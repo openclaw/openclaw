@@ -1,0 +1,244 @@
+{
+  "spec_version": "1.0.0",
+  "template_id": "cutmv_premium_clean_v003",
+  "brand": "cutmv",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration_sec": 10,
+    "total_frames": 300,
+    "aspect_ratio": "9:16",
+    "codec": "h264"
+  },
+  "design_philosophy": {
+    "principles": [
+      "Use scale and whitespace",
+      "One strong UI moment only",
+      "No clutter",
+      "No transparency hacks",
+      "No background screenshots behind text"
+    ],
+    "fixes_from_v002": [
+      "Removed choppy pacing — smooth 4-scene flow with breathing room",
+      "Removed overuse of reference images — zero demo frames, one UI asset only",
+      "Enlarged logo — 60% width with scale entrance",
+      "Improved vertical composition — centered layouts, even spacing, max-width constraints"
+    ]
+  },
+  "brand_rules": {
+    "text_case": "ALL_CAPS",
+    "background": "#000000",
+    "typography_color": "#FFFFFF",
+    "accent_color": "#94F33F",
+    "accent_usage": "underline_only",
+    "cta_required": "TRY CUTMV",
+    "min_text_opacity": 0.9,
+    "style": ["clean", "premium", "modern"]
+  },
+  "assets": {
+    "dashboard_ui": {
+      "path": "cutmv/dashboard_ui.jpg",
+      "loader": "staticFile",
+      "source_resolution": "1728x7991",
+      "usage": "scene_2_only",
+      "crop": "top_center"
+    },
+    "logo": {
+      "path": "cutmv/logo.png",
+      "loader": "staticFile",
+      "source_resolution": "3000x3000",
+      "aspect_ratio_lock": true,
+      "object_fit": "contain",
+      "max_opacity": 1,
+      "no_distortion": true
+    },
+    "demo_frames": "NOT_USED"
+  },
+  "structure": [
+    {
+      "scene": 1,
+      "id": "headline",
+      "time": { "start_sec": 0, "end_sec": 2.5 },
+      "frames": { "start": 0, "end": 75 },
+      "description": "Large centered headline, two lines, scale entrance",
+      "background": "#000000",
+      "elements": [
+        {
+          "type": "text",
+          "content": ["TURN MUSIC VIDEOS", "INTO VIRAL ASSETS"],
+          "lines": 2,
+          "position": "center_center",
+          "max_width_pct": 0.7,
+          "font_size": 68,
+          "font_weight": 800,
+          "color": "#FFFFFF",
+          "line_height": 1.15,
+          "letter_spacing": "0.02em",
+          "z_index": 5,
+          "animation": {
+            "fade_in": { "start_sec": 0.2, "duration_sec": 0.5 },
+            "scale": { "from": 1.0, "to": 1.05, "easing": "easeOutCubic", "duration_sec": 2.0 },
+            "fade_out": { "end_sec": 2.5, "duration_sec": 0.4 }
+          }
+        }
+      ],
+      "no_background_visuals": true
+    },
+    {
+      "scene": 2,
+      "id": "ui_showcase",
+      "time": { "start_sec": 2.5, "end_sec": 5.5 },
+      "frames": { "start": 75, "end": 165 },
+      "description": "Single cropped UI asset with output type labels above and below",
+      "background": "#000000",
+      "elements": [
+        {
+          "type": "text",
+          "content": "AUTO GENERATES",
+          "position": "center_x",
+          "top_pct": 0.24,
+          "font_size": 28,
+          "font_weight": 600,
+          "color": "#FFFFFF",
+          "letter_spacing": "0.06em",
+          "opacity": 1,
+          "z_index": 5,
+          "animation": {
+            "fade_in": { "start_sec": 2.6, "duration_sec": 0.3 }
+          }
+        },
+        {
+          "type": "image",
+          "asset": "dashboard_ui",
+          "position": "center_center",
+          "width_pct": 0.85,
+          "height": "auto",
+          "max_height_px": 700,
+          "crop": "top_center",
+          "border_radius": 12,
+          "border": "1px solid #222222",
+          "opacity": 1,
+          "z_index": 3,
+          "animation": {
+            "scale": { "from": 0.9, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.6 },
+            "fade_in": { "start_sec": 2.5, "duration_sec": 0.4 },
+            "fade_out": { "end_sec": 5.5, "duration_sec": 0.4 }
+          }
+        },
+        {
+          "type": "text_stack",
+          "labels": ["CLIPS", "GIFS", "THUMBNAILS", "CANVAS"],
+          "position": "center_x",
+          "start_top_pct": 0.72,
+          "vertical_spacing_px": 50,
+          "font_size": 32,
+          "font_weight": 700,
+          "color": "#FFFFFF",
+          "letter_spacing": "0.04em",
+          "z_index": 6,
+          "animation": {
+            "stagger_rhythm_sec": 0.1,
+            "fade_in_duration_sec": 0.25,
+            "translate_y_from": 12,
+            "translate_y_to": 0,
+            "first_label_start_sec": 3.2,
+            "fade_out_end_sec": 5.5,
+            "fade_out_duration_sec": 0.3
+          },
+          "note": "Even vertical spacing. No chaotic stagger. 0.1 rhythm fade up."
+        }
+      ]
+    },
+    {
+      "scene": 3,
+      "id": "statement",
+      "time": { "start_sec": 5.5, "end_sec": 7.5 },
+      "frames": { "start": 165, "end": 225 },
+      "description": "Centered statement with green underline draw animation",
+      "background": "#000000",
+      "elements": [
+        {
+          "type": "text",
+          "content": "GENERATED IN SECONDS.",
+          "position": "center_center",
+          "font_size": 52,
+          "font_weight": 700,
+          "color": "#FFFFFF",
+          "letter_spacing": "0.02em",
+          "z_index": 5,
+          "animation": {
+            "fade_in": { "start_sec": 5.6, "duration_sec": 0.4 },
+            "scale": { "from": 1.0, "to": 1.03, "easing": "easeOutCubic", "duration_sec": 1.5 },
+            "fade_out": { "end_sec": 7.5, "duration_sec": 0.3 }
+          }
+        },
+        {
+          "type": "underline",
+          "color": "#94F33F",
+          "height_px": 4,
+          "border_radius": 2,
+          "position": "below_text",
+          "offset_y": -8,
+          "animation": {
+            "draw_direction": "left_to_right",
+            "start_sec": 5.9,
+            "duration_sec": 0.5,
+            "width_match": "text_width"
+          },
+          "z_index": 5
+        }
+      ]
+    },
+    {
+      "scene": 4,
+      "id": "logo_cta",
+      "time": { "start_sec": 7.5, "end_sec": 10.0 },
+      "frames": { "start": 225, "end": 300 },
+      "description": "Logo scale entrance with CTA hold",
+      "background": "#000000",
+      "elements": [
+        {
+          "type": "image",
+          "asset": "logo",
+          "position": "center_x",
+          "top_pct": 0.32,
+          "width_pct": 0.6,
+          "aspect_ratio_lock": true,
+          "object_fit": "contain",
+          "z_index": 10,
+          "animation": {
+            "fade_in": { "start_sec": 7.5, "duration_sec": 0.5 },
+            "scale": { "from": 0.8, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.6 },
+            "final_opacity": 1
+          },
+          "constraints": {
+            "no_distortion": true,
+            "no_transparency": true,
+            "no_blur": true,
+            "no_stretch": true
+          }
+        },
+        {
+          "type": "text",
+          "content": "TRY CUTMV",
+          "position": "center_x",
+          "top_pct": 0.62,
+          "font_size": 64,
+          "font_weight": 700,
+          "color": "#FFFFFF",
+          "letter_spacing": "0.03em",
+          "z_index": 9,
+          "animation": {
+            "fade_in": { "start_sec": 7.8, "duration_sec": 0.4 },
+            "hold_until_end": true
+          }
+        }
+      ]
+    }
+  ],
+  "render": {
+    "output_pattern": "cutmv__motion__premium-clean__reels__1080x1920__dur-10__v003",
+    "composition_id": "CutmvPremiumAd"
+  }
+}

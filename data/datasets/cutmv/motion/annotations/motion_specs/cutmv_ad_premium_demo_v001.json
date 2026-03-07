@@ -1,0 +1,237 @@
+{
+  "template_id": "premium_demo_9x16_v1",
+  "brand": "cutmv",
+  "duration_sec": 10,
+  "fps": 30,
+  "aspect_ratio": "9:16",
+  "resolution": { "w": 1080, "h": 1920 },
+  "assets": {
+    "demo_frames": "brands/cutmv/datasets/motion/frames/keyframes/",
+    "ui_screens": "brands/cutmv/datasets/static/ui/screens/1080x1920/",
+    "logo": "brands/cutmv/datasets/static/brand_assets/logos/cutmv_primary.svg"
+  },
+  "structure": [
+    {
+      "type": "background",
+      "enter_sec": 0,
+      "animation": "none",
+      "color": "#000000"
+    },
+    {
+      "type": "demo_panels",
+      "description": "Three masked vertical strips of demo video frames sliding left to right behind headline",
+      "enter_sec": 0,
+      "exit_sec": 2.5,
+      "animation": "slide_right",
+      "easing": "easeOutCubic",
+      "opacity": 0.25,
+      "asset_path": "brands/cutmv/datasets/motion/frames/keyframes/",
+      "layout": {
+        "panel_count": 3,
+        "panel_width_pct": 0.2,
+        "gap_px": 24,
+        "mask": "vertical_strip",
+        "stagger_sec": 0.2
+      },
+      "position": { "x": "50%", "y": "50%", "anchor": "center" }
+    },
+    {
+      "type": "headline",
+      "text": "TURN MUSIC VIDEOS INTO VIRAL ASSETS",
+      "enter_sec": 0.3,
+      "exit_sec": 2.5,
+      "animation": "scale_fade",
+      "easing": "easeOutCubic",
+      "scale_from": 0.92,
+      "scale_to": 1.0,
+      "position": { "x": "50%", "y": "50%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 68,
+        "font_weight": 700,
+        "text_align": "center",
+        "max_width_pct": 0.8,
+        "letter_spacing": "0.02em",
+        "line_height": 1.1
+      }
+    },
+    {
+      "type": "ui_demo",
+      "description": "Dashboard UI mock slides up from bottom",
+      "enter_sec": 2.5,
+      "exit_sec": 6.0,
+      "animation": "slide_up",
+      "easing": "easeOutCubic",
+      "asset_path": "brands/cutmv/datasets/static/ui/screens/1080x1920/",
+      "position": { "x": "50%", "y": "55%", "anchor": "center" },
+      "style": {
+        "width_pct": 0.85,
+        "border_radius": 12,
+        "opacity": 0.9
+      }
+    },
+    {
+      "type": "timestamp_markers",
+      "description": "Subtle timestamp overlays on the UI demo",
+      "enter_sec": 3.0,
+      "exit_sec": 6.0,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "opacity": 0.5,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 14
+      }
+    },
+    {
+      "type": "label",
+      "text": "CLIPS",
+      "enter_sec": 3.2,
+      "exit_sec": 6.0,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": { "x": "50%", "y": "30%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "thickness": 3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "label",
+      "text": "GIFS",
+      "enter_sec": 3.35,
+      "exit_sec": 6.0,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": { "x": "50%", "y": "38%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "thickness": 3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "label",
+      "text": "THUMBNAILS",
+      "enter_sec": 3.5,
+      "exit_sec": 6.0,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": { "x": "50%", "y": "46%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "thickness": 3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "label",
+      "text": "CANVAS",
+      "enter_sec": 3.65,
+      "exit_sec": 6.0,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": { "x": "50%", "y": "54%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "thickness": 3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "subheadline",
+      "text": "GENERATED IN SECONDS.",
+      "enter_sec": 6.2,
+      "exit_sec": 8.5,
+      "animation": "scale_fade",
+      "easing": "easeOutCubic",
+      "scale_from": 0.95,
+      "scale_to": 1.0,
+      "position": { "x": "50%", "y": "48%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 52,
+        "font_weight": 700,
+        "text_align": "center",
+        "letter_spacing": "0.02em"
+      },
+      "emphasis_style": {
+        "type": "underline_animated",
+        "color": "#94F33F",
+        "thickness": 4,
+        "offset_y": 8,
+        "animation": "draw_left_to_right",
+        "draw_duration_sec": 0.5,
+        "draw_delay_sec": 0.3
+      }
+    },
+    {
+      "type": "logo",
+      "enter_sec": 8.5,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "asset_path": "brands/cutmv/datasets/static/brand_assets/logos/cutmv_primary.svg",
+      "position": { "x": "50%", "y": "42%", "anchor": "center" },
+      "style": {
+        "width_px": 200,
+        "color": "#FFFFFF"
+      }
+    },
+    {
+      "type": "cta",
+      "text": "TRY CUTMV",
+      "enter_sec": 8.8,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": { "x": "50%", "y": "56%", "anchor": "center" },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 64,
+        "font_weight": 700,
+        "text_align": "center",
+        "letter_spacing": "0.03em"
+      }
+    }
+  ],
+  "metadata": {
+    "brief_id": "cutmv_premium_demo_001",
+    "generated_by": "claude",
+    "approved": false,
+    "copy_ids_used": [
+      "cmv_hook_1001",
+      "cmv_bullets_0001",
+      "cmv_cta_0001"
+    ],
+    "template_category": "motion_ad",
+    "use_case": "premium_launch_demo"
+  }
+}

@@ -1,0 +1,493 @@
+{
+  "id": "cutmv_premium_v001",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 78,
+      "headlineLines": [
+        {
+          "text": "CONFIGURE.",
+          "emphasis": false
+        },
+        {
+          "text": "GENERATE.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "DONE.",
+      "transitionOut": {
+        "type": "sweep",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "CONFIGURE.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 42
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "GENERATE.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 44
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 44
+            }
+          }
+        },
+        {
+          "id": "sub",
+          "kind": "subhead",
+          "text": "DONE.",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 20
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 46
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_ui_config",
+      "type": "uiMock",
+      "from": 78,
+      "duration": 125,
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "aspectToggles": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "outputs": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "primaryButton": "START CREATING NOW"
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "CHOOSE OUTPUTS FAST.",
+          "underline": true
+        }
+      },
+      "transitionOut": {
+        "type": "wipe",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "top",
+          "kind": "headline",
+          "text": "CHOOSE OUTPUTS FAST.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 76
+            }
+          }
+        },
+        {
+          "id": "u2",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 76
+            }
+          }
+        },
+        {
+          "id": "ui",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "uiOptions": {
+            "aspectToggles": [
+              "9:16",
+              "1:1",
+              "16:9"
+            ],
+            "outputs": [
+              "CLIPS",
+              "GIFS",
+              "THUMBNAILS",
+              "CANVAS"
+            ],
+            "primaryButton": "START CREATING NOW"
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 70
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#10121A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "slowDrift",
+        "vignette": 0.25
+      },
+      "contextBadge": "LIVE DEMO"
+    },
+    {
+      "id": "s3_features",
+      "type": "featureList",
+      "from": 203,
+      "duration": 110,
+      "title": {
+        "text": "ONE UPLOAD.",
+        "emphasis": false
+      },
+      "title2": {
+        "text": "EVERYTHING GENERATED.",
+        "emphasis": true
+      },
+      "items": [
+        "SHORT-FORM CLIPS",
+        "GIF EXPORTS",
+        "AI THUMBNAILS",
+        "SPOTIFY CANVAS LOOPS"
+      ],
+      "layout": {
+        "anchor": "center",
+        "itemUnderline": true,
+        "maxWidthPx": 900
+      },
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "t1",
+          "kind": "headline",
+          "text": "ONE UPLOAD.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 62
+            }
+          }
+        },
+        {
+          "id": "t2",
+          "kind": "headline",
+          "text": "EVERYTHING GENERATED.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 64
+            }
+          }
+        },
+        {
+          "id": "li1",
+          "kind": "listItem",
+          "text": "SHORT-FORM CLIPS",
+          "motion": {
+            "enter": {
+              "preset": "LIST_ITEM_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "LIST_ITEM_OUT",
+              "at": 66
+            }
+          }
+        },
+        {
+          "id": "li2",
+          "kind": "listItem",
+          "text": "GIF EXPORTS",
+          "motion": {
+            "enter": {
+              "preset": "LIST_ITEM_IN",
+              "at": 22
+            },
+            "exit": {
+              "preset": "LIST_ITEM_OUT",
+              "at": 66
+            }
+          }
+        },
+        {
+          "id": "li3",
+          "kind": "listItem",
+          "text": "AI THUMBNAILS",
+          "motion": {
+            "enter": {
+              "preset": "LIST_ITEM_IN",
+              "at": 28
+            },
+            "exit": {
+              "preset": "LIST_ITEM_OUT",
+              "at": 68
+            }
+          }
+        },
+        {
+          "id": "li4",
+          "kind": "listItem",
+          "text": "SPOTIFY CANVAS LOOPS",
+          "motion": {
+            "enter": {
+              "preset": "LIST_ITEM_IN",
+              "at": 34
+            },
+            "exit": {
+              "preset": "LIST_ITEM_OUT",
+              "at": 68
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#10121A"
+        ],
+        "blobs": 3,
+        "greenAccent": true,
+        "movement": "pulse",
+        "vignette": 0.3
+      },
+      "contextBadge": "LIVE DEMO"
+    },
+    {
+      "id": "s4_cta",
+      "type": "ctaEndcard",
+      "from": 313,
+      "duration": 137,
+      "logo": {
+        "usePrimaryLogo": true,
+        "sizePx": 150
+      },
+      "headline": {
+        "text": "TRY CUTMV NOW.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED",
+        "style": "solid_green"
+      },
+      "footer": "CLIPS • GIFS • THUMBNAILS • CANVAS",
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "TRY CUTMV NOW.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 50
+            }
+          }
+        },
+        {
+          "id": "btn",
+          "kind": "cta",
+          "text": "JOIN THE BETA",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "foot",
+          "kind": "support",
+          "text": "BETA ACCESS • LIMITED FREE CREDITS",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 20
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 52
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

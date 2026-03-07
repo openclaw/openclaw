@@ -1,0 +1,307 @@
+# config/experiment_policy.yaml
+# OpenClaw Experiment Policy v1
+# Governs safety, budgets, sample sizes, kill/scale rules, and creative fatigue.
+# NOTE: This policy is intentionally conservative until conversion tracking is verified end-to-end.
+
+version: 1
+updated_at: "2026-03-01"
+
+global:
+  # Hard caps to prevent runaway spend / runaway object creation
+  max_active_combos: 30
+  max_daily_budget_usd: 80
+
+  # Safety gates
+  safe_mode_default: true
+  require_write_unlock: true
+  global_cooldown_seconds: 900
+  max_actions_per_run: 25
+  min_hours_between_budget_changes: 6
+
+measurement:
+  # What counts as enough data to make decisions
+  sample_windows:
+    warmup_hours: 6
+    evaluation_window_hours: 72
+  minimums:
+    min_impressions: 3000
+    min_clicks: 60
+    min_conversions: 3
+    min_spend_usd: 30
+
+definitions:
+  # Which event is a "conversion" differs by brand and funnel stage.
+  # Full Digital uses dual conversion: pipeline (lead quality) + revenue (actual sales).
+  brand_conversions:
+    cutmv:
+      primary: "checkout_paid"
+      secondary:
+        - "checkout_started"
+        - "onboarded"
+      revenue_stage: "checkout_paid"
+    fulldigital:
+      # Pipeline conversion: optimizes lead flow quality + scheduling
+      primary: "booking_complete"
+      pipeline_stages:
+        - "booking_complete"
+        - "application_submit"
+      # Revenue conversion: optimizes actual sales + LTV:CAC
+      revenue_stage: "checkout_paid"
+      secondary:
+        - "vsl_watch"
+
+rules:
+  kill:
+    # "3x CPA" rule: if combo CPA exceeds baseline CPA by 3x, kill it.
+    enabled: true
+    cpa_multiplier_threshold: 3.0
+    # Immediate kill guards (very high spend with zero conversions)
+    zero_conversion:
+      enabled: true
+      spend_threshold_usd: 60
+      min_clicks: 80
+      action: "pause"
+  scale:
+    # "2x ROAS" rule: if ROAS >= 2x, scale
+    enabled: true
+    roas_threshold: 2.0
+    max_scale_step_pct: 25
+    max_total_scale_pct_per_day: 60
+  hold:
+    # Hold combos that don't meet minimum sample sizes rather than killing prematurely
+    enabled: true
+
+creative_fatigue:
+  enabled: true
+  # Fatigue signals: CTR drop, CPM increase, frequency high, or CPA creeping
+  thresholds:
+    ctr_drop_pct: 35
+    cpm_increase_pct: 30
+    frequency_threshold: 2.5
+    cpa_increase_pct: 40
+  actions:
+    on_fatigue: "rotate_creative"
+    rotate_to_next_creative: true
+
+allocation:
+  # Winner allocation strategy
+  enabled: true
+  strategy: "ltv_cac_weighted"
+  ltv_cac_target_ratio: 3.0
+  # Protect exploration budget so you don't starve tests
+  exploration_budget_pct: 30
+  exploitation_budget_pct: 70
+
+offer_rotation:
+  # Offer rotation governs how Full Digital's flagship offers rotate as a
+  # first-class variant dimension alongside creatives/CTAs/audiences.
+  enabled: true
+  strategy: "multi_armed_bandit_softmax"
+  exploration_pct: 30
+  exploitation_pct: 70
+  min_spend_per_offer_usd: 20
+  cooldown_hours_per_offer: 24
+  guardrails:
+    never_exceed_active_offers_per_brand: 6
+    require_minimum_metrics:
+      impressions: 2000
+      clicks: 40
+  # Starter rack — rotate these 6 first before expanding to full catalog
+  starter_rack:
+    - fd_offer_01_visual_era
+    - fd_offer_02_viral_launch_engine
+    - fd_offer_03_label_ready_artist_kit
+    - fd_offer_07_ar_experience_drop
+    - fd_offer_08_music_video_companion
+    - fd_offer_05_30_day_rollout_system
+
+reporting:
+  enabled: true
+  include_top_n: 5
+  include_bottom_n: 5
+  include_dropoff_by_stage: true
+  include_fatigue_flags: true
+
+brands:
+  cutmv:
+    daily_budget_usd: 40
+    max_active_combos: 20
+    min_sample_overrides:
+      min_conversions: 2
+  fulldigital:
+    daily_budget_usd: 40
+    max_active_combos: 10
+    min_sample_overrides:
+      min_conversions: 1
+    # Optimization mode: which conversion drives policy CPA/kill/scale decisions.
+    # "pipeline" = booking_complete + application_submit (fast signal, early learning)
+    # "revenue"  = checkout_paid (slower signal, requires closed-won volume)
+    # Switch to "revenue" once you have enough Stripe payment volume.
+    optimization_mode: "pipeline"
+
+    # ── Layer 1: Pipeline Quality Minimum ──
+    # Must be met before close-rate or show-rate gates can trigger.
+    # Prevents judging combos too early on noise (collect enough outcomes first).
+    pipeline_quality_minimum:
+      enabled: true
+      # Minimum booked calls before any quality gate logic runs
+      min_calls_observed: 20
+      # Minimum pipeline conversions (bookings + applications)
+      min_pipeline_conversions: 15
+      # Minimum bookings specifically (before quality check)
+      min_bookings_before_quality_check: 15
+      # Minimum applications specifically (before quality check)
+      min_applications_before_quality_check: 25
+      # Minimum spend before any quality evaluation
+      min_spend_before_quality_eval: 500
+      # Lead scoring: require avg GHL lead score >= threshold
+      enabled_lead_score: false
+      lead_score_field: "ghl_lead_score"
+      min_avg_lead_score: 60
+      # Qualified rate: require X% of pipeline conversions to be qualified
+      enabled_qualified_rate: false
+      min_qualified_rate: 0.35
+
+    # ── Layer 2: Close Rate Gate ──
+    # Blocks scaling "junk-call winners" for Full Digital.
+    # Once a combo has enough pipeline conversions, if close rate is too low,
+    # SCALE decisions are downgraded to HOLD (or KILL if configured).
+    quality_gate:
+      enabled: true
+      # Gate triggers only after enough pipeline signal
+      min_pipeline_conversions: 20
+      # Minimum close rate (revenue_conversions / pipeline_conversions)
+      close_rate_min: 0.05
+      # Minimum spend before gate applies (prevents knee-jerk gating)
+      min_spend_usd: 50
+      # Hard fail: if close rate is this bad, escalate to hard_fail_action
+      hard_fail_close_rate: 0.02
+      hard_fail_action: "pause"
+      # What to do when gate triggers (normal):
+      # "block_scale" = downgrade SCALE → HOLD
+      # "block_scale_and_kill" = downgrade SCALE → KILL
+      decision: "block_scale"
+      # When held, cap daily budget to prevent further waste
+      hold_mode:
+        action: "hold"
+        cap_daily_budget_usd: 10
+
+    # ── Layer 3: Pipeline Integrity (Show Rate) ──
+    # Blocks scaling combos that generate bookings but low actual attendance.
+    # Protects against low-trust messaging, clickbait angles, unqualified applicants.
+    # show_rate = attended_calls / bookings
+    pipeline_integrity:
+      enabled: true
+      # Minimum show rate required to scale
+      min_show_rate: 0.60
+      # Minimum bookings before show rate is evaluated (avoid noise)
+      min_bookings_for_show_eval: 15
+
+# ══════════════════════════════════════════════════════════════════════
+# Advanced Policy Signals (Strategic Intelligence Brief upgrades)
+# ══════════════════════════════════════════════════════════════════════
+
+# B1: Close-rate volatility — Monte Carlo Beta CI penalty on scaling confidence
+forecasting:
+  enabled: true
+  monte_carlo:
+    iterations: 1000
+    horizon_days: 30
+    confidence: 0.90
+  close_rate_volatility:
+    enabled: true
+    min_calls_for_model: 30
+    penalty_weight: 0.35  # how strongly CI width reduces scaling confidence
+    # If confidence < this, downgrade SCALE → SCALE_SOFT
+    scale_soft_threshold: 0.50
+    # If confidence < this, downgrade SCALE → HOLD
+    hold_threshold: 0.25
+
+# B2: Content retention score — creative quality signal from Meta retention metrics
+content_retention:
+  enabled: false  # enable once Meta thruplay data is flowing
+  metric: "thruplay_rate"
+  min_impressions: 2000
+  penalty_if_below: 0.65   # multiplier for low retention
+  strong_bonus_if_above: 1.15
+  thresholds:
+    low: 0.12
+    high: 0.22
+
+# B3: Setter performance multiplier — adjusts scaling by setter close rate
+setter_scoring:
+  enabled: false  # enable once setter_id is in ledger payloads
+  lookback_days: 30
+  min_calls: 10
+  multiplier_range:
+    min: 0.85
+    max: 1.20
+
+# B4: Angle fatigue detection — detect when creative angles stop working
+angle_fatigue:
+  enabled: true
+  lookback_days: 7
+  ctr_drop_pct: 35
+  cpc_increase_pct: 40
+  frequency_threshold: 2.8
+  min_signals: 2  # require 2+ signals to trigger (reduce false positives)
+  action: "rotate_creative"  # ROTATE | HOLD
+
+# B5: CAC payback period gate — blocks scaling when payback exceeds horizon
+payback:
+  enabled: true
+  horizon_days: 60
+  cutmv:
+    gross_margin: 0.80
+    max_payback_days: 45
+  fulldigital:
+    gross_margin: 0.70
+    max_payback_days: 30
+
+# B6: Capacity gate — prevent scaling when fulfillment is constrained
+capacity_gate:
+  enabled: true
+  # Percent of capacity remaining required to allow scaling.
+  # 0.20 means "must have at least 20% headroom" to scale.
+  min_headroom_ratio_to_scale: 0.20
+  # Hard floor: must have >= X hours/week free
+  min_free_hours_to_scale: 10
+  # Per-brand override (CUTMV is SaaS, no fulfillment constraint)
+  brand_overrides:
+    cutmv:
+      enabled: false
+    fulldigital:
+      enabled: true
+
+# ── Meta-specific guardrails ──
+# Hard ceiling on daily ad spend — prevents emotional scaling decisions.
+# Applies to all meta.* actions.  Approval cards display this cap automatically.
+meta:
+  max_daily_budget_cap_usd: 200
+  soft_warning_ratio: 0.75
+
+  # Stability gate: queued remainder only requests approval if combo is still healthy.
+  stability_gate:
+    enabled: true
+    lookback_days: 2
+    min_spend_usd: 30
+    min_conversions: 2
+    max_cpa_increase_ratio: 1.25
+    min_roas_ratio_of_baseline: 0.85
+    max_fatigue_score: 0.70
+    fulldigital:
+      min_calls_observed: 10
+      min_pipeline_quality: 0.60
+      min_close_rate: 0.05
+    on_fail:
+      notify_telegram: true
+      keep_scheduled_action: false
+
+# If no baseline can be computed yet (no winners), fallback baselines:
+fallback_baselines:
+  cutmv:
+    target_cpa_usd: 35
+    target_roas: 1.5
+  fulldigital:
+    target_cpa_usd: 120
+    target_roas: 2.0

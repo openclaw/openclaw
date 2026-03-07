@@ -1,0 +1,12 @@
+{"id":"cmv_tip_0001","brand":"cutmv","key":"aspect_ratio","text":"CHOOSE THE EXPORT ASPECT RATIO.","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_tip_0002","brand":"cutmv","key":"canvas_loop","text":"CANVAS EXPORT CREATES A PERFECT LOOP.","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_tip_2001","brand":"cutmv","key":"upload_retention","text":"YOUR UPLOADED VIDEO WILL BE STORED FOR 24 HOURS.","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_2002","brand":"cutmv","key":"export_retention","text":"EXPORTS ARE AVAILABLE FOR 29 DAYS. DOWNLOAD BEFORE THEY EXPIRE.","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_2003","brand":"cutmv","key":"credits","text":"EACH EXPORT USES CREDITS FROM YOUR MONTHLY SUBSCRIPTION.","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_3001","brand":"cutmv","key":"credit_balance","text":"YOUR REMAINING CREDITS FOR THIS BILLING CYCLE.","context":"credit_counter","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_3002","brand":"cutmv","key":"upload_limit","text":"MAXIMUM FILE SIZE IS 10GB. SUPPORTED: MP4, MOV, AVI.","context":"upload_field","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_3003","brand":"cutmv","key":"upload_expiry","text":"THIS UPLOAD WILL BE REMOVED AFTER 24 HOURS.","context":"uploaded_file","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_3004","brand":"cutmv","key":"export_expiry","text":"EXPORTS ARE AVAILABLE FOR 29 DAYS FROM GENERATION.","context":"export_list","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_3005","brand":"cutmv","key":"clip_timestamps","text":"SET START AND END TIMES FOR YOUR CLIP IN SECONDS.","context":"clip_editor","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_3006","brand":"cutmv","key":"subscription_status","text":"YOUR CURRENT PLAN AND NEXT BILLING DATE.","context":"subscription_badge","flow_stage":"settings","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_tip_1003","brand":"cutmv","key":"format_info","text":"SELECT A VIDEO FORMAT (E.G., 9:16, 1:1) BEFORE PROCESSING.","context":"format_selector","constraints":["ALL_CAPS"],"source":"cutmv.fulldigitalll.com","status":"extracted"}

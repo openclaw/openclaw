@@ -1,0 +1,72 @@
+# OpenClaw WebOps — Site Registry
+# Source of truth for what "correct" looks like across all sites.
+# Each entry defines: hosting provider, domains, tracking IDs, Stripe webhooks,
+# and depends_on_tools (full tool dependency list for reporting).
+
+sites:
+  - site_key: cutmv_app
+    brand: cutmv
+    env: prod
+    urls:
+      - https://cutmv.com
+    provider:
+      dns: cloudflare
+      hosting: vercel
+    depends_on_tools:
+      - cloudflare
+      - vercel
+      - stripe
+      - posthog
+      - google_analytics
+      - resend
+      - sentry
+      - supabase
+      - r2_storage
+      - openai
+      - kickbox
+      - google_oauth
+      - microsoft_oauth
+    vercel:
+      project_name: cutmv
+      expected_prod_domain: cutmv.com
+    cloudflare:
+      zone_name: cutmv.com
+    tracking:
+      ga4_measurement_id: G-XXXXXXXXXX
+      posthog_project_api_key: phc_xxxxxxxxx
+    stripe:
+      webhook_endpoints_expected:
+        - purpose: cutmv_core
+          url: https://api.cutmv.com/webhooks/stripe
+          events:
+            - checkout.session.completed
+            - customer.subscription.created
+            - customer.subscription.updated
+            - invoice.payment_succeeded
+            - charge.refunded
+
+  - site_key: fulldigital_site
+    brand: fulldigital
+    env: prod
+    urls:
+      - https://fulldigitalll.com
+    provider:
+      dns: cloudflare
+      hosting: webflow
+    depends_on_tools:
+      - cloudflare
+      - webflow
+      - posthog
+      - google_analytics
+      - resend
+      - sentry
+      - stripe
+      - kickbox
+    webflow:
+      site_id: "WF_SITE_ID"
+      expected_publish_domain: fulldigitalll.com
+    cloudflare:
+      zone_name: fulldigitalll.com
+    tracking:
+      ga4_measurement_id: G-YYYYYYYYYY
+      posthog_project_api_key: phc_yyyyyyyyy

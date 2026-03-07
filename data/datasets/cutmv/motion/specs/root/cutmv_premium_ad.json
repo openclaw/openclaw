@@ -1,0 +1,100 @@
+{
+  "brand": "cutmv",
+  "compositionId": "CutmvPremiumAdEngine",
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "durationInFrames": 300,
+  "seed": 1337,
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "animatedGradient",
+    "grain": 0.04,
+    "vignette": true,
+    "green": "#7CFF3B",
+    "black": "#0B0B0F",
+    "card": "#111318"
+  },
+  "scenes": [
+    {
+      "id": "hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 60,
+      "headlineLines": [
+        { "text": "YOU EDIT FOR HOURS.", "color": "white" },
+        { "text": "NOBODY WATCHES.", "color": "green", "underline": true }
+      ],
+      "transitionOut": { "type": "sweep", "duration": 12 }
+    },
+    {
+      "id": "configure",
+      "type": "uiBlock",
+      "from": 60,
+      "duration": 110,
+      "ui": {
+        "component": "ConfigureOutputCard",
+        "props": {
+          "title": "CONFIGURE OUTPUT OPTIONS",
+          "quickStart": true,
+          "aspectPills": ["9:16", "1:1", "16:9"],
+          "toggles": ["CLIPS", "GIFS", "THUMBNAILS", "CANVAS"],
+          "cta": "START CREATING NOW"
+        }
+      },
+      "transitionOut": { "type": "wipe", "duration": 10 }
+    },
+    {
+      "id": "stack",
+      "type": "uiBlock",
+      "from": 170,
+      "duration": 60,
+      "ui": {
+        "component": "OutputCardStack",
+        "props": {
+          "cards": [
+            { "label": "GENERATE PROFESSIONAL GIFS", "credits": 180 },
+            { "label": "GENERATE PROFESSIONAL THUMBNAILS", "credits": 180 },
+            { "label": "GENERATE PROFESSIONAL SPOTIFY CANVAS", "credits": 450 }
+          ]
+        }
+      },
+      "transitionOut": { "type": "glitch", "duration": 8 }
+    },
+    {
+      "id": "impact",
+      "type": "impactText",
+      "from": 230,
+      "duration": 30,
+      "headlineLines": [
+        { "text": "GENERATED IN", "color": "white" },
+        { "text": "SECONDS.", "color": "green", "underline": true }
+      ],
+      "transitionOut": { "type": "sweep", "duration": 10 }
+    },
+    {
+      "id": "cta",
+      "type": "ctaEnd",
+      "from": 260,
+      "duration": 40,
+      "cta": {
+        "primary": "MORE CONTENT.",
+        "secondary": "LESS WORK.",
+        "button": "TRY CUTMV NOW",
+        "logoMinWidthPct": 0.6
+      }
+    }
+  ],
+  "captions": {
+    "enabled": true,
+    "style": "hormozi_box",
+    "segments": [
+      { "from": 0, "to": 30, "text": "YOU EDIT FOR HOURS.", "emphasis": ["HOURS"] },
+      { "from": 30, "to": 60, "text": "NOBODY WATCHES.", "emphasis": ["NOBODY"] },
+      { "from": 230, "to": 260, "text": "GENERATED IN SECONDS.", "emphasis": ["SECONDS"] }
+    ]
+  }
+}

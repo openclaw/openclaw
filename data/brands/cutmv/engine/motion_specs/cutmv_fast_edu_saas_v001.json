@@ -1,0 +1,132 @@
+{
+  "brand": "cutmv",
+  "composition": "HiggsfieldSaasProd",
+  "styleProfile": "fast_educational",
+  "template_id": "cutmv_fast_edu_saas_v001",
+  "duration_sec": 14,
+  "fps": 30,
+  "canvas": { "width": 1080, "height": 1920 },
+  "assets": {
+    "logos": [
+      { "id": "cutmv_logo", "path": "cutmv/logo.png", "widthPct": 0.6, "zIndex": 10 },
+      { "id": "fd_logo", "path": "cutmv/fd-logo-2025-white.png", "widthPct": 0.22, "zIndex": 9 }
+    ],
+    "ui": [
+      { "id": "dashboard", "path": "cutmv/dashboard_ui.jpg", "widthPct": 0.85, "zIndex": 5 }
+    ],
+    "demoFrames": [
+      { "id": "frame_001", "path": "cutmv/demo_frame_001.png", "zIndex": 4 },
+      { "id": "frame_002", "path": "cutmv/demo_frame_002.png", "zIndex": 4 },
+      { "id": "frame_003", "path": "cutmv/demo_frame_003.png", "zIndex": 4 }
+    ]
+  },
+  "scenes": [
+    {
+      "id": "hook",
+      "type": "hook",
+      "start": 0,
+      "end": 75,
+      "zone": "hook",
+      "headline": "YOUR CONTENT IS COSTING YOU FANS.",
+      "animation": "pop",
+      "zIndex": 8,
+      "notes": "Large centered headline. Brutal. No UI. Text only."
+    },
+    {
+      "id": "problem",
+      "type": "problem",
+      "start": 75,
+      "end": 180,
+      "zone": "hook",
+      "headline": "YOU EDIT FOR HOURS. NOBODY WATCHES.",
+      "sub": "EVERY ARTIST LOSES 80% OF REACH FROM BAD CONTENT.",
+      "animation": "snap_in",
+      "zIndex": 8,
+      "notes": "Fast caption segments. Text dominant. No UI yet."
+    },
+    {
+      "id": "product_reveal",
+      "type": "product",
+      "start": 180,
+      "end": 300,
+      "zone": "demo",
+      "headline": "ONE UPLOAD. EVERYTHING GENERATED.",
+      "ui_asset": "dashboard",
+      "animation": "punch_in",
+      "benefit_line": "CLIPS · GIFS · THUMBNAILS · CANVAS",
+      "zIndex": 6,
+      "notes": "ONE cropped CUTMV UI screen. Framed clean. Punch-in. 1 benefit overlay."
+    },
+    {
+      "id": "demo_proof",
+      "type": "demo",
+      "start": 300,
+      "end": 390,
+      "zone": "demo",
+      "headline": "GENERATED IN SECONDS.",
+      "demo_frames": ["frame_001", "frame_002", "frame_003"],
+      "animation": "rapid_stagger",
+      "zIndex": 6,
+      "notes": "Demo frame sequence burst. Quick cut feel."
+    },
+    {
+      "id": "cta_lockup",
+      "type": "cta",
+      "start": 390,
+      "end": 420,
+      "zone": "cta",
+      "logo": "cutmv_logo",
+      "fd_logo": "fd_logo",
+      "cta_text": "TRY CUTMV FREE",
+      "animation": "bold_scale_up",
+      "zIndex": 10,
+      "notes": "Logo centered min 60%. FD logo smaller beneath. CTA line. No motion after 0.8s settle."
+    }
+  ],
+  "captions": {
+    "segments": [
+      {
+        "start": 0,
+        "end": 2.5,
+        "text": "YOUR CONTENT IS COSTING YOU FANS.",
+        "emphasis": ["COSTING", "FANS"],
+        "style": "hormozi_box"
+      },
+      {
+        "start": 2.5,
+        "end": 4.5,
+        "text": "YOU EDIT FOR HOURS.",
+        "emphasis": ["HOURS"],
+        "style": "scribble_callout"
+      },
+      {
+        "start": 4.5,
+        "end": 6,
+        "text": "NOBODY WATCHES.",
+        "emphasis": ["NOBODY"],
+        "style": "scribble_callout"
+      },
+      {
+        "start": 6,
+        "end": 10,
+        "text": "ONE UPLOAD. EVERYTHING GENERATED.",
+        "emphasis": ["ONE", "EVERYTHING"],
+        "style": "hormozi_box"
+      },
+      {
+        "start": 10,
+        "end": 12,
+        "text": "GENERATED IN SECONDS.",
+        "emphasis": ["SECONDS"],
+        "style": "scribble_callout"
+      },
+      {
+        "start": 12,
+        "end": 14,
+        "text": "TRY CUTMV FREE",
+        "emphasis": ["CUTMV", "FREE"],
+        "style": "hormozi_box"
+      }
+    ]
+  }
+}

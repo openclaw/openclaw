@@ -1,0 +1,207 @@
+{
+  "brand": "cutmv",
+  "composition": "CutmvPremiumAdV5",
+  "styleProfile": "premium_clean",
+  "template_id": "cutmv_premium_v5_reconstructed",
+  "duration_sec": 10,
+  "fps": 30,
+  "durationFrames": 300,
+  "canvas": { "width": 1080, "height": 1920 },
+  "assets": {
+    "logos": [
+      { "id": "cutmv_logo", "path": "cutmv/logo.png", "widthPct": 0.6 },
+      { "id": "fd_logo", "path": "cutmv/fd-logo-2025-white.png", "widthPct": 0.18 }
+    ],
+    "ui": [],
+    "demoFrames": []
+  },
+  "uiBlocks": [
+    {
+      "type": "ConfigureOutputCard",
+      "variant": "default",
+      "showTimestamp": true,
+      "position": { "zone": "demo", "y": 330 },
+      "enter": 60,
+      "exit": 180,
+      "animation": "spring_slide_up",
+      "motion": {
+        "cardFloat": true,
+        "parallaxDepth": true,
+        "floatAmplitude": 3
+      },
+      "zIndex": 6
+    },
+    {
+      "type": "GenerateCard",
+      "variant": "gifs",
+      "title": "Generate Professional GIFs",
+      "subtitle": "Pack of 5 × 6-second GIFs",
+      "credits": "180 credits",
+      "toggleOn": true,
+      "tiltDeg": -3,
+      "position": { "zone": "demo", "y": 960 },
+      "enter": 80,
+      "exit": 180,
+      "animation": "spring_scale_in",
+      "motion": {
+        "glowOnToggle": true,
+        "glowPulseFreq": 0.08,
+        "cardFloat": true
+      },
+      "zIndex": 7
+    },
+    {
+      "type": "GenerateCard_Stack",
+      "cards": [
+        { "title": "Spotify Canvas", "credits": "450 credits", "on": true },
+        { "title": "Thumbnails", "credits": "180 credits", "on": true },
+        { "title": "GIFs", "credits": "180 credits", "on": false }
+      ],
+      "position": { "zone": "demo", "y": 320 },
+      "enter": 180,
+      "exit": 240,
+      "animation": "3D_layered_card_stack",
+      "motion": {
+        "staggerFrames": 5,
+        "rotateZ_fan": 2,
+        "depthShadow": true,
+        "microFloat": true
+      },
+      "lighting": "soft_rim_light_green_edge_glow",
+      "zIndex": 5
+    }
+  ],
+  "scenes": [
+    {
+      "id": "hook",
+      "type": "hook",
+      "frames": [0, 60],
+      "headline": "ONE UPLOAD. EVERYTHING GENERATED.",
+      "greenWords": ["ONE", "EVERYTHING"],
+      "animation": {
+        "camera": "push_in_1.04",
+        "text": "fade_up_stagger_8f",
+        "decoration": "green_underline_reveal"
+      },
+      "background": {
+        "type": "ambient_layer",
+        "gradient": "deep_black_to_charcoal",
+        "grain": true,
+        "glow": { "color": "#94F33F", "opacity": 0.12, "size": 600 },
+        "particles": true,
+        "vignette": true
+      },
+      "zIndex": 5
+    },
+    {
+      "id": "ui_recreation",
+      "type": "product",
+      "frames": [60, 180],
+      "referenceFrames": [
+        "cutmv - general - demo video - 1677.png",
+        "cutmv - general - demo video - 1733.png"
+      ],
+      "headline": "CONFIGURE YOUR OUTPUT",
+      "uiComponents": [
+        "ConfigureOutputCard",
+        "GenerateCard"
+      ],
+      "motion": {
+        "cardFloat": true,
+        "parallaxDepth": true,
+        "glowOnToggle": true,
+        "spring_damping": 16,
+        "spring_mass": 0.8
+      },
+      "bottomText": "SHORT-FORM CLIPS, GIFS, THUMBNAILS",
+      "zIndex": 6
+    },
+    {
+      "id": "stack_cards",
+      "type": "showcase",
+      "frames": [180, 240],
+      "referenceFrames": [
+        "cutmv - general - demo video - 1752.png",
+        "cutmv - general - demo video - 1823.png"
+      ],
+      "animation": "3D_layered_card_stack_rotation",
+      "lighting": "soft_rim_light_green_edge_glow",
+      "overlayText": "GENERATED IN SECONDS.",
+      "decoration": "green_underline_reveal",
+      "zIndex": 5
+    },
+    {
+      "id": "cta",
+      "type": "cta",
+      "frames": [240, 300],
+      "referenceFrames": [
+        "cutmv - general - demo video - 1854.png",
+        "cutmv - general - demo video - 1863.png"
+      ],
+      "background": "green_gradient_flood",
+      "logo": { "id": "cutmv_logo", "widthPct": 0.6, "zIndex": 10 },
+      "fd_logo": { "id": "fd_logo", "widthPct": 0.18, "zIndex": 10 },
+      "text": {
+        "line1": "MORE CONTENT.",
+        "line1_color": "#fff",
+        "line2": "LESS WORK.",
+        "line2_color": "rgba(255,255,255,0.55)"
+      },
+      "zIndex": 10
+    }
+  ],
+  "captions": {
+    "segments": [
+      {
+        "start": 0, "end": 2,
+        "text": "ONE UPLOAD. EVERYTHING GENERATED.",
+        "emphasis": ["ONE", "EVERYTHING"],
+        "style": "premium_clean"
+      },
+      {
+        "start": 2, "end": 4,
+        "text": "CONFIGURE YOUR OUTPUT.",
+        "emphasis": ["CONFIGURE"],
+        "style": "premium_clean"
+      },
+      {
+        "start": 4, "end": 6,
+        "text": "SHORT-FORM CLIPS, GIFS, THUMBNAILS.",
+        "emphasis": ["CLIPS", "GIFS", "THUMBNAILS"],
+        "style": "scribble_callout"
+      },
+      {
+        "start": 6, "end": 8,
+        "text": "GENERATED IN SECONDS.",
+        "emphasis": ["SECONDS"],
+        "style": "scribble_callout"
+      },
+      {
+        "start": 8, "end": 10,
+        "text": "MORE CONTENT. LESS WORK.",
+        "emphasis": ["MORE", "LESS"],
+        "style": "premium_clean"
+      }
+    ]
+  },
+  "visualSystem": {
+    "background": "deep_black_to_charcoal_gradient",
+    "grain": { "opacity": 0.04, "animated": true },
+    "glow": { "color": "#94F33F", "opacity": 0.12, "breathing": true },
+    "particles": { "count": 8, "subtle": true },
+    "vignette": true,
+    "ctaOverride": "green_gradient_flood"
+  },
+  "motionPrinciples": [
+    "ease_in_out_cubic",
+    "3D_card_tilt",
+    "parallax_layering_depth",
+    "ui_micro_float",
+    "toggle_glow_pulse",
+    "auto_generate_button_pulse",
+    "no_harsh_transitions",
+    "no_jump_cuts",
+    "no_screenshot_snapping",
+    "intentional_and_premium"
+  ]
+}

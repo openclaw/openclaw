@@ -1,0 +1,112 @@
+# Skills registry — enabled capabilities and their configuration
+#
+# Each skill maps to an executor in the prompt engine.
+# Skills can be enabled/disabled per brand and per environment.
+
+skills:
+  grant_scanning:
+    enabled: true
+    executor: grant_executor
+    brands: [fulldigital]
+    description: "Scan grant databases, score opportunities, draft applications"
+    risk_level: low  # scanning is read-only; submission is high
+    schedule: "daily at 06:00 ET"
+    dependencies:
+      - candid_api
+      - submittable_api
+
+  marketing_analysis:
+    enabled: true
+    executor: marketing_executor
+    brands: [fulldigital, cutmv]
+    description: "Analyze campaign performance, propose next actions"
+    risk_level: medium  # proposals may involve spend recommendations
+    dependencies:
+      - ghl_api
+
+  content_generation:
+    enabled: true
+    executor: content_executor
+    brands: [fulldigital, cutmv]
+    description: "Generate ad hooks, captions, scripts, social content"
+    risk_level: low
+    model: content  # uses the 4b model by default
+    dependencies:
+      - ollama
+
+  system_health:
+    enabled: true
+    executor: system_executor
+    brands: [fulldigital, cutmv]
+    description: "Check cluster, gateway, Ollama, and service health"
+    risk_level: low
+    schedule: "every 15 minutes"
+
+  daily_guidance:
+    enabled: true
+    executor: daily_executor
+    brands: [fulldigital, cutmv]
+    description: "Compile today's priorities, deadlines, and focus areas"
+    risk_level: low
+    schedule: "daily at 08:00 ET"
+    dependencies:
+      - schedule_provider
+      - finance_provider
+
+  sales_pipeline:
+    enabled: true
+    executor: sales_executor
+    brands: [fulldigital]
+    description: "Pipeline status, stale deal detection, follow-up suggestions"
+    risk_level: low
+    dependencies:
+      - ghl_api
+
+  approval_processing:
+    enabled: true
+    executor: approval_executor
+    brands: [fulldigital, cutmv]
+    description: "Process approve/deny decisions from DA"
+    risk_level: low
+
+  media_rendering:
+    enabled: false
+    executor: media_executor
+    brands: [cutmv]
+    description: "Generate video cutdowns and Spotify Canvas loops via Remotion"
+    risk_level: medium
+    node: claw-m1  # requires heavy compute
+    dependencies:
+      - remotion
+      - ollama
+
+  research:
+    enabled: false
+    executor: research_executor
+    brands: [fulldigital, cutmv]
+    description: "Deep web research, competitor analysis, market intelligence"
+    risk_level: low
+    model: reasoning  # uses the 9b model
+    node: claw-m1
+
+# External service dependencies
+dependencies:
+  candid_api:
+    required_env: CANDID_API_KEY
+    status: configured
+
+  submittable_api:
+    required_env: SUBMITTABLE_API_KEY
+    status: configured
+
+  ghl_api:
+    required_env: GHL_API_KEY
+    status: configured
+
+  ollama:
+    required_env: OLLAMA_PRIMARY_HOST
+    status: active
+
+  remotion:
+    required_env: null
+    status: planned

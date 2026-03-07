@@ -1,0 +1,23 @@
+# Brand Voice Configuration
+# Enforces brand consistency across all generated content.
+# Every content artifact must include brand + voice_profile_id headers.
+# BrandGuard.validate() blocks generation if mismatched.
+
+brands:
+  fulldigital:
+    parent: fulldigital
+    primary_kpi: booked_calls
+    allowed_voice_profiles:
+      - fd_exec_authority
+      - fd_direct_response
+      - fd_case_study
+    default_voice_profile_id: fd_exec_authority
+
+  cutmv:
+    parent: fulldigital
+    primary_kpi: trials_to_paid
+    allowed_voice_profiles:
+      - cutmv_direct
+      - cutmv_creator
+      - cutmv_product
+    default_voice_profile_id: cutmv_product

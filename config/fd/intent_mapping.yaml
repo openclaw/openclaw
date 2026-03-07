@@ -1,0 +1,112 @@
+# Intent-to-Action Mapping Configuration
+# Maps classified intents to system capabilities.
+# Used by packages/intent/planner.py to build execution plans.
+
+# ── Agent Routing ──
+# (domain, brand) → target agent
+agent_routing:
+  fulldigital:
+    grantops: "fulldigital-finance"
+    marketing: "fulldigital-content"
+    sales: "fulldigital-sales"
+    cluster: "fulldigital-ops"
+    default: "fulldigital-ops"
+
+  cutmv:
+    marketing: "cutmv-growth"
+    sales: "cutmv-growth"
+    support: "cutmv-support"
+    cluster: "cutmv-ops"
+    default: "cutmv-ops"
+
+  # Brand-agnostic fallbacks
+  any:
+    cluster: "fulldigital-ops"
+    grantops: "fulldigital-finance"
+    default: "fulldigital-ops"
+
+# ── Approval Requirements ──
+# Actions that always require human approval, regardless of DRY_RUN
+always_require_approval:
+  - "grantops.submitter.initiate_submission"
+  - "marketing.prepare_campaign"
+  - "marketing.launch_campaign"
+  - "sales.send_outreach"
+  - "sales.send_proposal"
+  - "config.apply"
+  - "ads.update_budget"
+  - "billing.create_invoice"
+
+# ── Risk Classifications ──
+# Maps system calls to risk levels
+risk_levels:
+  safe:
+    - "information.query"
+    - "information.format"
+    - "analysis.gather"
+    - "analysis.run"
+    - "analysis.format"
+    - "cluster.check_ssh"
+    - "cluster.check_services"
+    - "cluster.check_ollama"
+    - "cluster.check_storage"
+    - "conversation.respond"
+    - "grantops.store.list_action_needed"
+    - "sales.summarize_pipeline"
+    - "integrations.ghl.get_pipeline"
+
+  moderate:
+    - "grantops.scanner.run_daily_scan"
+    - "grantops.scoring.score_batch"
+    - "grantops.store.upsert_opportunities"
+    - "grantops.drafter.create_draft_package"
+    - "grantops.drafter.extract_requirements"
+    - "creative.generate_hooks"
+    - "creative.generate_angles"
+    - "creative.generate_scripts"
+    - "creative.format_results"
+    - "content.plan_week"
+    - "jobs.queue.submit"
+    - "notion.update_content_calendar"
+    - "approvals.confirm"
+    - "analytics.content_performance"
+
+  high:
+    - "grantops.submitter.initiate_submission"
+    - "marketing.prepare_campaign"
+    - "marketing.launch_campaign"
+    - "sales.draft_outreach"
+    - "sales.review_outreach"
+    - "config.apply"
+
+# ── Response Style ──
+# Guidelines for the plain-English response formatter
+response_style:
+  # Never use these in user-facing responses
+  banned_terms:
+    - "pipeline"
+    - "executing"
+    - "process ID"
+    - "exit code"
+    - "stderr"
+    - "stdout"
+    - "exception"
+    - "traceback"
+    - "stack trace"
+    - "module"
+    - "function call"
+    - "API endpoint"
+    - "HTTP"
+    - "JSON"
+    - "SQL"
+
+  # Always use plain English equivalents
+  translations:
+    "pipeline executed": "workflow completed"
+    "job queued": "task scheduled"
+    "API called": "service contacted"
+    "database updated": "records saved"
+    "webhook received": "notification received"
+    "cron triggered": "scheduled task started"
+    "model inference": "thinking"
+    "context window": "conversation memory"

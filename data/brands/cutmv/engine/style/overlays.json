@@ -1,0 +1,94 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Overlay presets define which visual effects are available per style profile. Linked from profiles.json.",
+  "presets": {
+    "minimal_accent_v1": {
+      "description": "Premium clean — only subtle green accents. No scribbles.",
+      "allowed_effects": [
+        {
+          "id": "green_underline",
+          "type": "line",
+          "color": "#94F33F",
+          "height_px": 4,
+          "border_radius": 2,
+          "animation": "draw_left_to_right",
+          "duration_frames": 15
+        },
+        {
+          "id": "green_accent_bar",
+          "type": "line",
+          "color": "#94F33F",
+          "width_px": 4,
+          "position": "left_edge",
+          "animation": "grow_top_to_bottom",
+          "duration_frames": 12
+        }
+      ],
+      "blocked_effects": ["scribble", "hand_drawn", "marker", "arrow_burst", "caption_box"]
+    },
+    "scribble_pack_v1": {
+      "description": "Mixed media — full scribble toolkit for native feel.",
+      "allowed_effects": [
+        {
+          "id": "marker_circle",
+          "type": "scribble",
+          "color": "#94F33F",
+          "stroke_width": 3,
+          "animation": "draw_clockwise",
+          "duration_frames": 12
+        },
+        {
+          "id": "hand_drawn_arrow",
+          "type": "scribble",
+          "color": "#FFFFFF",
+          "stroke_width": 3,
+          "animation": "draw_from_tail",
+          "duration_frames": 9
+        },
+        {
+          "id": "strike_through",
+          "type": "scribble",
+          "color": "#FF4444",
+          "stroke_width": 4,
+          "animation": "draw_left_to_right",
+          "duration_frames": 6
+        },
+        {
+          "id": "highlight_swipe",
+          "type": "marker",
+          "color": "#94F33F",
+          "opacity": 0.3,
+          "animation": "swipe_left_to_right",
+          "duration_frames": 8
+        },
+        {
+          "id": "underline_sketch",
+          "type": "scribble",
+          "color": "#94F33F",
+          "stroke_width": 3,
+          "animation": "draw_left_to_right",
+          "duration_frames": 9
+        },
+        {
+          "id": "arrow_burst",
+          "type": "scribble",
+          "color": "#FFFFFF",
+          "stroke_width": 2,
+          "count": 3,
+          "animation": "burst_outward",
+          "duration_frames": 10
+        },
+        {
+          "id": "caption_box",
+          "type": "background",
+          "color": "#000000",
+          "opacity": 0.85,
+          "padding": 16,
+          "border_radius": 8
+        }
+      ],
+      "blocked_effects": []
+    }
+  }
+}

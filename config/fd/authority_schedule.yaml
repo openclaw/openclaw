@@ -1,0 +1,97 @@
+# ── Authority Content Auto-Scheduler ──
+#
+# Drives the weekly content cadence for authority building.
+# Brain calls authority_scheduler on Mondays or when gap detected.
+
+schedule:
+  default_cadence:
+    reels: 3
+    carousels: 2
+    stories: 2
+    emails: 1
+    total_weekly: 8
+
+  # When KPI gap is positive (need more bookings), increase cadence
+  high_urgency_cadence:
+    reels: 5
+    carousels: 3
+    stories: 3
+    emails: 2
+    total_weekly: 13
+
+  urgency_threshold_kpi_gap: 2  # +2 calls/day gap triggers high urgency
+
+# ── Content type rotation ──
+# Day 0=Mon through 6=Sun
+weekly_template:
+  - day: 0
+    content_type: case_study
+    description: "Client result / transformation story"
+    format: carousel
+    priority: high
+
+  - day: 1
+    content_type: hook
+    description: "Pain-first hook — stop the scroll"
+    format: reel
+    priority: high
+
+  - day: 2
+    content_type: mechanism
+    description: "Explain the Visual Era Framework"
+    format: carousel
+    priority: medium
+
+  - day: 3
+    content_type: social_proof
+    description: "Screenshot / testimonial / DM"
+    format: story
+    priority: medium
+
+  - day: 4
+    content_type: authority_post
+    description: "Industry insight or hot take"
+    format: reel
+    priority: high
+
+  - day: 5
+    content_type: cta
+    description: "Direct call to action post"
+    format: reel
+    priority: high
+
+  - day: 6
+    content_type: engagement
+    description: "Weekend engagement hook"
+    format: story
+    priority: low
+
+# ── Source signals (what feeds content ideas) ──
+content_sources:
+  - source: case_studies
+    description: "Closed-won clients with strong outcomes"
+    min_revenue_cents: 500000
+
+  - source: vsl_hooks
+    description: "Top-performing VSL hooks to repurpose"
+
+  - source: ad_winners
+    description: "Best-performing ad angles to repurpose"
+
+  - source: offer_angles
+    description: "Active angles from rotation matrix"
+
+  - source: dm_triggers
+    description: "DM conversations that led to bookings"
+
+# ── Notion integration ──
+notion:
+  content_queue_db_name: "Content Queue"
+  content_calendar_db_name: "Content Calendar"
+  idempotency_prefix: "content"
+
+# ── Safety ──
+safety:
+  safe_mode_default: true
+  max_items_per_seed: 15
+  require_approval_for_publish: true

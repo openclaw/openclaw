@@ -1,0 +1,486 @@
+{
+  "id": "cutmv_premium_v035",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 97,
+      "headlineLines": [
+        {
+          "text": "FORMATS READY",
+          "emphasis": false
+        },
+        {
+          "text": "FOR SOCIAL.",
+          "emphasis": true
+        }
+      ],
+      "transitionOut": {
+        "type": "sweep",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "badge_new",
+          "kind": "badge",
+          "text": "NEW",
+          "motion": {
+            "enter": {
+              "preset": "BADGE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "BADGE_OUT",
+              "at": 54
+            }
+          }
+        },
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "FORMATS READY",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 54
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "FOR SOCIAL.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 56
+            }
+          }
+        },
+        {
+          "id": "sub1",
+          "kind": "subhead",
+          "text": "TIKTOK + REELS + SHORTS",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 22
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 56
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "UNDERLINE_IN",
+              "at": 26
+            },
+            "exit": {
+              "preset": "UNDERLINE_OUT",
+              "at": 56
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_ui_configure",
+      "type": "uiMock",
+      "from": 97,
+      "duration": 211,
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "title": "CONFIGURE OUTPUTS",
+        "aspectToggles": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "outputs": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "primaryButton": "START CREATING NOW"
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "CONFIGURE.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 10
+      },
+      "elements": [
+        {
+          "id": "cfg_head",
+          "kind": "headline",
+          "text": "CONFIGURE.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 138
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "uiOptions": {
+            "title": "CONFIGURE OUTPUTS",
+            "aspectToggles": [
+              "9:16",
+              "1:1",
+              "16:9"
+            ],
+            "outputs": [
+              "CLIPS",
+              "GIFS",
+              "THUMBNAILS",
+              "CANVAS"
+            ],
+            "primaryButton": "START CREATING NOW"
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 12
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 136
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": false
+                  },
+                  {
+                    "label": "GIFS",
+                    "on": false
+                  },
+                  {
+                    "label": "THUMBNAILS",
+                    "on": false
+                  },
+                  {
+                    "label": "CANVAS",
+                    "on": false
+                  }
+                ],
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 16,
+              "props": {
+                "tapTarget": "aspect.1:1",
+                "tap": {
+                  "x": 182,
+                  "y": 179
+                },
+                "activeAspect": 1
+              }
+            },
+            {
+              "at": 32,
+              "props": {
+                "tapTarget": "aspect.16:9",
+                "tap": {
+                  "x": 292,
+                  "y": 179
+                },
+                "activeAspect": 2
+              }
+            },
+            {
+              "at": 48,
+              "props": {
+                "tapTarget": "aspect.9:16",
+                "tap": {
+                  "x": 72,
+                  "y": 179
+                },
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 66,
+              "props": {
+                "tapTarget": "toggle.thumbnails",
+                "tap": {
+                  "x": 762,
+                  "y": 384
+                },
+                "toggles": [
+                  {
+                    "label": "THUMBNAILS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 2
+              }
+            },
+            {
+              "at": 80,
+              "props": {
+                "tapTarget": "toggle.clips",
+                "tap": {
+                  "x": 762,
+                  "y": 264
+                },
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 0
+              }
+            },
+            {
+              "at": 96,
+              "props": {
+                "tapTarget": "button.start",
+                "pressed": true,
+                "tap": {
+                  "x": 410,
+                  "y": 520
+                }
+              }
+            },
+            {
+              "at": 104,
+              "props": {
+                "pressed": false,
+                "progress": 0,
+                "status": "generating"
+              }
+            },
+            {
+              "at": 116,
+              "props": {
+                "progress": 0.5
+              }
+            },
+            {
+              "at": 128,
+              "props": {
+                "progress": 1,
+                "status": "done",
+                "checkmarks": [
+                  "CLIPS",
+                  "THUMBNAILS"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "slowDrift",
+        "vignette": 0.3
+      },
+      "contextBadge": "AFTER"
+    },
+    {
+      "id": "s3_cta",
+      "type": "ctaEndcard",
+      "from": 308,
+      "duration": 142,
+      "headline": {
+        "text": "TRY CUTMV NOW.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED",
+        "style": "solid_green"
+      },
+      "footer": "CLIPS + GIFS + THUMBNAILS + CANVAS",
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "TRY CUTMV NOW.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 46
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "GET EARLY ACCESS",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 48
+            }
+          }
+        },
+        {
+          "id": "foot_cta",
+          "kind": "support",
+          "text": "EARLY ACCESS • BUILT BY FULL DIGITAL",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 22
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 50
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

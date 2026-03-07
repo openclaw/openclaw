@@ -1,0 +1,599 @@
+{
+  "id": "cutmv_premium_v038",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_before_one_by_one",
+      "type": "impactText",
+      "from": 0,
+      "duration": 120,
+      "headlineLines": [
+        {
+          "text": "EXPORTING",
+          "emphasis": false
+        },
+        {
+          "text": "ONE BY ONE?",
+          "emphasis": true
+        }
+      ],
+      "enhancedTransitionOut": {
+        "type": "sweep",
+        "coverage": "full",
+        "duration": 18
+      },
+      "elements": [
+        {
+          "id": "badge_before",
+          "kind": "badge",
+          "text": "BEFORE",
+          "motion": {
+            "enter": {
+              "preset": "BADGE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "BADGE_OUT",
+              "at": 84
+            }
+          }
+        },
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "EXPORTING",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 86
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "ONE BY ONE?",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 88
+            }
+          }
+        },
+        {
+          "id": "sub1",
+          "kind": "subhead",
+          "text": "THAT'S THE OLD WAY.",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 24
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 90
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "UNDERLINE_IN",
+              "at": 28
+            },
+            "exit": {
+              "preset": "UNDERLINE_OUT",
+              "at": 90
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "ugc_fastcuts",
+        "seed": 3801,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "BEFORE"
+    },
+    {
+      "id": "s2_promise",
+      "type": "hookText",
+      "from": 120,
+      "duration": 90,
+      "headlineLines": [
+        {
+          "text": "1 UPLOAD.",
+          "emphasis": true
+        }
+      ],
+      "enhancedTransitionOut": {
+        "type": "crossfade",
+        "coverage": "full",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "h1_promise",
+          "kind": "headline",
+          "text": "1 UPLOAD.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 58
+            }
+          }
+        },
+        {
+          "id": "sub_promise",
+          "kind": "subhead",
+          "text": "CLIPS + GIFS + THUMBNAILS + CANVAS",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 18
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 60
+            }
+          }
+        },
+        {
+          "id": "u1_promise",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "UNDERLINE_IN",
+              "at": 24
+            },
+            "exit": {
+              "preset": "UNDERLINE_OUT",
+              "at": 60
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "seed": 3802,
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s3_configure",
+      "type": "uiMock",
+      "from": 210,
+      "duration": 165,
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "title": "CONFIGURE OUTPUTS",
+        "aspectToggles": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "outputs": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "primaryButton": "START CREATING NOW"
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "CONFIGURE.",
+          "underline": false
+        }
+      },
+      "enhancedTransitionOut": {
+        "type": "wipe",
+        "coverage": "full",
+        "direction": "leftToRight",
+        "duration": 16,
+        "featherPx": 30
+      },
+      "elements": [
+        {
+          "id": "cfg_head",
+          "kind": "headline",
+          "text": "CONFIGURE.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 138
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "uiOptions": {
+            "title": "CONFIGURE OUTPUTS",
+            "aspectToggles": [
+              "9:16",
+              "1:1",
+              "16:9"
+            ],
+            "outputs": [
+              "CLIPS",
+              "GIFS",
+              "THUMBNAILS",
+              "CANVAS"
+            ],
+            "primaryButton": "START CREATING NOW"
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 136
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": false
+                  },
+                  {
+                    "label": "GIFS",
+                    "on": false
+                  },
+                  {
+                    "label": "THUMBNAILS",
+                    "on": false
+                  },
+                  {
+                    "label": "CANVAS",
+                    "on": false
+                  }
+                ],
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 12,
+              "props": {
+                "tapTarget": "toggle.clips",
+                "tap": {
+                  "x": 762,
+                  "y": 264
+                },
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 0
+              }
+            },
+            {
+              "at": 28,
+              "props": {
+                "tapTarget": "toggle.gifs",
+                "tap": {
+                  "x": 762,
+                  "y": 324
+                },
+                "toggles": [
+                  {
+                    "label": "GIFS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 1
+              }
+            },
+            {
+              "at": 44,
+              "props": {
+                "tapTarget": "toggle.thumbnails",
+                "tap": {
+                  "x": 762,
+                  "y": 384
+                },
+                "toggles": [
+                  {
+                    "label": "THUMBNAILS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 2
+              }
+            },
+            {
+              "at": 60,
+              "props": {
+                "tapTarget": "toggle.canvas",
+                "tap": {
+                  "x": 762,
+                  "y": 444
+                },
+                "toggles": [
+                  {
+                    "label": "CANVAS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 3
+              }
+            },
+            {
+              "at": 90,
+              "props": {
+                "tapTarget": "button.start",
+                "pressed": true,
+                "tap": {
+                  "x": 410,
+                  "y": 520
+                }
+              }
+            },
+            {
+              "at": 98,
+              "props": {
+                "pressed": false,
+                "progress": 0,
+                "status": "generating"
+              }
+            },
+            {
+              "at": 110,
+              "props": {
+                "progress": 0.4
+              }
+            },
+            {
+              "at": 120,
+              "props": {
+                "progress": 0.75
+              }
+            },
+            {
+              "at": 130,
+              "props": {
+                "progress": 1,
+                "status": "done",
+                "checkmarks": [
+                  "CLIPS",
+                  "GIFS",
+                  "THUMBNAILS",
+                  "CANVAS"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "slowDrift",
+        "seed": 3803,
+        "vignette": 0.3
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s4_end_beta",
+      "type": "ctaEndcard",
+      "from": 375,
+      "duration": 75,
+      "headline": {
+        "text": "BETA IS LIVE.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET BETA ACCESS",
+        "style": "solid_green"
+      },
+      "footer": "JOIN BETA — HELP SHAPE IT.",
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "BETA IS LIVE.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 42
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "GET BETA ACCESS",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 44
+            }
+          }
+        },
+        {
+          "id": "foot_cta",
+          "kind": "support",
+          "text": "JOIN BETA — HELP SHAPE IT.",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 20
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 46
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "pulse",
+        "seed": 3804,
+        "vignette": 0.35
+      },
+      "contextBadge": "BETA",
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "spec_version": "1.0.0",
+  "template_id": "hormozi_education_v1",
+  "brand": "cutmv",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration_sec": 12,
+    "total_frames": 360,
+    "aspect_ratio": "9:16",
+    "codec": "h264"
+  },
+  "style_profile": "fast_educational_mixed_media",
+  "design_philosophy": {
+    "principles": [
+      "Fast punchy cuts for maximum retention",
+      "Hormozi-style educational pacing",
+      "Caption always on screen",
+      "Aggressive clarity over subtlety",
+      "Scribble overlays for native feel"
+    ],
+    "use_case": "SaaS education ad — high retention, fast pacing"
+  },
+  "global_rules": {
+    "aspect_ratio": "9:16",
+    "all_caps": true,
+    "high_contrast": true,
+    "cta_required": true,
+    "caption_always_on": true,
+    "background": "#000000",
+    "typography_color": "#FFFFFF",
+    "accent_color": "#94F33F",
+    "accent_usage": "underline_and_scribble_highlights"
+  },
+  "structure": [
+    {
+      "scene": 1,
+      "id": "hook_text",
+      "type": "hook_text",
+      "text": "STOP EDITING MUSIC VIDEOS MANUALLY.",
+      "time": { "start_sec": 0, "end_sec": 2 },
+      "frames": { "start": 0, "end": 60 },
+      "animation": {
+        "type": "hard_cut_fade_in",
+        "fade_in_sec": 0.1,
+        "scale": { "from": 1.0, "to": 1.05, "easing": "easeOutCubic" }
+      },
+      "overlay_effect": "scribble_strike_bottom",
+      "font_size": 64,
+      "font_weight": 800,
+      "position": "center_center",
+      "max_width_pct": 0.75,
+      "z_index": 5,
+      "description": "Hard-hitting hook. Fast fade in. Scale punch. Scribble strike below text."
+    },
+    {
+      "scene": 2,
+      "id": "value_punch",
+      "type": "value_punch",
+      "text": "CUTMV DOES IT FOR YOU.",
+      "time": { "start_sec": 2, "end_sec": 4 },
+      "frames": { "start": 60, "end": 120 },
+      "animation": {
+        "type": "zoom_snap",
+        "scale": { "from": 0.85, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.3 },
+        "fade_in_sec": 0.1
+      },
+      "overlay_effect": "marker_circle_highlight",
+      "font_size": 56,
+      "font_weight": 700,
+      "position": "center_center",
+      "max_width_pct": 0.7,
+      "z_index": 5,
+      "description": "Value proposition snap. Marker circle around 'CUTMV'."
+    },
+    {
+      "scene": 3,
+      "id": "ui_demo_clip",
+      "type": "ui_demo_clip",
+      "asset": {
+        "path": "cutmv/dashboard_ui.jpg",
+        "loader": "staticFile",
+        "crop": "top_center"
+      },
+      "time": { "start_sec": 4, "end_sec": 8 },
+      "frames": { "start": 120, "end": 240 },
+      "animation": {
+        "type": "punch_in_zoom",
+        "scale": { "from": 0.95, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.4 },
+        "fade_in_sec": 0.3,
+        "fade_out_sec": 0.3
+      },
+      "overlay_effect": "animated_arrow_pointing",
+      "width_pct": 0.9,
+      "border_radius": 12,
+      "z_index": 3,
+      "description": "Real dashboard UI. Punch-in zoom. Animated arrow points to key feature."
+    },
+    {
+      "scene": 4,
+      "id": "benefit_flash",
+      "type": "benefit_flash",
+      "text_sequence": ["CLIPS.", "GIFS.", "THUMBNAILS.", "CANVAS."],
+      "time": { "start_sec": 8, "end_sec": 10 },
+      "frames": { "start": 240, "end": 300 },
+      "animation": {
+        "type": "rapid_stagger",
+        "stagger_rhythm_sec": 0.1,
+        "fade_in_duration_sec": 0.15,
+        "scale_snap": { "from": 1.1, "to": 1.0 }
+      },
+      "overlay_effect": "quick_scribble_underlines",
+      "font_size": 48,
+      "font_weight": 700,
+      "position": "center_center",
+      "vertical_spacing_px": 60,
+      "z_index": 6,
+      "description": "Rapid-fire benefit list. Each word snaps in at 0.1s intervals. Scribble underlines each."
+    },
+    {
+      "scene": 5,
+      "id": "cta",
+      "type": "cta",
+      "text": "TRY CUTMV",
+      "time": { "start_sec": 10, "end_sec": 12 },
+      "frames": { "start": 300, "end": 360 },
+      "animation": {
+        "type": "bold_scale_up",
+        "scale": { "from": 0.8, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.4 },
+        "fade_in_sec": 0.3,
+        "hold_until_end": true
+      },
+      "overlay_effect": "none",
+      "font_size": 72,
+      "font_weight": 800,
+      "position": "center_center",
+      "z_index": 9,
+      "description": "Bold CTA scale up. Clean. No overlay. Holds to end."
+    }
+  ],
+  "render": {
+    "output_pattern": "cutmv__motion__hormozi-education__reels__1080x1920__dur-12__v001",
+    "composition_id": "HormoziEducation"
+  }
+}

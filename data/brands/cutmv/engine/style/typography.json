@@ -1,0 +1,47 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Typography contracts. Every text element must reference a type preset.",
+  "presets": {
+    "cutmv_type_v1": {
+      "description": "Standard premium typography — clean, readable, authoritative.",
+      "font_stack": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "text_transform": "uppercase",
+      "color": "#FFFFFF",
+      "sizes": {
+        "hero": { "fontSize": 68, "fontWeight": 800, "lineHeight": 1.15, "letterSpacing": "0.02em" },
+        "headline": { "fontSize": 56, "fontWeight": 700, "lineHeight": 1.15, "letterSpacing": "0.02em" },
+        "subheadline": { "fontSize": 42, "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "0.02em" },
+        "body": { "fontSize": 32, "fontWeight": 600, "lineHeight": 1.25, "letterSpacing": "0.04em" },
+        "label": { "fontSize": 28, "fontWeight": 600, "lineHeight": 1.3, "letterSpacing": "0.06em" },
+        "cta": { "fontSize": 64, "fontWeight": 700, "lineHeight": 1.1, "letterSpacing": "0.03em" }
+      },
+      "constraints": {
+        "min_font_size": 28,
+        "max_font_size": 72,
+        "min_opacity": 0.9,
+        "always_uppercase": true
+      }
+    },
+    "cutmv_type_bold_v1": {
+      "description": "Bold variant for educational/native — heavier weights, tighter leading.",
+      "font_stack": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "text_transform": "uppercase",
+      "color": "#FFFFFF",
+      "sizes": {
+        "hero": { "fontSize": 72, "fontWeight": 900, "lineHeight": 1.05, "letterSpacing": "0.01em" },
+        "headline": { "fontSize": 60, "fontWeight": 800, "lineHeight": 1.1, "letterSpacing": "0.02em" },
+        "subheadline": { "fontSize": 48, "fontWeight": 700, "lineHeight": 1.15, "letterSpacing": "0.02em" },
+        "body": { "fontSize": 36, "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "0.03em" },
+        "label": { "fontSize": 32, "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "0.04em" },
+        "cta": { "fontSize": 72, "fontWeight": 900, "lineHeight": 1.05, "letterSpacing": "0.02em" }
+      },
+      "constraints": {
+        "min_font_size": 32,
+        "max_font_size": 76,
+        "min_opacity": 1.0,
+        "always_uppercase": true
+      }
+    }
+  }
+}

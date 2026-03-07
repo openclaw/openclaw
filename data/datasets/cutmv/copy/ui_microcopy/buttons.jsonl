@@ -1,0 +1,18 @@
+{"id":"cmv_btn_0001","brand":"cutmv","key":"primary_cta","text":"TRY CUTMV","context":"global","constraints":["ALL_CAPS"],"source":"user_rule","status":"approved"}
+{"id":"cmv_btn_0002","brand":"cutmv","key":"upload","text":"UPLOAD VIDEO","context":"dashboard","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_btn_0003","brand":"cutmv","key":"export","text":"EXPORT","context":"results","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_btn_1001","brand":"cutmv","key":"hero_logged_out","text":"Start Creating Now →","context":"landing_hero","status":"extracted"}
+{"id":"cmv_btn_1002","brand":"cutmv","key":"hero_logged_in","text":"Go to Dashboard →","context":"landing_hero","status":"extracted"}
+{"id":"cmv_btn_1003","brand":"cutmv","key":"pricing_cta","text":"Start Processing Videos","context":"pricing_section","status":"extracted"}
+{"id":"cmv_btn_2001","brand":"cutmv","key":"login","text":"LOG IN","context":"login_page","flow_stage":"login","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2002","brand":"cutmv","key":"signup","text":"SIGN UP","context":"login_page","flow_stage":"login","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2003","brand":"cutmv","key":"forgot_password","text":"FORGOT PASSWORD","context":"login_page","flow_stage":"login","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2004","brand":"cutmv","key":"get_started","text":"GET STARTED","context":"onboarding","flow_stage":"onboarding","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2005","brand":"cutmv","key":"skip_tour","text":"SKIP TOUR","context":"onboarding","flow_stage":"onboarding","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2006","brand":"cutmv","key":"upload_video","text":"UPLOAD VIDEO","context":"dashboard","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2007","brand":"cutmv","key":"view_exports","text":"VIEW EXPORTS","context":"dashboard","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2008","brand":"cutmv","key":"download_all","text":"DOWNLOAD ALL","context":"results_page","flow_stage":"dashboard","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2009","brand":"cutmv","key":"choose_plan","text":"CHOOSE PLAN","context":"pricing_page","flow_stage":"pricing","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_2010","brand":"cutmv","key":"manage_subscription","text":"MANAGE SUBSCRIPTION","context":"account_settings","flow_stage":"settings","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}
+{"id":"cmv_btn_1004","brand":"cutmv","key":"start_creating","text":"START CREATING NOW","context":"landing","constraints":["ALL_CAPS"],"source":"cutmv.fulldigitalll.com","status":"extracted"}
+{"id":"cmv_btn_1005","brand":"cutmv","key":"configure_output","text":"CONFIGURE OUTPUT","context":"landing","constraints":["ALL_CAPS"],"source":"cutmv.fulldigitalll.com","status":"extracted"}

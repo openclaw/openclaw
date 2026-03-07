@@ -1,0 +1,58 @@
+# ── Automated Setter Routing Policy ──
+#
+# Routes leads to setters based on quality score, capacity, and fairness.
+# Never overrides setter_locked leads.
+
+setter_policy:
+  max_daily_leads_per_setter: 15
+  default_max_queue: 20
+
+  # Fairness constraints: no setter gets < 15% or > 45% of leads
+  fairness:
+    min_share: 0.15
+    max_share: 0.45
+    rebalance_on_capacity_change: true
+
+  # High-value routing: best leads → best setters
+  routing:
+    high_value_offer_ids:
+      - major_label_rollout_sim
+    high_value_min_quality_score: 70
+
+    # How we compute lead quality (0-100)
+    quality_signals:
+      - signal: application_score
+        weight: 0.40
+        description: "Score from application form fields"
+      - signal: show_rate_history
+        weight: 0.25
+        description: "Historical show rate for this lead source"
+      - signal: lead_source_quality
+        weight: 0.20
+        description: "Quality score of the acquisition source"
+      - signal: engagement_depth
+        weight: 0.15
+        description: "Number of touchpoints before booking"
+
+  # Setter scoring weights (for ranking setters)
+  setter_scoring:
+    close_rate_weight: 0.55
+    show_rate_weight: 0.30
+    speed_weight: 0.15
+    # Normalize against these targets
+    close_rate_target: 0.30     # 30% close = perfect score
+    show_rate_target: 0.80      # 80% show = perfect score
+    max_response_minutes: 60    # Under 60 min = perfect speed score
+
+  # Override rules
+  overrides:
+    setter_locked_respected: true       # If lead has setter_locked=true, never reroute
+    manual_assignment_respected: true   # If lead was manually assigned, don't auto-reroute
+    training_setter_max_quality: 50     # Training setters only get leads with quality < 50
+
+# ── Audit ──
+audit:
+  log_every_routing_decision: true
+  log_to_notion: true
+  log_to_db: true
+  explain_format: policy_debug_explain

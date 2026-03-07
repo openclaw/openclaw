@@ -1,0 +1,520 @@
+{
+  "id": "cutmv_premium_v015",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.22
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.14,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook_fast",
+      "type": "hookText",
+      "from": 0,
+      "duration": 58,
+      "headlineLines": [
+        {
+          "text": "STOP WASTING DAYS.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "CUTDOWNS IN SECONDS.",
+      "transitionOut": {
+        "type": "wipe",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "STOP WASTING DAYS.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 30
+            }
+          }
+        },
+        {
+          "id": "sub1",
+          "kind": "support",
+          "text": "CUTDOWNS IN SECONDS.",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 32
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_ui_montage",
+      "type": "uiMockMontage",
+      "from": 58,
+      "duration": 129,
+      "uiPreset": "cutmv_montage_dark",
+      "uiOptions": {
+        "modules": [
+          {
+            "preset": "cutmv_configure_output_options_dark",
+            "weight": 0.35
+          },
+          {
+            "preset": "cutmv_dashboard_outputs_dark",
+            "weight": 0.35
+          },
+          {
+            "preset": "cutmv_pricing_cards_dark",
+            "weight": 0.3
+          }
+        ]
+      },
+      "layout": {
+        "anchor": "center"
+      },
+      "transitionOut": {
+        "type": "sweep",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "montage_head",
+          "kind": "headline",
+          "text": "CLIPS. GIFS. THUMBNAILS.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 88
+            }
+          }
+        },
+        {
+          "id": "ui_montage",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_montage_dark",
+          "uiOptions": {
+            "modules": [
+              {
+                "preset": "cutmv_configure_output_options_dark",
+                "weight": 0.35
+              },
+              {
+                "preset": "cutmv_dashboard_outputs_dark",
+                "weight": 0.35
+              },
+              {
+                "preset": "cutmv_pricing_cards_dark",
+                "weight": 0.3
+              }
+            ]
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 84
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_dense",
+        "seed": 304,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s3_ui_configure_clicks",
+      "type": "uiMock",
+      "from": 187,
+      "duration": 137,
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "title": "CONFIGURE OUTPUTS",
+        "aspectToggles": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "outputs": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "primaryButton": "START CREATING NOW"
+      },
+      "layout": {
+        "anchor": "center"
+      },
+      "transitionOut": {
+        "type": "crossfade",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "uiOptions": {
+            "title": "CONFIGURE OUTPUTS",
+            "aspectToggles": [
+              "9:16",
+              "1:1",
+              "16:9"
+            ],
+            "outputs": [
+              "CLIPS",
+              "GIFS",
+              "THUMBNAILS",
+              "CANVAS"
+            ],
+            "primaryButton": "START CREATING NOW"
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 4
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 96
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": false
+                  },
+                  {
+                    "label": "GIFS",
+                    "on": false
+                  },
+                  {
+                    "label": "THUMBNAILS",
+                    "on": false
+                  },
+                  {
+                    "label": "CANVAS",
+                    "on": false
+                  }
+                ],
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 16,
+              "props": {
+                "tapTarget": "toggle.clips",
+                "tap": {
+                  "x": 762,
+                  "y": 264
+                },
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 0
+              }
+            },
+            {
+              "at": 28,
+              "props": {
+                "tapTarget": "toggle.gifs",
+                "tap": {
+                  "x": 762,
+                  "y": 324
+                },
+                "toggles": [
+                  {
+                    "label": "GIFS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 1
+              }
+            },
+            {
+              "at": 40,
+              "props": {
+                "tapTarget": "toggle.canvas",
+                "tap": {
+                  "x": 762,
+                  "y": 444
+                },
+                "toggles": [
+                  {
+                    "label": "CANVAS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 3
+              }
+            },
+            {
+              "at": 58,
+              "props": {
+                "tapTarget": "button.start",
+                "pressed": true,
+                "tap": {
+                  "x": 410,
+                  "y": 520
+                }
+              }
+            },
+            {
+              "at": 64,
+              "props": {
+                "pressed": false,
+                "progress": 0,
+                "status": "generating"
+              }
+            },
+            {
+              "at": 74,
+              "props": {
+                "progress": 0.55
+              }
+            },
+            {
+              "at": 92,
+              "props": {
+                "progress": 1,
+                "status": "done",
+                "checkmarks": [
+                  "CLIPS",
+                  "GIFS",
+                  "CANVAS"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_dense",
+        "seed": 311,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s4_cta",
+      "type": "ctaEndcard",
+      "from": 324,
+      "duration": 126,
+      "headline": {
+        "text": "GET STARTED.",
+        "emphasis": true
+      },
+      "footer": "EXPORT READY • NO WATERMARKS",
+      "cta": {
+        "text": "TRY CUTMV",
+        "style": "solid_green"
+      },
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "GET STARTED.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 48
+            }
+          }
+        },
+        {
+          "id": "foot_cta",
+          "kind": "support",
+          "text": "BUILT BY FULL DIGITAL",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 12
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 50
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

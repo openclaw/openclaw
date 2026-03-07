@@ -1,0 +1,104 @@
+# ── VSL Retention Optimizer — Variant Configuration ──
+#
+# Tracks VSL hook variants, pacing, CTAs.
+# Correlates retention metrics to downstream conversions.
+
+vsls:
+  - vsl_id: fd_vsl_main
+    brand: fulldigital
+    title: "Full Digital — Major Label Rollout VSL"
+    page_url: ""  # ClickFunnels URL
+    length_sec: 1200
+    variants:
+      - variant_id: hook_a
+        hook_script: "You don't need a designer. You need a visual era."
+        hook_type: identity
+        fatigue_group: hook
+        active: true
+
+      - variant_id: hook_b
+        hook_script: "If your drop day doesn't spike, you're invisible."
+        hook_type: pain
+        fatigue_group: hook
+        active: true
+
+      - variant_id: hook_c
+        hook_script: "What if your next release looked like it had a label budget?"
+        hook_type: aspiration
+        fatigue_group: hook
+        active: false  # queued for next rotation
+
+      - variant_id: hook_d
+        hook_script: "Stop dropping music into the void."
+        hook_type: pain_short
+        fatigue_group: hook
+        active: false
+
+  - vsl_id: fd_vsl_retainer
+    brand: fulldigital
+    title: "Full Digital — Era Control Retainer VSL"
+    page_url: ""
+    length_sec: 600
+    variants:
+      - variant_id: retainer_hook_a
+        hook_script: "One project doesn't build a visual era. A system does."
+        hook_type: mechanism
+        fatigue_group: retainer_hook
+        active: true
+
+      - variant_id: retainer_hook_b
+        hook_script: "Your last drop looked great. But what about the next 3?"
+        hook_type: continuity
+        fatigue_group: retainer_hook
+        active: true
+
+# ── Retention scoring weights ──
+scoring:
+  # Weighted retention score: how well the VSL holds attention
+  # p25 = % still watching at 25% mark, etc.
+  retention_weights:
+    p25: 0.15
+    p50: 0.35
+    p75: 0.30
+    p90: 0.20
+
+  # Conversion scoring weights
+  conversion_weights:
+    cta_click_rate: 0.30
+    booking_rate: 0.35
+    application_rate: 0.20
+    paid_rate: 0.15
+
+  # Thresholds
+  retention_floor: 0.30          # Below this: rewrite hook
+  high_retention_low_conv: 0.60  # Retention above this + low conv = fix CTA
+  min_views_for_winner: 50
+  min_views_for_rotation: 30
+
+# ── Diagnostic rules ──
+diagnostics:
+  - condition: "retention_score < retention_floor"
+    diagnosis: "Hook is weak — losing viewers early"
+    action: rewrite_hook
+    priority: high
+
+  - condition: "retention_score >= high_retention_low_conv AND app_rate < 0.03"
+    diagnosis: "Good watch time but low conversion — CTA/proof issue"
+    action: increase_proof_density
+    priority: high
+
+  - condition: "drop_off_minute < 2.0"
+    diagnosis: "Catastrophic early drop-off"
+    action: rewrite_opening_30s
+    priority: critical
+
+  - condition: "cta_click_rate < 0.05 AND retention_score > 0.50"
+    diagnosis: "Viewers watch but don't click CTA — CTA positioning issue"
+    action: move_cta_earlier
+    priority: medium
+
+# ── Safety ──
+safety:
+  auto_publish_variants: false  # Never auto-publish VSL changes
+  require_approval: true
+  max_active_variants_per_vsl: 2

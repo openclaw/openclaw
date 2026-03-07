@@ -1,0 +1,153 @@
+{
+  "spec_version": "1.0.0",
+  "template_id": "mixed_media_scribble_v1",
+  "brand": "cutmv",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration_sec": 14,
+    "total_frames": 420,
+    "aspect_ratio": "9:16",
+    "codec": "h264"
+  },
+  "style_profile": "mixed_media_tiktok_native",
+  "design_philosophy": {
+    "principles": [
+      "TikTok-native feel — scroll-stopping energy",
+      "Mixed media overlays (scribbles, arrows, markers)",
+      "Problem → Solution → Demo → CTA arc",
+      "High engagement through visual variety",
+      "Feels creator-made, not corporate"
+    ],
+    "use_case": "TikTok/Reels native engagement ad — organic creator aesthetic"
+  },
+  "global_rules": {
+    "aspect_ratio": "9:16",
+    "all_caps": true,
+    "high_contrast": true,
+    "cta_required": true,
+    "background": "#000000",
+    "typography_color": "#FFFFFF",
+    "accent_color": "#94F33F"
+  },
+  "overlays": {
+    "scribble_pack": true,
+    "animated_arrows": true,
+    "marker_highlights": true,
+    "caption_background_boxes": true
+  },
+  "structure": [
+    {
+      "scene": 1,
+      "id": "hook",
+      "type": "hook",
+      "text": "THIS CHANGED HOW I POST MUSIC VIDEOS.",
+      "time": { "start_sec": 0, "end_sec": 2.5 },
+      "frames": { "start": 0, "end": 75 },
+      "animation": {
+        "type": "whip_zoom_in",
+        "scale": { "from": 1.3, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.25 },
+        "fade_in_sec": 0.1
+      },
+      "overlay_effect": "hand_drawn_circle",
+      "font_size": 56,
+      "font_weight": 800,
+      "position": "center_center",
+      "max_width_pct": 0.75,
+      "z_index": 5,
+      "description": "Whip zoom hook. Hand-drawn circle around key phrase. Stops the scroll."
+    },
+    {
+      "scene": 2,
+      "id": "problem",
+      "type": "problem",
+      "text": "EDITING CLIPS TAKES HOURS.",
+      "time": { "start_sec": 2.5, "end_sec": 5 },
+      "frames": { "start": 75, "end": 150 },
+      "animation": {
+        "type": "caption_slide_in",
+        "direction": "left_to_right",
+        "slide_duration_sec": 0.3,
+        "fade_in_sec": 0.2
+      },
+      "overlay_effect": "red_cross_scribble",
+      "font_size": 52,
+      "font_weight": 700,
+      "position": "center_center",
+      "caption_background": {
+        "type": "black_box",
+        "padding": 16,
+        "border_radius": 8
+      },
+      "z_index": 5,
+      "description": "Problem statement slides in. Red cross scribble strikes through 'HOURS'."
+    },
+    {
+      "scene": 3,
+      "id": "solution",
+      "type": "solution",
+      "text": "CUTMV DOES IT IN MINUTES.",
+      "time": { "start_sec": 5, "end_sec": 7 },
+      "frames": { "start": 150, "end": 210 },
+      "animation": {
+        "type": "snap_pop",
+        "scale": { "from": 0.9, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.2 },
+        "fade_in_sec": 0.1
+      },
+      "overlay_effect": "green_highlight_swipe",
+      "font_size": 52,
+      "font_weight": 700,
+      "position": "center_center",
+      "z_index": 5,
+      "description": "Solution snap-pops in. Green highlight swipes across 'MINUTES'."
+    },
+    {
+      "scene": 4,
+      "id": "demo_sequence",
+      "type": "demo_sequence",
+      "asset": {
+        "path": "cutmv/dashboard_ui.jpg",
+        "loader": "staticFile",
+        "crop": "top_center"
+      },
+      "time": { "start_sec": 7, "end_sec": 11 },
+      "frames": { "start": 210, "end": 330 },
+      "animation": {
+        "type": "quick_punch_cuts",
+        "punch_in_scale": 1.05,
+        "cut_rhythm_sec": 1.0,
+        "fade_out_sec": 0.3
+      },
+      "overlay_effect": "arrow_burst_points",
+      "width_pct": 0.9,
+      "border_radius": 12,
+      "z_index": 3,
+      "description": "Dashboard demo with quick punch cuts. Arrows burst-point to key features."
+    },
+    {
+      "scene": 5,
+      "id": "cta",
+      "type": "cta",
+      "text": "TRY CUTMV",
+      "time": { "start_sec": 11, "end_sec": 14 },
+      "frames": { "start": 330, "end": 420 },
+      "animation": {
+        "type": "hard_center_snap",
+        "scale": { "from": 0.85, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.3 },
+        "fade_in_sec": 0.2,
+        "hold_until_end": true
+      },
+      "overlay_effect": "none",
+      "font_size": 72,
+      "font_weight": 800,
+      "position": "center_center",
+      "z_index": 9,
+      "description": "Hard center snap CTA. Clean close. No overlay. Holds 3 seconds."
+    }
+  ],
+  "render": {
+    "output_pattern": "cutmv__motion__mixed-media-scribble__reels__1080x1920__dur-14__v001",
+    "composition_id": "MixedMediaScribble"
+  }
+}

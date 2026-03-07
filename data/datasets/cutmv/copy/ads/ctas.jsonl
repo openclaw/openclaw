@@ -1,0 +1,2 @@
+{"id":"cmv_cta_0001","brand":"cutmv","text":"TRY CUTMV","intent":"primary","constraints":["ALL_CAPS"],"source":"user_rule","status":"approved"}
+{"id":"cmv_cta_0002","brand":"cutmv","text":"GO TO DASHBOARD","intent":"product","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}

@@ -1,0 +1,123 @@
+{
+  "brand": "cutmv",
+  "composition": "CutmvPremiumAd",
+  "styleProfile": "premium_clean",
+  "template_id": "cutmv_ad_premium_uiblocks_v004",
+  "duration_sec": 10,
+  "fps": 30,
+  "canvas": { "width": 1080, "height": 1920 },
+  "assets": {
+    "logos": [
+      { "id": "cutmv_logo", "path": "cutmv/logo.png", "widthPct": 0.6 },
+      { "id": "fd_logo", "path": "cutmv/fd-logo-2025-white.png", "widthPct": 0.22 }
+    ],
+    "ui": [],
+    "demoFrames": []
+  },
+  "uiBlocks": [
+    {
+      "type": "CutmvDashboardMock",
+      "variant": "output_config",
+      "frame": "browser",
+      "position": { "zone": "demo", "y": 340 },
+      "enter": 60,
+      "exit": 195,
+      "animation": "scale_in",
+      "zIndex": 5
+    },
+    {
+      "type": "CutmvOutputList",
+      "highlight": "CLIPS",
+      "position": { "zone": "demo", "y": 920 },
+      "enter": 90,
+      "exit": 195,
+      "animation": "fade_up",
+      "stagger": { "delay": 4, "perItem": 6 },
+      "zIndex": 5
+    }
+  ],
+  "scenes": [
+    {
+      "id": "hook",
+      "type": "hook",
+      "start": 0,
+      "end": 60,
+      "headline": "TURN MUSIC VIDEOS INTO VIRAL ASSETS",
+      "animation": "fade_up",
+      "zIndex": 5,
+      "notes": "Centered headline. 70% width. No UI. Text only."
+    },
+    {
+      "id": "ui_recreation",
+      "type": "product",
+      "start": 60,
+      "end": 195,
+      "headline": "CONFIGURE. GENERATE. DONE.",
+      "uiBlocks": ["CutmvDashboardMock", "CutmvOutputList"],
+      "animation": "scale_in",
+      "zIndex": 5,
+      "notes": "Code-based UI. NO screenshots. Dashboard mock + output list stagger."
+    },
+    {
+      "id": "statement",
+      "type": "statement",
+      "start": 195,
+      "end": 240,
+      "headline": "GENERATED IN SECONDS.",
+      "decoration": "green_underline_draw",
+      "animation": "slow_scale",
+      "zIndex": 5
+    },
+    {
+      "id": "cta_lockup",
+      "type": "cta",
+      "start": 240,
+      "end": 300,
+      "logo": "cutmv_logo",
+      "fd_logo": "fd_logo",
+      "cta_text": "TRY CUTMV",
+      "animation": "logo_reveal",
+      "zIndex": 10,
+      "notes": "CUTMV logo 60%, FD logo 22% beneath. CTA in bottom safe zone."
+    }
+  ],
+  "captions": {
+    "segments": [
+      {
+        "start": 0,
+        "end": 2,
+        "text": "TURN MUSIC VIDEOS INTO VIRAL ASSETS.",
+        "emphasis": ["VIRAL", "ASSETS"],
+        "style": "premium_clean"
+      },
+      {
+        "start": 2,
+        "end": 4.5,
+        "text": "CONFIGURE. GENERATE. DONE.",
+        "emphasis": ["GENERATE"],
+        "style": "premium_clean"
+      },
+      {
+        "start": 4.5,
+        "end": 6.5,
+        "text": "CLIPS. GIFS. THUMBNAILS. CANVAS.",
+        "emphasis": ["CLIPS", "GIFS", "THUMBNAILS", "CANVAS"],
+        "style": "scribble_callout"
+      },
+      {
+        "start": 6.5,
+        "end": 8,
+        "text": "GENERATED IN SECONDS.",
+        "emphasis": ["SECONDS"],
+        "style": "premium_clean"
+      },
+      {
+        "start": 8,
+        "end": 10,
+        "text": "TRY CUTMV",
+        "emphasis": ["CUTMV"],
+        "style": "premium_clean"
+      }
+    ]
+  }
+}

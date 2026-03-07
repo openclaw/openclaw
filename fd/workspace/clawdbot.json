@@ -1,0 +1,40 @@
+{
+  "name": "OpenClaw",
+  "version": "0.1.0",
+  "description": "Prompt-first operations system for Full Digital and CUTMV",
+  "gateway": {
+    "config": "../gateway/openclaw.json5",
+    "port": 18789
+  },
+  "workspace": {
+    "root": ".",
+    "memory": "memory/",
+    "bank": "bank/",
+    "tasks": "tasks/",
+    "logs": "logs/",
+    "config": "config/"
+  },
+  "identity": {
+    "soul": "SOUL.md",
+    "identity": "IDENTITY.md",
+    "mission": "MISSION.md",
+    "rules": "OPERATING_RULES.md",
+    "security": "SECURITY.md"
+  },
+  "prompts": {
+    "system": "prompts/system.md",
+    "planner": "prompts/planner.md",
+    "executor": "prompts/executor.md",
+    "reviewer": "prompts/reviewer.md"
+  },
+  "safety": {
+    "dry_run": true,
+    "kill_switch": false,
+    "read_only": false,
+    "approval_required_risk_levels": ["medium", "high"]
+  },
+  "engine": {
+    "module": "openclaw.prompt_engine",
+    "class": "OpenClawPromptEngine"
+  }
+}

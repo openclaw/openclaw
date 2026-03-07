@@ -1,0 +1,259 @@
+{
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 336
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "scale": 2.25,
+    "profile": "FAST_CLICKY",
+    "idleBehavior": "activeHover"
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": false,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "logoOnly",
+      "showLastFrames": 60,
+      "heroMark": "fd_logo_new",
+      "size": 140
+    }
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "id": "cutmv_premium_v054",
+  "scenes": [
+    {
+      "id": "s1_hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 72,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 57
+      },
+      "headlineLines": [
+        {
+          "text": "YOUR EDITS",
+          "emphasis": false
+        },
+        {
+          "text": "DESERVE MORE.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "Every frame. Every format. Instant."
+    },
+    {
+      "id": "s2_speed",
+      "type": "impactText",
+      "from": 72,
+      "duration": 66,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 58
+      },
+      "headlineLines": [
+        {
+          "text": "4 FORMATS.",
+          "emphasis": true
+        },
+        {
+          "text": "30 SECONDS.",
+          "emphasis": false
+        }
+      ],
+      "subhead": "Not 4 hours. Not 4 exports."
+    },
+    {
+      "id": "s3_ui",
+      "type": "uiMock",
+      "from": 138,
+      "duration": 138,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 59
+      },
+      "contextBadge": "LIVE DEMO",
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "title": "OUTPUTS",
+        "aspectPills": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "toggles": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "cta": "START CREATING NOW"
+      },
+      "elements": [
+        {
+          "id": "ui",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "motion": {
+            "enter": {
+              "type": "slideUp",
+              "at": 0,
+              "durationFrames": 16
+            },
+            "exit": {
+              "type": "fadeDown",
+              "at": 122,
+              "durationFrames": 14
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "activeAspect": "9:16",
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": true
+                  }
+                ]
+              }
+            },
+            {
+              "at": 16,
+              "props": {
+                "tapTarget": "toggle.gifs"
+              }
+            },
+            {
+              "at": 22,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "GIFS",
+                    "on": true
+                  }
+                ]
+              }
+            },
+            {
+              "at": 38,
+              "props": {
+                "tapTarget": "toggle.thumbnails"
+              }
+            },
+            {
+              "at": 44,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "THUMBNAILS",
+                    "on": true
+                  }
+                ]
+              }
+            },
+            {
+              "at": 60,
+              "props": {
+                "tapTarget": "toggle.canvas"
+              }
+            },
+            {
+              "at": 66,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "CANVAS",
+                    "on": true
+                  }
+                ]
+              }
+            },
+            {
+              "at": 82,
+              "props": {
+                "tapTarget": "button.start"
+              }
+            },
+            {
+              "at": 88,
+              "props": {
+                "status": "processing",
+                "progress": 0.05
+              }
+            },
+            {
+              "at": 106,
+              "props": {
+                "progress": 0.55
+              }
+            },
+            {
+              "at": 126,
+              "props": {
+                "status": "done",
+                "progress": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s4_outro",
+      "type": "blank",
+      "from": 276,
+      "duration": 60,
+      "environment": {
+        "type": "none"
+      }
+    }
+  ]
+}

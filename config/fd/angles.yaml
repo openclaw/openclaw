@@ -1,0 +1,154 @@
+# ── Offer Angle Rotation Matrix ──
+#
+# Each angle belongs to a fatigue group. When an angle within a group
+# shows fatigue (high frequency + CTR drop + CPC increase), the rotation
+# engine picks the least-fatigued angle from another group.
+#
+# Angles are tested against offers via combo_id:
+#   combo:{offer_id}:{angle_id}:{hook_id}:{cta_id}:{format_id}:{audience_id}
+
+angles:
+  - angle_id: era_control
+    name: "Control the Visual Era"
+    promise: "You look major-label before you are."
+    pains:
+      - "inconsistent visuals"
+      - "drop day underperforms"
+    proofs:
+      - "before/after brand kit"
+      - "rollout calendar screenshot"
+    use_cases: ["single", "EP", "album"]
+    fatigue_group: positioning
+
+  - angle_id: drop_spike
+    name: "14-Day Drop Spike"
+    promise: "We manufacture attention in the first 14 days."
+    pains:
+      - "no spike on release"
+      - "no momentum after drop"
+    proofs:
+      - "teaser engine walkthrough"
+      - "ad-ready asset examples"
+    use_cases: ["single", "EP"]
+    fatigue_group: performance
+
+  - angle_id: looks_signed
+    name: "Looks Signed"
+    promise: "Your pages and visuals read 'signed'."
+    pains:
+      - "amateur look vs signed artists"
+      - "low trust on DSP pages"
+    proofs:
+      - "template system showcase"
+      - "DSP pack before/after"
+    use_cases: ["single", "EP", "album"]
+    fatigue_group: identity
+
+  - angle_id: invisible_drop
+    name: "Invisible Drop Fix"
+    promise: "Your last release didn't fail — your rollout did."
+    pains:
+      - "good music, low streams"
+      - "no visual narrative"
+    proofs:
+      - "stream lift case study"
+      - "visual timeline comparison"
+    use_cases: ["single", "EP"]
+    fatigue_group: pain
+
+  - angle_id: visual_era_blueprint
+    name: "The Visual Era Blueprint"
+    promise: "One creative direction, 50 assets, zero guesswork."
+    pains:
+      - "scattered visual identity"
+      - "hiring designers per project"
+    proofs:
+      - "asset multiplication walkthrough"
+      - "client project showcase"
+    use_cases: ["album", "rebrand"]
+    fatigue_group: mechanism
+
+# ── Hooks (short-form openers) ──
+hooks:
+  - hook_id: void_hook
+    text: "Stop dropping music into the void."
+    angle_ids: [drop_spike, invisible_drop]
+
+  - hook_id: label_budget_hook
+    text: "What if your next drop looked like it had a label budget?"
+    angle_ids: [era_control, looks_signed]
+
+  - hook_id: views_hook
+    text: "The difference between 500 views and 50K? A rollout strategy."
+    angle_ids: [drop_spike, invisible_drop]
+
+  - hook_id: signed_look_hook
+    text: "Why do signed artists look different? It's not talent — it's system."
+    angle_ids: [looks_signed, visual_era_blueprint]
+
+  - hook_id: one_shoot_hook
+    text: "1 shoot. 50 assets. Zero guesswork."
+    angle_ids: [visual_era_blueprint, era_control]
+
+# ── CTAs ──
+ctas:
+  - cta_id: book_strategy
+    text: "Book your free strategy call"
+    type: booking
+
+  - cta_id: dm_rollout
+    text: "DM 'ROLLOUT' for the playbook"
+    type: dm_trigger
+
+  - cta_id: watch_vsl
+    text: "Watch the free VSL — link in bio"
+    type: content
+
+  - cta_id: dm_visual
+    text: "DM 'VISUAL' to see examples"
+    type: dm_trigger
+
+# ── Formats ──
+formats:
+  - format_id: ugc_video
+    name: "UGC-style talking head"
+    platforms: [instagram, tiktok, youtube_shorts]
+
+  - format_id: carousel
+    name: "Carousel (before/after)"
+    platforms: [instagram]
+
+  - format_id: static_ad
+    name: "Static image ad"
+    platforms: [instagram, facebook]
+
+  - format_id: motion_graphic
+    name: "Motion graphic (15s)"
+    platforms: [instagram, tiktok, youtube_shorts]
+
+# ── Audiences ──
+audiences:
+  - audience_id: cold_emerging_rapper
+    name: "Cold — Emerging Rapper"
+    description: "Independent artists, 10k-100k monthly listeners"
+
+  - audience_id: cold_mid_tier
+    name: "Cold — Mid-Tier Artist"
+    description: "50k-500k monthly listeners, label interest"
+
+  - audience_id: warm_engaged
+    name: "Warm — Engaged"
+    description: "Content viewers, page visitors, DM responders"
+
+  - audience_id: retarget_vsl
+    name: "Retarget — VSL Viewers"
+    description: "Watched 50%+ of VSL but didn't book"
+
+# ── Fatigue policy ──
+fatigue_policy:
+  frequency_threshold: 2.8
+  ctr_drop_pct: 35.0
+  cpc_increase_pct: 40.0
+  min_signals: 2
+  max_active_combos_per_brand: 6
+  rotation_cooldown_days: 7

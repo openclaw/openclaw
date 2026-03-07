@@ -1,0 +1,13 @@
+# Setter email → setter_id mapping
+# Used by Calendly ingestion to resolve organizer email to internal setter_id.
+# Add entries as setters are onboarded.
+
+setters:
+  - setter_id: "DA"
+    name: "DA"
+    emails:
+      - "da@fulldigital.co"
+  # - setter_id: "SETTER_1"
+  #   name: "John"
+  #   emails:
+  #     - "john@fulldigital.co"

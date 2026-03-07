@@ -1,0 +1,425 @@
+{
+  "id": "cutmv_premium_v011",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.2
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.15,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 104,
+      "headlineLines": [
+        {
+          "text": "TRY CUTMV",
+          "emphasis": false
+        },
+        {
+          "text": "NOW.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "FREE CREDITS INCLUDED.",
+      "transitionOut": {
+        "type": "crossfade",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "TRY CUTMV",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 60
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "NOW.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 62
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 62
+            }
+          }
+        },
+        {
+          "id": "sub",
+          "kind": "support",
+          "text": "FREE CREDITS INCLUDED.",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 20
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 64
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_pricing",
+      "type": "uiMock",
+      "from": 104,
+      "duration": 157,
+      "uiPreset": "cutmv_pricing_cards_dark",
+      "uiOptions": {
+        "cards": [
+          {
+            "title": "STARTER",
+            "meta": "50 credits/mo"
+          },
+          {
+            "title": "PRO",
+            "meta": "200 credits/mo",
+            "badge": "POPULAR"
+          },
+          {
+            "title": "TEAM",
+            "meta": "Unlimited"
+          }
+        ]
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "PICK YOUR PLAN.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "wipe",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "badge_deal",
+          "kind": "badge",
+          "text": "FREE CREDITS",
+          "motion": {
+            "enter": {
+              "preset": "BADGE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "BADGE_OUT",
+              "at": 100
+            }
+          }
+        },
+        {
+          "id": "pricing_head",
+          "kind": "headline",
+          "text": "PICK YOUR PLAN.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 100
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_pricing_cards_dark",
+          "uiOptions": {
+            "cards": [
+              {
+                "title": "STARTER",
+                "meta": "50 credits/mo"
+              },
+              {
+                "title": "PRO",
+                "meta": "200 credits/mo",
+                "badge": "POPULAR"
+              },
+              {
+                "title": "TEAM",
+                "meta": "Unlimited"
+              }
+            ]
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 12
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 96
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "status": "idle",
+                "progress": 0
+              }
+            },
+            {
+              "at": 30,
+              "props": {
+                "tapTarget": "button.start",
+                "pressed": true,
+                "tap": {
+                  "x": 410,
+                  "y": 400
+                }
+              }
+            },
+            {
+              "at": 36,
+              "props": {
+                "pressed": false
+              }
+            },
+            {
+              "at": 60,
+              "props": {
+                "status": "generating",
+                "progress": 0.4
+              }
+            },
+            {
+              "at": 90,
+              "props": {
+                "progress": 1,
+                "status": "done"
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#10121A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "slowDrift",
+        "vignette": 0.25
+      },
+      "contextBadge": "LIVE DEMO"
+    },
+    {
+      "id": "s3_cta",
+      "type": "ctaEndcard",
+      "from": 261,
+      "duration": 189,
+      "headline": {
+        "text": "FREE CREDITS",
+        "emphasis": false
+      },
+      "headline2": {
+        "text": "INCLUDED.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED FREE",
+        "style": "solid_green"
+      },
+      "footer": "NO CARD REQUIRED. CANCEL ANYTIME.",
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "h_cta1",
+          "kind": "headline",
+          "text": "FREE CREDITS",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 82
+            }
+          }
+        },
+        {
+          "id": "h_cta2",
+          "kind": "headline",
+          "text": "INCLUDED.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 84
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "GET EARLY ACCESS",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 20
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 84
+            }
+          }
+        },
+        {
+          "id": "foot_cta",
+          "kind": "support",
+          "text": "EARLY ACCESS • BUILT BY FULL DIGITAL",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 26
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 86
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

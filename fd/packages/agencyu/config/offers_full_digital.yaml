@@ -1,0 +1,182 @@
+# Full Digital — Offer Catalog v1
+# Transformation-based offers rotated as a first-class variant dimension.
+# Each offer has stable IDs, tiered pricing, deliverables, and ad angles.
+# Referenced by experiment_matrix.py and offer_rotation policy rules.
+
+version: 1
+updated_at: "2026-03-01"
+
+brand: fulldigital
+positioning:
+  one_liner: "We control the visual era of your release."
+  categories:
+    - "visual-era"
+    - "performance-launch"
+    - "label-ready"
+    - "ar-experience"
+    - "rollout-system"
+    - "major-label-simulation"
+
+offers:
+  - id: fd_offer_01_visual_era
+    name: "The Visual Era Package"
+    category: "visual-era"
+    outcome: "Complete visual identity for a single rollout."
+    ideal_for: ["single", "ep", "emerging", "mid-tier"]
+    deliverables:
+      - "cover_art"
+      - "animated_cover"
+      - "lyric_video_template"
+      - "social_launch_kit_10_posts"
+      - "spotify_canvas"
+      - "youtube_visualizer"
+      - "story_highlight_assets"
+    tiers:
+      lite:
+        anchor_price_usd: 2500
+        timeline_days: 7
+      pro:
+        anchor_price_usd: 5000
+        timeline_days: 10
+      elite:
+        anchor_price_usd: 8000
+        timeline_days: 14
+    ad_angles:
+      - "We don't design covers. We design eras."
+      - "Make your release look signed."
+      - "One drop. Full identity."
+
+  - id: fd_offer_02_viral_launch_engine
+    name: "The Viral Launch Engine"
+    category: "performance-launch"
+    outcome: "Trigger attention in the first 14 days."
+    ideal_for: ["single", "ep", "mid-tier", "fast-rollout"]
+    deliverables:
+      - "cover_art"
+      - "short_form_teasers_5"
+      - "motion_overlays_pack"
+      - "meme_ready_templates"
+      - "countdown_assets"
+      - "story_sticker_pack"
+      - "thumbnail_variants_performance"
+    tiers:
+      lite: { anchor_price_usd: 2000, timeline_days: 6 }
+      pro:  { anchor_price_usd: 4500, timeline_days: 10 }
+      elite: { anchor_price_usd: 7500, timeline_days: 14 }
+    ad_angles:
+      - "Designed to spike attention."
+      - "Turn a drop into momentum."
+
+  - id: fd_offer_03_label_ready_artist_kit
+    name: "The Label-Ready Artist Kit"
+    category: "label-ready"
+    outcome: "Make the artist look signed (brand + assets)."
+    ideal_for: ["emerging", "mid-tier"]
+    deliverables:
+      - "brand_board"
+      - "logo_or_monogram"
+      - "cover_art"
+      - "press_kit_template"
+      - "youtube_banner"
+      - "dsp_profile_design"
+      - "stage_visuals_pack"
+    tiers:
+      lite: { anchor_price_usd: 1800, timeline_days: 7 }
+      pro:  { anchor_price_usd: 3500, timeline_days: 10 }
+      elite: { anchor_price_usd: 6000, timeline_days: 14 }
+    ad_angles:
+      - "Look signed before you're signed."
+      - "Package the brand. Raise the ceiling."
+
+  - id: fd_offer_04_deluxe_drop
+    name: "The Deluxe Drop Package"
+    category: "rollout-system"
+    outcome: "Deluxe re-launch creative suite."
+    ideal_for: ["deluxe", "album", "mid-tier", "label"]
+    deliverables:
+      - "deluxe_cover"
+      - "tracklist_motion"
+      - "lyric_animations_3"
+      - "social_relaunch_kit"
+      - "spotify_canvas_set_updated"
+      - "merch_mockups"
+    tiers:
+      lite: { anchor_price_usd: 2500, timeline_days: 7 }
+      pro:  { anchor_price_usd: 5000, timeline_days: 10 }
+      elite: { anchor_price_usd: 9000, timeline_days: 14 }
+    ad_angles:
+      - "Second drop, bigger moment."
+
+  - id: fd_offer_05_30_day_rollout_system
+    name: "The 30-Day Rollout System"
+    category: "rollout-system"
+    outcome: "Calendar-driven rollout creative."
+    ideal_for: ["single", "ep", "album"]
+    deliverables:
+      - "presave_assets"
+      - "social_creatives_15"
+      - "short_form_templates_5"
+      - "bts_frames_pack"
+      - "release_day_blast_kit"
+      - "post_release_assets"
+    tiers:
+      lite: { anchor_price_usd: 3500, timeline_days: 10 }
+      pro:  { anchor_price_usd: 6500, timeline_days: 14 }
+      elite: { anchor_price_usd: 10000, timeline_days: 21 }
+    ad_angles:
+      - "Your rollout, engineered."
+      - "Stop posting randomly."
+
+  - id: fd_offer_06_billboard_moment
+    name: "The Billboard Moment Package"
+    category: "visual-era"
+    outcome: "Big announcement visuals (OOH + digital)."
+    ideal_for: ["announcement", "label", "moment"]
+    deliverables:
+      - "billboard_mockup"
+      - "billboard_print_files"
+      - "social_campaign_visuals"
+      - "press_announcement_graphics"
+      - "motion_reveal"
+    tiers:
+      lite: { anchor_price_usd: 3000, timeline_days: 6 }
+      pro:  { anchor_price_usd: 6000, timeline_days: 10 }
+      elite: { anchor_price_usd: 9500, timeline_days: 14 }
+    ad_angles:
+      - "Make the announcement undeniable."
+
+  - id: fd_offer_07_ar_experience_drop
+    name: "The AR Experience Drop"
+    category: "ar-experience"
+    outcome: "Custom AR filter + activation kit."
+    ideal_for: ["single", "viral", "mid-tier", "label"]
+    deliverables:
+      - "custom_ar_filter"
+      - "branded_face_effect"
+      - "drop_day_promo_assets"
+      - "how_to_tutorial_video"
+      - "influencer_activation_kit"
+    tiers:
+      lite: { anchor_price_usd: 3500, timeline_days: 7 }
+      pro:  { anchor_price_usd: 7000, timeline_days: 10 }
+      elite: { anchor_price_usd: 12000, timeline_days: 14 }
+    ad_angles:
+      - "Turn the drop into an experience."
+
+  - id: fd_offer_08_music_video_companion
+    name: "The Music Video Companion Kit"
+    category: "performance-launch"
+    outcome: "Amplify one music video across platforms."
+    ideal_for: ["video", "campaign"]
+    deliverables:
+      - "thumbnail_optimization_set"
+      - "motion_overlays_10"
+      - "short_form_edits_5"
+      - "end_screen_template"
+      - "teaser_pack"
+    tiers:
+      lite: { anchor_price_usd: 2500, timeline_days: 7 }
+      pro:  { anchor_price_usd: 5000, timeline_days: 10 }
+      elite: { anchor_price_usd: 8500, timeline_days: 14 }
+    ad_angles:
+      - "Make the video travel."

@@ -1,0 +1,288 @@
+{
+  "template_id": "premium_demo_9x16_v2",
+  "brand": "cutmv",
+  "duration_sec": 10,
+  "fps": 30,
+  "aspect_ratio": "9:16",
+  "resolution": { "w": 1080, "h": 1920 },
+  "assets": {
+    "demo_frames": [
+      {
+        "id": "frame_001",
+        "path": "brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1/cutmv - general - demo video - 1000.png",
+        "dimensions": "1080x1920",
+        "public_path": "cutmv/demo_frame_001.png"
+      },
+      {
+        "id": "frame_002",
+        "path": "brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1/cutmv - general - demo video - 1301.png",
+        "dimensions": "1080x1920",
+        "public_path": "cutmv/demo_frame_002.png"
+      },
+      {
+        "id": "frame_003",
+        "path": "brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1/cutmv - general - demo video - 1659.png",
+        "dimensions": "1080x1920",
+        "public_path": "cutmv/demo_frame_003.png"
+      }
+    ],
+    "ui_screens": [
+      {
+        "id": "dashboard_main",
+        "path": "brands/cutmv/datasets/static/ui/screens/1920x1080/MacBook Pro 16_ - 2.jpg",
+        "dimensions": "1728x7991",
+        "public_path": "cutmv/dashboard_ui.jpg"
+      }
+    ],
+    "logo": {
+      "id": "cutmv_primary",
+      "path": "brands/cutmv/datasets/static/brand_assets/logos/cutmv-logo-header.png",
+      "dimensions": "3000x3000",
+      "public_path": "cutmv/logo.png",
+      "aspect_ratio_lock": true
+    }
+  },
+  "structure": [
+    {
+      "type": "background",
+      "enter_sec": 0,
+      "exit_sec": 10,
+      "color": "#000000",
+      "animation": "none",
+      "z_index": 0
+    },
+    {
+      "type": "demo_panel",
+      "panel_index": 0,
+      "asset_ref": "frame_001",
+      "enter_sec": 0,
+      "exit_sec": 2.5,
+      "animation": "slide_up",
+      "easing": "easeOutCubic",
+      "opacity": 0.25,
+      "width_pct": 0.28,
+      "position": { "x": "12%", "y": "50%", "anchor": "center" },
+      "z_index": 1
+    },
+    {
+      "type": "demo_panel",
+      "panel_index": 1,
+      "asset_ref": "frame_002",
+      "enter_sec": 0.15,
+      "exit_sec": 2.5,
+      "animation": "slide_up",
+      "easing": "easeOutCubic",
+      "opacity": 0.25,
+      "width_pct": 0.28,
+      "position": { "x": "50%", "y": "50%", "anchor": "center" },
+      "z_index": 1
+    },
+    {
+      "type": "demo_panel",
+      "panel_index": 2,
+      "asset_ref": "frame_003",
+      "enter_sec": 0.3,
+      "exit_sec": 2.5,
+      "animation": "slide_up",
+      "easing": "easeOutCubic",
+      "opacity": 0.25,
+      "width_pct": 0.28,
+      "position": { "x": "88%", "y": "50%", "anchor": "center" },
+      "z_index": 1
+    },
+    {
+      "type": "headline",
+      "text": "TURN MUSIC VIDEOS INTO VIRAL ASSETS",
+      "enter_sec": 0.3,
+      "exit_sec": 2.5,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "50%", "anchor": "center" },
+      "z_index": 5,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 68,
+        "font_weight": 700,
+        "text_align": "center",
+        "max_width_pct": 0.8,
+        "letter_spacing": "0.02em",
+        "line_height": 1.1
+      }
+    },
+    {
+      "type": "ui_demo",
+      "asset_ref": "dashboard_main",
+      "enter_sec": 2.5,
+      "exit_sec": 6.0,
+      "animation": "slide_up",
+      "easing": "easeOutCubic",
+      "width_pct": 0.85,
+      "opacity": 1,
+      "scale": 1,
+      "position": { "x": "50%", "y": "60%", "anchor": "center" },
+      "z_index": 4
+    },
+    {
+      "type": "label",
+      "text": "CLIPS",
+      "enter_sec": 3.2,
+      "exit_sec": 6.0,
+      "animation": "fade_up",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "28%", "anchor": "center" },
+      "z_index": 6,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "height_px": 4,
+        "width_pct": 0.3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "label",
+      "text": "GIFS",
+      "enter_sec": 3.35,
+      "exit_sec": 6.0,
+      "animation": "fade_up",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "34%", "anchor": "center" },
+      "z_index": 6,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "height_px": 4,
+        "width_pct": 0.3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "label",
+      "text": "THUMBNAILS",
+      "enter_sec": 3.5,
+      "exit_sec": 6.0,
+      "animation": "fade_up",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "40%", "anchor": "center" },
+      "z_index": 6,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "height_px": 4,
+        "width_pct": 0.3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "label",
+      "text": "CANVAS",
+      "enter_sec": 3.65,
+      "exit_sec": 6.0,
+      "animation": "fade_up",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "46%", "anchor": "center" },
+      "z_index": 6,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 36,
+        "font_weight": 700,
+        "letter_spacing": "0.04em"
+      },
+      "emphasis_style": {
+        "type": "underline",
+        "color": "#94F33F",
+        "height_px": 4,
+        "width_pct": 0.3,
+        "offset_y": 6
+      }
+    },
+    {
+      "type": "subheadline",
+      "text": "GENERATED IN SECONDS.",
+      "enter_sec": 6.2,
+      "exit_sec": 8.5,
+      "animation": "scale_in",
+      "scale_from": 1.0,
+      "scale_to": 1.05,
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "50%", "anchor": "center" },
+      "z_index": 5,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 52,
+        "font_weight": 700,
+        "text_align": "center",
+        "letter_spacing": "0.02em"
+      }
+    },
+    {
+      "type": "logo",
+      "asset_ref": "cutmv_primary",
+      "enter_sec": 8.5,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "aspect_ratio_lock": true,
+      "width_pct": 0.5,
+      "position": { "x": "50%", "y": "40%", "anchor": "center" },
+      "z_index": 10
+    },
+    {
+      "type": "cta",
+      "text": "TRY CUTMV",
+      "enter_sec": 8.8,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "opacity": 1,
+      "position": { "x": "50%", "y": "60%", "anchor": "center" },
+      "z_index": 9,
+      "style": {
+        "color": "#FFFFFF",
+        "font_size": 64,
+        "font_weight": 700,
+        "text_align": "center",
+        "letter_spacing": "0.03em"
+      }
+    }
+  ],
+  "metadata": {
+    "brief_id": "cutmv_premium_demo_002",
+    "generated_by": "claude",
+    "approved": false,
+    "copy_ids_used": ["cmv_hook_1001", "cmv_bullets_0001", "cmv_cta_0001"],
+    "template_category": "motion_ad",
+    "use_case": "premium_launch_demo",
+    "fixes_from_v001": [
+      "All assets reference real file paths",
+      "Logo has aspect_ratio_lock and opacity 1",
+      "All text opacity >= 0.9",
+      "All z_index values explicitly defined",
+      "Background solid black only, no gradients",
+      "Demo panels have explicit width_pct and position"
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+# Model selection and routing policy
+#
+# Strategy: Local Ollama first, cloud escalation second.
+# Never send sensitive data to cloud unless explicitly escalated.
+
+default_provider: ollama
+
+providers:
+  ollama:
+    host: "${OLLAMA_PRIMARY_HOST:-http://10.0.0.145:11434}"
+    fallback_host: "${OLLAMA_FALLBACK_HOST:-http://localhost:11434}"
+    timeout_seconds: 30
+    retry_attempts: 2
+
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+    escalation_only: true
+    max_tokens: 4096
+
+# Model assignments by task type
+# Principle: use the smallest model that gets the job done.
+models:
+  triage:
+    # Gateway-level intent classification, brand detection
+    provider: ollama
+    model: "qwen3.5:2b"
+    max_tokens: 256
+    temperature: 0.1
+    note: "Fast, low-resource. Used for routing decisions."
+
+  content:
+    # Content generation — ad hooks, captions, drafts
+    provider: ollama
+    model: "qwen3.5:4b"
+    max_tokens: 2048
+    temperature: 0.7
+    note: "Good balance of speed and creativity."
+
+  reasoning:
+    # Complex analysis, planning, multi-step reasoning
+    provider: ollama
+    model: "qwen3.5:9b"
+    max_tokens: 4096
+    temperature: 0.3
+    note: "Used for planner, reviewer, and analysis tasks."
+
+  deep:
+    # Long-context research, complex synthesis
+    provider: ollama
+    model: "qwen3.5:27b"
+    max_tokens: 8192
+    temperature: 0.2
+    note: "Heavy model. M1 only. Use sparingly."
+
+  escalation:
+    # Cloud fallback for tasks that exceed local capability
+    provider: anthropic
+    model: "claude-sonnet-4-20250514"
+    max_tokens: 4096
+    temperature: 0.3
+    note: "Used only when local models can't handle the task."
+
+# Escalation triggers — when to move from local to cloud
+escalation_rules:
+  - condition: "ollama_unavailable"
+    action: "use anthropic"
+  - condition: "confidence_below_0.5"
+    action: "retry with reasoning model, then escalate"
+  - condition: "context_exceeds_32k_tokens"
+    action: "use deep model or escalate"

@@ -1,0 +1,163 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Modern mixed media motion grammar — reusable overlay, caption, camera, and rhythm system for all MotionSpec templates.",
+  "overlay_system": {
+    "scribble_styles": [
+      {
+        "id": "marker_circle",
+        "description": "Hand-drawn circle around key text or element",
+        "color": "#94F33F",
+        "stroke_width": 3,
+        "animation": "draw_clockwise",
+        "duration_sec": 0.4
+      },
+      {
+        "id": "hand_drawn_arrow",
+        "description": "Animated arrow pointing to feature or element",
+        "color": "#FFFFFF",
+        "stroke_width": 3,
+        "animation": "draw_from_tail",
+        "duration_sec": 0.3
+      },
+      {
+        "id": "strike_through",
+        "description": "Scribble strike through text (used for negation/problem)",
+        "color": "#FF4444",
+        "stroke_width": 4,
+        "animation": "draw_left_to_right",
+        "duration_sec": 0.2
+      },
+      {
+        "id": "highlight_swipe",
+        "description": "Marker highlight swipe behind text",
+        "color": "#94F33F",
+        "opacity": 0.3,
+        "animation": "swipe_left_to_right",
+        "duration_sec": 0.25
+      },
+      {
+        "id": "underline_sketch",
+        "description": "Hand-drawn underline below text",
+        "color": "#94F33F",
+        "stroke_width": 3,
+        "animation": "draw_left_to_right",
+        "duration_sec": 0.3
+      }
+    ],
+    "caption_styles": [
+      {
+        "id": "white_text_black_box",
+        "description": "White ALL_CAPS text on solid black box background",
+        "text_color": "#FFFFFF",
+        "background_color": "#000000",
+        "padding": 16,
+        "border_radius": 8,
+        "font_weight": 700
+      },
+      {
+        "id": "white_text_green_accent_bar",
+        "description": "White text with thin green accent bar on left edge",
+        "text_color": "#FFFFFF",
+        "accent_color": "#94F33F",
+        "accent_position": "left_bar",
+        "accent_width": 4,
+        "font_weight": 700
+      },
+      {
+        "id": "drop_shadow_heavy",
+        "description": "White text with heavy drop shadow for readability over images",
+        "text_color": "#FFFFFF",
+        "shadow": "0 4px 24px rgba(0,0,0,0.8)",
+        "font_weight": 800
+      },
+      {
+        "id": "bold_center_lock",
+        "description": "Large centered bold text, no decoration, pure typography",
+        "text_color": "#FFFFFF",
+        "font_weight": 800,
+        "text_align": "center",
+        "max_width_pct": 0.75
+      }
+    ],
+    "camera_moves": [
+      {
+        "id": "micro_zoom_1_03",
+        "description": "Barely perceptible zoom for premium feel",
+        "scale": { "from": 1.0, "to": 1.03 },
+        "easing": "easeOutCubic",
+        "use_case": "headlines, statements, logo holds"
+      },
+      {
+        "id": "snap_zoom_1_1",
+        "description": "Aggressive snap zoom for attention grab",
+        "scale": { "from": 1.1, "to": 1.0 },
+        "easing": "easeOutCubic",
+        "duration_sec": 0.2,
+        "use_case": "hooks, value punches, benefit reveals"
+      },
+      {
+        "id": "punch_cut",
+        "description": "Quick scale bump on cut transitions",
+        "scale": { "from": 1.05, "to": 1.0 },
+        "easing": "easeOutCubic",
+        "duration_sec": 0.15,
+        "use_case": "scene transitions, demo cuts"
+      },
+      {
+        "id": "whip_pan_simulation",
+        "description": "Horizontal motion blur simulation for native feel",
+        "translate_x": { "from": -40, "to": 0 },
+        "easing": "easeOutCubic",
+        "duration_sec": 0.25,
+        "use_case": "TikTok-native transitions, hook entrances"
+      }
+    ],
+    "rhythm_profiles": {
+      "educational_fast": {
+        "stagger_sec": 0.1,
+        "cut_rhythm_sec": 0.8,
+        "hold_min_sec": 1.5,
+        "description": "Hormozi-style — rapid stagger, tight cuts, minimum hold"
+      },
+      "premium_clean": {
+        "stagger_sec": 0.25,
+        "cut_rhythm_sec": 2.0,
+        "hold_min_sec": 2.5,
+        "description": "Higgsfield-style — deliberate pacing, longer holds, breathing room"
+      },
+      "native_social": {
+        "stagger_sec": 0.12,
+        "cut_rhythm_sec": 1.0,
+        "hold_min_sec": 2.0,
+        "description": "Mixed media — fast enough to feel native, slow enough to read"
+      }
+    }
+  },
+  "composition_rules": {
+    "typography": {
+      "always_all_caps": true,
+      "min_font_size": 28,
+      "max_font_size": 72,
+      "font_weight_range": [600, 800],
+      "letter_spacing_range": ["0.02em", "0.06em"],
+      "line_height_range": [1.1, 1.2],
+      "font_stack": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+    },
+    "spacing": {
+      "safe_margin_pct": 0.05,
+      "vertical_center_bias": true,
+      "max_text_width_pct": 0.75,
+      "label_vertical_spacing_px_range": [40, 60]
+    },
+    "z_index_hierarchy": {
+      "background": 0,
+      "ui_assets": 3,
+      "text_primary": 5,
+      "text_labels": 6,
+      "overlays_scribbles": 7,
+      "cta": 9,
+      "logo": 10
+    }
+  }
+}

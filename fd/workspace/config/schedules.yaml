@@ -1,0 +1,82 @@
+# Scheduled tasks — cron-style jobs managed by the gateway
+#
+# All times are in America/New_York unless specified otherwise.
+# Jobs respect DRY_RUN and SAFE_MODE controls.
+
+timezone: "America/New_York"
+
+schedules:
+  # ── Daily ────────────────────────────────────────────────────────────────
+
+  daily_digest:
+    schedule: "0 8 * * *"  # 8:00 AM daily
+    description: "Compile and send today's priorities to DA via Telegram"
+    workflow: daily_guidance
+    brand: null  # both brands
+    channel: telegram
+    enabled: true
+
+  grant_scan:
+    schedule: "0 6 * * *"  # 6:00 AM daily
+    description: "Scan for new grant opportunities for Full Digital"
+    workflow: grantops
+    brand: fulldigital
+    enabled: true
+    requires_approval: false  # scanning is safe; submission requires approval
+
+  pipeline_health:
+    schedule: "0 9 * * 1-5"  # 9:00 AM weekdays
+    description: "Check sales pipeline for stale deals and overdue follow-ups"
+    workflow: sales_ops
+    brand: fulldigital
+    enabled: true
+
+  # ── Periodic ─────────────────────────────────────────────────────────────
+
+  system_healthcheck:
+    schedule: "*/15 * * * *"  # Every 15 minutes
+    description: "Check cluster health, gateway status, Ollama availability"
+    workflow: system_health
+    brand: null
+    enabled: true
+    alert_on_failure: true
+
+  memory_sync:
+    schedule: "*/30 * * * *"  # Every 30 minutes
+    description: "Sync memory and bank files across cluster nodes"
+    script: "openclaw/scripts/sync-memory.sh"
+    node: claw-i7
+    enabled: true
+
+  # ── Weekly ───────────────────────────────────────────────────────────────
+
+  weekly_review:
+    schedule: "0 10 * * 1"  # Monday 10:00 AM
+    description: "Compile weekly summary — completed tasks, metrics, priorities"
+    workflow: daily_guidance
+    brand: null
+    channel: telegram
+    enabled: true
+
+  content_calendar_review:
+    schedule: "0 11 * * 1"  # Monday 11:00 AM
+    description: "Review content calendar and flag gaps for the week ahead"
+    workflow: content_generation
+    brand: fulldigital
+    enabled: true
+
+  # ── Maintenance ──────────────────────────────────────────────────────────
+
+  log_rotation:
+    schedule: "0 2 * * 0"  # Sunday 2:00 AM
+    description: "Rotate and compress agent activity logs"
+    script: "openclaw/scripts/rotate-logs.sh"
+    node: claw-i7
+    enabled: true
+
+  model_warmup:
+    schedule: "0 5 * * *"  # 5:00 AM daily
+    description: "Pre-warm Ollama models on M1 for fast first inference"
+    script: "scripts/warm-models.sh"
+    node: claw-m1
+    enabled: true

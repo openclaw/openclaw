@@ -1,0 +1,8 @@
+{"content_id":"cmv_cta_0001","brand":"cutmv","status":"approved","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Global CTA rule.","source":"user_rule"}
+{"content_id":"cmv_hook_0001","brand":"cutmv","status":"unknown","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Fill after testing.","source":"seed"}
+{"content_id":"cmv_hook_1001","brand":"cutmv","status":"unknown","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Baseline hero messaging"}
+{"content_id":"cmv_faq_2001","brand":"cutmv","status":"approved","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Canonical pricing FAQ — source of truth.","source":"canonical"}
+{"content_id":"cmv_faq_2002","brand":"cutmv","status":"approved","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Canonical upload retention FAQ — source of truth.","source":"canonical"}
+{"content_id":"cmv_faq_2003","brand":"cutmv","status":"approved","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Canonical export retention FAQ — source of truth.","source":"canonical"}
+{"content_id":"cmv_faq_2004","brand":"cutmv","status":"approved","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Canonical subscription requirement FAQ — source of truth.","source":"canonical"}
+{"content_id":"cmv_hero_1004","brand":"cutmv","status":"unknown","metrics":{},"notes":"Hero headline for CUTMV landing","source":"cutmv.fulldigitalll.com"}

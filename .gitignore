@@ -81,8 +81,8 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
-IDENTITY.md
-USER.md
+/IDENTITY.md
+/USER.md
 .tgz
 .idea
 
@@ -121,3 +121,21 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# Full Digital / CUTMV infrastructure (Python)
+fd/.venv/
+fd/data/*.db
+fd/data/*.sqlite
+fd/.env
+
+# Remotion engine outputs (build artifacts, not source)
+packages/remotion-engine/out/
+packages/remotion-engine/node_modules/
+
+# Brand AI large assets (frame dumps, rendered outputs)
+data/datasets/*/motion/frames/
+data/datasets/*/motion/renders/
+*.mp4
+*.mov
+*.gif
+*.egg-info/
