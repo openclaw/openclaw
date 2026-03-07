@@ -9,8 +9,8 @@ describe("resolveMatrixConfig", () => {
         dejoy: {
           homeserver: "https://cfg.example.org",
           userId: "@cfg:example.org",
-          accessToken: "cfg-token",
-          password: "cfg-pass",
+          accessToken: "cfg-token", // pragma: allowlist secret
+          password: "cfg-pass", // pragma: allowlist secret
           deviceName: "CfgDevice",
           initialSyncLimit: 5,
         },
@@ -19,16 +19,16 @@ describe("resolveMatrixConfig", () => {
     const env = {
       DEJOY_HOMESERVER: "https://env.example.org",
       DEJOY_USER_ID: "@env:example.org",
-      DEJOY_ACCESS_TOKEN: "env-token",
-      DEJOY_PASSWORD: "env-pass",
+      DEJOY_ACCESS_TOKEN: "env-token", // pragma: allowlist secret
+      DEJOY_PASSWORD: "env-pass", // pragma: allowlist secret
       DEJOY_DEVICE_NAME: "EnvDevice",
     } as NodeJS.ProcessEnv;
     const resolved = resolveMatrixConfig(cfg, env);
     expect(resolved).toEqual({
       homeserver: "https://cfg.example.org",
       userId: "@cfg:example.org",
-      accessToken: "cfg-token",
-      password: "cfg-pass",
+      accessToken: "cfg-token", // pragma: allowlist secret
+      password: "cfg-pass", // pragma: allowlist secret
       deviceName: "CfgDevice",
       initialSyncLimit: 5,
       encryption: false,
@@ -40,15 +40,15 @@ describe("resolveMatrixConfig", () => {
     const env = {
       DEJOY_HOMESERVER: "https://env.example.org",
       DEJOY_USER_ID: "@env:example.org",
-      DEJOY_ACCESS_TOKEN: "env-token",
-      DEJOY_PASSWORD: "env-pass",
+      DEJOY_ACCESS_TOKEN: "env-token", // pragma: allowlist secret
+      DEJOY_PASSWORD: "env-pass", // pragma: allowlist secret
       DEJOY_DEVICE_NAME: "EnvDevice",
     } as NodeJS.ProcessEnv;
     const resolved = resolveMatrixConfig(cfg, env);
     expect(resolved.homeserver).toBe("https://env.example.org");
     expect(resolved.userId).toBe("@env:example.org");
-    expect(resolved.accessToken).toBe("env-token");
-    expect(resolved.password).toBe("env-pass");
+    expect(resolved.accessToken).toBe("env-token"); // pragma: allowlist secret
+    expect(resolved.password).toBe("env-pass"); // pragma: allowlist secret
     expect(resolved.deviceName).toBe("EnvDevice");
     expect(resolved.initialSyncLimit).toBeUndefined();
     expect(resolved.encryption).toBe(false);

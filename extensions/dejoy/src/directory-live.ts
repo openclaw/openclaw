@@ -34,7 +34,7 @@ async function fetchMatrixJson<T>(params: {
     init: {
       method: params.method ?? "GET",
       headers: {
-        Authorization: `Bearer ${params.accessToken}`,
+        Authorization: `Bearer ${params.accessToken}`, // pragma: allowlist secret
         "Content-Type": "application/json",
       },
       body: params.body ? JSON.stringify(params.body) : undefined,

@@ -42,7 +42,7 @@ describe("resolveMatrixAccount", () => {
       channels: {
         dejoy: {
           homeserver: "https://matrix.example.org",
-          accessToken: "tok-access",
+          accessToken: "tok-access", // pragma: allowlist secret
         },
       },
     };
@@ -71,7 +71,7 @@ describe("resolveMatrixAccount", () => {
         dejoy: {
           homeserver: "https://matrix.example.org",
           userId: "@bot:example.org",
-          password: "secret",
+          password: "secret", // pragma: allowlist secret
         },
       },
     };

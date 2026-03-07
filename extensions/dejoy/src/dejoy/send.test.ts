@@ -108,7 +108,7 @@ describe("sendMessageMatrix media", () => {
             kty: "oct",
             key_ops: ["encrypt", "decrypt"],
             alg: "A256CTR",
-            k: "secret",
+            k: "secret", // pragma: allowlist secret
             ext: true,
           },
           iv: "iv",
