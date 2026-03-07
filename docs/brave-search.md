@@ -13,7 +13,7 @@ OpenClaw supports Brave Search as a web search provider for `web_search`.
 ## Get an API key
 
 1. Create a Brave Search API account at [https://brave.com/search/api/](https://brave.com/search/api/)
-2. In the dashboard, choose the **Data for Search** plan and generate an API key.
+2. In the dashboard, choose the **Search** plan and generate an API key.
 3. Store the key in config (recommended) or set `BRAVE_API_KEY` in the Gateway environment.
 
 ## Config example
@@ -72,9 +72,9 @@ await web_search({
 
 ## Notes
 
-- The Data for AI plan is **not** compatible with `web_search`.
-- Brave provides paid plans; check the Brave API portal for current limits.
-- Brave Terms include restrictions on some AI-related uses of Search Results. Review the Brave Terms of Service and confirm your intended use is compliant. For legal questions, consult your counsel.
+- The Brave Search API includes $5 in free credits each month. Users may configure a $5 **usage limit** in the dashboard to avoid exceeding this amount.
+- Brave provides paid plans; check the Brave API portal for details.
+- Brave Terms include restrictions on some AI-related uses of Search Results. Review the [Search API Terms of Service](https://api-dashboard.search.brave.com/documentation/resources/terms-of-service) and confirm your intended use is compliant. For legal questions, consult your counsel.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 See [Web tools](/tools/web) for the full web_search configuration.

@@ -64,7 +64,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 ### Brave Search
 
 1. Create a Brave Search API account at <https://brave.com/search/api/>
-2. In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
+2. In the dashboard, choose the **Search** plan and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
 Brave provides paid plans; check the Brave API portal for the current limits and pricing.
