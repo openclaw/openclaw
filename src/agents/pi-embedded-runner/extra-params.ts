@@ -1209,7 +1209,7 @@ export function applyExtraParamsToAgent(
   // fal routes to OpenRouter — apply the same reasoning-format transformation
   // that regular OpenRouter uses to avoid flat reasoning_effort rejection.
   if (provider === "fal-openrouter") {
-    const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
+    const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const falThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, falThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
