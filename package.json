@@ -417,6 +417,9 @@
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
+    "patchedDependencies": {
+      "@mariozechner/pi-agent-core@0.55.3": "patches/@mariozechner__pi-agent-core@0.55.3.patch"
+    },
     "overrides": {
       "hono": "4.12.5",
       "@hono/node-server": "1.19.10",
