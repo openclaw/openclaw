@@ -21,7 +21,7 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { createPluginRuntime } from "./runtime/index.js";
+import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
@@ -38,6 +38,7 @@ export type PluginLoadOptions = {
   workspaceDir?: string;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
 };
@@ -86,42 +87,110 @@ const resolvePluginSdkAliasFile = (params: {
 };
 
 const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "index.ts", distFile: "index.js" });
+  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
-const resolvePluginSdkAccountIdAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
-};
+const pluginSdkScopedAliasEntries = [
+  { subpath: "core", srcFile: "core.ts", distFile: "core.js" },
+  { subpath: "compat", srcFile: "compat.ts", distFile: "compat.js" },
+  { subpath: "telegram", srcFile: "telegram.ts", distFile: "telegram.js" },
+  { subpath: "discord", srcFile: "discord.ts", distFile: "discord.js" },
+  { subpath: "slack", srcFile: "slack.ts", distFile: "slack.js" },
+  { subpath: "signal", srcFile: "signal.ts", distFile: "signal.js" },
+  { subpath: "imessage", srcFile: "imessage.ts", distFile: "imessage.js" },
+  { subpath: "whatsapp", srcFile: "whatsapp.ts", distFile: "whatsapp.js" },
+  { subpath: "line", srcFile: "line.ts", distFile: "line.js" },
+  { subpath: "msteams", srcFile: "msteams.ts", distFile: "msteams.js" },
+  { subpath: "acpx", srcFile: "acpx.ts", distFile: "acpx.js" },
+  { subpath: "bluebubbles", srcFile: "bluebubbles.ts", distFile: "bluebubbles.js" },
+  {
+    subpath: "copilot-proxy",
+    srcFile: "copilot-proxy.ts",
+    distFile: "copilot-proxy.js",
+  },
+  { subpath: "device-pair", srcFile: "device-pair.ts", distFile: "device-pair.js" },
+  {
+    subpath: "diagnostics-otel",
+    srcFile: "diagnostics-otel.ts",
+    distFile: "diagnostics-otel.js",
+  },
+  { subpath: "diffs", srcFile: "diffs.ts", distFile: "diffs.js" },
+  { subpath: "feishu", srcFile: "feishu.ts", distFile: "feishu.js" },
+  {
+    subpath: "google-gemini-cli-auth",
+    srcFile: "google-gemini-cli-auth.ts",
+    distFile: "google-gemini-cli-auth.js",
+  },
+  { subpath: "googlechat", srcFile: "googlechat.ts", distFile: "googlechat.js" },
+  { subpath: "irc", srcFile: "irc.ts", distFile: "irc.js" },
+  { subpath: "llm-task", srcFile: "llm-task.ts", distFile: "llm-task.js" },
+  { subpath: "lobster", srcFile: "lobster.ts", distFile: "lobster.js" },
+  { subpath: "matrix", srcFile: "matrix.ts", distFile: "matrix.js" },
+  { subpath: "mattermost", srcFile: "mattermost.ts", distFile: "mattermost.js" },
+  { subpath: "memory-core", srcFile: "memory-core.ts", distFile: "memory-core.js" },
+  {
+    subpath: "memory-lancedb",
+    srcFile: "memory-lancedb.ts",
+    distFile: "memory-lancedb.js",
+  },
+  {
+    subpath: "minimax-portal-auth",
+    srcFile: "minimax-portal-auth.ts",
+    distFile: "minimax-portal-auth.js",
+  },
+  {
+    subpath: "nextcloud-talk",
+    srcFile: "nextcloud-talk.ts",
+    distFile: "nextcloud-talk.js",
+  },
+  { subpath: "nostr", srcFile: "nostr.ts", distFile: "nostr.js" },
+  { subpath: "open-prose", srcFile: "open-prose.ts", distFile: "open-prose.js" },
+  {
+    subpath: "phone-control",
+    srcFile: "phone-control.ts",
+    distFile: "phone-control.js",
+  },
+  {
+    subpath: "qwen-portal-auth",
+    srcFile: "qwen-portal-auth.ts",
+    distFile: "qwen-portal-auth.js",
+  },
+  {
+    subpath: "synology-chat",
+    srcFile: "synology-chat.ts",
+    distFile: "synology-chat.js",
+  },
+  { subpath: "talk-voice", srcFile: "talk-voice.ts", distFile: "talk-voice.js" },
+  { subpath: "test-utils", srcFile: "test-utils.ts", distFile: "test-utils.js" },
+  {
+    subpath: "thread-ownership",
+    srcFile: "thread-ownership.ts",
+    distFile: "thread-ownership.js",
+  },
+  { subpath: "tlon", srcFile: "tlon.ts", distFile: "tlon.js" },
+  { subpath: "twitch", srcFile: "twitch.ts", distFile: "twitch.js" },
+  { subpath: "voice-call", srcFile: "voice-call.ts", distFile: "voice-call.js" },
+  { subpath: "zalo", srcFile: "zalo.ts", distFile: "zalo.js" },
+  { subpath: "zalouser", srcFile: "zalouser.ts", distFile: "zalouser.js" },
+  { subpath: "account-id", srcFile: "account-id.ts", distFile: "account-id.js" },
+  {
+    subpath: "keyed-async-queue",
+    srcFile: "keyed-async-queue.ts",
+    distFile: "keyed-async-queue.js",
+  },
+] as const;
 
-const resolvePluginSdkCoreAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "core.ts", distFile: "core.js" });
-};
-
-const resolvePluginSdkTelegramAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "telegram.ts", distFile: "telegram.js" });
-};
-
-const resolvePluginSdkDiscordAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "discord.ts", distFile: "discord.js" });
-};
-
-const resolvePluginSdkSlackAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "slack.ts", distFile: "slack.js" });
-};
-
-const resolvePluginSdkSignalAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "signal.ts", distFile: "signal.js" });
-};
-
-const resolvePluginSdkIMessageAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "imessage.ts", distFile: "imessage.js" });
-};
-
-const resolvePluginSdkWhatsAppAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "whatsapp.ts", distFile: "whatsapp.js" });
-};
-
-const resolvePluginSdkLineAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "line.ts", distFile: "line.js" });
+const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
+  const aliasMap: Record<string, string> = {};
+  for (const entry of pluginSdkScopedAliasEntries) {
+    const resolved = resolvePluginSdkAliasFile({
+      srcFile: entry.srcFile,
+      distFile: entry.distFile,
+    });
+    if (resolved) {
+      aliasMap[`openclaw/plugin-sdk/${entry.subpath}`] = resolved;
+    }
+  }
+  return aliasMap;
 };
 
 export const __testing = {
@@ -226,15 +295,20 @@ function recordPluginError(params: {
   diagnosticMessagePrefix: string;
 }) {
   const errorText = String(params.error);
-  params.logger.error(`${params.logPrefix}${errorText}`);
+  const deprecatedApiHint =
+    errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
+      ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
+      : null;
+  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
+  params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
-  params.record.error = errorText;
+  params.record.error = displayError;
   params.registry.plugins.push(params.record);
   params.registry.diagnostics.push({
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
-    message: `${params.diagnosticMessagePrefix}${errorText}`,
+    message: `${params.diagnosticMessagePrefix}${displayError}`,
   });
 }
 
@@ -426,7 +500,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // not eagerly load every channel runtime dependency.
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= createPluginRuntime();
+    resolvedRuntime ??= createPluginRuntime(options.runtimeOptions);
     return resolvedRuntime;
   };
   const runtime = new Proxy({} as PluginRuntime, {
@@ -464,6 +538,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
+    cache: options.cache,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
@@ -495,28 +570,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return jitiLoader;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
-    const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
-    const pluginSdkCoreAlias = resolvePluginSdkCoreAlias();
-    const pluginSdkTelegramAlias = resolvePluginSdkTelegramAlias();
-    const pluginSdkDiscordAlias = resolvePluginSdkDiscordAlias();
-    const pluginSdkSlackAlias = resolvePluginSdkSlackAlias();
-    const pluginSdkSignalAlias = resolvePluginSdkSignalAlias();
-    const pluginSdkIMessageAlias = resolvePluginSdkIMessageAlias();
-    const pluginSdkWhatsAppAlias = resolvePluginSdkWhatsAppAlias();
-    const pluginSdkLineAlias = resolvePluginSdkLineAlias();
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...(pluginSdkCoreAlias ? { "openclaw/plugin-sdk/core": pluginSdkCoreAlias } : {}),
-      ...(pluginSdkTelegramAlias ? { "openclaw/plugin-sdk/telegram": pluginSdkTelegramAlias } : {}),
-      ...(pluginSdkDiscordAlias ? { "openclaw/plugin-sdk/discord": pluginSdkDiscordAlias } : {}),
-      ...(pluginSdkSlackAlias ? { "openclaw/plugin-sdk/slack": pluginSdkSlackAlias } : {}),
-      ...(pluginSdkSignalAlias ? { "openclaw/plugin-sdk/signal": pluginSdkSignalAlias } : {}),
-      ...(pluginSdkIMessageAlias ? { "openclaw/plugin-sdk/imessage": pluginSdkIMessageAlias } : {}),
-      ...(pluginSdkWhatsAppAlias ? { "openclaw/plugin-sdk/whatsapp": pluginSdkWhatsAppAlias } : {}),
-      ...(pluginSdkLineAlias ? { "openclaw/plugin-sdk/line": pluginSdkLineAlias } : {}),
-      ...(pluginSdkAccountIdAlias
-        ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
-        : {}),
+      ...resolvePluginSdkScopedAliasMap(),
     };
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
@@ -604,6 +660,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
+    }
+
+    // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
+    // This avoids opening/importing heavy memory plugin modules that will never register.
+    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+      const earlyMemoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: "memory",
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
+      if (!earlyMemoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = earlyMemoryDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
     }
 
     if (!manifestRecord.configSchema) {
@@ -720,6 +795,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const api = createApi(record, {
       config: cfg,
       pluginConfig: validatedConfig.value,
+      hookPolicy: entry?.hooks,
     });
 
     try {

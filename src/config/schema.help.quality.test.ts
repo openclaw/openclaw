@@ -339,6 +339,8 @@ const TARGET_KEYS = [
   "plugins.slots",
   "plugins.entries",
   "plugins.entries.*.enabled",
+  "plugins.entries.*.hooks",
+  "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
@@ -370,6 +372,10 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.maxHistoryShare",
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.qualityGuard",
+  "agents.defaults.compaction.qualityGuard.enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -758,6 +764,11 @@ describe("config help copy quality", () => {
 
     const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
+
+    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
+    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
+    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
+    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
@@ -784,6 +795,11 @@ describe("config help copy quality", () => {
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
+    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
+    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

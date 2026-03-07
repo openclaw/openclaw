@@ -1,11 +1,11 @@
-import type { ChannelOnboardingAdapter, OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ChannelOnboardingAdapter, OpenClawConfig } from "openclaw/plugin-sdk/compat";
 import {
   promptAccountId,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   formatDocsLink,
-} from "openclaw/plugin-sdk";
-import { getXRuntime } from "./runtime.js";
+} from "openclaw/plugin-sdk/compat";
+import { getXChannel } from "./runtime.js";
 
 const channel = "x" as const;
 
@@ -86,12 +86,11 @@ function writeAccountConfig(params: {
 export const xOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = getXRuntime()
-      .channel.x.listXAccountIds(cfg)
-      .some((accountId) =>
-        getXRuntime().channel.x.isXAccountConfigured(
-          getXRuntime().channel.x.resolveXAccount(cfg, accountId),
-        ),
+    const xChannel = getXChannel();
+    const configured = xChannel
+      .listXAccountIds(cfg)
+      .some((accountId: string) =>
+        xChannel.isXAccountConfigured(xChannel.resolveXAccount(cfg, accountId)),
       );
     return {
       channel,
@@ -102,6 +101,7 @@ export const xOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+    const xChannel = getXChannel();
     await prompter.note(
       [
         "Create credentials in the X Developer Portal (API key/secret + access token/secret).",
@@ -112,7 +112,7 @@ export const xOnboardingAdapter: ChannelOnboardingAdapter = {
     );
 
     const xOverride = accountOverrides.x?.trim();
-    const defaultAccountId = getXRuntime().channel.x.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
+    const defaultAccountId = xChannel.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
     let xAccountId = xOverride ? normalizeAccountId(xOverride) : defaultAccountId;
     if (shouldPromptAccountIds && !xOverride) {
       xAccountId = await promptAccountId({
@@ -120,13 +120,13 @@ export const xOnboardingAdapter: ChannelOnboardingAdapter = {
         prompter,
         label: "X",
         currentId: xAccountId,
-        listAccountIds: (nextCfg) => getXRuntime().channel.x.listXAccountIds(nextCfg),
+        listAccountIds: (nextCfg) => xChannel.listXAccountIds(nextCfg),
         defaultAccountId,
       });
     }
 
-    const existing = getXRuntime().channel.x.resolveXAccount(cfg, xAccountId);
-    const hasExistingCreds = getXRuntime().channel.x.isXAccountConfigured(existing);
+    const existing = xChannel.resolveXAccount(cfg, xAccountId);
+    const hasExistingCreds = xChannel.isXAccountConfigured(existing);
     const keepExisting =
       hasExistingCreds &&
       (await prompter.confirm({

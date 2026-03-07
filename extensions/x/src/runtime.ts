@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/compat";
 
 let runtime: PluginRuntime | null = null;
 
@@ -11,4 +11,8 @@ export function getXRuntime(): PluginRuntime {
     throw new Error("X runtime not initialized");
   }
   return runtime;
+}
+
+export function getXChannel(): any {
+  return (getXRuntime().channel as Record<string, unknown>).x as any;
 }

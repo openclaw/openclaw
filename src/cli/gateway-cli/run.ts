@@ -9,6 +9,7 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -315,9 +316,22 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordValue = resolvedAuth.password;
   const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
   const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  const tokenConfigured =
+    hasToken ||
+    hasConfiguredSecretInput(
+      authOverride?.token ?? cfg.gateway?.auth?.token,
+      cfg.secrets?.defaults,
+    );
+  const passwordConfigured =
+    hasPassword ||
+    hasConfiguredSecretInput(
+      authOverride?.password ?? cfg.gateway?.auth?.password,
+      cfg.secrets?.defaults,
+    );
   const hasSharedSecret =
-    (resolvedAuthMode === "token" && hasToken) || (resolvedAuthMode === "password" && hasPassword);
-  const canBootstrapToken = resolvedAuthMode === "token" && !hasToken;
+    (resolvedAuthMode === "token" && tokenConfigured) ||
+    (resolvedAuthMode === "password" && passwordConfigured);
+  const canBootstrapToken = resolvedAuthMode === "token" && !tokenConfigured;
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -327,7 +341,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
-  if (resolvedAuthMode === "password" && !hasPassword) {
+  if (resolvedAuthMode === "password" && !passwordConfigured) {
     defaultRuntime.error(
       [
         "Gateway auth is set to password, but no password is configured.",

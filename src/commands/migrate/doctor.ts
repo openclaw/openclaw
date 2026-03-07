@@ -159,7 +159,8 @@ async function checkGatewayTokenDrift(): Promise<DoctorIssue[]> {
     }
 
     const cfg = loadConfig();
-    const configToken = cfg.gateway?.auth?.token?.trim();
+    const configToken =
+      typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
 
     const service = resolveGatewayService();
     const command = await service.readCommand(process.env);

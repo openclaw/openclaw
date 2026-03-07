@@ -117,4 +117,12 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /**
+   * Allow a single run attempt even when all auth profiles are in cooldown,
+   * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
+   *
+   * This is used by model fallback when trying sibling models on providers
+   * where transient service pressure is often model-scoped.
+   */
+  allowTransientCooldownProbe?: boolean;
 };
