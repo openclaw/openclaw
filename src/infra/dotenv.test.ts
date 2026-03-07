@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import dotenv from "dotenv";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
@@ -48,6 +49,10 @@ async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>)
 }
 
 describe("loadDotEnv", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("loads ~/.openclaw/.env as fallback without overriding CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -93,6 +98,115 @@ describe("loadDotEnv", () => {
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
+  it("expands references from the shell and CWD env files", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        process.env.OPENAI_API_KEY = "from-shell";
+        await writeEnvFile(path.join(cwdDir, ".env"), "LOCAL_BASE=from-cwd\n");
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "OPENAI_TRANSCRIPTION_API_KEY=${OPENAI_API_KEY}\nCHAINED_VALUE=${LOCAL_BASE}\n",
+        );
+
+        process.chdir(cwdDir);
+        delete process.env.OPENAI_TRANSCRIPTION_API_KEY;
+        delete process.env.CHAINED_VALUE;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.OPENAI_TRANSCRIPTION_API_KEY).toBe("from-shell");
+        expect(process.env.CHAINED_VALUE).toBe("from-cwd");
+      });
+    });
+  });
+
+  it("expands references defined earlier in the same env file", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "BASE=from-global\nCOMBINED=${BASE}-suffix\n",
+        );
+        process.chdir(cwdDir);
+        delete process.env.BASE;
+        delete process.env.COMBINED;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.BASE).toBe("from-global");
+        expect(process.env.COMBINED).toBe("from-global-suffix");
+      });
+    });
+  });
+
+  it("keeps loading fallback env files when a prior env file fails to parse", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(path.join(cwdDir, ".env"), "BROKEN=1\n");
+        await writeEnvFile(path.join(stateDir, ".env"), "FALLBACK_OK=from-global\n");
+        process.chdir(cwdDir);
+        delete process.env.FALLBACK_OK;
+
+        const configSpy = vi.spyOn(dotenv, "configDotenv");
+        configSpy.mockImplementation((options): ReturnType<typeof dotenv.configDotenv> => {
+          if (typeof options?.path === "string" && options.path === path.join(cwdDir, ".env")) {
+            return {
+              parsed: {},
+              error: Object.assign(new Error("boom"), { code: "MISSING_DATA" as const }),
+            };
+          }
+          return { parsed: { FALLBACK_OK: "from-global" } };
+        });
+
+        expect(() => loadDotEnv({ quiet: true })).not.toThrow();
+        expect(process.env.FALLBACK_OK).toBe("from-global");
+      });
+    });
+  });
+
+  it("does not treat dollar-prefixed literals as env references", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "PRICE=cost-$5\nPASSWORD=abc$5word\nBRACED=keep-${5}\n",
+        );
+        process.chdir(cwdDir);
+        delete process.env.PRICE;
+        delete process.env.PASSWORD;
+        delete process.env.BRACED;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.PRICE).toBe("cost-$5");
+        expect(process.env.PASSWORD).toBe("abc$5word");
+        expect(process.env.BRACED).toBe("keep-${5}");
+      });
+    });
+  });
+
+  it("preserves escaped dollar literals without expanding them", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "ESCAPED_BARE=abc\\$TOKEN\nESCAPED_BRACED=abc\\${TOKEN}\nDOUBLE=abc\\\\$TOKEN\n",
+        );
+        process.chdir(cwdDir);
+        delete process.env.ESCAPED_BARE;
+        delete process.env.ESCAPED_BRACED;
+        delete process.env.DOUBLE;
+        delete process.env.TOKEN;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.ESCAPED_BARE).toBe("abc$TOKEN");
+        expect(process.env.ESCAPED_BRACED).toBe("abc${TOKEN}");
+        expect(process.env.DOUBLE).toBe("abc\\$TOKEN");
       });
     });
   });
