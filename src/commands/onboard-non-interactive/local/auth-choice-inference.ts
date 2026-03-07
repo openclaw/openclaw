@@ -21,6 +21,7 @@ type AuthChoiceFlagOptions = Pick<
   | "kimiCodeApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
+  | "deepinfraApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
   | "zaiApiKey"

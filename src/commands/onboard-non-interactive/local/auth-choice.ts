@@ -25,6 +25,7 @@ import {
   applyOpenrouterConfig,
   applySyntheticConfig,
   applyVeniceConfig,
+  applyDeepinfraConfig,
   applyTogetherConfig,
   applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
@@ -51,6 +52,7 @@ import {
   setVolcengineApiKey,
   setXaiApiKey,
   setVeniceApiKey,
+  setDeepinfraApiKey,
   setTogetherApiKey,
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
@@ -867,6 +869,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpencodeZenConfig(nextConfig);
+  }
+
+  if (authChoice === "deepinfra-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "deepinfra",
+      cfg: baseConfig,
+      flagValue: opts.deepinfraApiKey,
+      flagName: "--deepinfra-api-key",
+      envVar: "DEEPINFRA_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setDeepinfraApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "deepinfra:default",
+      provider: "deepinfra",
+      mode: "api_key",
+    });
+    return applyDeepinfraConfig(nextConfig);
   }
 
   if (authChoice === "together-api-key") {

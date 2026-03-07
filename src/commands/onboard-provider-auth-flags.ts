@@ -17,6 +17,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "minimaxApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
+  | "deepinfraApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
@@ -141,6 +142,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--venice-api-key",
     cliOption: "--venice-api-key <key>",
     description: "Venice API key",
+  },
+  {
+    optionKey: "deepinfraApiKey",
+    authChoice: "deepinfra-api-key",
+    cliFlag: "--deepinfra-api-key",
+    cliOption: "--deepinfra-api-key <key>",
+    description: "DeepInfra API key",
   },
   {
     optionKey: "togetherApiKey",
