@@ -90,3 +90,4 @@ export {
   resolveOutboundMediaUrls,
 } from "./reply-payload.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
+export { waitUntilAbort } from "./channel-lifecycle.js";
