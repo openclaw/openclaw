@@ -46,6 +46,26 @@ async function inspectUnknownListenerFallback(params: {
   });
 }
 
+async function inspectAmbiguousOwnershipWithProbe(
+  probeResult: Awaited<ReturnType<typeof probeGateway>>,
+) {
+  const service = {
+    readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
+  } as unknown as GatewayService;
+
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ commandLine: "" }],
+    hints: [],
+  });
+  classifyPortListener.mockReturnValue("unknown");
+  probeGateway.mockResolvedValue(probeResult);
+
+  const { inspectGatewayRestart } = await import("./restart-health.js");
+  return inspectGatewayRestart({ service, port: 18789 });
+}
+
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
     inspectPortUsage.mockReset();
@@ -159,24 +179,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("uses a local gateway probe when ownership is ambiguous", async () => {
-    const service = {
-      readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
-    } as unknown as GatewayService;
-
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ commandLine: "" }],
-      hints: [],
-    });
-    classifyPortListener.mockReturnValue("unknown");
-    probeGateway.mockResolvedValue({
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
       ok: true,
       close: null,
     });
-
-    const { inspectGatewayRestart } = await import("./restart-health.js");
-    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).toHaveBeenCalledWith(
@@ -185,24 +191,10 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("treats auth-closed probe as healthy gateway reachability", async () => {
-    const service = {
-      readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
-    } as unknown as GatewayService;
-
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ commandLine: "" }],
-      hints: [],
-    });
-    classifyPortListener.mockReturnValue("unknown");
-    probeGateway.mockResolvedValue({
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
       ok: false,
       close: { code: 1008, reason: "auth required" },
     });
-
-    const { inspectGatewayRestart } = await import("./restart-health.js");
-    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
 
     expect(snapshot.healthy).toBe(true);
   });
