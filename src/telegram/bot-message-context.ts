@@ -470,7 +470,7 @@ export const buildTelegramMessageContext = async ({
   const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
-  let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
+  let placeholder = resolveTelegramMediaPlaceholder(msg, { includeFileId: true }) ?? "";
 
   // Check if sticker has a cached description - if so, use it instead of sending the image
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
@@ -541,14 +541,14 @@ export const buildTelegramMessageContext = async ({
   }
 
   // Replace audio placeholder with transcript when preflight succeeds.
-  if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
+  if (hasAudio && bodyText.startsWith("<media:audio") && preflightTranscript) {
     bodyText = preflightTranscript;
   }
 
   // Build bodyText fallback for messages that still have no text.
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
-      bodyText = preflightTranscript || "<media:audio>";
+      bodyText = preflightTranscript || placeholder || "<media:audio>";
     } else {
       bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
     }

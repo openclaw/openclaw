@@ -107,6 +107,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("createForumTopic")) {
       actions.add("topic-create");
     }
+    // download-file is always available when the bot has a token
+    actions.add("download-file");
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -275,6 +277,19 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           name,
           iconColor: iconColor ?? undefined,
           iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "download-file") {
+      const fileId = readStringParam(params, "fileId", { required: true });
+      return await handleTelegramAction(
+        {
+          action: "downloadFile",
+          fileId,
           accountId: accountId ?? undefined,
         },
         cfg,

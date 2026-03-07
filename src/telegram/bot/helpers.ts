@@ -222,7 +222,11 @@ export function buildSenderName(msg: Message) {
   return name || undefined;
 }
 
-export function resolveTelegramMediaPlaceholder(
+/**
+ * Extract the primary file_id from an inbound Telegram message.
+ * Returns the largest photo size, or the file_id for video/audio/document/sticker.
+ */
+export function resolveInboundMediaFileId(
   msg:
     | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
     | undefined
@@ -231,20 +235,43 @@ export function resolveTelegramMediaPlaceholder(
   if (!msg) {
     return undefined;
   }
+  return (
+    msg.sticker?.file_id ??
+    msg.photo?.[msg.photo.length - 1]?.file_id ??
+    msg.video?.file_id ??
+    msg.video_note?.file_id ??
+    msg.document?.file_id ??
+    msg.audio?.file_id ??
+    msg.voice?.file_id
+  );
+}
+
+export function resolveTelegramMediaPlaceholder(
+  msg:
+    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
+    | undefined
+    | null,
+  options?: { includeFileId?: boolean },
+): string | undefined {
+  if (!msg) {
+    return undefined;
+  }
+  const fileId = options?.includeFileId ? resolveInboundMediaFileId(msg) : undefined;
+  const suffix = fileId ? ` file_id="${fileId}"` : "";
   if (msg.photo) {
-    return "<media:image>";
+    return `<media:image${suffix}>`;
   }
   if (msg.video || msg.video_note) {
-    return "<media:video>";
+    return `<media:video${suffix}>`;
   }
   if (msg.audio || msg.voice) {
-    return "<media:audio>";
+    return `<media:audio${suffix}>`;
   }
   if (msg.document) {
-    return "<media:document>";
+    return `<media:document${suffix}>`;
   }
   if (msg.sticker) {
-    return "<media:sticker>";
+    return `<media:sticker${suffix}>`;
   }
   return undefined;
 }

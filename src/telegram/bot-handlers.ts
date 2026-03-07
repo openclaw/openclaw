@@ -46,6 +46,7 @@ import { resolveMedia } from "./bot/delivery.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  resolveInboundMediaFileId,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
@@ -90,18 +91,6 @@ function hasReplyTargetMedia(msg: Message): boolean {
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
   const replyTarget = msg.reply_to_message ?? externalReply;
   return Boolean(replyTarget && hasInboundMedia(replyTarget));
-}
-
-function resolveInboundMediaFileId(msg: Message): string | undefined {
-  return (
-    msg.sticker?.file_id ??
-    msg.photo?.[msg.photo.length - 1]?.file_id ??
-    msg.video?.file_id ??
-    msg.video_note?.file_id ??
-    msg.document?.file_id ??
-    msg.audio?.file_id ??
-    msg.voice?.file_id
-  );
 }
 
 export const registerTelegramHandlers = ({

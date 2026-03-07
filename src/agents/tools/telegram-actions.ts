@@ -467,5 +467,46 @@ export async function handleTelegramAction(
     });
   }
 
+  if (action === "downloadFile") {
+    const fileId = readStringParam(params, "fileId", { required: true });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const fileInfo = await fetch(
+      `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`,
+    );
+    if (!fileInfo.ok) {
+      throw new Error(`Telegram getFile failed: ${fileInfo.status}`);
+    }
+    const fileJson = (await fileInfo.json()) as {
+      ok: boolean;
+      result?: { file_path?: string; file_size?: number };
+    };
+    if (!fileJson.ok || !fileJson.result?.file_path) {
+      throw new Error("Telegram getFile returned no file_path");
+    }
+    const filePath = fileJson.result.file_path;
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const fileRes = await fetch(fileUrl);
+    if (!fileRes.ok) {
+      throw new Error(`Telegram file download failed: ${fileRes.status}`);
+    }
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+    const ext = filePath.includes(".") ? filePath.slice(filePath.lastIndexOf(".")) : ".bin";
+    const outDir = "/tmp";
+    const outPath = `${outDir}/tg_${fileId.slice(0, 16)}${ext}`;
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(outPath, buffer);
+    return jsonResult({
+      ok: true,
+      path: outPath,
+      fileSize: fileJson.result.file_size,
+      filePath,
+    });
+  }
+
   throw new Error(`Unsupported Telegram action: ${action}`);
 }

@@ -65,12 +65,12 @@ function expectTranscriptRendered(
   expect(ctx).not.toBeNull();
   expect(ctx?.ctxPayload?.BodyForAgent).toBe(transcript);
   expect(ctx?.ctxPayload?.Body).toContain(transcript);
-  expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
+  expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio");
 }
 
 function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>) {
   expect(ctx).not.toBeNull();
-  expect(ctx?.ctxPayload?.Body).toContain("<media:audio>");
+  expect(ctx?.ctxPayload?.Body).toContain("<media:audio");
 }
 
 describe("buildTelegramMessageContext audio transcript body", () => {
