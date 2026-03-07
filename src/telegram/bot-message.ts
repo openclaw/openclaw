@@ -1,5 +1,6 @@
 import type { ReplyToMode } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
+import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   buildTelegramMessageContext,
@@ -78,16 +79,29 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       return;
     }
-    await dispatchTelegramMessage({
-      context,
-      bot,
-      cfg,
-      runtime,
-      replyToMode,
-      streamMode,
-      textLimit,
-      telegramCfg,
-      opts,
-    });
+    try {
+      await dispatchTelegramMessage({
+        context,
+        bot,
+        cfg,
+        runtime,
+        replyToMode,
+        streamMode,
+        textLimit,
+        telegramCfg,
+        opts,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
+      try {
+        await bot.api.sendMessage(
+          context.chatId,
+          "Something went wrong while processing your request. Please try again.",
+          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
+        );
+      } catch {
+        // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
+      }
+    }
   };
 };

@@ -292,6 +292,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat/requests-in-flight scheduling: stop advancing `nextDueMs` and avoid immediate `scheduleNext()` timer overrides on requests-in-flight skips, so wake-layer retry cooldowns are honored and heartbeat cadence no longer drifts under sustained contention. (#39182) Thanks @MumuTW.
 - Memory/SQLite contention resilience: re-apply `PRAGMA busy_timeout` on every sync-store and QMD connection open so process restarts/reopens no longer revert to immediate `SQLITE_BUSY` failures under lock contention. (#39183) Thanks @MumuTW.
 - Gateway/webchat route safety: block webchat/control-ui clients from inheriting stored external delivery routes on channel-scoped sessions (while preserving route inheritance for UI/TUI clients), preventing cross-channel leakage from scoped chats. (#39175) Thanks @widingmarcus-cyber.
+- Telegram error-surface resilience: return a user-visible fallback reply when dispatch/debounce processing fails instead of going silent, while preserving draft-stream cleanup and best-effort thread-scoped fallback delivery. (#39209) Thanks @riftzen-bit.
 
 ## 2026.3.2
 
