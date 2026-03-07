@@ -528,7 +528,18 @@ function validateMcpResult(
     for (const [field, expectedType] of Object.entries(variant)) {
       const actual = result[field];
       if (actual === undefined) {
-        // const-typed discriminant fields are required
+        // The discriminant itself is always required.
+        if (field === toolSchema.discriminant) {
+          addViolation(
+            "schema.missing-field",
+            `required field '${field}' missing from variant '${variantKey}'`,
+          );
+          continue;
+        }
+        // Optional variant fields (`... | undefined`) may be absent.
+        if (isOptionalTypeString(expectedType)) {
+          continue;
+        }
         addViolation(
           "schema.missing-field",
           `required field '${field}' missing from variant '${variantKey}'`,

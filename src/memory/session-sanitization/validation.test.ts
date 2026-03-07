@@ -607,6 +607,36 @@ describe("schemaValidation", () => {
       expect(r.pass).toBe(false);
       expect(r.ruleIds).toContain("schema.type-mismatch");
     });
+
+    it("allows missing optional field in selected variant", () => {
+      const optionalVariantSchema: ToolOutputSchema = {
+        discriminant: "type",
+        variants: {
+          success: { type: "const:success", items: "array", cursor: "string | undefined" },
+          error: { type: "const:error", message: "string", code: "number" },
+        },
+      };
+      const r = schemaValidation({ type: "success", items: [] }, "mcp", optionalVariantSchema);
+      expect(r.pass).toBe(true);
+      expect(r.ruleIds).not.toContain("schema.missing-field");
+    });
+
+    it("rejects wrong type for optional field when present in selected variant", () => {
+      const optionalVariantSchema: ToolOutputSchema = {
+        discriminant: "type",
+        variants: {
+          success: { type: "const:success", items: "array", cursor: "string | undefined" },
+          error: { type: "const:error", message: "string", code: "number" },
+        },
+      };
+      const r = schemaValidation(
+        { type: "success", items: [], cursor: 123 },
+        "mcp",
+        optionalVariantSchema,
+      );
+      expect(r.pass).toBe(false);
+      expect(r.ruleIds).toContain("schema.type-mismatch");
+    });
   });
 });
 
