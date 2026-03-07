@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
 } from "../../ui/src/i18n/lib/registry.ts";
+import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 
 function getNestedTranslation(map: TranslationMap | null, ...path: string[]): string | undefined {
   let value: string | TranslationMap | undefined = map ?? undefined;
@@ -43,7 +43,7 @@ describe("ui i18n locale registry", () => {
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
     expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
-    expect(getNestedTranslation(zhCN, "common", "health")).toBe("健康状况");
+    expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
   });
 });

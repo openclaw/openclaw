@@ -30,9 +30,12 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```json5
 {
   env: { OPENAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
 }
 ```
+
+OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
+OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -53,9 +56,12 @@ openclaw models auth login --provider openai-codex
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
 }
 ```
+
+OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
+maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
 ### Transport default
 
@@ -81,9 +87,9 @@ Related OpenAI docs:
 {
   agents: {
     defaults: {
-      model: { primary: "openai-codex/gpt-5.3-codex" },
+      model: { primary: "openai-codex/gpt-5.4" },
       models: {
-        "openai-codex/gpt-5.3-codex": {
+        "openai-codex/gpt-5.4": {
           params: {
             transport: "auto",
           },
@@ -106,7 +112,7 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5.2": {
+        "openai/gpt-5.4": {
           params: {
             openaiWsWarmup: false,
           },
@@ -124,7 +130,7 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5.2": {
+        "openai/gpt-5.4": {
           params: {
             openaiWsWarmup: true,
           },
@@ -134,6 +140,30 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
   },
 }
 ```
+
+### OpenAI priority processing
+
+OpenAI's API exposes priority processing via `service_tier=priority`. In
+OpenClaw, set `agents.defaults.models["openai/<model>"].params.serviceTier` to
+pass that field through on direct `openai/*` Responses requests.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            serviceTier: "priority",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Supported values are `auto`, `default`, `flex`, and `priority`.
 
 ### OpenAI Responses server-side compaction
 
@@ -157,7 +187,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "azure-openai-responses/gpt-5.2": {
+        "azure-openai-responses/gpt-5.4": {
           params: {
             responsesServerCompaction: true,
           },
@@ -175,7 +205,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5.2": {
+        "openai/gpt-5.4": {
           params: {
             responsesServerCompaction: true,
             responsesCompactThreshold: 120000,
@@ -194,7 +224,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5.2": {
+        "openai/gpt-5.4": {
           params: {
             responsesServerCompaction: false,
           },

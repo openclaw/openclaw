@@ -73,6 +73,7 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -92,5 +93,10 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
-export { createLoggerBackedRuntime } from "./runtime.js";
-export { buildProbeChannelStatusSummary } from "./status-helpers.js";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
+export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime.js";
+export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export {
+  buildProbeChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+} from "./status-helpers.js";

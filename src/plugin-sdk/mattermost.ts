@@ -15,6 +15,12 @@ export type { ChatType } from "../channels/chat-type.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveAllowlistMatchSimple } from "../channels/plugins/allowlist-match.js";
+export { normalizeProviderId } from "../agents/model-selection.js";
+export {
+  buildModelsProviderData,
+  type ModelsProviderData,
+} from "../auto-reply/reply/commands-models.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -38,11 +44,13 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "../channels/plugins/types.js";
+export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -55,6 +63,7 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
@@ -64,6 +73,8 @@ export {
 } from "../config/zod-schema.core.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { rawDataToString } from "../infra/ws.js";
+export { isLoopbackHost, isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
+export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";

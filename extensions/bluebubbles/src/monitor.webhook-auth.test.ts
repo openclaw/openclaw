@@ -166,7 +166,7 @@ function createMockAccount(
     configured: true,
     config: {
       serverUrl: "http://localhost:1234",
-      password: "test-password",
+      password: "test-password", // pragma: allowlist secret
       dmPolicy: "open",
       groupPolicy: "open",
       allowFrom: [],
@@ -511,7 +511,7 @@ describe("BlueBubbles webhook monitor", () => {
             guid: "msg-1",
           },
         },
-        { "x-password": "secret-token" },
+        { "x-password": "secret-token" }, // pragma: allowlist secret
       );
       (req as unknown as { socket: { remoteAddress: string } }).socket = {
         remoteAddress: "192.168.1.100",

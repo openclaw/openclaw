@@ -19,8 +19,8 @@ import {
   warmupDedupFromDisk,
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
-import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
-import { botOpenIds } from "./monitor.state.js";
+import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
+import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
@@ -247,6 +247,7 @@ function registerEventHandlers(
         cfg,
         event,
         botOpenId: botOpenIds.get(accountId),
+        botName: botNames.get(accountId),
         runtime,
         chatHistories,
         accountId,
@@ -260,7 +261,7 @@ function registerEventHandlers(
   };
   const resolveDebounceText = (event: FeishuMessageEvent): string => {
     const botOpenId = botOpenIds.get(accountId);
-    const parsed = parseFeishuMessageEvent(event, botOpenId);
+    const parsed = parseFeishuMessageEvent(event, botOpenId, botNames.get(accountId));
     return parsed.content.trim();
   };
   const recordSuppressedMessageIds = async (
@@ -430,6 +431,7 @@ function registerEventHandlers(
           cfg,
           event: syntheticEvent,
           botOpenId: myBotId,
+          botName: botNames.get(accountId),
           runtime,
           chatHistories,
           accountId,
@@ -483,7 +485,9 @@ function registerEventHandlers(
   });
 }
 
-export type BotOpenIdSource = { kind: "prefetched"; botOpenId?: string } | { kind: "fetch" };
+export type BotOpenIdSource =
+  | { kind: "prefetched"; botOpenId?: string; botName?: string }
+  | { kind: "fetch" };
 
 export type MonitorSingleAccountParams = {
   cfg: ClawdbotConfig;
@@ -499,11 +503,18 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const log = runtime?.log ?? console.log;
 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
-  const botOpenId =
+  const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? botOpenIdSource.botOpenId
-      : await fetchBotOpenIdForMonitor(account, { runtime, abortSignal });
+      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
+  const botOpenId = botIdentity.botOpenId;
+  const botName = botIdentity.botName?.trim();
   botOpenIds.set(accountId, botOpenId ?? "");
+  if (botName) {
+    botNames.set(accountId, botName);
+  } else {
+    botNames.delete(accountId);
+  }
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
   const connectionMode = account.config.connectionMode ?? "websocket";

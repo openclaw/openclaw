@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 describe("resolveProviderAuths key normalization", () => {
@@ -248,17 +249,17 @@ describe("resolveProviderAuths key normalization", () => {
               zai: {
                 baseUrl: "https://api.z.ai",
                 models: [modelDef],
-                apiKey: "cfg-zai-key",
+                apiKey: "cfg-zai-key", // pragma: allowlist secret
               },
               minimax: {
                 baseUrl: "https://api.minimaxi.com",
                 models: [modelDef],
-                apiKey: "cfg-minimax-key",
+                apiKey: "cfg-minimax-key", // pragma: allowlist secret
               },
               xiaomi: {
                 baseUrl: "https://api.xiaomi.example",
                 models: [modelDef],
-                apiKey: "cfg-xiaomi-key",
+                apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
               },
             },
           },
@@ -402,5 +403,77 @@ describe("resolveProviderAuths key normalization", () => {
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
     }, {});
+  });
+
+  it("ignores marker-backed config keys for provider usage auth resolution", async () => {
+    await withSuiteHome(
+      async (home) => {
+        const modelDef = {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1024,
+          maxTokens: 256,
+        };
+        await writeConfig(home, {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com",
+                models: [modelDef],
+                apiKey: NON_ENV_SECRETREF_MARKER,
+              },
+            },
+          },
+        });
+
+        const auths = await resolveProviderAuths({
+          providers: ["minimax"],
+        });
+        expect(auths).toEqual([]);
+      },
+      {
+        MINIMAX_API_KEY: undefined,
+        MINIMAX_CODE_PLAN_KEY: undefined,
+      },
+    );
+  });
+
+  it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {
+    await withSuiteHome(
+      async (home) => {
+        const modelDef = {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1024,
+          maxTokens: 256,
+        };
+        await writeConfig(home, {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com",
+                models: [modelDef],
+                apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
+              },
+            },
+          },
+        });
+
+        const auths = await resolveProviderAuths({
+          providers: ["minimax"],
+        });
+        expect(auths).toEqual([{ provider: "minimax", token: "ALLCAPS_SAMPLE" }]);
+      },
+      {
+        MINIMAX_API_KEY: undefined,
+        MINIMAX_CODE_PLAN_KEY: undefined,
+      },
+    );
   });
 });

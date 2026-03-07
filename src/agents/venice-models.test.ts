@@ -42,6 +42,7 @@ function makeModelsResponse(id: string): Response {
             name: id,
             privacy: "private",
             availableContextTokens: 131072,
+            maxCompletionTokens: 4096,
             capabilities: {
               supportsReasoning: false,
               supportsVision: false,
@@ -92,6 +93,239 @@ describe("venice-models", () => {
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     expect(attempts).toBe(3);
     expect(models.map((m) => m.id)).toContain("llama-3.3-70b");
+  });
+
+  it("uses API maxCompletionTokens for catalog models when present", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "llama-3.3-70b",
+                model_spec: {
+                  name: "llama-3.3-70b",
+                  privacy: "private",
+                  availableContextTokens: 131072,
+                  maxCompletionTokens: 2048,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: true,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const llama = models.find((m) => m.id === "llama-3.3-70b");
+    expect(llama?.maxTokens).toBe(2048);
+  });
+
+  it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "qwen3-235b-a22b-instruct-2507",
+                model_spec: {
+                  name: "qwen3-235b-a22b-instruct-2507",
+                  privacy: "private",
+                  availableContextTokens: 131072,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: true,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const qwen = models.find((m) => m.id === "qwen3-235b-a22b-instruct-2507");
+    expect(qwen?.maxTokens).toBe(16384);
+  });
+
+  it("disables tools for catalog models that do not support function calling", () => {
+    const model = buildVeniceModelDefinition(
+      VENICE_MODEL_CATALOG.find((entry) => entry.id === "deepseek-v3.2")!,
+    );
+    expect(model.compat?.supportsTools).toBe(false);
+  });
+
+  it("uses a conservative bounded maxTokens value for new models", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "new-model-2026",
+                model_spec: {
+                  name: "new-model-2026",
+                  privacy: "private",
+                  availableContextTokens: 50_000,
+                  maxCompletionTokens: 200_000,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: false,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const newModel = models.find((m) => m.id === "new-model-2026");
+    expect(newModel?.maxTokens).toBe(50000);
+    expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
+    expect(newModel?.compat?.supportsTools).toBe(false);
+  });
+
+  it("caps new-model maxTokens to the fallback context window when API context is missing", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "new-model-without-context",
+                model_spec: {
+                  name: "new-model-without-context",
+                  privacy: "private",
+                  maxCompletionTokens: 200_000,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: true,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const newModel = models.find((m) => m.id === "new-model-without-context");
+    expect(newModel?.contextWindow).toBe(128000);
+    expect(newModel?.maxTokens).toBe(128000);
+  });
+
+  it("ignores missing capabilities on partial metadata instead of aborting discovery", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "llama-3.3-70b",
+                model_spec: {
+                  name: "llama-3.3-70b",
+                  privacy: "private",
+                  availableContextTokens: 131072,
+                  maxCompletionTokens: 2048,
+                },
+              },
+              {
+                id: "new-model-partial",
+                model_spec: {
+                  name: "new-model-partial",
+                  privacy: "private",
+                  maxCompletionTokens: 2048,
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const knownModel = models.find((m) => m.id === "llama-3.3-70b");
+    const partialModel = models.find((m) => m.id === "new-model-partial");
+    expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
+    expect(knownModel?.maxTokens).toBe(2048);
+    expect(partialModel?.contextWindow).toBe(128000);
+    expect(partialModel?.maxTokens).toBe(2048);
+    expect(partialModel?.compat?.supportsTools).toBeUndefined();
+  });
+
+  it("keeps known models discoverable when a row omits model_spec", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "llama-3.3-70b",
+              },
+              {
+                id: "new-model-valid",
+                model_spec: {
+                  name: "new-model-valid",
+                  privacy: "private",
+                  availableContextTokens: 32_000,
+                  maxCompletionTokens: 2_048,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: true,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const knownModel = models.find((m) => m.id === "llama-3.3-70b");
+    const newModel = models.find((m) => m.id === "new-model-valid");
+    expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
+    expect(knownModel?.maxTokens).toBe(4096);
+    expect(newModel?.contextWindow).toBe(32000);
+    expect(newModel?.maxTokens).toBe(2048);
   });
 
   it("falls back to static catalog after retry budget is exhausted", async () => {
