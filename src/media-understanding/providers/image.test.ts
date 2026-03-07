@@ -65,8 +65,10 @@ describe("describeImageWithModel", () => {
       provider: "minimax-portal",
       model: "MiniMax-VL-01",
       buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
       mime: "image/png",
       prompt: "Describe the image.",
+      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
