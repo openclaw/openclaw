@@ -16,7 +16,7 @@ import {
   deleteEmails,
   getProcessedEmailUids,
 } from "./poll_inbox.js";
-import { classifyMessage } from "./classify_message.js";
+import { classifyMessage, classifyForInbox, getInboxCategoryName, type InboxCategory, type InboxClassification, type InboxAction } from "./classify_message.js";
 import {
   initializeCommands,
   executeCommand,
@@ -29,6 +29,54 @@ import {
   initializeTransporter,
   closeTransporter,
 } from "./send_response.js";
+
+// Inbox Management Module imports
+import {
+  getAgentInstructions,
+  getConciseInstructions,
+  getInboxStatus,
+  verifyInboxClean,
+  getActionForCategory,
+  type InboxStatus,
+  type VerificationResult,
+  type ProcessingAction,
+} from "./inbox-manager.js";
+
+// Folder Management Module imports
+import {
+  ensureFolderStructure,
+  listFolders,
+  moveToFolder,
+  archiveEmail,
+  moveToSpam,
+  moveToReview,
+  moveToCommands,
+  moveToTasks,
+  moveToNotifications,
+  getFolderStats,
+  getDestinationFolder,
+  REQUIRED_FOLDERS,
+  type FolderInfo,
+  type FolderStats,
+} from "./folder-manager.js";
+
+// Task Creator Module imports
+import {
+  createTask,
+  extractTaskFromEmail,
+  getAllTasks,
+  getPendingTasks,
+  getTaskStats,
+  exportTasksToObsidian,
+  loadTasks,
+  initTaskCreator,
+  isTaskCreatorEnabled,
+  type EmailTask,
+  type CreateTaskOptions,
+  type TaskPriority,
+  type TaskStatus,
+} from "./task-creator.js";
+
 import type { EmailListenerConfig, ParsedEmail, ClassifiedMessage } from "./types.js";
 
 let config: EmailListenerConfig | null = null;
@@ -374,6 +422,62 @@ export function getStatus(): {
 export function getCommands() {
   return getAllCommands();
 }
+
+// Export Inbox Management functions
+export {
+  getAgentInstructions,
+  getConciseInstructions,
+  getInboxStatus,
+  verifyInboxClean,
+  getActionForCategory,
+  type InboxStatus,
+  type VerificationResult,
+  type ProcessingAction,
+};
+
+// Export Folder Management functions
+export {
+  ensureFolderStructure,
+  listFolders,
+  moveToFolder,
+  archiveEmail,
+  moveToSpam,
+  moveToReview,
+  moveToCommands,
+  moveToTasks,
+  moveToNotifications,
+  getFolderStats,
+  getDestinationFolder,
+  REQUIRED_FOLDERS,
+  type FolderInfo,
+  type FolderStats,
+};
+
+// Export Task Creator functions
+export {
+  createTask,
+  extractTaskFromEmail,
+  getAllTasks,
+  getPendingTasks,
+  getTaskStats,
+  exportTasksToObsidian,
+  loadTasks,
+  initTaskCreator,
+  isTaskCreatorEnabled,
+  type EmailTask,
+  type CreateTaskOptions,
+  type TaskPriority,
+  type TaskStatus,
+};
+
+// Export Classification functions
+export {
+  classifyForInbox,
+  getInboxCategoryName,
+  type InboxCategory,
+  type InboxClassification,
+  type InboxAction,
+};
 
 // Export for testing
 export { resetPollingState, config };
