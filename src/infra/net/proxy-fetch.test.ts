@@ -81,20 +81,20 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 
-  it("returns undefined for private-network targets", () => {
+  it("returns proxy fetch for private-network targets that are not in no_proxy", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", "");
     vi.stubEnv("no_proxy", "");
 
-    expect(resolveProxyFetchFromEnv("http://192.168.3.20:8080/health")).toBeUndefined();
-    expect(envAgentSpy).not.toHaveBeenCalled();
+    expect(resolveProxyFetchFromEnv("http://192.168.3.20:8080/health")).toBeDefined();
+    expect(envAgentSpy).toHaveBeenCalled();
   });
 
   it("returns undefined for CIDR no_proxy matches", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-    vi.stubEnv("NO_PROXY", "172.16.0.0/12");
+    vi.stubEnv("NO_PROXY", "203.0.113.0/24");
 
-    expect(resolveProxyFetchFromEnv("http://172.31.0.14:9001/v1/models")).toBeUndefined();
+    expect(resolveProxyFetchFromEnv("http://203.0.113.14:9001/v1/models")).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 

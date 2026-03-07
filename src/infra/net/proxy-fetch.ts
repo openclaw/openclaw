@@ -46,15 +46,6 @@ function matchesIpv4Cidr(hostname: string, cidr: string): boolean {
   return (hostValue & mask) === (networkValue & mask);
 }
 
-function isPrivateIpv4(hostname: string): boolean {
-  return (
-    matchesIpv4Cidr(hostname, "10.0.0.0/8") ||
-    matchesIpv4Cidr(hostname, "172.16.0.0/12") ||
-    matchesIpv4Cidr(hostname, "192.168.0.0/16") ||
-    matchesIpv4Cidr(hostname, "127.0.0.0/8")
-  );
-}
-
 function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
   let hostname: string;
   try {
@@ -67,9 +58,6 @@ function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   if (hostname === "localhost" || hostname === "::1") {
-    return true;
-  }
-  if (isIP(hostname) === 4 && isPrivateIpv4(hostname)) {
     return true;
   }
 
@@ -121,8 +109,10 @@ export function resolveProxyFetchFromEnv(targetUrl?: string): typeof fetch | und
   if (!proxyUrl?.trim()) {
     return undefined;
   }
-  // Use the default fetch path for hosts that should stay local. This avoids
-  // proxying internal STT/media requests and keeps multipart uploads intact.
+  // Use the default fetch path only for loopback targets or hosts the operator
+  // explicitly excluded through NO_PROXY. This keeps proxy behavior aligned
+  // with standard clients while still allowing self-hosted STT/media backends
+  // to opt out when multipart uploads break through proxy wrappers.
   if (targetUrl && shouldBypassProxy(targetUrl, process.env)) {
     return undefined;
   }
