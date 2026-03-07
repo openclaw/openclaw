@@ -377,7 +377,7 @@ export function registerGatewayCli(program: Command) {
           join: (s: string) => colorize(rich, theme.success, s),
           stay: (s: string) => colorize(rich, theme.info, s),
           skip: (s: string) => colorize(rich, theme.muted, s),
-          disengage: (s: string) => colorize(rich, theme.warning, s),
+          disengage: (s: string) => colorize(rich, theme.warn, s),
         };
 
         let buffer = "";
