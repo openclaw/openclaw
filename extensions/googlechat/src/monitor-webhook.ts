@@ -25,6 +25,7 @@ function extractBearerToken(header: unknown): string {
 type ParsedGoogleChatInboundPayload =
   | { ok: true; event: GoogleChatEvent; addOnBearerToken: string }
   | { ok: false };
+type ParsedGoogleChatInboundSuccess = Extract<ParsedGoogleChatInboundPayload, { ok: true }>;
 
 function parseGoogleChatInboundPayload(
   raw: unknown,
@@ -116,6 +117,23 @@ export function createGoogleChatWebhookRequestHandler(params: {
       const headerBearer = extractBearerToken(req.headers.authorization);
       let selectedTarget: WebhookTarget | null = null;
       let parsedEvent: GoogleChatEvent | null = null;
+      const readAndParseEvent = async (
+        profile: "pre-auth" | "post-auth",
+      ): Promise<ParsedGoogleChatInboundSuccess | null> => {
+        const body = await readJsonWebhookBodyOrReject({
+          req,
+          res,
+          profile,
+          emptyObjectOnEmpty: false,
+          invalidJsonMessage: "invalid payload",
+        });
+        if (!body.ok) {
+          return null;
+        }
+
+        const parsed = parseGoogleChatInboundPayload(body.value, res);
+        return parsed.ok ? parsed : null;
+      };
 
       if (headerBearer) {
         selectedTarget = await resolveWebhookTargetWithAuthOrReject({
@@ -134,36 +152,14 @@ export function createGoogleChatWebhookRequestHandler(params: {
           return true;
         }
 
-        const body = await readJsonWebhookBodyOrReject({
-          req,
-          res,
-          profile: "post-auth",
-          emptyObjectOnEmpty: false,
-          invalidJsonMessage: "invalid payload",
-        });
-        if (!body.ok) {
-          return true;
-        }
-
-        const parsed = parseGoogleChatInboundPayload(body.value, res);
-        if (!parsed.ok) {
+        const parsed = await readAndParseEvent("post-auth");
+        if (!parsed) {
           return true;
         }
         parsedEvent = parsed.event;
       } else {
-        const body = await readJsonWebhookBodyOrReject({
-          req,
-          res,
-          profile: "pre-auth",
-          emptyObjectOnEmpty: false,
-          invalidJsonMessage: "invalid payload",
-        });
-        if (!body.ok) {
-          return true;
-        }
-
-        const parsed = parseGoogleChatInboundPayload(body.value, res);
-        if (!parsed.ok) {
+        const parsed = await readAndParseEvent("pre-auth");
+        if (!parsed) {
           return true;
         }
         parsedEvent = parsed.event;
