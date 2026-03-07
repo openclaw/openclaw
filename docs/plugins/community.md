@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **TokenRanger** — Compresses session context via a local Ollama SLM before sending to cloud LLMs, reducing input token costs by 50–80%. GPU-aware (full/light/passthrough strategies). Includes FastAPI sidecar, CLI setup, and `/tokenranger` command.
+- **TokenRanger** — Compresses session context via a local Ollama SLM before sending to cloud LLMs, reducing token costs by 50–80%.
   npm: `openclaw-plugin-tokenranger`
   repo: `https://github.com/peterjohannmedina/openclaw-plugin-tokenranger`
   install: `openclaw plugins install openclaw-plugin-tokenranger`
