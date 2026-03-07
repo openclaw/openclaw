@@ -210,6 +210,7 @@ type DeviceKeys = {
   device_id: string;
   keys: Record<string, string>;
   signatures?: Record<string, Record<string, string>>;
+  unsigned?: Record<string, unknown>;
   user_id: string;
 };
 
@@ -226,9 +227,9 @@ export async function bootstrapCrossSigningFromRecoveryKey(params: {
   accessToken: string;
   recoveryKey: string;
   logger: {
-    info: (msg: string, ...args: unknown[]) => void;
-    warn: (msg: string, ...args: unknown[]) => void;
-    debug?: (msg: string, ...args: unknown[]) => void;
+    info: (msg: string, meta?: Record<string, unknown>) => void;
+    warn: (msg: string, meta?: Record<string, unknown>) => void;
+    debug?: (msg: string, meta?: Record<string, unknown>) => void;
   };
 }): Promise<void> {
   const { homeserver, userId, accessToken, logger } = params;

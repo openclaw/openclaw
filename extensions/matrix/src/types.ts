@@ -65,6 +65,8 @@ export type MatrixConfig = {
   initialSyncLimit?: number;
   /** Enable end-to-end encryption (E2EE). Default: false. */
   encryption?: boolean;
+  /** Matrix recovery key phrase for automatic cross-signing at startup. Supports SecretRef. */
+  recoveryKey?: SecretInput;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
   /** Group message policy (default: allowlist). */
