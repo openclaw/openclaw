@@ -134,7 +134,9 @@ describe("launchd bootstrap repair", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
+    const serviceId = `${domain}/${label}`;
 
+    expect(state.launchctlCalls).toContainEqual(["enable", serviceId]);
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
   });
@@ -218,6 +220,9 @@ describe("launchd install", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
+    const enableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "enable" && c[1] === `${domain}/${label}`,
+    );
     const bootoutIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
     );
@@ -228,10 +233,12 @@ describe("launchd install", () => {
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
     );
 
+    expect(enableIndex).toBeGreaterThanOrEqual(0);
     expect(bootoutIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(kickstartIndex).toBeGreaterThanOrEqual(0);
     expect(bootoutIndex).toBeLessThan(bootstrapIndex);
+    expect(enableIndex).toBeLessThan(bootstrapIndex);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
 
