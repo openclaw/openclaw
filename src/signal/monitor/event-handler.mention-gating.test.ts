@@ -171,6 +171,34 @@ describe("signal mention gating", () => {
     expect(entries[0].body).toBe("<media:audio>");
   });
 
+  it("summarizes multiple skipped attachments with stable file count wording", async () => {
+    capturedCtx = undefined;
+    const groupHistories = new Map();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: createSignalConfig({ requireMention: true }),
+        historyLimit: 5,
+        groupHistories,
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.bin`,
+        }),
+      }),
+    );
+
+    await handler(
+      makeGroupEvent({
+        message: "",
+        attachments: [{ id: "a1" }, { id: "a2" }],
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    const entries = groupHistories.get("g1");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].body).toBe("[2 files attached]");
+  });
+
   it("records quote text in pending history for skipped quote-only group messages", async () => {
     await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
   });
