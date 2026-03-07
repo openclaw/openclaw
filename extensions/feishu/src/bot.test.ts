@@ -1527,6 +1527,12 @@ describe("handleFeishuMessage command authorization", () => {
 
   it("routes topic sessions and parentPeer when groupSessionScope=group_topic_sender", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_root_topic",
+      chatId: "oc-group",
+      content: "Role-Task-Routing",
+      contentType: "text",
+    });
 
     const cfg: ClawdbotConfig = {
       channels: {
@@ -1559,6 +1565,12 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         peer: { kind: "group", id: "oc-group:topic:om_root_topic:sender:ou-topic-user" },
         parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: "om_root_topic",
+        ThreadLabel: expect.stringContaining("Role-Task-Routing"),
       }),
     );
   });
@@ -1753,6 +1765,11 @@ describe("handleFeishuMessage command authorization", () => {
         parentPeer: { kind: "group", id: "oc-group" },
       }),
     );
+    const lastContext = mockFinalizeInboundContext.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(lastContext?.ThreadLabel).toBeUndefined();
+    expect(lastContext?.MessageThreadId).toBeUndefined();
   });
 
   it("keeps topic session key stable after first turn creates a thread", async () => {
