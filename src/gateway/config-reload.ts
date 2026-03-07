@@ -7,7 +7,8 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 import { type ChannelKind, type GatewayReloadPlan } from "./config-reload-plan.js";
 
-export type { ChannelKind, GatewayReloadPlan };
+export { buildGatewayReloadPlan };
+export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
