@@ -440,7 +440,7 @@ export const OpenClawSchema = z
             maxAttempts: z.number().int().min(0).max(10).optional(),
             backoffMs: z.array(z.number().int().nonnegative()).min(1).max(10).optional(),
             retryOn: z
-              .array(z.enum(["rate_limit", "network", "timeout", "server_error"]))
+              .array(z.enum(["rate_limit", "overloaded", "network", "timeout", "server_error"]))
               .min(1)
               .optional(),
           })
@@ -708,6 +708,15 @@ export const OpenClawSchema = z
                 chatCompletions: z
                   .object({
                     enabled: z.boolean().optional(),
+                    maxBodyBytes: z.number().int().positive().optional(),
+                    maxImageParts: z.number().int().nonnegative().optional(),
+                    maxTotalImageBytes: z.number().int().positive().optional(),
+                    images: z
+                      .object({
+                        ...ResponsesEndpointUrlFetchShape,
+                      })
+                      .strict()
+                      .optional(),
                   })
                   .strict()
                   .optional(),
@@ -820,6 +829,7 @@ export const OpenClawSchema = z
         slots: z
           .object({
             memory: z.string().optional(),
+            contextEngine: z.string().optional(),
           })
           .strict()
           .optional(),

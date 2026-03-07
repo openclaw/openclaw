@@ -210,6 +210,43 @@ describe("embedding provider remote overrides", () => {
     expect(headers["Content-Type"]).toBe("application/json");
   });
 
+  it("fails fast when Gemini remote apiKey is an unresolved SecretRef", async () => {
+    await expect(
+      createEmbeddingProvider({
+        config: {} as never,
+        provider: "gemini",
+        remote: {
+          apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+        },
+        model: "text-embedding-004",
+        fallback: "openai",
+      }),
+    ).rejects.toThrow(/agents\.\*\.memorySearch\.remote\.apiKey:/i);
+  });
+
+  it("uses GEMINI_API_KEY env indirection for Gemini remote apiKey", async () => {
+    const fetchMock = createGeminiFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("GEMINI_API_KEY", "env-gemini-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: {
+        apiKey: "GEMINI_API_KEY", // pragma: allowlist secret
+      },
+      model: "text-embedding-004",
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    const { init } = readFirstFetchRequest(fetchMock);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers["x-goog-api-key"]).toBe("env-gemini-key");
+  });
+
   it("builds Mistral embeddings requests with bearer auth", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -229,7 +266,7 @@ describe("embedding provider remote overrides", () => {
       config: cfg as never,
       provider: "mistral",
       remote: {
-        apiKey: "mistral-key",
+        apiKey: "mistral-key", // pragma: allowlist secret
       },
       model: "mistral/mistral-embed",
       fallback: "none",
@@ -319,7 +356,7 @@ describe("embedding provider auto selection", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "mistral") {
-        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" };
+        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" }; // pragma: allowlist secret
       }
       throw new Error(`No API key found for provider "${provider}".`);
     });
