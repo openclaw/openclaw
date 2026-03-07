@@ -157,6 +157,10 @@
     "responseTimeoutMs": {
       "label": "Response Timeout (ms)",
       "advanced": true
+    },
+    "staleCallReaperSeconds": {
+      "label": "Stale Call Reaper Timeout (sec)",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -248,6 +252,10 @@
       "maxDurationSeconds": {
         "type": "integer",
         "minimum": 1
+      },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
       },
       "silenceTimeoutMs": {
         "type": "integer",
