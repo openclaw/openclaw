@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/zalo";
 import {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
@@ -16,6 +17,7 @@ import {
   formatAllowFromLowercase,
   formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
+  listDirectoryUserEntriesFromAllowFrom,
   normalizeAccountId,
   isNumericTargetId,
   PAIRING_APPROVED_MESSAGE,
@@ -195,19 +197,12 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
     self: async () => null,
     listPeers: async ({ cfg, accountId, query, limit }) => {
       const account = resolveZaloAccount({ cfg: cfg, accountId });
-      const q = query?.trim().toLowerCase() || "";
-      const peers = Array.from(
-        new Set(
-          (account.config.allowFrom ?? [])
-            .map((entry) => String(entry).trim())
-            .filter((entry) => Boolean(entry) && entry !== "*")
-            .map((entry) => entry.replace(/^(zalo|zl):/i, "")),
-        ),
-      )
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "user", id }) as const);
-      return peers;
+      return listDirectoryUserEntriesFromAllowFrom({
+        allowFrom: account.config.allowFrom,
+        query,
+        limit,
+        normalizeId: (entry) => entry.replace(/^(zalo|zl):/i, ""),
+      });
     },
     listGroups: async () => [],
   },
@@ -243,47 +238,19 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
               channelKey: "zalo",
             })
           : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            zalo: {
-              ...next.channels?.zalo,
-              enabled: true,
-              ...(input.useEnv
-                ? {}
-                : input.tokenFile
-                  ? { tokenFile: input.tokenFile }
-                  : input.token
-                    ? { botToken: input.token }
-                    : {}),
-            },
-          },
-        } as OpenClawConfig;
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          zalo: {
-            ...next.channels?.zalo,
-            enabled: true,
-            accounts: {
-              ...next.channels?.zalo?.accounts,
-              [accountId]: {
-                ...next.channels?.zalo?.accounts?.[accountId],
-                enabled: true,
-                ...(input.tokenFile
-                  ? { tokenFile: input.tokenFile }
-                  : input.token
-                    ? { botToken: input.token }
-                    : {}),
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
+      const patch = input.useEnv
+        ? {}
+        : input.tokenFile
+          ? { tokenFile: input.tokenFile }
+          : input.token
+            ? { botToken: input.token }
+            : {};
+      return applySetupAccountConfigPatch({
+        cfg: next,
+        channelKey: "zalo",
+        accountId,
+        patch,
+      });
     },
   },
   pairing: {

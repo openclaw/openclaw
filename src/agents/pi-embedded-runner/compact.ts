@@ -376,6 +376,20 @@ export async function compactEmbeddedPiSessionDirect(
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
+    // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
+    // threshold uses the effective limit, not the native context window.
+    const ctxInfo = resolveContextWindowInfo({
+      cfg: params.config,
+      provider,
+      modelId,
+      modelContextWindow: model.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    const effectiveModel =
+      ctxInfo.tokens < (model.contextWindow ?? Infinity)
+        ? { ...model, contextWindow: ctxInfo.tokens }
+        : model;
+
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
@@ -398,7 +412,7 @@ export async function compactEmbeddedPiSessionDirect(
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
       modelId,
-      modelContextWindowTokens: model.contextWindow,
+      modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const tools = sanitizeToolsForGoogle({
@@ -594,7 +608,7 @@ export async function compactEmbeddedPiSessionDirect(
         agentDir,
         authStorage,
         modelRegistry,
-        model,
+        model: effectiveModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,

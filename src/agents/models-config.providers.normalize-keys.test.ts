@@ -74,6 +74,40 @@ describe("normalizeProviders", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+  it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const original = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345";
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-test-secret-value-12345", // simulates resolved ${OPENAI_API_KEY}
+          api: "openai-completions",
+          models: [
+            {
+              id: "gpt-4.1",
+              name: "GPT-4.1",
+              input: ["text"],
+              reasoning: false,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 16384,
+            },
+          ],
+        },
+      };
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = original;
+      }
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 
   it("normalizes SecretRef-backed provider headers to non-secret marker values", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
