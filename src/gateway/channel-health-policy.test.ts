@@ -111,7 +111,7 @@ describe("evaluateChannelHealth", () => {
         enabled: true,
         configured: true,
         lastStartAt: 0,
-        lastEventAt: null,
+        lastEventAt: 0,
       },
       {
         channelId: "discord",
@@ -135,6 +135,26 @@ describe("evaluateChannelHealth", () => {
       },
       {
         channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not flag stale sockets for channels without event tracking", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
