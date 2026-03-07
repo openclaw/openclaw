@@ -411,5 +411,33 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(closeInfo.code).toBe(1008);
       expect(closeInfo.reason).toContain("invalid connect params");
     });
+
+    test("rejects legacy handshake first frame with explicit classification", async () => {
+      const ws = await openWs(port);
+      const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+
+      ws.send(JSON.stringify({ type: "handshake", id: "h-legacy", method: "connect" }));
+
+      const closeInfo = await closeInfoPromise;
+      expect(closeInfo.code).toBe(1008);
+      expect(closeInfo.reason).toContain("legacy handshake frame");
+      expect(closeInfo.reason).toContain("type=handshake");
+    });
+
+    test("truncates invalid-first-frame close reason safely", async () => {
+      const ws = await openWs(port);
+      const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+
+      ws.send(JSON.stringify({ type: `legacy-${"x".repeat(300)}` }));
+
+      const closeInfo = await closeInfoPromise;
+      expect(closeInfo.code).toBe(1008);
+      expect(Buffer.byteLength(closeInfo.reason, "utf8")).toBeLessThanOrEqual(120);
+      expect(closeInfo.reason).toContain("invalid request frame");
+    });
   });
 }
