@@ -209,6 +209,9 @@ function buildTaskScript({
       if (!value) {
         continue;
       }
+      if (key.toUpperCase() === "PATH") {
+        continue;
+      }
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
