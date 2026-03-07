@@ -702,12 +702,18 @@ export async function runReplyAgent(params: {
       // so the completion message closes the loop for every user regardless of
       // their verbose setting.
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
-      verboseNotices.push({ text: `✅ Context compacted${suffix}.` });
-      if (verboseEnabled) {
-        // Verbose mode already gets the completion — keep the legacy notice
-        // text only for verbose so power users see the traditional wording.
-        verboseNotices.pop();
-        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+      const completionText = verboseEnabled
+        ? `🧹 Auto-compaction complete${suffix}.`
+        : `✅ Context compacted${suffix}.`;
+
+      // In block-streaming mode, onBlockReply bypasses buildReplyPayloads, so
+      // we must deliver the completion notice the same way the start notice was
+      // sent (via onBlockReply directly). Otherwise the user sees the "🧹
+      // Compacting context..." start notice but never receives the completion.
+      if (opts?.onBlockReply) {
+        await opts.onBlockReply({ text: completionText });
+      } else {
+        verboseNotices.push({ text: completionText });
       }
     }
     if (verboseNotices.length > 0) {
