@@ -159,7 +159,10 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule) => {
+const formatSchedule = (schedule: CronSchedule | undefined | null) => {
+  if (!schedule || typeof schedule !== "object") {
+    return "-";
+  }
   if (schedule.kind === "at") {
     return `at ${formatIsoMinute(schedule.at)}`;
   }
@@ -224,7 +227,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
         CRON_MODEL_PAD,
       ),
       CRON_MODEL_PAD,
@@ -263,7 +266,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       coloredStatus,
       coloredTarget,
       coloredAgent,
-      job.payload.kind === "agentTurn" && job.payload.model
+      job.payload?.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
