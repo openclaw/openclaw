@@ -97,6 +97,19 @@ export async function runBeforeToolCallHook(args: {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 
+  // Check after_llm_call gate — if the hook blocked this turn's tool execution
+  // or filtered this specific tool call, block before we even run other checks.
+  // The gate is a Promise that resolves when the hook completes. First tool
+  // call waits for resolution; subsequent calls get the cached result instantly.
+  if (args.ctx?.sessionId) {
+    const { checkAfterLlmCallGate } =
+      await import("./pi-embedded-runner/run/after-llm-call-gate.js");
+    const gateResult = await checkAfterLlmCallGate(args.ctx.sessionId, args.toolCallId);
+    if (gateResult.blocked) {
+      return { blocked: true, reason: gateResult.reason ?? "Blocked by after_llm_call hook" };
+    }
+  }
+
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
       await loadBeforeToolCallRuntime();

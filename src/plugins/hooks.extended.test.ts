@@ -10,6 +10,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeLlmCallEvent,
+  PluginHookAfterLlmCallEvent,
   PluginHookRegistration,
 } from "./types.js";
 
@@ -175,3 +176,95 @@ describe("before_llm_call hook", () => {
 // ---------------------------------------------------------------------------
 // after_llm_call (modifying, sequential)
 // ---------------------------------------------------------------------------
+
+describe("after_llm_call hook", () => {
+  const baseEvent: PluginHookAfterLlmCallEvent = {
+    response: { role: "assistant", content: [], timestamp: Date.now() } as AgentMessage,
+    toolCalls: [
+      { id: "tc1", name: "read", arguments: { path: "/a" } },
+      { id: "tc2", name: "write", arguments: { path: "/b" } },
+    ],
+    iteration: 1,
+    model: "test-model",
+  };
+
+  it("merges block from multiple handlers (one-way latch)", async () => {
+    const hooks: PluginHookRegistration[] = [
+      {
+        pluginId: "a",
+        hookName: "after_llm_call",
+        handler: async () => ({ block: false }),
+        priority: 10,
+        source: "test",
+      },
+      {
+        pluginId: "b",
+        hookName: "after_llm_call",
+        handler: async () => ({ block: true, blockReason: "policy" }),
+        priority: 5,
+        source: "test",
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("policy");
+  });
+
+  it("uses first blockReason (first-writer-wins)", async () => {
+    const hooks: PluginHookRegistration[] = [
+      {
+        pluginId: "a",
+        hookName: "after_llm_call",
+        handler: async () => ({ block: true, blockReason: "reason A" }),
+        priority: 10,
+        source: "test",
+      },
+      {
+        pluginId: "b",
+        hookName: "after_llm_call",
+        handler: async () => ({ block: true, blockReason: "reason B" }),
+        priority: 5,
+        source: "test",
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result?.blockReason).toBe("reason A");
+  });
+
+  it("intersects toolCalls from multiple handlers", async () => {
+    const hooks: PluginHookRegistration[] = [
+      {
+        pluginId: "a",
+        hookName: "after_llm_call",
+        handler: async () => ({
+          toolCalls: [
+            { id: "tc1", name: "read", arguments: {} },
+            { id: "tc2", name: "write", arguments: {} },
+          ],
+        }),
+        priority: 10,
+        source: "test",
+      },
+      {
+        pluginId: "b",
+        hookName: "after_llm_call",
+        handler: async () => ({
+          toolCalls: [{ id: "tc1", name: "read", arguments: {} }],
+        }),
+        priority: 5,
+        source: "test",
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result?.toolCalls?.map((t) => t.id)).toEqual(["tc1"]);
+  });
+
+  it("returns undefined when no handlers registered", async () => {
+    const runner = createHookRunner(makeRegistry([]));
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result).toBeUndefined();
+  });
+});
