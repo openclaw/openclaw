@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRouteAllowlistWarnings,
+  formatAllowFromLowercase,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -112,11 +113,10 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom ?? []
       ).map((entry) => String(entry).toLowerCase()),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.replace(/^(nextcloud-talk|nc-talk|nc):/i, ""))
-        .map((entry) => entry.toLowerCase()),
+      formatAllowFromLowercase({
+        allowFrom,
+        stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
+      }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
