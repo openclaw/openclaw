@@ -84,3 +84,25 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Local workspace/runtime artifacts
+/.openclaw/
+/.openclaw.bak/
+/.openclaw.bak_fix/
+/.venv/
+/.uv-cache/
+/.uv-tools/
+/automation/
+/backups/
+/logs/
+/state/
+/.tmp-vitest/
+/ui/.tmp-vitest/
+
+# Local config snapshots and scratch files
+/openclaw.config.json
+/openclaw.config.pretty.json
+/openclaw.config.backup*.json
+/openclaw.config.json.bak*
+/openclaw.config.json.securityfix-*.bak
+/Nouveau Document texte.txt

@@ -59,7 +59,7 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
 
 function candidateDirsFromArgv1(argv1: string): string[] {
   const normalized = path.resolve(argv1);
-  const candidates = [path.dirname(normalized)];
+  const candidates: string[] = [];
 
   // Resolve symlinks for version managers (nvm, fnm, n, Homebrew/Linuxbrew)
   // that create symlinks in bin/ pointing to the real package location.
@@ -79,7 +79,11 @@ function candidateDirsFromArgv1(argv1: string): string[] {
     const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
     candidates.push(path.join(nodeModulesDir, binName));
   }
-  return candidates;
+
+  // Prefer specific package candidates over parent-directory traversal.
+  candidates.push(path.dirname(normalized));
+
+  return Array.from(new Set(candidates.map((candidate) => path.resolve(candidate))));
 }
 
 export async function resolveOpenClawPackageRoot(opts: {

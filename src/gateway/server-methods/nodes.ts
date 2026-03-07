@@ -25,6 +25,7 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import { broadcastDashboardDelta } from "./dashboard.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -86,6 +87,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         context.broadcast("node.pair.requested", result.request, {
           dropIfSlow: true,
         });
+        void broadcastDashboardDelta(context);
       }
       respond(true, result, undefined);
     });
@@ -130,6 +132,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
+      void broadcastDashboardDelta(context);
       respond(true, approved, undefined);
     });
   },
@@ -159,6 +162,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
+      void broadcastDashboardDelta(context);
       respond(true, rejected, undefined);
     });
   },

@@ -160,7 +160,7 @@ export function titleForTab(tab: Tab) {
     case "agents":
       return "Agents";
     case "overview":
-      return "Overview";
+      return "Mission Control";
     case "channels":
       return "Channels";
     case "instances":
@@ -193,7 +193,7 @@ export function subtitleForTab(tab: Tab) {
     case "agents":
       return "Manage agent workspaces, tools, and identities.";
     case "overview":
-      return "Gateway status, entry points, and a fast health read.";
+      return "Real-time command center for health, sessions, channels, cron, and approvals.";
     case "channels":
       return "Manage channels and settings.";
     case "instances":

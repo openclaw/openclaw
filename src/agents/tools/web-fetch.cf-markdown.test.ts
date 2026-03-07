@@ -52,9 +52,16 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
+    const realResolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
-      resolvePinnedHostname(hostname, lookupMock),
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+      async (hostname, params) => {
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        if (normalized !== "example.com") {
+          return await realResolvePinnedHostnameWithPolicy(hostname, params);
+        }
+        return await resolvePinnedHostname(hostname, lookupMock);
+      },
     );
   });
 

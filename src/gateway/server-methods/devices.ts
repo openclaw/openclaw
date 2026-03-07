@@ -18,6 +18,7 @@ import {
   validateDeviceTokenRevokeParams,
   validateDeviceTokenRotateParams,
 } from "../protocol/index.js";
+import { broadcastDashboardDelta } from "./dashboard.js";
 
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
@@ -87,6 +88,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    void broadcastDashboardDelta(context);
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
   },
   "device.pair.reject": async ({ params, respond, context }) => {
@@ -119,6 +121,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    void broadcastDashboardDelta(context);
     respond(true, rejected, undefined);
   },
   "device.token.rotate": async ({ params, respond, context }) => {

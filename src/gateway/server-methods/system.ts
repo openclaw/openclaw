@@ -5,6 +5,7 @@ import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { scheduleDashboardDelta } from "./dashboard.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
   "last-heartbeat": ({ respond }) => {
@@ -135,6 +136,7 @@ export const systemHandlers: GatewayRequestHandlers = {
         },
       },
     );
+    scheduleDashboardDelta(context);
     respond(true, { ok: true }, undefined);
   },
 };

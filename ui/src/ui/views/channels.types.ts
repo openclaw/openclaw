@@ -22,6 +22,7 @@ export type ChannelsProps = {
   snapshot: ChannelsStatusSnapshot | null;
   lastError: string | null;
   lastSuccessAt: number | null;
+  focusChannelId: string | null;
   whatsappMessage: string | null;
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;

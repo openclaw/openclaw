@@ -143,6 +143,14 @@ export class ExecApprovalManager {
     return entry?.record ?? null;
   }
 
+  listPending(): ExecApprovalRecord[] {
+    const now = Date.now();
+    return [...this.pending.values()]
+      .map((entry) => entry.record)
+      .filter((record) => record.resolvedAtMs === undefined && record.expiresAtMs > now)
+      .toSorted((left, right) => left.expiresAtMs - right.expiresAtMs);
+  }
+
   /**
    * Wait for decision on an already-registered approval.
    * Returns the decision promise if the ID is pending, null otherwise.

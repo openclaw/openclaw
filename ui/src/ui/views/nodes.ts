@@ -11,6 +11,7 @@ import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-app
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
+  focusNodeId: string | null;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
@@ -48,10 +49,35 @@ export type NodesProps = {
 export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
+  const orderedNodes = [...props.nodes].toSorted((left, right) => {
+    const leftId = typeof left.nodeId === "string" ? left.nodeId : "";
+    const rightId = typeof right.nodeId === "string" ? right.nodeId : "";
+    if (props.focusNodeId) {
+      const leftFocused = leftId === props.focusNodeId;
+      const rightFocused = rightId === props.focusNodeId;
+      if (leftFocused !== rightFocused) {
+        return leftFocused ? -1 : 1;
+      }
+    }
+    return 0;
+  });
   return html`
     ${renderExecApprovals(approvalsState)}
     ${renderBindings(bindingState)}
     ${renderDevices(props)}
+    ${
+      props.focusNodeId
+        ? html`
+            <section class="card" style="margin-bottom: 18px; border-color: var(--accent);">
+              <div class="card-title">Focused Node</div>
+              <div class="card-sub">
+                Mission Control opened the node view for
+                <span class="mono">${props.focusNodeId}</span>.
+              </div>
+            </section>
+          `
+        : nothing
+    }
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -64,11 +90,11 @@ export function renderNodes(props: NodesProps) {
       </div>
       <div class="list" style="margin-top: 16px;">
         ${
-          props.nodes.length === 0
+          orderedNodes.length === 0
             ? html`
                 <div class="muted">No nodes found.</div>
               `
-            : props.nodes.map((n) => renderNode(n))
+            : orderedNodes.map((n) => renderNode(n))
         }
       </div>
     </section>

@@ -17,6 +17,9 @@ import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
+import { captureDashboardTimeline } from "./controllers/dashboard-timeline.ts";
+import { applyDashboardSummary, loadDashboardSummary } from "./controllers/dashboard.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import {
   addExecApproval,
@@ -24,6 +27,7 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import { resumeMissionNodeRun } from "./controllers/mission-control.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
@@ -54,6 +58,15 @@ type GatewayHost = {
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  missionNodePendingRuns: Record<
+    string,
+    import("./controllers/mission-control.ts").PendingMissionNodeRun
+  >;
+  missionNodeBusyById: Record<
+    string,
+    import("./controllers/mission-control.ts").MissionNodeActionKind | "approval" | null
+  >;
+  missionNodeResult: import("./controllers/mission-control.ts").MissionNodeActionResult | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -62,6 +75,36 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   scope?: string;
 };
+
+const dashboardRefreshTimers = new WeakMap<GatewayHost, number>();
+
+function shouldRefreshDashboardSummary(evt: GatewayEventFrame): boolean {
+  if (evt.event === "chat") {
+    const payload = evt.payload as { state?: string } | undefined;
+    return payload?.state === "final" || payload?.state === "error" || payload?.state === "aborted";
+  }
+  if (evt.event === "agent") {
+    const payload = evt.payload as { stream?: string; data?: { phase?: string } } | undefined;
+    return (
+      payload?.stream === "lifecycle" &&
+      (payload.data?.phase === "start" ||
+        payload.data?.phase === "end" ||
+        payload.data?.phase === "error")
+    );
+  }
+  return false;
+}
+
+function scheduleDashboardSummaryRefresh(host: GatewayHost, delayMs = 900) {
+  if (!host.connected || dashboardRefreshTimers.has(host)) {
+    return;
+  }
+  const timer = window.setTimeout(() => {
+    dashboardRefreshTimers.delete(host);
+    void loadDashboardSummary(host as unknown as OpenClawApp, { quiet: true });
+  }, delayMs);
+  dashboardRefreshTimers.set(host, timer);
+}
 
 function normalizeSessionKeyForDefaults(
   value: string | undefined,
@@ -147,6 +190,7 @@ export function connectGateway(host: GatewayHost) {
       void loadAgents(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      void loadDashboardSummary(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason }) => {
@@ -190,8 +234,19 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,
   ].slice(0, 250);
-  if (host.tab === "debug") {
-    host.eventLog = host.eventLogBuffer;
+  host.eventLog = host.eventLogBuffer;
+
+  if (evt.event === "dashboard.delta") {
+    applyDashboardSummary(
+      host as unknown as Parameters<typeof applyDashboardSummary>[0],
+      evt.payload as Parameters<typeof applyDashboardSummary>[1],
+    );
+    captureDashboardTimeline(host as unknown as Parameters<typeof captureDashboardTimeline>[0]);
+    return;
+  }
+
+  if (shouldRefreshDashboardSummary(evt)) {
+    scheduleDashboardSummaryRefresh(host);
   }
 
   if (evt.event === "agent") {
@@ -243,8 +298,15 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     return;
   }
 
-  if (evt.event === "cron" && host.tab === "cron") {
-    void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
+  if (evt.event === "cron") {
+    if (host.tab === "cron") {
+      void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
+    } else if (host.tab === "overview") {
+      void Promise.all([
+        loadCronJobs(host as unknown as OpenClawApp),
+        loadCronStatus(host as unknown as OpenClawApp),
+      ]);
+    }
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
@@ -268,6 +330,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const resolved = parseExecApprovalResolved(evt.payload);
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+      if (
+        resolved.decision === "allow-once" ||
+        resolved.decision === "allow-always" ||
+        resolved.decision === "deny"
+      ) {
+        void resumeMissionNodeRun(
+          host as unknown as Parameters<typeof resumeMissionNodeRun>[0],
+          resolved.id,
+          resolved.decision,
+        );
+      }
     }
   }
 }

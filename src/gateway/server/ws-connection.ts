@@ -12,6 +12,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
+import { scheduleDashboardDelta } from "../server-methods/dashboard.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
@@ -246,6 +247,7 @@ export function attachGatewayWsConnectionHandler(params: {
         if (nodeId) {
           removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
+          scheduleDashboardDelta(context);
         }
       }
       logWs("out", "close", {

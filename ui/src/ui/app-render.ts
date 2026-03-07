@@ -25,6 +25,11 @@ import {
   removeCronJob,
   addCronJob,
 } from "./controllers/cron.ts";
+import {
+  ackDashboardIncident,
+  loadDashboardSummary,
+  resolveDashboardIncident,
+} from "./controllers/dashboard.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
   approveDevicePairing,
@@ -33,6 +38,7 @@ import {
   revokeDeviceToken,
   rotateDeviceToken,
 } from "./controllers/devices.ts";
+import { resolveExecApproval } from "./controllers/exec-approval.ts";
 import {
   loadExecApprovals,
   removeExecApprovalsFormValue,
@@ -40,6 +46,11 @@ import {
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import {
+  describeMissionNode,
+  probeMissionNode,
+  runMissionNodeDoctor,
+} from "./controllers/mission-control.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
@@ -87,9 +98,6 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
-  const presenceCount = state.presenceEntries.length;
-  const sessionsCount = state.sessionsResult?.count ?? null;
-  const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
@@ -205,11 +213,43 @@ export function renderApp(state: AppViewState) {
                 settings: state.settings,
                 password: state.password,
                 lastError: state.lastError,
-                presenceCount,
-                sessionsCount,
-                cronEnabled: state.cronStatus?.enabled ?? null,
-                cronNext,
+                presenceEntries: state.presenceEntries,
+                presenceError: state.presenceError,
+                presenceStatus: state.presenceStatus,
+                sessionsResult: state.sessionsResult,
+                sessionsError: state.sessionsError,
+                cronStatus: state.cronStatus,
+                cronJobs: state.cronJobs,
+                cronError: state.cronError,
+                channelsSnapshot: state.channelsSnapshot,
+                channelsError: state.channelsError,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                debugStatus: state.debugStatus,
+                debugHealth: state.debugHealth,
+                debugHeartbeat: state.debugHeartbeat,
+                logsEntries: state.logsEntries,
+                logsError: state.logsError,
+                logsLastFetchAt: state.logsLastFetchAt,
+                usageResult: state.usageResult,
+                usageCostSummary: state.usageCostSummary,
+                usageError: state.usageError,
+                usageStartDate: state.usageStartDate,
+                usageEndDate: state.usageEndDate,
+                devicesList: state.devicesList,
+                devicesError: state.devicesError,
+                devicesLoading: state.devicesLoading,
+                dashboardSummary: state.dashboardSummary,
+                dashboardError: state.dashboardError,
+                dashboardLoading: state.dashboardLoading,
+                dashboardTimeline: state.dashboardTimeline,
+                nodes: state.nodes,
+                missionNodeBusyById: state.missionNodeBusyById,
+                missionNodeResult: state.missionNodeResult,
+                execApprovalQueue: state.execApprovalQueue,
+                execApprovalBusy: state.execApprovalBusy,
+                cronBusy: state.cronBusy,
+                nodesCount: state.nodes.length,
+                eventLog: state.eventLog,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -223,8 +263,98 @@ export function renderApp(state: AppViewState) {
                   });
                   void state.loadAssistantIdentity();
                 },
+                onNavigate: (tab) => state.setTab(tab),
+                onOpenSession: (next) => {
+                  state.sessionKey = next;
+                  state.chatMessage = "";
+                  state.chatAttachments = [];
+                  state.chatStream = null;
+                  state.chatStreamStartedAt = null;
+                  state.chatRunId = null;
+                  state.chatQueue = [];
+                  state.resetToolStream();
+                  state.resetChatScroll();
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey: next,
+                    lastActiveSessionKey: next,
+                  });
+                  void state.loadAssistantIdentity();
+                  void loadChatHistory(state);
+                  void refreshChatAvatar(state);
+                  state.setTab("chat");
+                },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onResolveExecApproval: async (id, decision) => {
+                  const changed = await resolveExecApproval(state, id, decision);
+                  if (!changed) {
+                    return;
+                  }
+                  await loadDashboardSummary(state, { quiet: true });
+                },
+                onApproveDevice: async (requestId) => {
+                  await approveDevicePairing(state, requestId);
+                  await loadDashboardSummary(state, { quiet: true });
+                },
+                onRejectDevice: async (requestId) => {
+                  await rejectDevicePairing(state, requestId);
+                  await loadDashboardSummary(state, { quiet: true });
+                },
+                onRunCronJob: async (jobId) => {
+                  const job = state.cronJobs.find((entry) => entry.id === jobId);
+                  if (!job) {
+                    return;
+                  }
+                  await runCronJob(state, job);
+                  await Promise.all([
+                    loadDashboardSummary(state, { quiet: true }),
+                    loadLogs(state, { quiet: true }),
+                  ]);
+                },
+                onRefreshSecurityAudit: () => loadDashboardSummary(state, { forceAudit: true }),
+                onAckIncident: (incidentId) => ackDashboardIncident(state, incidentId),
+                onResolveIncident: (incidentId) => resolveDashboardIncident(state, incidentId),
+                onDescribeNode: async (nodeId) => {
+                  const node = state.nodes.find((entry) => entry.nodeId === nodeId);
+                  if (!node) {
+                    return;
+                  }
+                  await describeMissionNode(state, node);
+                },
+                onProbeNode: async (nodeId) => {
+                  const node = state.nodes.find((entry) => entry.nodeId === nodeId);
+                  if (!node) {
+                    return;
+                  }
+                  await probeMissionNode(state, node);
+                },
+                onRunNodeDoctor: async (nodeId) => {
+                  const node = state.nodes.find((entry) => entry.nodeId === nodeId);
+                  if (!node) {
+                    return;
+                  }
+                  await runMissionNodeDoctor(state, node);
+                },
+                onOpenLogsQuery: async (query) => {
+                  state.logsFilterText = query;
+                  state.logsAtBottom = true;
+                  state.setTab("logs");
+                  await loadLogs(state, { reset: true });
+                },
+                onFocusAgent: (agentId) => {
+                  state.agentsSelectedId = agentId;
+                  state.agentsPanel = "overview";
+                  state.setTab("agents");
+                },
+                onFocusChannel: (channelId) => {
+                  state.channelsFocusId = channelId;
+                  state.setTab("channels");
+                },
+                onFocusNode: (nodeId) => {
+                  state.nodesFocusId = nodeId;
+                  state.setTab("nodes");
+                },
               })
             : nothing
         }
@@ -237,6 +367,7 @@ export function renderApp(state: AppViewState) {
                 snapshot: state.channelsSnapshot,
                 lastError: state.channelsError,
                 lastSuccessAt: state.channelsLastSuccess,
+                focusChannelId: state.channelsFocusId,
                 whatsappMessage: state.whatsappLoginMessage,
                 whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
                 whatsappConnected: state.whatsappLoginConnected,
@@ -706,6 +837,7 @@ export function renderApp(state: AppViewState) {
             ? renderNodes({
                 loading: state.nodesLoading,
                 nodes: state.nodes,
+                focusNodeId: state.nodesFocusId,
                 devicesLoading: state.devicesLoading,
                 devicesError: state.devicesError,
                 devicesList: state.devicesList,

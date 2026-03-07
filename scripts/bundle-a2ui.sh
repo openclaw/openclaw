@@ -12,6 +12,55 @@ HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
 A2UI_APP_DIR="$ROOT_DIR/apps/shared/OpenClawKit/Tools/CanvasA2UI"
+TSC_CLI="$ROOT_DIR/node_modules/typescript/bin/tsc"
+ROLLDOWN_CLI="$ROOT_DIR/node_modules/rolldown/bin/cli.mjs"
+
+NODE_BIN="$(command -v node 2>/dev/null || true)"
+if [[ -z "$NODE_BIN" ]]; then
+  NODE_BIN="$(command -v node.exe 2>/dev/null || true)"
+fi
+if [[ -z "$NODE_BIN" ]]; then
+  for node_dir in \
+    "/c/Program Files/nodejs" \
+    "/c/Program Files (x86)/nodejs" \
+    "/mnt/c/Program Files/nodejs" \
+    "/mnt/c/Program Files (x86)/nodejs"
+  do
+    if [[ -x "$node_dir/node.exe" ]]; then
+      NODE_BIN="$node_dir/node.exe"
+      break
+    fi
+  done
+fi
+if [[ -z "$NODE_BIN" ]]; then
+  echo "node runtime not found for A2UI bundling" >&2
+  exit 1
+fi
+
+node_path() {
+  local value="$1"
+  if [[ "$NODE_BIN" == *.exe && "$value" == /* ]]; then
+    if [[ "$value" =~ ^/mnt/([a-zA-Z])/(.*)$ ]]; then
+      local drive="${BASH_REMATCH[1]^^}:"
+      local rest="${BASH_REMATCH[2]//\//\\}"
+      printf "%s\\%s" "$drive" "$rest"
+      return
+    fi
+    if [[ "$value" =~ ^/([a-zA-Z])/(.*)$ ]]; then
+      local drive="${BASH_REMATCH[1]^^}:"
+      local rest="${BASH_REMATCH[2]//\//\\}"
+      printf "%s\\%s" "$drive" "$rest"
+      return
+    fi
+  fi
+  printf "%s" "$value"
+}
+
+NODE_ROOT_DIR="$(node_path "$ROOT_DIR")"
+NODE_TSC_CLI="$(node_path "$TSC_CLI")"
+NODE_ROLLDOWN_CLI="$(node_path "$ROLLDOWN_CLI")"
+NODE_ROLLDOWN_CONFIG="$(node_path "$A2UI_APP_DIR/rolldown.config.mjs")"
+NODE_A2UI_RENDERER_TSCONFIG="$(node_path "$A2UI_RENDERER_DIR/tsconfig.json")"
 
 # Docker builds exclude vendor/apps via .dockerignore.
 # In that environment we can keep a prebuilt bundle only if it exists.
@@ -31,8 +80,13 @@ INPUT_PATHS=(
   "$A2UI_APP_DIR"
 )
 
+NODE_INPUT_PATHS=()
+for input_path in "${INPUT_PATHS[@]}"; do
+  NODE_INPUT_PATHS+=("$(node_path "$input_path")")
+done
+
 compute_hash() {
-  ROOT_DIR="$ROOT_DIR" node --input-type=module - "${INPUT_PATHS[@]}" <<'NODE'
+  ROOT_DIR="$NODE_ROOT_DIR" "$NODE_BIN" --input-type=module - "${NODE_INPUT_PATHS[@]}" <<'NODE'
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -85,7 +139,7 @@ if [[ -f "$HASH_FILE" ]]; then
   fi
 fi
 
-pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
-rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+"$NODE_BIN" "$NODE_TSC_CLI" -p "$NODE_A2UI_RENDERER_TSCONFIG"
+"$NODE_BIN" "$NODE_ROLLDOWN_CLI" -c "$NODE_ROLLDOWN_CONFIG"
 
 echo "$current_hash" > "$HASH_FILE"

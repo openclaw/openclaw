@@ -172,7 +172,7 @@ export async function runCronJob(state: CronState, job: CronJob) {
   state.cronError = null;
   try {
     await state.client.request("cron.run", { id: job.id, mode: "force" });
-    await loadCronRuns(state, job.id);
+    await Promise.all([loadCronRuns(state, job.id), loadCronJobs(state), loadCronStatus(state)]);
   } catch (err) {
     state.cronError = String(err);
   } finally {

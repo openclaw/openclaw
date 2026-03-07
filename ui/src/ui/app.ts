@@ -2,9 +2,15 @@ import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { EventLogEntry } from "./app-events.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { DashboardTimelinePoint } from "./controllers/dashboard-timeline.ts";
+import type { DashboardSummaryResult } from "./controllers/dashboard.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  MissionNodeActionKind,
+  MissionNodeActionResult,
+  PendingMissionNodeRun,
+} from "./controllers/mission-control.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -78,6 +84,7 @@ import {
 } from "./app-tool-stream.ts";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { resolveExecApproval, type ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 
@@ -145,9 +152,17 @@ export class OpenClawApp extends LitElement {
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
+  @state() nodesFocusId: string | null = null;
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
+  @state() dashboardLoading = false;
+  @state() dashboardSummary: DashboardSummaryResult | null = null;
+  @state() dashboardError: string | null = null;
+  @state() dashboardTimeline: DashboardTimelinePoint[] = [];
+  @state() missionNodeBusyById: Record<string, MissionNodeActionKind | "approval" | null> = {};
+  @state() missionNodeResult: MissionNodeActionResult | null = null;
+  @state() missionNodePendingRuns: Record<string, PendingMissionNodeRun> = {};
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;
@@ -187,6 +202,7 @@ export class OpenClawApp extends LitElement {
   @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
   @state() channelsError: string | null = null;
   @state() channelsLastSuccess: number | null = null;
+  @state() channelsFocusId: string | null = null;
   @state() whatsappLoginMessage: string | null = null;
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
@@ -289,6 +305,7 @@ export class OpenClawApp extends LitElement {
   @state() cronRunsJobId: string | null = null;
   @state() cronRuns: CronRunLogEntry[] = [];
   @state() cronBusy = false;
+  dashboardTimelinePollInterval: number | null = null;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;
@@ -331,6 +348,8 @@ export class OpenClawApp extends LitElement {
   private chatUserNearBottom = true;
   @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
+  private overviewFastPollInterval: number | null = null;
+  private overviewSlowPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
@@ -497,22 +516,10 @@ export class OpenClawApp extends LitElement {
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
     const active = this.execApprovalQueue[0];
-    if (!active || !this.client || this.execApprovalBusy) {
+    if (!active) {
       return;
     }
-    this.execApprovalBusy = true;
-    this.execApprovalError = null;
-    try {
-      await this.client.request("exec.approval.resolve", {
-        id: active.id,
-        decision,
-      });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
-    } catch (err) {
-      this.execApprovalError = `Exec approval failed: ${String(err)}`;
-    } finally {
-      this.execApprovalBusy = false;
-    }
+    await resolveExecApproval(this, active.id, decision);
   }
 
   handleGatewayUrlConfirm() {

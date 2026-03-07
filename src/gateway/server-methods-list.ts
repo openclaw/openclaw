@@ -4,6 +4,10 @@ const BASE_METHODS = [
   "health",
   "logs.tail",
   "channels.status",
+  "dashboard.summary",
+  "incident.list",
+  "incident.ack",
+  "incident.resolve",
   "channels.logout",
   "status",
   "usage.status",
@@ -116,4 +120,5 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "dashboard.delta",
 ];

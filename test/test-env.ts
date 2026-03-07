@@ -66,6 +66,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
 
   const restore: RestoreEntry[] = [
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
+    { key: "OPENCLAW_HOME", value: process.env.OPENCLAW_HOME },
     { key: "HOME", value: process.env.HOME },
     { key: "USERPROFILE", value: process.env.USERPROFILE },
     { key: "XDG_CONFIG_HOME", value: process.env.XDG_CONFIG_HOME },
@@ -97,6 +98,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_TEST_HOME = tempHome;
   process.env.OPENCLAW_TEST_FAST = "1";
+  delete process.env.OPENCLAW_HOME;
 
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   delete process.env.OPENCLAW_CONFIG_PATH;

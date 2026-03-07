@@ -23,6 +23,16 @@ export type ExecApprovalResolved = {
   ts?: number | null;
 };
 
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type ExecApprovalState = {
+  client: { request: <T = unknown>(method: string, params?: unknown) => Promise<T> } | null;
+  connected: boolean;
+  execApprovalBusy: boolean;
+  execApprovalError: string | null;
+  execApprovalQueue: ExecApprovalRequest[];
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -97,4 +107,33 @@ export function removeExecApproval(
   id: string,
 ): ExecApprovalRequest[] {
   return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
+}
+
+export async function resolveExecApproval(
+  state: ExecApprovalState,
+  id: string,
+  decision: ExecApprovalDecision,
+) {
+  if (!state.client || !state.connected || state.execApprovalBusy) {
+    return false;
+  }
+  const active = state.execApprovalQueue.find((entry) => entry.id === id);
+  if (!active) {
+    return false;
+  }
+  state.execApprovalBusy = true;
+  state.execApprovalError = null;
+  try {
+    await state.client.request("exec.approval.resolve", {
+      id,
+      decision,
+    });
+    state.execApprovalQueue = state.execApprovalQueue.filter((entry) => entry.id !== id);
+    return true;
+  } catch (err) {
+    state.execApprovalError = `Exec approval failed: ${String(err)}`;
+    return false;
+  } finally {
+    state.execApprovalBusy = false;
+  }
 }

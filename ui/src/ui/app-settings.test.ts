@@ -5,6 +5,9 @@ import { setTabFromRoute } from "./app-settings.ts";
 type SettingsHost = Parameters<typeof setTabFromRoute>[0] & {
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  overviewFastPollInterval: number | null;
+  overviewSlowPollInterval: number | null;
+  dashboardTimelinePollInterval: number | null;
 };
 
 const createHost = (tab: Tab): SettingsHost => ({
@@ -35,6 +38,9 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeMediaHandler: null,
   logsPollInterval: null,
   debugPollInterval: null,
+  overviewFastPollInterval: null,
+  overviewSlowPollInterval: null,
+  dashboardTimelinePollInterval: null,
 });
 
 describe("setTabFromRoute", () => {
@@ -66,5 +72,19 @@ describe("setTabFromRoute", () => {
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
+  });
+
+  it("starts and stops overview polling based on the tab", () => {
+    const host = createHost("chat");
+
+    setTabFromRoute(host, "overview");
+    expect(host.overviewFastPollInterval).not.toBeNull();
+    expect(host.overviewSlowPollInterval).not.toBeNull();
+    expect(host.dashboardTimelinePollInterval).not.toBeNull();
+
+    setTabFromRoute(host, "chat");
+    expect(host.overviewFastPollInterval).toBeNull();
+    expect(host.overviewSlowPollInterval).toBeNull();
+    expect(host.dashboardTimelinePollInterval).toBeNull();
   });
 });

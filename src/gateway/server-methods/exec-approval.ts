@@ -12,6 +12,7 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
+import { broadcastDashboardDelta } from "./dashboard.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
@@ -96,6 +97,7 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
+      void broadcastDashboardDelta(context);
       void opts?.forwarder
         ?.handleRequested({
           id: record.id,
@@ -197,6 +199,7 @@ export function createExecApprovalHandlers(
         { id: p.id, decision, resolvedBy, ts: Date.now() },
         { dropIfSlow: true },
       );
+      void broadcastDashboardDelta(context);
       void opts?.forwarder
         ?.handleResolved({ id: p.id, decision, resolvedBy, ts: Date.now() })
         .catch((err) => {

@@ -15,7 +15,10 @@ export type DebugState = {
   debugCallError: string | null;
 };
 
-export async function loadDebug(state: DebugState) {
+export async function loadDebug(
+  state: DebugState,
+  opts?: { probe?: boolean; includeModels?: boolean },
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -26,14 +29,18 @@ export async function loadDebug(state: DebugState) {
   try {
     const [status, health, models, heartbeat] = await Promise.all([
       state.client.request("status", {}),
-      state.client.request("health", {}),
-      state.client.request("models.list", {}),
+      state.client.request("health", { probe: opts?.probe ?? true }),
+      opts?.includeModels === false
+        ? Promise.resolve(null)
+        : state.client.request("models.list", {}),
       state.client.request("last-heartbeat", {}),
     ]);
     state.debugStatus = status as StatusSummary;
     state.debugHealth = health as HealthSnapshot;
     const modelPayload = models as { models?: unknown[] } | undefined;
-    state.debugModels = Array.isArray(modelPayload?.models) ? modelPayload?.models : [];
+    if (opts?.includeModels !== false) {
+      state.debugModels = Array.isArray(modelPayload?.models) ? modelPayload?.models : [];
+    }
     state.debugHeartbeat = heartbeat;
   } catch (err) {
     state.debugCallError = String(err);

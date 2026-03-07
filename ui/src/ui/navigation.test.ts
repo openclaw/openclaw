@@ -57,7 +57,7 @@ describe("titleForTab", () => {
 
   it("returns expected titles", () => {
     expect(titleForTab("chat")).toBe("Chat");
-    expect(titleForTab("overview")).toBe("Overview");
+    expect(titleForTab("overview")).toBe("Mission Control");
     expect(titleForTab("cron")).toBe("Cron Jobs");
   });
 });

@@ -30,6 +30,15 @@ async function canonicalPath(p: string): Promise<string> {
   }
 }
 
+function resolveFixtureBaseDir(): string {
+  const tempRoot = path.resolve(os.tmpdir());
+  const workspaceRoot = path.resolve(process.cwd());
+  if (tempRoot === workspaceRoot || tempRoot.startsWith(`${workspaceRoot}${path.sep}`)) {
+    return path.join(path.dirname(workspaceRoot), ".openclaw-test-tmp");
+  }
+  return tempRoot;
+}
+
 describe("control UI assets helpers", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -41,7 +50,9 @@ describe("control UI assets helpers", () => {
   }
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    const fixtureBaseDir = resolveFixtureBaseDir();
+    await fs.mkdir(fixtureBaseDir, { recursive: true });
+    fixtureRoot = await fs.mkdtemp(path.join(fixtureBaseDir, "openclaw-ui-"));
   });
 
   afterAll(async () => {

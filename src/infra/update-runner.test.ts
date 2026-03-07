@@ -22,13 +22,24 @@ function createRunner(responses: Record<string, CommandResult>) {
   return { runner, calls };
 }
 
+function resolveFixtureBaseDir(): string {
+  const tempRoot = path.resolve(os.tmpdir());
+  const workspaceRoot = path.resolve(process.cwd());
+  if (tempRoot === workspaceRoot || tempRoot.startsWith(`${workspaceRoot}${path.sep}`)) {
+    return path.join(path.dirname(workspaceRoot), ".openclaw-test-tmp");
+  }
+  return tempRoot;
+}
+
 describe("runGatewayUpdate", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let tempDir: string;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
+    const fixtureBaseDir = resolveFixtureBaseDir();
+    await fs.mkdir(fixtureBaseDir, { recursive: true });
+    fixtureRoot = await fs.mkdtemp(path.join(fixtureBaseDir, "openclaw-update-"));
   });
 
   afterAll(async () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectGateway } from "./app-gateway.ts";
 
 type GatewayClientMock = {
@@ -9,7 +9,11 @@ type GatewayClientMock = {
   emitEvent: (evt: { event: string; payload?: unknown; seq?: number }) => void;
 };
 
-const gatewayClientInstances: GatewayClientMock[] = [];
+const gatewayClientInstances = vi.hoisted(() => [] as GatewayClientMock[]);
+const loadDashboardSummaryMock = vi.hoisted(() => vi.fn());
+const captureDashboardTimelineMock = vi.hoisted(() => vi.fn());
+const handleAgentEventMock = vi.hoisted(() => vi.fn());
+const resumeMissionNodeRunMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./gateway.ts", () => {
   class GatewayBrowserClient {
@@ -41,6 +45,37 @@ vi.mock("./gateway.ts", () => {
 
   return { GatewayBrowserClient };
 });
+
+vi.mock("./controllers/dashboard.ts", () => ({
+  loadDashboardSummary: loadDashboardSummaryMock,
+  applyDashboardSummary: (
+    state: {
+      dashboardSummary: unknown;
+      dashboardError: string | null;
+      execApprovalQueue: unknown[];
+    },
+    summary: { approvals?: { pending?: unknown[] } },
+  ) => {
+    state.dashboardSummary = summary;
+    state.dashboardError = null;
+    if (Array.isArray(summary.approvals?.pending)) {
+      state.execApprovalQueue = summary.approvals.pending;
+    }
+  },
+}));
+
+vi.mock("./controllers/dashboard-timeline.ts", () => ({
+  captureDashboardTimeline: captureDashboardTimelineMock,
+}));
+
+vi.mock("./app-tool-stream.ts", () => ({
+  handleAgentEvent: handleAgentEventMock,
+  resetToolStream: vi.fn(),
+}));
+
+vi.mock("./controllers/mission-control.ts", () => ({
+  resumeMissionNodeRun: resumeMissionNodeRunMock,
+}));
 
 function createHost() {
   return {
@@ -77,14 +112,29 @@ function createHost() {
     sessionKey: "main",
     chatRunId: null,
     refreshSessionsAfterChat: new Set<string>(),
+    dashboardSummary: null,
+    dashboardError: null,
+    dashboardTimeline: [],
     execApprovalQueue: [],
     execApprovalError: null,
+    missionNodePendingRuns: {},
+    missionNodeBusyById: {},
+    missionNodeResult: null,
   } as unknown as Parameters<typeof connectGateway>[0];
 }
 
 describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
+    loadDashboardSummaryMock.mockReset();
+    captureDashboardTimelineMock.mockReset();
+    handleAgentEventMock.mockReset();
+    resumeMissionNodeRunMock.mockReset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -142,5 +192,150 @@ describe("connectGateway", () => {
 
     secondClient.emitClose(1005);
     expect(host.lastError).toBe("disconnected (1005): no reason");
+  });
+
+  it("applies dashboard delta payload immediately", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    host.connected = true;
+
+    client.emitEvent({
+      event: "dashboard.delta",
+      payload: {
+        ts: Date.now(),
+        security: {
+          ts: Date.now(),
+          cached: true,
+          summary: { critical: 1, warn: 2, info: 0 },
+          topFindings: [],
+        },
+        approvals: {
+          count: 1,
+          pending: [
+            {
+              id: "approval-1",
+              request: {
+                command: "git pull",
+                agentId: "main",
+                sessionKey: "main",
+              },
+              expiresAtMs: Date.now() + 60_000,
+            },
+          ],
+        },
+        devices: { pending: 2, paired: 3 },
+        nodes: { count: 4, hasMobileNodeConnected: true },
+        runtime: { queueSize: 5, pendingReplies: 1, activeEmbeddedRuns: 2 },
+      },
+    });
+
+    expect((host as unknown as { dashboardSummary: unknown }).dashboardSummary).toEqual(
+      expect.objectContaining({
+        runtime: { queueSize: 5, pendingReplies: 1, activeEmbeddedRuns: 2 },
+      }),
+    );
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(loadDashboardSummaryMock).not.toHaveBeenCalled();
+    expect(captureDashboardTimelineMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refetch dashboard summary for operator delta events", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    host.connected = true;
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-1",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        request: {
+          command: "git pull",
+          agentId: "main",
+          sessionKey: "main",
+        },
+      },
+    });
+    client.emitEvent({
+      event: "device.pair.requested",
+      payload: {
+        requestId: "pair-1",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(900);
+
+    expect(loadDashboardSummaryMock).not.toHaveBeenCalled();
+  });
+
+  it("throttles dashboard summary refresh after lifecycle events", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    host.connected = true;
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        stream: "lifecycle",
+        data: { phase: "start" },
+      },
+    });
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      },
+    });
+
+    expect(loadDashboardSummaryMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(900);
+
+    expect(loadDashboardSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes pending mission node runs after approval resolution", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    host.execApprovalQueue = [
+      {
+        id: "approval-1",
+        request: {
+          command: "openclaw doctor --non-interactive",
+          agentId: "main",
+          sessionKey: "main",
+        },
+        expiresAtMs: Date.now() + 60_000,
+      },
+    ] as typeof host.execApprovalQueue;
+
+    client.emitEvent({
+      event: "exec.approval.resolved",
+      payload: {
+        id: "approval-1",
+        decision: "allow-once",
+      },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(0);
+    expect(resumeMissionNodeRunMock).toHaveBeenCalledTimes(1);
+    expect(resumeMissionNodeRunMock).toHaveBeenCalledWith(host, "approval-1", "allow-once");
   });
 });

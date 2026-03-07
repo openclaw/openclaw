@@ -14,6 +14,28 @@ type DockerSetupSandbox = {
   binDir: string;
 };
 
+function toBashPath(value: string): string {
+  if (process.platform !== "win32") {
+    return value;
+  }
+  const normalized = value.replaceAll("\\", "/");
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    return `/mnt/${normalized.slice(0, 1).toLowerCase()}${normalized.slice(2)}`;
+  }
+  return normalized;
+}
+
+function resolveBashPathEnv(): string {
+  if (process.platform !== "win32") {
+    return process.env.PATH ?? "";
+  }
+  const probe = spawnSync("bash", ["-lc", 'printf %s "$PATH"'], { encoding: "utf8" });
+  if (probe.status === 0 && probe.stdout.trim()) {
+    return probe.stdout.trim();
+  }
+  return process.env.PATH ?? "";
+}
+
 async function writeDockerStub(binDir: string, logPath: string) {
   const stub = `#!/usr/bin/env bash
 set -euo pipefail
@@ -62,8 +84,12 @@ function createEnv(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
 ): NodeJS.ProcessEnv {
+  const pathEntries =
+    process.platform === "win32"
+      ? [toBashPath(sandbox.binDir), resolveBashPathEnv()]
+      : [sandbox.binDir, process.env.PATH ?? ""];
   const env: NodeJS.ProcessEnv = {
-    PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
+    PATH: pathEntries.filter(Boolean).join(":"),
     HOME: process.env.HOME ?? sandbox.rootDir,
     LANG: process.env.LANG,
     LC_ALL: process.env.LC_ALL,
@@ -95,6 +121,84 @@ function resolveBashForCompatCheck(): string | null {
   return null;
 }
 
+function resolveBashCommand(): string {
+  if (process.platform !== "win32") {
+    return "bash";
+  }
+  const probe = spawnSync("where", ["bash"], { encoding: "utf8" });
+  if (probe.status === 0) {
+    const first = probe.stdout
+      .split(/\r?\n/u)
+      .map((entry) => entry.trim())
+      .find(Boolean);
+    if (first) {
+      return first;
+    }
+  }
+  return "bash";
+}
+
+function bashQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function createBashEnv(
+  sandbox: DockerSetupSandbox,
+  overrides: Record<string, string | undefined> = {},
+): NodeJS.ProcessEnv {
+  const env = createEnv(sandbox, overrides);
+  if (process.platform !== "win32") {
+    return env;
+  }
+  return {
+    ...env,
+    HOME: toBashPath(env.HOME ?? sandbox.rootDir),
+    OPENCLAW_CONFIG_DIR: toBashPath(join(sandbox.rootDir, "config")),
+    OPENCLAW_WORKSPACE_DIR: toBashPath(join(sandbox.rootDir, "openclaw")),
+  };
+}
+
+function runDockerSetupScript(
+  sandbox: DockerSetupSandbox,
+  overrides: Record<string, string | undefined> = {},
+) {
+  const bashCommand = resolveBashCommand();
+  if (process.platform !== "win32") {
+    return spawnSync("bash", [sandbox.scriptPath], {
+      cwd: sandbox.rootDir,
+      env: createEnv(sandbox, overrides),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  }
+
+  const logPath = bashQuote(toBashPath(sandbox.logPath));
+  const scriptPath = bashQuote(toBashPath(sandbox.scriptPath));
+  const script = `
+docker() {
+  if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
+    return 0
+  fi
+  if [[ "\${1:-}" == "build" ]]; then
+    echo "build $*" >>${logPath}
+    return 0
+  fi
+  if [[ "\${1:-}" == "compose" ]]; then
+    echo "compose $*" >>${logPath}
+    return 0
+  fi
+  echo "unknown $*" >>${logPath}
+  return 0
+}
+source ${scriptPath}
+`;
+
+  return spawnSync(bashCommand, ["-lc", script], {
+    cwd: sandbox.rootDir,
+    env: createBashEnv(sandbox, overrides),
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+}
+
 describe("docker-setup.sh", () => {
   let sandbox: DockerSetupSandbox | null = null;
 
@@ -114,15 +218,14 @@ describe("docker-setup.sh", () => {
     if (!sandbox) {
       throw new Error("sandbox missing");
     }
+    if (process.platform === "win32") {
+      return;
+    }
 
-    const result = spawnSync("bash", [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env: createEnv(sandbox, {
-        OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
-        OPENCLAW_EXTRA_MOUNTS: undefined,
-        OPENCLAW_HOME_VOLUME: "openclaw-home",
-      }),
-      stdio: ["ignore", "ignore", "pipe"],
+    const result = runDockerSetupScript(sandbox, {
+      OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
+      OPENCLAW_EXTRA_MOUNTS: undefined,
+      OPENCLAW_HOME_VOLUME: "openclaw-home",
     });
     expect(result.status).toBe(0);
     const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");

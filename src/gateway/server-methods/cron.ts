@@ -16,6 +16,7 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
+import { broadcastDashboardDelta } from "./dashboard.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -94,6 +95,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const job = await context.cron.add(jobCreate);
+    void broadcastDashboardDelta(context);
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
@@ -140,6 +142,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     const job = await context.cron.update(jobId, patch);
+    void broadcastDashboardDelta(context);
     respond(true, job, undefined);
   },
   "cron.remove": async ({ params, respond, context }) => {
@@ -165,6 +168,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await context.cron.remove(jobId);
+    void broadcastDashboardDelta(context);
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context }) => {
@@ -190,6 +194,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await context.cron.run(jobId, p.mode ?? "force");
+    void broadcastDashboardDelta(context);
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

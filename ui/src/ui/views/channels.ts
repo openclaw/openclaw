@@ -42,8 +42,12 @@ export function renderChannels(props: ChannelsProps) {
       key,
       enabled: channelEnabled(key, props),
       order: index,
+      focused: props.focusChannelId === key,
     }))
     .toSorted((a, b) => {
+      if (a.focused !== b.focused) {
+        return a.focused ? -1 : 1;
+      }
       if (a.enabled !== b.enabled) {
         return a.enabled ? -1 : 1;
       }
@@ -51,6 +55,19 @@ export function renderChannels(props: ChannelsProps) {
     });
 
   return html`
+    ${
+      props.focusChannelId
+        ? html`
+            <section class="card" style="margin-bottom: 18px; border-color: var(--accent);">
+              <div class="card-title">Focused Channel</div>
+              <div class="card-sub">
+                Mission Control opened the channel view for
+                <span class="mono">${props.focusChannelId}</span>.
+              </div>
+            </section>
+          `
+        : nothing
+    }
     <section class="grid grid-cols-2">
       ${orderedChannels.map((channel) =>
         renderChannel(channel.key, props, {

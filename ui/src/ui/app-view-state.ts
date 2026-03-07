@@ -1,8 +1,15 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus } from "./app-tool-stream.ts";
+import type { DashboardTimelinePoint } from "./controllers/dashboard-timeline.ts";
+import type { DashboardSummaryResult } from "./controllers/dashboard.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  MissionNodeActionKind,
+  MissionNodeActionResult,
+  PendingMissionNodeRun,
+} from "./controllers/mission-control.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -67,6 +74,7 @@ export type AppViewState = {
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
+  nodesFocusId: string | null;
   chatNewMessagesBelow: boolean;
   sidebarOpen: boolean;
   sidebarContent: string | null;
@@ -76,6 +84,13 @@ export type AppViewState = {
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
+  dashboardLoading: boolean;
+  dashboardSummary: DashboardSummaryResult | null;
+  dashboardError: string | null;
+  dashboardTimeline: DashboardTimelinePoint[];
+  missionNodeBusyById: Record<string, MissionNodeActionKind | "approval" | null>;
+  missionNodeResult: MissionNodeActionResult | null;
+  missionNodePendingRuns: Record<string, PendingMissionNodeRun>;
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -112,6 +127,7 @@ export type AppViewState = {
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;
+  channelsFocusId: string | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;

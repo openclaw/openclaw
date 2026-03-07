@@ -2,6 +2,8 @@ import type { OpenClawApp } from "./app.ts";
 import type { AgentsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
+  startOverviewPolling,
+  stopOverviewPolling,
   startLogsPolling,
   stopLogsPolling,
   startDebugPolling,
@@ -14,6 +16,8 @@ import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
+import { captureDashboardTimeline } from "./controllers/dashboard-timeline.ts";
+import { loadDashboardSummary } from "./controllers/dashboard.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
@@ -22,6 +26,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import { loadUsage } from "./controllers/usage.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -48,6 +53,11 @@ type SettingsHost = {
   eventLog: unknown[];
   eventLogBuffer: unknown[];
   basePath: string;
+  overviewFastPollInterval: number | null;
+  overviewSlowPollInterval: number | null;
+  dashboardLoading?: boolean;
+  dashboardSummary?: unknown;
+  dashboardError?: string | null;
   agentsList?: AgentsListResult | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
@@ -154,6 +164,11 @@ export function setTab(host: SettingsHost, next: Tab) {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   } else {
     stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  }
+  if (next === "overview") {
+    startOverviewPolling(host as unknown as Parameters<typeof startOverviewPolling>[0]);
+  } else {
+    stopOverviewPolling(host as unknown as Parameters<typeof stopOverviewPolling>[0]);
   }
   if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
@@ -354,6 +369,11 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   } else {
     stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   }
+  if (next === "overview") {
+    startOverviewPolling(host as unknown as Parameters<typeof startOverviewPolling>[0]);
+  } else {
+    stopOverviewPolling(host as unknown as Parameters<typeof stopOverviewPolling>[0]);
+  }
   if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   } else {
@@ -408,8 +428,15 @@ export async function loadOverview(host: SettingsHost) {
     loadPresence(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp),
     loadCronStatus(host as unknown as OpenClawApp),
-    loadDebug(host as unknown as OpenClawApp),
+    loadCronJobs(host as unknown as OpenClawApp),
+    loadDebug(host as unknown as OpenClawApp, { probe: false, includeModels: false }),
+    loadDashboardSummary(host as unknown as OpenClawApp, { quiet: true }),
+    loadLogs(host as unknown as OpenClawApp, { quiet: true }),
+    loadUsage(host as unknown as OpenClawApp),
+    loadNodes(host as unknown as OpenClawApp, { quiet: true }),
+    loadDevices(host as unknown as OpenClawApp, { quiet: true }),
   ]);
+  captureDashboardTimeline(host as unknown as OpenClawApp);
 }
 
 export async function loadChannelsTab(host: SettingsHost) {
