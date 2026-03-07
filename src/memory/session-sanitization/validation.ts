@@ -168,26 +168,38 @@ type StringLeaf = { value: string; fieldName?: string };
  * Recursively collect all string leaf values from an object or value.
  * Tracks the immediate parent field name for base64 context.
  */
-function collectStringLeaves(value: unknown, parentKey?: string): StringLeaf[] {
+function collectStringLeaves(
+  value: unknown,
+  parentKey?: string,
+  inPath: WeakSet<object> = new WeakSet<object>(),
+): StringLeaf[] {
   if (typeof value === "string") {
     return [{ value, fieldName: parentKey }];
   }
   if (value === null || typeof value !== "object") {
     return [];
   }
+  if (inPath.has(value)) {
+    return [];
+  }
+  inPath.add(value);
   const leaves: StringLeaf[] = [];
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      for (const leaf of collectStringLeaves(item)) {
-        leaves.push(leaf);
+  try {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        for (const leaf of collectStringLeaves(item, undefined, inPath)) {
+          leaves.push(leaf);
+        }
+      }
+    } else {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        for (const leaf of collectStringLeaves(v, k, inPath)) {
+          leaves.push(leaf);
+        }
       }
     }
-  } else {
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      for (const leaf of collectStringLeaves(v, k)) {
-        leaves.push(leaf);
-      }
-    }
+  } finally {
+    inPath.delete(value);
   }
   return leaves;
 }
@@ -654,8 +666,8 @@ export type PreFilterParams = {
 /**
  * Run Stage 1A and Stage 1B and merge their results.
  *
- * The merged result's `pass` field is true only when both stages pass.
- * We dispatch both stage evaluations first and then await them together.
+ * Both stages are synchronous pure functions. The merged result's `pass`
+ * field is true only when both stages pass.
  */
 export async function runPreFilter(params: PreFilterParams): Promise<PreFilterResult> {
   const ss = params.schemaStrictness;
@@ -665,19 +677,14 @@ export async function runPreFilter(params: PreFilterParams): Promise<PreFilterRe
     ss === "lenient" || (typeof ss === "object" && ss !== null && ss.mcp === "lenient");
   const lenientExtraFields = params.source === "transcript" ? lenientTranscript : lenientMcp;
 
-  const syntacticPromise = Promise.resolve().then(() =>
-    syntacticPreFilter(params.input, params.syntacticConfig),
+  const syntactic = syntacticPreFilter(params.input, params.syntacticConfig);
+  const schema = schemaValidation(
+    params.input,
+    params.source,
+    params.toolSchema,
+    lenientExtraFields,
+    params.rejectUndeclaredToolSchemas ?? false,
   );
-  const schemaPromise = Promise.resolve().then(() =>
-    schemaValidation(
-      params.input,
-      params.source,
-      params.toolSchema,
-      lenientExtraFields,
-      params.rejectUndeclaredToolSchemas ?? false,
-    ),
-  );
-  const [syntactic, schema] = await Promise.all([syntacticPromise, schemaPromise]);
 
   const allRuleIds = [...new Set([...syntactic.ruleIds, ...schema.ruleIds])];
   const allFlags = [...syntactic.flags, ...schema.violations];
