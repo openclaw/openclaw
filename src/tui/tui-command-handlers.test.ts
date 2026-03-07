@@ -141,4 +141,13 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
+
+  it("does not reload gateway history for local theme changes", async () => {
+    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand } = createHarness({ loadHistory });
+
+    await handleCommand("/theme default");
+
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
 });

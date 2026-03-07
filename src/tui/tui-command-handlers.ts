@@ -257,7 +257,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     selector.onSelect = (item) => {
       applyTheme(item.value, tui);
       chatLog.addSystem(`theme set to ${item.value}`);
-      void loadHistory();
       closeOverlayAndRender();
     };
 
@@ -492,7 +491,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         if (applyTheme(args, tui)) {
           chatLog.addSystem(`theme set to ${args}`);
-          await loadHistory();
         } else {
           chatLog.addSystem(`unknown theme: ${args}. try /theme for picker or /theme list`);
         }
