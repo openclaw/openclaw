@@ -106,6 +106,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
+import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import {
   ensureGatewayStartupAuth,
@@ -117,6 +118,17 @@ import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
 ensureOpenClawCliOnPath();
+
+const MAX_MEDIA_TTL_HOURS = 24 * 7;
+
+function resolveMediaCleanupTtlMs(ttlHoursRaw: number): number {
+  const ttlHours = Math.min(Math.max(ttlHoursRaw, 1), MAX_MEDIA_TTL_HOURS);
+  const ttlMs = ttlHours * 60 * 60_000;
+  if (!Number.isFinite(ttlMs) || !Number.isSafeInteger(ttlMs)) {
+    throw new Error(`Invalid media.ttlHours: ${String(ttlHoursRaw)}`);
+  }
+  return ttlMs;
+}
 
 const log = createSubsystemLogger("gateway");
 const logCanvas = log.child("canvas");
@@ -546,6 +558,17 @@ export async function startGatewayServer(
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
+  const serverStartedAt = Date.now();
+  const channelManager = createChannelManager({
+    loadConfig,
+    channelLogs,
+    channelRuntimeEnvs,
+    channelRuntime: createPluginRuntime().channel,
+  });
+  const getReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
+  });
   const {
     canvasHost,
     httpServer,
@@ -589,6 +612,7 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
+    getReadiness,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -618,12 +642,6 @@ export async function startGatewayServer(
   });
   let { cron, storePath: cronStorePath } = cronState;
 
-  const channelManager = createChannelManager({
-    loadConfig,
-    channelLogs,
-    channelRuntimeEnvs,
-    channelRuntime: createPluginRuntime().channel,
-  });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
 
@@ -673,8 +691,9 @@ export async function startGatewayServer(
   let tickInterval = noopInterval();
   let healthInterval = noopInterval();
   let dedupeCleanup = noopInterval();
+  let mediaCleanup: ReturnType<typeof setInterval> | null = null;
   if (!minimalTestGateway) {
-    ({ tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
+    ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } = startGatewayMaintenanceTimers({
       broadcast,
       nodeSendToAllSubscribed,
       getPresenceVersion,
@@ -689,6 +708,9 @@ export async function startGatewayServer(
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
+      ...(typeof cfgAtStart.media?.ttlHours === "number"
+        ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
+        : {}),
     }));
   }
 
@@ -995,6 +1017,7 @@ export async function startGatewayServer(
     tickInterval,
     healthInterval,
     dedupeCleanup,
+    mediaCleanup,
     agentUnsub,
     heartbeatUnsub,
     chatRunState,
