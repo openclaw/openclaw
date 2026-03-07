@@ -176,7 +176,7 @@ describe("buildLineMessageContext", () => {
   });
 
   it("group peer binding matches raw groupId without prefix (#21907)", async () => {
-    const groupId = "Cc7e3bece1234567890abcdef";
+    const groupId = "Cc7e3bece1234567890abcdef"; // pragma: allowlist secret
     const bindingCfg: OpenClawConfig = {
       session: { store: storePath },
       agents: {

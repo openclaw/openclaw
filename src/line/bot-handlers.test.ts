@@ -65,6 +65,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
+type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
@@ -88,7 +89,7 @@ function createReplayMessageEvent(params: {
 }
 
 function createOpenGroupReplayContext(
-  processMessage: ReturnType<typeof vi.fn>,
+  processMessage: LineWebhookContext["processMessage"],
   replayCache: ReturnType<typeof createLineWebhookReplayCache>,
 ): Parameters<typeof handleLineWebhookEvents>[1] {
   return {
@@ -394,8 +395,8 @@ describe("handleLineWebhookEvents", () => {
       account: {
         accountId: "work",
         enabled: true,
-        channelAccessToken: "token-work",
-        channelSecret: "secret-work",
+        channelAccessToken: "token-work", // pragma: allowlist secret
+        channelSecret: "secret-work", // pragma: allowlist secret
         tokenSource: "config",
         config: { dmPolicy: "pairing" },
       },

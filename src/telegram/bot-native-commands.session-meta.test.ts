@@ -238,7 +238,7 @@ function createConfiguredAcpTopicBinding(boundSessionKey: string) {
       status: "active",
       boundAt: 0,
     },
-  };
+  } satisfies import("../acp/persistent-bindings.js").ResolvedConfiguredAcpBinding;
 }
 
 function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.fn>) {
