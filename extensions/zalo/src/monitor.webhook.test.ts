@@ -269,7 +269,7 @@ describe("handleZaloWebhookRequest", () => {
         const saw429 = await postUntilRateLimited({
           baseUrl,
           path: "/hook-rate",
-          secret: "secret",
+          secret: "secret", // pragma: allowlist secret
         });
 
         expect(saw429).toBe(true);
@@ -287,7 +287,7 @@ describe("handleZaloWebhookRequest", () => {
           const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
             method: "POST",
             headers: {
-              "x-bot-api-secret-token": "invalid-token",
+              "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
               "content-type": "application/json",
             },
             body: "{}",
@@ -310,7 +310,7 @@ describe("handleZaloWebhookRequest", () => {
         const saw429 = await postUntilRateLimited({
           baseUrl,
           path: "/hook-query-rate",
-          secret: "secret",
+          secret: "secret", // pragma: allowlist secret
           withNonceQuery: true,
         });
 
