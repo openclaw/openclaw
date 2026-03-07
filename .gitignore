@@ -132,6 +132,12 @@ fd/.env
 packages/remotion-engine/out/
 packages/remotion-engine/node_modules/
 
+# CUTMV app (SaaS application)
+packages/cutmv-app/node_modules/
+packages/cutmv-app/dist/
+packages/cutmv-app/.env
+packages/cutmv-app/uploads/
+
 # Brand AI large assets (frame dumps, rendered outputs)
 data/datasets/*/motion/frames/
 data/datasets/*/motion/renders/
