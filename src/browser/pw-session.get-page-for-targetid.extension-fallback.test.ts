@@ -50,4 +50,56 @@ describe("pw-session getPageForTargetId", () => {
     await closePlaywrightBrowserConnection();
     expect(browserClose).toHaveBeenCalled();
   });
+
+  it("reports extension attach guidance when multiple pages exist and target is missing", async () => {
+    connectOverCdpSpy.mockClear();
+    getChromeWebSocketUrlSpy.mockClear();
+
+    const contextOn = vi.fn();
+    const browserOn = vi.fn();
+    const browserClose = vi.fn(async () => {});
+
+    const context = {
+      pages: () => [],
+      on: contextOn,
+      newCDPSession: vi.fn(async () => {
+        throw new Error(
+          'Protocol error (Target.attachToBrowserTarget): {"code":-32000,"message":"Not allowed"}',
+        );
+      }),
+    } as unknown as import("playwright-core").BrowserContext;
+
+    const page1 = {
+      on: vi.fn(),
+      context: () => context,
+      url: () => "https://example.com",
+    } as unknown as import("playwright-core").Page;
+
+    const page2 = {
+      on: vi.fn(),
+      context: () => context,
+      url: () => "https://example.org",
+    } as unknown as import("playwright-core").Page;
+
+    (context as unknown as { pages: () => unknown[] }).pages = () => [page1, page2];
+
+    const browser = {
+      contexts: () => [context],
+      on: browserOn,
+      close: browserClose,
+    } as unknown as import("playwright-core").Browser;
+
+    connectOverCdpSpy.mockResolvedValue(browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "MISSING_TAB",
+      }),
+    ).rejects.toThrow(/badge is ON/i);
+
+    await closePlaywrightBrowserConnection();
+    expect(browserClose).toHaveBeenCalled();
+  });
 });
