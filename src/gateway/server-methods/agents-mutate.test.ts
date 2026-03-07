@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   fsLstat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsRealpath: vi.fn(async (p: string) => p),
   fsOpen: vi.fn(async () => ({}) as unknown),
+  writeFileWithinRoot: vi.fn(async () => {}),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -76,6 +77,15 @@ vi.mock("../../utils.js", () => ({
 vi.mock("../session-utils.js", () => ({
   listAgentsForGateway: mocks.listAgentsForGateway,
 }));
+
+vi.mock("../../infra/fs-safe.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../infra/fs-safe.js")>("../../infra/fs-safe.js");
+  return {
+    ...actual,
+    writeFileWithinRoot: mocks.writeFileWithinRoot,
+  };
+});
 
 // Mock node:fs/promises – agents.ts uses `import fs from "node:fs/promises"`
 // which resolves to the module namespace default, so we spread actual and

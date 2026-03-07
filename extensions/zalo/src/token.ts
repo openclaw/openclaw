@@ -8,6 +8,19 @@ export type ZaloTokenResolution = BaseTokenResolution & {
   source: "env" | "config" | "configFile" | "none";
 };
 
+function readTokenFromFile(tokenFile: string | undefined): string {
+  const trimmedPath = tokenFile?.trim();
+  if (!trimmedPath) {
+    return "";
+  }
+  try {
+    return readFileSync(trimmedPath, "utf8").trim();
+  } catch {
+    // ignore read failures
+    return "";
+  }
+}
+
 export function resolveZaloToken(
   config: ZaloConfig | undefined,
   accountId?: string | null,
@@ -44,28 +57,16 @@ export function resolveZaloToken(
     if (token) {
       return { token, source: "config" };
     }
-    const tokenFile = accountConfig.tokenFile?.trim();
-    if (tokenFile) {
-      try {
-        const fileToken = readFileSync(tokenFile, "utf8").trim();
-        if (fileToken) {
-          return { token: fileToken, source: "configFile" };
-        }
-      } catch {
-        // ignore read failures
-      }
+    const fileToken = readTokenFromFile(accountConfig.tokenFile);
+    if (fileToken) {
+      return { token: fileToken, source: "configFile" };
     }
   }
 
-  const accountTokenFile = accountConfig?.tokenFile?.trim();
-  if (!accountHasBotToken && accountTokenFile) {
-    try {
-      const fileToken = readFileSync(accountTokenFile, "utf8").trim();
-      if (fileToken) {
-        return { token: fileToken, source: "configFile" };
-      }
-    } catch {
-      // ignore read failures
+  if (!accountHasBotToken) {
+    const fileToken = readTokenFromFile(accountConfig?.tokenFile);
+    if (fileToken) {
+      return { token: fileToken, source: "configFile" };
     }
   }
 
@@ -79,16 +80,9 @@ export function resolveZaloToken(
     if (token) {
       return { token, source: "config" };
     }
-    const tokenFile = baseConfig?.tokenFile?.trim();
-    if (tokenFile) {
-      try {
-        const fileToken = readFileSync(tokenFile, "utf8").trim();
-        if (fileToken) {
-          return { token: fileToken, source: "configFile" };
-        }
-      } catch {
-        // ignore read failures
-      }
+    const fileToken = readTokenFromFile(baseConfig?.tokenFile);
+    if (fileToken) {
+      return { token: fileToken, source: "configFile" };
     }
   }
 
