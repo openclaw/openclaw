@@ -96,12 +96,22 @@ export async function resolveSlackChannelAllowlist(params: {
   client?: WebClient;
 }): Promise<SlackChannelResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
-  const channels = await listSlackChannels(client);
+
+  // Pre-parse all entries to check if we need to fetch the channel list
+  const parsedEntries = params.entries.map((input) => ({
+    input,
+    parsed: parseSlackChannelMention(input),
+  }));
+
+  // Only fetch channels if at least one entry needs name-based resolution
+  const needsChannelList = parsedEntries.some(({ parsed }) => !parsed.id && parsed.name);
+  const channels = needsChannelList ? await listSlackChannels(client) : [];
+
   const results: SlackChannelResolution[] = [];
 
-  for (const input of params.entries) {
-    const parsed = parseSlackChannelMention(input);
+  for (const { input, parsed } of parsedEntries) {
     if (parsed.id) {
+      // For ID-based entries, optionally look up metadata if we already have the list
       const match = channels.find((channel) => channel.id === parsed.id);
       results.push({
         input,
