@@ -1687,10 +1687,10 @@ export function createWebSearchTool(options?: {
         });
       }
       const language = readStringParam(params, "language");
-      if (language && provider !== "brave" && provider !== "perplexity") {
+      if (language && provider !== "brave" && provider !== "perplexity" && provider !== "searxng") {
         return jsonResult({
           error: "unsupported_language",
-          message: `language filtering is not supported by the ${provider} provider. Only Brave and Perplexity support language filtering.`,
+          message: `language filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and SearXNG support language filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1838,7 +1838,7 @@ export function createWebSearchTool(options?: {
         searxngUrl: resolveSearxngUrl(searxngConfig),
         searxngEngines: searxngConfig.engines,
         searxngCategories: searxngConfig.categories,
-        searxngLanguage: searxngConfig.language,
+        searxngLanguage: provider === "searxng" && language ? language : searxngConfig.language,
         searxngSafeSearch: searxngConfig.safeSearch,
       });
       return jsonResult(result);
