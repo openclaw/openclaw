@@ -11,7 +11,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
+import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import {
   listInterpreterLikeSafeBins,
@@ -86,6 +86,7 @@ export type SecurityAuditReport = {
 
 export type SecurityAuditOptions = {
   config: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deep?: boolean;
@@ -113,6 +114,7 @@ export type SecurityAuditOptions = {
 
 type AuditExecutionContext = {
   cfg: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
   includeFilesystem: boolean;
@@ -1041,7 +1043,10 @@ async function maybeProbeGateway(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   probe: typeof probeGateway;
-}): Promise<SecurityAuditReport["deep"]> {
+}): Promise<{
+  deep: SecurityAuditReport["deep"];
+  authWarning?: string;
+}> {
   const connection = buildGatewayConnectionDetails({ config: params.cfg });
   const url = connection.url;
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
@@ -1049,30 +1054,39 @@ async function maybeProbeGateway(params: {
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url.trim() : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
 
-  const auth =
+  const authResolution =
     !isRemoteMode || remoteUrlMissing
-      ? resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "local" })
-      : resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "remote" });
-  const res = await params.probe({ url, auth, timeoutMs: params.timeoutMs }).catch((err) => ({
-    ok: false,
-    url,
-    connectLatencyMs: null,
-    error: String(err),
-    close: null,
-    health: null,
-    status: null,
-    presence: null,
-    configSnapshot: null,
-  }));
+      ? resolveGatewayProbeAuthSafe({ cfg: params.cfg, env: params.env, mode: "local" })
+      : resolveGatewayProbeAuthSafe({ cfg: params.cfg, env: params.env, mode: "remote" });
+  const res = await params
+    .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
+    .catch((err) => ({
+      ok: false,
+      url,
+      connectLatencyMs: null,
+      error: String(err),
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    }));
+
+  if (authResolution.warning && !res.ok) {
+    res.error = res.error ? `${res.error}; ${authResolution.warning}` : authResolution.warning;
+  }
 
   return {
-    gateway: {
-      attempted: true,
-      url,
-      ok: res.ok,
-      error: res.ok ? null : res.error,
-      close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+    deep: {
+      gateway: {
+        attempted: true,
+        url,
+        ok: res.ok,
+        error: res.ok ? null : res.error,
+        close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+      },
     },
+    authWarning: authResolution.warning,
   };
 }
 
@@ -1080,6 +1094,7 @@ async function createAuditExecutionContext(
   opts: SecurityAuditOptions,
 ): Promise<AuditExecutionContext> {
   const cfg = opts.config;
+  const sourceConfig = opts.sourceConfig ?? opts.config;
   const env = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
   const includeFilesystem = opts.includeFilesystem !== false;
@@ -1095,6 +1110,7 @@ async function createAuditExecutionContext(
     : null;
   return {
     cfg,
+    sourceConfig,
     env,
     platform,
     includeFilesystem,
@@ -1194,10 +1210,16 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
 
   if (context.includeChannelSecurity) {
     const plugins = context.plugins ?? listChannelPlugins();
-    findings.push(...(await collectChannelSecurityFindings({ cfg, plugins })));
+    findings.push(
+      ...(await collectChannelSecurityFindings({
+        cfg,
+        sourceConfig: context.sourceConfig,
+        plugins,
+      })),
+    );
   }
 
-  const deep = context.deep
+  const deepProbeResult = context.deep
     ? await maybeProbeGateway({
         cfg,
         env,
@@ -1205,6 +1227,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         probe: context.probeGatewayFn ?? probeGateway,
       })
     : undefined;
+  const deep = deepProbeResult?.deep;
 
   if (deep?.gateway?.attempted && !deep.gateway.ok) {
     findings.push({
@@ -1213,6 +1236,15 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       title: "Gateway probe failed (deep)",
       detail: deep.gateway.error ?? "gateway unreachable",
       remediation: `Run "${formatCliCommand("openclaw status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
+    });
+  }
+  if (deepProbeResult?.authWarning) {
+    findings.push({
+      checkId: "gateway.probe_auth_secretref_unavailable",
+      severity: "warn",
+      title: "Gateway probe auth SecretRef is unavailable",
+      detail: deepProbeResult.authWarning,
+      remediation: `Set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD in this shell or resolve the external secret provider, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
     });
   }
 
