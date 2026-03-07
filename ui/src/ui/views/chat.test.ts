@@ -897,4 +897,37 @@ describe("chat view", () => {
     expect(onHistoryNavigateDown).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
   });
+
+  it("keeps caret at start after ArrowUp history navigation updates draft", async () => {
+    const container = document.createElement("div");
+    let draft = "newest";
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createProps({
+            draft,
+            onHistoryNavigateUp,
+          }),
+        ),
+        container,
+      );
+    };
+    const onHistoryNavigateUp = vi.fn(() => {
+      draft = "older-entry";
+      renderCurrent();
+      return true;
+    });
+
+    renderCurrent();
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    expect(onHistoryNavigateUp).toHaveBeenCalledTimes(1);
+    expect(textarea.selectionStart).toBe(0);
+    expect(textarea.selectionEnd).toBe(0);
+  });
 });
