@@ -2,12 +2,14 @@
  * Email Listener Skill - Send Response Module
  *
  * Sends email responses back to the sender.
+ * Supports both SMTP (traditional) and AgentMail API.
  */
 
 import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import type { EmailResponse, CommandResult, EmailListenerConfig } from "./types.js";
 import { logger } from "./logger.js";
+import { sendEmailViaAgentMail } from "./agentmail-polling.js";
 
 let transporter: Transporter | null = null;
 
@@ -88,6 +90,37 @@ export async function sendResponse(
 }
 
 /**
+ * Try to send email via AgentMail, with SMTP fallback
+ */
+async function sendViaAgentMailOrSmtp(
+  to: string,
+  subject: string,
+  body: string,
+  config: EmailListenerConfig["imap"]
+): Promise<boolean> {
+  // Try AgentMail first if configured
+  if (process.env.AGENTMAIL_API_KEY) {
+    try {
+      await sendEmailViaAgentMail(to, subject, body);
+      return true;
+    } catch (error) {
+      logger.warn("AgentMail send failed, falling back to SMTP", {
+        error: String(error),
+        to,
+      });
+      // Fall through to SMTP fallback
+    }
+  }
+
+  // Fall back to SMTP
+  return sendResponse(config, {
+    to,
+    subject,
+    body,
+  });
+}
+
+/**
  * Send a command result response
  */
 export async function sendCommandResult(
@@ -101,12 +134,8 @@ export async function sendCommandResult(
 
   const body = formatCommandResult(result);
 
-  return sendResponse(config, {
-    to: originalEmail.sender,
-    subject,
-    body,
-    inReplyTo: originalEmail.messageId,
-  });
+  // Use AgentMail if configured, otherwise fall back to SMTP
+  return sendViaAgentMailOrSmtp(originalEmail.sender, subject, body, config);
 }
 
 /**

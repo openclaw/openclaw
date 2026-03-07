@@ -16,6 +16,7 @@ import {
   deleteEmails,
   getProcessedEmailUids,
 } from "./poll_inbox.js";
+import { pollAgentMailInbox, healthCheckAgentMail } from "./agentmail-polling.js";
 import { classifyMessage, classifyForInbox, getInboxCategoryName, type InboxCategory, type InboxClassification, type InboxAction } from "./classify_message.js";
 import {
   initializeCommands,
@@ -154,11 +155,25 @@ export async function initialize(customConfigPath?: string): Promise<void> {
   // Initialize commands
   initializeCommands();
 
-  // Connect to IMAP
-  await connect(config.imap);
+  // Check if using AgentMail or IMAP
+  if (process.env.AGENTMAIL_API_KEY) {
+    logger.info("AgentMail configured, performing health check");
+    try {
+      const health = await healthCheckAgentMail();
+      logger.info("AgentMail health check", health);
+    } catch (error) {
+      logger.warn("AgentMail health check failed", { error: String(error) });
+    }
+  } else {
+    // Use traditional IMAP setup
+    logger.info("AgentMail not configured, using IMAP");
 
-  // Initialize SMTP transporter
-  await initializeTransporter(config.imap);
+    // Connect to IMAP
+    await connect(config.imap);
+
+    // Initialize SMTP transporter
+    await initializeTransporter(config.imap);
+  }
 
   logger.info("Email listener skill initialized");
 }
@@ -219,7 +234,7 @@ export function stop(): void {
 }
 
 /**
- * Poll for new emails
+ * Poll for new emails (AgentMail or IMAP)
  */
 async function poll(): Promise<void> {
   if (!config) return;
@@ -227,7 +242,23 @@ async function poll(): Promise<void> {
   try {
     logger.debug("Polling for emails");
 
-    const emails = await pollInbox(config.imap);
+    let emails;
+
+    // Try AgentMail first if API key is configured
+    if (process.env.AGENTMAIL_API_KEY) {
+      try {
+        logger.debug("Using AgentMail for inbox polling");
+        emails = await pollAgentMailInbox();
+      } catch (error) {
+        logger.warn("AgentMail polling failed, falling back to IMAP", {
+          error: String(error),
+        });
+        emails = await pollInbox(config.imap);
+      }
+    } else {
+      // Use IMAP if AgentMail not configured
+      emails = await pollInbox(config.imap);
+    }
 
     for (const email of emails) {
       await processEmail(email);
