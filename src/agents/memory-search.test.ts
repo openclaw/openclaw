@@ -63,6 +63,20 @@ describe("memory search config", () => {
     expect(resolved?.fallback).toBe("none");
   });
 
+  it("returns null for plugin-managed provider ids", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-openviking",
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved).toBeNull();
+  });
+
   it("merges defaults and overrides", () => {
     const cfg = asConfig({
       agents: {

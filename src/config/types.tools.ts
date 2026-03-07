@@ -324,8 +324,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  /** Embedding provider mode (built-in provider or memory plugin id). */
+  provider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;

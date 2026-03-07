@@ -285,4 +285,91 @@ describe("config plugin validation", () => {
       ).toBe(true);
     }
   });
+
+  it("accepts memorySearch provider when it matches memory slot plugin", async () => {
+    const memoryPluginDir = path.join(suiteHome, "memory-openviking-plugin");
+    await writePluginFixture({
+      dir: memoryPluginDir,
+      id: "memory-openviking",
+      schema: { type: "object" },
+    });
+    await fs.writeFile(
+      path.join(memoryPluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "memory-openviking",
+          kind: "memory",
+          configSchema: { type: "object" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearPluginManifestRegistryCache();
+
+    const res = validateInSuite({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-openviking",
+          },
+        },
+      },
+      plugins: {
+        load: { paths: [memoryPluginDir] },
+        slots: { memory: "memory-openviking" },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects memorySearch plugin provider when memory slot differs", async () => {
+    const memoryPluginDir = path.join(suiteHome, "memory-custom-plugin");
+    await writePluginFixture({
+      dir: memoryPluginDir,
+      id: "memory-custom",
+      schema: { type: "object" },
+    });
+    await fs.writeFile(
+      path.join(memoryPluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "memory-custom",
+          kind: "memory",
+          configSchema: { type: "object" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearPluginManifestRegistryCache();
+
+    const res = validateInSuite({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-custom",
+          },
+        },
+      },
+      plugins: {
+        load: { paths: [memoryPluginDir] },
+        slots: { memory: "memory-core" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "agents.defaults.memorySearch.provider" &&
+            issue.message.includes("must match plugins.slots.memory"),
+        ),
+      ).toBe(true);
+    }
+  });
 });

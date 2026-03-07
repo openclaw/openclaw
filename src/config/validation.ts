@@ -25,6 +25,15 @@ import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
+const BUILTIN_MEMORY_SEARCH_PROVIDER_IDS = new Set([
+  "openai",
+  "local",
+  "gemini",
+  "voyage",
+  "mistral",
+  "ollama",
+  "auto",
+]);
 
 type UnknownIssueRecord = Record<string, unknown>;
 type AllowedValuesCollection = {
@@ -380,6 +389,78 @@ function validateConfigObjectWithPluginsBase(
     }
     return info.normalizedPlugins;
   };
+
+  const validateMemorySearchProvider = (provider: string | undefined, providerPath: string) => {
+    if (typeof provider !== "string") {
+      return;
+    }
+    const normalizedProvider = provider.trim();
+    if (!normalizedProvider || BUILTIN_MEMORY_SEARCH_PROVIDER_IDS.has(normalizedProvider)) {
+      return;
+    }
+
+    const normalizedPlugins = ensureNormalizedPlugins();
+    const memorySlot = normalizedPlugins.slots.memory;
+    if (memorySlot === null) {
+      issues.push({
+        path: providerPath,
+        message: `memory search provider plugin "${normalizedProvider}" requires a memory slot plugin, but plugins.slots.memory is "none"`,
+      });
+      return;
+    }
+    if (memorySlot !== normalizedProvider) {
+      issues.push({
+        path: providerPath,
+        message: `memory search provider plugin "${normalizedProvider}" must match plugins.slots.memory (current: "${memorySlot ?? "unset"}")`,
+      });
+      return;
+    }
+
+    const knownIds = ensureKnownIds();
+    if (!knownIds.has(normalizedProvider)) {
+      issues.push({
+        path: providerPath,
+        message: `unknown memory search provider plugin: ${normalizedProvider}`,
+      });
+      return;
+    }
+
+    const { registry } = ensureRegistry();
+    const record = registry.plugins.find((plugin) => plugin.id === normalizedProvider);
+    if (record?.kind !== "memory") {
+      issues.push({
+        path: providerPath,
+        message: `memory search provider plugin must be kind "memory": ${normalizedProvider}`,
+      });
+      return;
+    }
+
+    const enableState = resolveEffectiveEnableState({
+      id: normalizedProvider,
+      origin: record.origin,
+      config: normalizedPlugins,
+      rootConfig: config,
+    });
+    if (!enableState.enabled) {
+      issues.push({
+        path: providerPath,
+        message: `memory search provider plugin is disabled: ${normalizedProvider} (${enableState.reason ?? "disabled"})`,
+      });
+    }
+  };
+
+  validateMemorySearchProvider(
+    config.agents?.defaults?.memorySearch?.provider,
+    "agents.defaults.memorySearch.provider",
+  );
+  if (Array.isArray(config.agents?.list)) {
+    for (const [index, entry] of config.agents.list.entries()) {
+      validateMemorySearchProvider(
+        entry?.memorySearch?.provider,
+        `agents.list.${index}.memorySearch.provider`,
+      );
+    }
+  }
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 

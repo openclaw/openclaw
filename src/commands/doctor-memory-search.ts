@@ -1,5 +1,9 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -9,6 +13,16 @@ import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
+
+const BUILTIN_MEMORY_SEARCH_PROVIDERS = new Set([
+  "openai",
+  "local",
+  "gemini",
+  "voyage",
+  "mistral",
+  "ollama",
+  "auto",
+]);
 
 /**
  * Check whether memory search has a usable embedding provider.
@@ -26,10 +40,28 @@ export async function noteMemorySearchHealth(
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const rawProvider =
+    (
+      resolveAgentConfig(cfg, agentId)?.memorySearch?.provider ??
+      cfg.agents?.defaults?.memorySearch?.provider ??
+      "auto"
+    )
+      ?.trim()
+      .toLowerCase() ?? "auto";
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
+    if (rawProvider && !BUILTIN_MEMORY_SEARCH_PROVIDERS.has(rawProvider)) {
+      note(
+        [
+          `Memory search provider "${rawProvider}" is delegated to the memory plugin slot (plugins.slots.memory).`,
+          "Built-in memory embeddings health checks are skipped for plugin providers.",
+        ].join("\n"),
+        "Memory search",
+      );
+      return;
+    }
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
     return;
   }

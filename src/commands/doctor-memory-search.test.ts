@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
+const resolveAgentConfig = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
@@ -14,6 +15,7 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveAgentDir,
 }));
@@ -53,6 +55,8 @@ describe("noteMemorySearchHealth", () => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
+    resolveAgentConfig.mockReset();
+    resolveAgentConfig.mockReturnValue(undefined);
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
@@ -289,6 +293,22 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("notes plugin-managed providers and skips built-in checks", async () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+    resolveAgentConfig.mockReturnValue({
+      memorySearch: {
+        provider: "memory-openviking",
+      },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "memory-openviking" is delegated');
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 });
 

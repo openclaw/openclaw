@@ -194,6 +194,20 @@ export async function createEmbeddingProvider(
     return { provider, openAi: client };
   };
 
+  const assertEmbeddingProviderId = (provider: string): EmbeddingProviderId => {
+    if (
+      provider === "openai" ||
+      provider === "local" ||
+      provider === "gemini" ||
+      provider === "voyage" ||
+      provider === "mistral" ||
+      provider === "ollama"
+    ) {
+      return provider;
+    }
+    throw new Error(`Unknown memory embedding provider: ${provider}`);
+  };
+
   const formatPrimaryError = (err: unknown, provider: EmbeddingProviderId) =>
     provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
 
@@ -238,7 +252,7 @@ export async function createEmbeddingProvider(
   }
 
   try {
-    const primary = await createProvider(requestedProvider);
+    const primary = await createProvider(assertEmbeddingProviderId(requestedProvider));
     return { ...primary, requestedProvider };
   } catch (primaryErr) {
     const reason = formatPrimaryError(primaryErr, requestedProvider);

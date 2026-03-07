@@ -79,6 +79,31 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
+export const BUILTIN_MEMORY_SEARCH_PROVIDERS = new Set([
+  "openai",
+  "local",
+  "gemini",
+  "voyage",
+  "mistral",
+  "ollama",
+  "auto",
+] as const);
+
+export type BuiltinMemorySearchProvider =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "auto";
+
+export function isBuiltinMemorySearchProvider(
+  provider: string,
+): provider is BuiltinMemorySearchProvider {
+  return BUILTIN_MEMORY_SEARCH_PROVIDERS.has(provider as BuiltinMemorySearchProvider);
+}
+
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
@@ -136,7 +161,7 @@ function mergeConfig(
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
   agentId: string,
-): ResolvedMemorySearchConfig {
+): Omit<ResolvedMemorySearchConfig, "provider"> & { provider: string } {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
@@ -360,6 +385,9 @@ export function resolveMemorySearchConfig(
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const resolved = mergeConfig(defaults, overrides, agentId);
   if (!resolved.enabled) {
+    return null;
+  }
+  if (!isBuiltinMemorySearchProvider(resolved.provider)) {
     return null;
   }
   return resolved;
