@@ -1,4 +1,5 @@
 require "shellwords"
+require "open3"
 
 default_platform(:ios)
 
@@ -16,33 +17,104 @@ def load_env_file(path)
   end
 end
 
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+
+def clear_empty_env_var(key)
+  return unless ENV.key?(key)
+  ENV.delete(key) unless env_present?(ENV[key])
+end
+
+def maybe_decode_hex_keychain_secret(value)
+  return value unless env_present?(value)
+
+  candidate = value.strip
+  return candidate unless candidate.match?(/\A[0-9a-fA-F]+\z/) && candidate.length.even?
+
+  begin
+    decoded = [candidate].pack("H*")
+    return candidate unless decoded.valid_encoding?
+
+    # `security find-generic-password -w` can return hex when the stored secret
+    # includes newlines/non-printable bytes (like PEM files).
+    if decoded.include?("BEGIN PRIVATE KEY") || decoded.include?("END PRIVATE KEY")
+      UI.message("Decoded hex-encoded ASC key content from Keychain.")
+      return decoded
+    end
+  rescue StandardError
+    return candidate
+  end
+
+  candidate
+end
+
+def read_asc_key_content_from_keychain
+  service = ENV["ASC_KEYCHAIN_SERVICE"]
+  service = "openclaw-asc-key" unless env_present?(service)
+
+  account = ENV["ASC_KEYCHAIN_ACCOUNT"]
+  account = ENV["USER"] unless env_present?(account)
+  account = ENV["LOGNAME"] unless env_present?(account)
+  return nil unless env_present?(account)
+
+  begin
+    stdout, _stderr, status = Open3.capture3(
+      "security",
+      "find-generic-password",
+      "-s",
+      service,
+      "-a",
+      account,
+      "-w"
+    )
+
+    return nil unless status.success?
+
+    key_content = stdout.to_s.strip
+    key_content = maybe_decode_hex_keychain_secret(key_content)
+    return nil unless env_present?(key_content)
+
+    UI.message("Loaded ASC key content from Keychain service '#{service}' (account '#{account}').")
+    key_content
+  rescue Errno::ENOENT
+    nil
+  end
+end
+
 platform :ios do
   private_lane :asc_api_key do
     load_env_file(File.join(__dir__, ".env"))
+    clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
+    clear_empty_env_var("ASC_KEY_PATH")
+    clear_empty_env_var("ASC_KEY_CONTENT")
 
     api_key = nil
 
     key_path = ENV["APP_STORE_CONNECT_API_KEY_PATH"]
-    if key_path && !key_path.strip.empty?
+    if env_present?(key_path)
       api_key = app_store_connect_api_key(path: key_path)
     else
       p8_path = ENV["ASC_KEY_PATH"]
-      if p8_path && !p8_path.strip.empty?
-      key_id = ENV["ASC_KEY_ID"]
-      issuer_id = ENV["ASC_ISSUER_ID"]
-      UI.user_error!("Missing ASC_KEY_ID or ASC_ISSUER_ID for ASC_KEY_PATH auth.") if [key_id, issuer_id].any? { |v| v.nil? || v.strip.empty? }
+      if env_present?(p8_path)
+        key_id = ENV["ASC_KEY_ID"]
+        issuer_id = ENV["ASC_ISSUER_ID"]
+        UI.user_error!("Missing ASC_KEY_ID or ASC_ISSUER_ID for ASC_KEY_PATH auth.") if [key_id, issuer_id].any? { |v| !env_present?(v) }
 
         api_key = app_store_connect_api_key(
-        key_id: key_id,
-        issuer_id: issuer_id,
-        key_filepath: p8_path
-      )
+          key_id: key_id,
+          issuer_id: issuer_id,
+          key_filepath: p8_path
+        )
       else
         key_id = ENV["ASC_KEY_ID"]
         issuer_id = ENV["ASC_ISSUER_ID"]
         key_content = ENV["ASC_KEY_CONTENT"]
+        key_content = read_asc_key_content_from_keychain unless env_present?(key_content)
 
-        UI.user_error!("Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH (json) or ASC_KEY_PATH (p8) or ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_CONTENT.") if [key_id, issuer_id, key_content].any? { |v| v.nil? || v.strip.empty? }
+        UI.user_error!(
+          "Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH (json), ASC_KEY_PATH (p8), or ASC_KEY_ID/ASC_ISSUER_ID with ASC_KEY_CONTENT (or Keychain via ASC_KEYCHAIN_SERVICE/ASC_KEYCHAIN_ACCOUNT)."
+        ) if [key_id, issuer_id, key_content].any? { |v| !env_present?(v) }
 
         is_base64 = key_content.include?("BEGIN PRIVATE KEY") ? false : true
 
@@ -64,7 +136,7 @@ platform :ios do
 
     team_id = ENV["IOS_DEVELOPMENT_TEAM"]
     if team_id.nil? || team_id.strip.empty?
-      helper_path = File.expand_path("../../scripts/ios-team-id.sh", __dir__)
+      helper_path = File.expand_path("../../../scripts/ios-team-id.sh", __dir__)
       if File.exist?(helper_path)
         # Keep CI/local compatibility where teams are present in keychain but not Xcode account metadata.
         team_id = sh("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 bash #{helper_path.shellescape}").strip
@@ -77,6 +149,7 @@ platform :ios do
       scheme: "OpenClaw",
       export_method: "app-store",
       clean: true,
+      skip_profile_detection: true,
       xcargs: "DEVELOPMENT_TEAM=#{team_id} -allowProvisioningUpdates",
       export_xcargs: "-allowProvisioningUpdates",
       export_options: {
@@ -86,19 +159,40 @@ platform :ios do
 
     upload_to_testflight(
       api_key: api_key,
-      skip_waiting_for_build_processing: true
+      skip_waiting_for_build_processing: true,
+      uses_non_exempt_encryption: false
     )
   end
 
   desc "Upload App Store metadata (and optionally screenshots)"
   lane :metadata do
     api_key = asc_api_key
+    clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
+    app_identifier = ENV["ASC_APP_IDENTIFIER"]
+    app_id = ENV["ASC_APP_ID"]
+    app_identifier = nil unless env_present?(app_identifier)
+    app_id = nil unless env_present?(app_id)
 
-    deliver(
+    deliver_options = {
       api_key: api_key,
       force: true,
       skip_screenshots: ENV["DELIVER_SCREENSHOTS"] != "1",
-      skip_metadata: ENV["DELIVER_METADATA"] != "1"
-    )
+      skip_metadata: ENV["DELIVER_METADATA"] != "1",
+      run_precheck_before_submit: false
+    }
+    deliver_options[:app_identifier] = app_identifier if app_identifier
+    if app_id && app_identifier.nil?
+      # `deliver` prefers app_identifier from Appfile unless explicitly blanked.
+      deliver_options[:app_identifier] = ""
+      deliver_options[:app] = app_id
+    end
+
+    deliver(**deliver_options)
+  end
+
+  desc "Validate App Store Connect API auth"
+  lane :auth_check do
+    asc_api_key
+    UI.success("App Store Connect API auth loaded successfully.")
   end
 end
