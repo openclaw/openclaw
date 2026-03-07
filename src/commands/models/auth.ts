@@ -1,20 +1,30 @@
-import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
+import {
+  cancel as clackCancel,
+  confirm as clackConfirm,
+  isCancel,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { upsertAuthProfile } from "../../agents/auth-profiles.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
-import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
@@ -53,6 +63,15 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     ),
   });
 
+function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+  if (isCancel(value)) {
+    clackCancel(stylePromptTitle("Auth setup cancelled.") ?? "Auth setup cancelled.");
+    runtime.exit(0);
+    throw new Error("unreachable");
+  }
+  return value;
+}
+
 type TokenProvider = "anthropic";
 
 function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
@@ -85,19 +104,25 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   if (!opts.yes) {
-    const proceed = await confirm({
-      message: "Have you run `claude setup-token` and copied the token?",
-      initialValue: true,
-    });
+    const proceed = guardPromptCancel(
+      await confirm({
+        message: "Have you run `claude setup-token` and copied the token?",
+        initialValue: true,
+      }),
+      runtime,
+    );
     if (!proceed) {
       return;
     }
   }
 
-  const tokenInput = await text({
-    message: "Paste Anthropic setup-token",
-    validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
-  });
+  const tokenInput = guardPromptCancel(
+    await text({
+      message: "Paste Anthropic setup-token",
+      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+    }),
+    runtime,
+  );
   const token = String(tokenInput ?? "").trim();
   const profileId = resolveDefaultTokenProfileId(provider);
 
@@ -137,10 +162,13 @@ export async function modelsAuthPasteTokenCommand(
   const provider = normalizeProviderId(rawProvider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
-  const tokenInput = await text({
-    message: `Paste token for ${provider}`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
-  });
+  const tokenInput = guardPromptCancel(
+    await text({
+      message: `Paste token for ${provider}`,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+    runtime,
+  );
   const token = String(tokenInput ?? "").trim();
 
   const expires =
@@ -165,41 +193,50 @@ export async function modelsAuthPasteTokenCommand(
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
-  const provider = (await select({
-    message: "Token provider",
-    options: [
-      { value: "anthropic", label: "anthropic" },
-      { value: "custom", label: "custom (type provider id)" },
-    ],
-  })) as TokenProvider | "custom";
+  const provider = guardPromptCancel(
+    await select({
+      message: "Token provider",
+      options: [
+        { value: "anthropic", label: "anthropic" },
+        { value: "custom", label: "custom (type provider id)" },
+      ],
+    }),
+    runtime,
+  );
 
   const providerId =
     provider === "custom"
       ? normalizeProviderId(
           String(
-            await text({
-              message: "Provider id",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
+            guardPromptCancel(
+              await text({
+                message: "Provider id",
+                validate: (value) => (value?.trim() ? undefined : "Required"),
+              }),
+              runtime,
+            ),
           ),
         )
       : provider;
 
-  const method = (await select({
-    message: "Token method",
-    options: [
-      ...(providerId === "anthropic"
-        ? [
-            {
-              value: "setup-token",
-              label: "setup-token (claude)",
-              hint: "Paste a setup-token from `claude setup-token`",
-            },
-          ]
-        : []),
-      { value: "paste", label: "paste token" },
-    ],
-  })) as "setup-token" | "paste";
+  const method = guardPromptCancel(
+    await select({
+      message: "Token method",
+      options: [
+        ...(providerId === "anthropic"
+          ? [
+              {
+                value: "setup-token",
+                label: "setup-token (claude)",
+                hint: "Paste a setup-token from `claude setup-token`",
+              },
+            ]
+          : []),
+        { value: "paste", label: "paste token" },
+      ],
+    }),
+    runtime,
+  ) as "setup-token" | "paste";
 
   if (method === "setup-token") {
     await modelsAuthSetupTokenCommand({ provider: providerId }, runtime);
@@ -208,31 +245,40 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
 
   const profileIdDefault = resolveDefaultTokenProfileId(providerId);
   const profileId = String(
-    await text({
-      message: "Profile id",
-      initialValue: profileIdDefault,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
+    guardPromptCancel(
+      await text({
+        message: "Profile id",
+        initialValue: profileIdDefault,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    ),
   ).trim();
 
-  const wantsExpiry = await confirm({
-    message: "Does this token expire?",
-    initialValue: false,
-  });
+  const wantsExpiry = guardPromptCancel(
+    await confirm({
+      message: "Does this token expire?",
+      initialValue: false,
+    }),
+    runtime,
+  );
   const expiresIn = wantsExpiry
     ? String(
-        await text({
-          message: "Expires in (duration)",
-          initialValue: "365d",
-          validate: (value) => {
-            try {
-              parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
-              return undefined;
-            } catch {
-              return "Invalid duration (e.g. 365d, 12h, 30m)";
-            }
-          },
-        }),
+        guardPromptCancel(
+          await text({
+            message: "Expires in (duration)",
+            initialValue: "365d",
+            validate: (value) => {
+              try {
+                parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
+                return undefined;
+              } catch {
+                return "Invalid duration (e.g. 365d, 12h, 30m)";
+              }
+            },
+          }),
+          runtime,
+        ),
       ).trim()
     : undefined;
 

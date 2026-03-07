@@ -3,10 +3,16 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
+  clackCancel: vi.fn(),
+  clackConfirm: vi.fn(),
+  clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
+  clackSelect: vi.fn(),
+  clackText: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   resolveAgentDir: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
+  upsertAuthProfile: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
   loginOpenAICodexOAuth: vi.fn(),
@@ -17,10 +23,22 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
 }));
 
+vi.mock("@clack/prompts", () => ({
+  cancel: mocks.clackCancel,
+  confirm: mocks.clackConfirm,
+  isCancel: mocks.clackIsCancel,
+  select: mocks.clackSelect,
+  text: mocks.clackText,
+}));
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
 vi.mock("../../agents/workspace.js", () => ({
@@ -64,13 +82,24 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-const { modelsAuthLoginCommand } = await import("./auth.js");
+const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
+  await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
+  };
+}
+
+function createExitThrowingRuntime(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn((code: number) => {
+      throw new Error(`exit:${code}`);
+    }),
   };
 }
 
@@ -108,6 +137,14 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
+    mocks.clackCancel.mockReset();
+    mocks.clackConfirm.mockReset();
+    mocks.clackIsCancel.mockImplementation(
+      (value: unknown) => value === Symbol.for("clack:cancel"),
+    );
+    mocks.clackSelect.mockReset();
+    mocks.clackText.mockReset();
+    mocks.upsertAuthProfile.mockReset();
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
         lastUpdatedConfig = mutator(currentConfig);
@@ -157,7 +194,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.3-codex (use --set-default to apply)",
+      "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
     );
   });
 
@@ -167,9 +204,9 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
 
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai-codex/gpt-5.3-codex",
+      primary: "openai-codex/gpt-5.4",
     });
-    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.3-codex");
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
   });
 
   it("keeps existing plugin error behavior for non built-in providers", async () => {
@@ -178,5 +215,31 @@ describe("modelsAuthLoginCommand", () => {
     await expect(modelsAuthLoginCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
       "No provider plugins found.",
     );
+  });
+
+  it("does not persist a cancelled manual token entry", async () => {
+    const runtime = createExitThrowingRuntime();
+    mocks.clackText.mockResolvedValue(Symbol.for("clack:cancel"));
+
+    await expect(modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
+      "exit:0",
+    );
+
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a cancelled setup-token entry", async () => {
+    const runtime = createExitThrowingRuntime();
+    mocks.clackText.mockResolvedValue(Symbol.for("clack:cancel"));
+
+    await expect(
+      modelsAuthSetupTokenCommand({ provider: "anthropic", yes: true }, runtime),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
   });
 });
