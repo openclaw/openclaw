@@ -18,12 +18,32 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.workspaceDir).toBe(path.resolve(explicit));
   });
 
-  it("falls back to configured per-agent workspace when input is missing", () => {
+  it("prefers defaults workspace for subagent sessions when input is missing", () => {
     const defaultWorkspace = path.join(process.cwd(), "tmp", "workspace-default-main");
     const researchWorkspace = path.join(process.cwd(), "tmp", "workspace-research");
     const cfg = {
       agents: {
         defaults: { workspace: defaultWorkspace },
+        list: [{ id: "research", workspace: researchWorkspace }],
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      sessionKey: "agent:research:subagent:test",
+      config: cfg,
+    });
+
+    expect(result.usedFallback).toBe(true);
+    expect(result.fallbackReason).toBe("missing");
+    expect(result.agentId).toBe("research");
+    expect(result.workspaceDir).toBe(path.resolve(defaultWorkspace));
+  });
+
+  it("falls back to parent workspace for subagent sessions when defaults workspace is missing", () => {
+    const researchWorkspace = path.join(process.cwd(), "tmp", "workspace-research");
+    const cfg = {
+      agents: {
         list: [{ id: "research", workspace: researchWorkspace }],
       },
     } satisfies OpenClawConfig;

@@ -4,6 +4,7 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import {
   classifySessionKeyShape,
   DEFAULT_AGENT_ID,
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -101,7 +102,13 @@ export function resolveRunWorkspaceDir(params: {
 
   const fallbackReason: WorkspaceFallbackReason =
     requested == null ? "missing" : typeof requested === "string" ? "blank" : "invalid_type";
-  const fallbackWorkspace = resolveAgentWorkspaceDir(params.config ?? {}, agentId);
+  const configuredDefaultWorkspace = params.config?.agents?.defaults?.workspace?.trim();
+  const shouldPreferDefaultWorkspace =
+    !params.agentId?.trim() && isSubagentSessionKey(params.sessionKey);
+  const fallbackWorkspace =
+    shouldPreferDefaultWorkspace && configuredDefaultWorkspace
+      ? resolveUserPath(configuredDefaultWorkspace)
+      : resolveAgentWorkspaceDir(params.config ?? {}, agentId);
   const sanitizedFallback = sanitizeForPromptLiteral(fallbackWorkspace);
   if (sanitizedFallback !== fallbackWorkspace) {
     logWarn("Control/format characters stripped from fallback workspaceDir (OC-19 hardening).");
