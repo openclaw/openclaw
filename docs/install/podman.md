@@ -99,7 +99,7 @@ To add quadlet **after** an initial setup that did not use it, re-run: `./setup-
 - **Ephemeral sandbox tmpfs:** if you enable `agents.defaults.sandbox`, the tool sandbox containers mount `tmpfs` at `/tmp`, `/var/tmp`, and `/run`. Those paths are memory-backed and disappear with the sandbox container; the top-level Podman container setup does not add its own tmpfs mounts.
 - **Disk growth hotspots:** the main paths to watch are `media/`, `agents/<agentId>/sessions/sessions.json`, transcript JSONL files, `cron/runs/*.jsonl`, and rolling file logs under `/tmp/openclaw/` (or your configured `logging.file`).
 
-`setup-podman.sh` now stages the image tar in `TMPDIR` when available, otherwise `/var/tmp`, then `/tmp`, and prints the chosen temp dir during setup. This avoids assuming `/tmp` is disk-backed on hosts where it is tmpfs.
+`setup-podman.sh` now stages the image tar in a private temp directory and prints the chosen base dir during setup. For non-root runs it accepts `TMPDIR` only when that base is safe to use; otherwise it falls back to `/var/tmp`, then `/tmp`. The saved tar stays owner-only and is streamed into the target user’s `podman load`, so private caller temp dirs do not block setup.
 
 ## Useful commands
 
