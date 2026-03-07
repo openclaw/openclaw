@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { PrimaryRecoveryConfig } from "../config/types.agents-shared.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -339,6 +340,33 @@ const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 
+/**
+ * Default interval for periodic primary recovery probing (5 minutes).
+ * When the primary model is in cooldown and fallbacks are available,
+ * this controls how often the system re-checks the primary to detect recovery.
+ */
+const DEFAULT_PRIMARY_RECOVERY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
+
+function resolvePrimaryRecoveryConfig(cfg: OpenClawConfig | undefined): PrimaryRecoveryConfig {
+  const model = cfg?.agents?.defaults?.model;
+  if (!model || typeof model === "string") {
+    return {};
+  }
+  return model.primaryRecovery ?? {};
+}
+
+function resolvePrimaryRecoveryProbeIntervalMs(recoveryConfig: PrimaryRecoveryConfig): number {
+  const interval = recoveryConfig.probeIntervalMs;
+  if (typeof interval === "number" && Number.isFinite(interval) && interval >= 0) {
+    return interval;
+  }
+  return DEFAULT_PRIMARY_RECOVERY_PROBE_INTERVAL_MS;
+}
+
+function isPrimaryRecoveryAutoReturnEnabled(recoveryConfig: PrimaryRecoveryConfig): boolean {
+  return recoveryConfig.autoReturn !== false;
+}
+
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
@@ -351,6 +379,7 @@ function shouldProbePrimaryDuringCooldown(params: {
   throttleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   profileIds: string[];
+  primaryRecoveryConfig?: PrimaryRecoveryConfig;
 }): boolean {
   if (!params.isPrimary || !params.hasFallbackCandidates) {
     return false;
@@ -367,7 +396,31 @@ function shouldProbePrimaryDuringCooldown(params: {
   }
 
   // Probe when cooldown already expired or within the configured margin.
-  return params.now >= soonest - PROBE_MARGIN_MS;
+  if (params.now >= soonest - PROBE_MARGIN_MS) {
+    return true;
+  }
+
+  // Periodic recovery probing: even when cooldown expiry is far away,
+  // probe at a configurable interval to detect early recovery.
+  // This addresses #19730 — sessions stuck on fallback because the
+  // primary was never re-attempted until cooldown fully expired.
+  // Only applies after at least one probe attempt has been recorded
+  // (avoids changing behavior on first encounter of a cooldown).
+  const recoveryConfig = params.primaryRecoveryConfig ?? {};
+  if (!isPrimaryRecoveryAutoReturnEnabled(recoveryConfig)) {
+    return false;
+  }
+  const recoveryInterval = resolvePrimaryRecoveryProbeIntervalMs(recoveryConfig);
+  if (recoveryInterval <= 0) {
+    return false;
+  }
+  // Only trigger periodic recovery probing if there's been a prior probe.
+  // This ensures first-time cooldown encounters follow the original
+  // margin-based logic, while subsequent requests benefit from periodic probing.
+  if (lastProbe === 0) {
+    return false;
+  }
+  return params.now - lastProbe >= recoveryInterval;
 }
 
 /** @internal – exposed for unit tests only */
@@ -375,6 +428,7 @@ export const _probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
+  DEFAULT_PRIMARY_RECOVERY_PROBE_INTERVAL_MS,
   resolveProbeThrottleKey,
 } as const;
 
@@ -471,6 +525,7 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
 
   const hasFallbackCandidates = candidates.length > 1;
+  const primaryRecoveryConfig = resolvePrimaryRecoveryConfig(params.cfg);
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
@@ -499,6 +554,7 @@ export async function runWithModelFallback<T>(params: {
           probeThrottleKey,
           authStore,
           profileIds,
+          primaryRecoveryConfig,
         });
 
         if (decision.type === "skip") {

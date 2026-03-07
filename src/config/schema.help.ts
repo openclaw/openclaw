@@ -970,6 +970,12 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.primaryRecovery":
+    "Controls how aggressively the system probes and returns to the primary model after falling back to a secondary model.",
+  "agents.defaults.model.primaryRecovery.probeIntervalMs":
+    "How often (ms) to probe the primary model during fallback. Default: 300000 (5 minutes). Set to 0 to disable periodic probing.",
+  "agents.defaults.model.primaryRecovery.autoReturn":
+    "Whether to automatically return to the primary model when it recovers. Default: true.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

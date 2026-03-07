@@ -4,6 +4,22 @@ import type {
   SandboxPruneSettings,
 } from "./types.sandbox.js";
 
+export type PrimaryRecoveryConfig = {
+  /**
+   * How often (ms) to probe the primary model during fallback to check
+   * if it has recovered. Default: 300_000 (5 minutes).
+   * Set to 0 to disable periodic probing (only probe near cooldown expiry).
+   */
+  probeIntervalMs?: number;
+  /**
+   * Whether to automatically return to the primary model when it recovers
+   * from cooldown. Default: true.
+   * When false, fallback persists until manually cleared via /model or
+   * session_status(model='default').
+   */
+  autoReturn?: boolean;
+};
+
 export type AgentModelConfig =
   | string
   | {
@@ -11,6 +27,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Controls how aggressively the system probes and returns to the primary model after fallback. */
+      primaryRecovery?: PrimaryRecoveryConfig;
     };
 
 export type AgentSandboxConfig = {

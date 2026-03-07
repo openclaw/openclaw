@@ -370,4 +370,207 @@ describe("runWithModelFallback – probe logic", () => {
       allowTransientCooldownProbe: true,
     });
   });
+
+  describe("primary recovery probing (#19730)", () => {
+    const RECOVERY_INTERVAL = _probeThrottleInternals.DEFAULT_PRIMARY_RECOVERY_PROBE_INTERVAL_MS;
+
+    it("probes primary periodically even when cooldown is far from expiry", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { autoReturn: true },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 hour — well beyond the 2-min margin
+      const expiresIn1Hour = NOW + 60 * 60 * 1000;
+      mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Hour);
+
+      // Simulate last probe was RECOVERY_INTERVAL ago (should trigger periodic probe)
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - RECOVERY_INTERVAL);
+
+      const run = vi.fn().mockResolvedValue("recovered");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      expectPrimaryProbeSuccess(result, run, "recovered");
+    });
+
+    it("does NOT probe primary when recovery interval has not elapsed", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { autoReturn: true },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 hour
+      const expiresIn1Hour = NOW + 60 * 60 * 1000;
+      mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Hour);
+
+      // Last probe was only 2 minutes ago — less than the 5-min recovery interval
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 2 * 60 * 1000);
+
+      const run = vi.fn().mockResolvedValue("ok");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      // Should skip primary and use fallback
+      expectFallbackUsed(result, run);
+    });
+
+    it("respects custom probeIntervalMs config", async () => {
+      const customInterval = 10 * 60 * 1000; // 10 minutes
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { probeIntervalMs: customInterval },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 hour
+      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 60 * 1000);
+
+      // Last probe was 6 minutes ago — past default 5 min but under custom 10 min
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 6 * 60 * 1000);
+
+      const run = vi.fn().mockResolvedValue("ok");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      // Should use fallback — 6 min < 10 min custom interval
+      expectFallbackUsed(result, run);
+    });
+
+    it("probes when custom interval has elapsed", async () => {
+      const customInterval = 10 * 60 * 1000; // 10 minutes
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { probeIntervalMs: customInterval },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 hour
+      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 60 * 1000);
+
+      // Last probe was 11 minutes ago — past custom 10 min interval
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 11 * 60 * 1000);
+
+      const run = vi.fn().mockResolvedValue("recovered-custom");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      expectPrimaryProbeSuccess(result, run, "recovered-custom");
+    });
+
+    it("disables periodic probing when autoReturn is false", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { autoReturn: false },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 hour
+      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 60 * 1000);
+
+      // Even though recovery interval has elapsed, autoReturn is false
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - RECOVERY_INTERVAL * 2);
+
+      const run = vi.fn().mockResolvedValue("ok");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      // Should use fallback — auto-return disabled
+      expectFallbackUsed(result, run);
+    });
+
+    it("disables periodic probing when probeIntervalMs is 0", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { probeIntervalMs: 0 },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 hour
+      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 60 * 1000);
+
+      // Recovery interval has elapsed, but probing is disabled
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - RECOVERY_INTERVAL * 2);
+
+      const run = vi.fn().mockResolvedValue("ok");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      // Should use fallback — periodic probing disabled
+      expectFallbackUsed(result, run);
+    });
+
+    it("uses default recovery interval when no config is provided", async () => {
+      // Standard config without primaryRecovery
+      const cfg = makeCfg();
+
+      // Cooldown expires in 1 hour
+      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 60 * 1000);
+
+      // Last probe was DEFAULT_PRIMARY_RECOVERY_PROBE_INTERVAL_MS ago
+      _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - RECOVERY_INTERVAL);
+
+      const run = vi.fn().mockResolvedValue("recovered-default");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      // Should probe — default recovery config enables auto-return
+      expectPrimaryProbeSuccess(result, run, "recovered-default");
+    });
+
+    it("still probes near cooldown expiry even when autoReturn is false", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5"],
+              primaryRecovery: { autoReturn: false },
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>);
+
+      // Cooldown expires in 1 minute — within 2-min probe margin
+      const expiresIn1Min = NOW + 60 * 1000;
+      mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
+
+      const run = vi.fn().mockResolvedValue("margin-probe");
+
+      const result = await runPrimaryCandidate(cfg, run);
+      // Should still probe — margin-based probing is independent of autoReturn
+      expectPrimaryProbeSuccess(result, run, "margin-probe");
+    });
+  });
 });

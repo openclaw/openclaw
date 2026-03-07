@@ -19,6 +19,8 @@ export type AgentModelEntryConfig = {
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+  /** Controls how aggressively the system probes and returns to the primary model after fallback. */
+  primaryRecovery?: import("./types.agents-shared.js").PrimaryRecoveryConfig;
 };
 
 export type AgentContextPruningConfig = {
