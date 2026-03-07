@@ -414,13 +414,17 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
-  // For "none" mode, return just the basic identity line
+  const modelIdentityLine = runtimeInfo?.model
+    ? `You are a personal assistant running inside OpenClaw, currently powered by ${sanitizeForPromptLiteral(runtimeInfo.model)}. When asked what model you are, always answer: ${sanitizeForPromptLiteral(runtimeInfo.model)}.`
+    : "You are a personal assistant running inside OpenClaw.";
+
+  // For "none" mode, return just the identity line (with model if available)
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return modelIdentityLine;
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    modelIdentityLine,
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",

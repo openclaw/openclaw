@@ -95,7 +95,7 @@ export async function runCliAgent(params: {
   const backend = backendResolved.config;
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backend);
-  const modelDisplay = `${params.provider}/${modelId}`;
+  const modelDisplay = `${params.provider}/${normalizedModel || modelId}`;
 
   const extraSystemPrompt = [
     params.extraSystemPrompt?.trim(),

@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { normalizeCliModel, resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
@@ -313,5 +313,17 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       useResume: true,
     });
     expect(timeoutMs).toBe(42_000);
+  });
+});
+
+describe("normalizeCliModel", () => {
+  it("resolves aliases to canonical model IDs", () => {
+    const backend = { modelAliases: { default: "claude-sonnet-4-20250514" } } as never;
+    expect(normalizeCliModel("default", backend)).toBe("claude-sonnet-4-20250514");
+  });
+
+  it("returns raw model ID when no alias matches", () => {
+    const backend = { modelAliases: {} } as never;
+    expect(normalizeCliModel("claude-opus-4-20250115", backend)).toBe("claude-opus-4-20250115");
   });
 });
