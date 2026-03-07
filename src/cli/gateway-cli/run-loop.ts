@@ -1,3 +1,4 @@
+import { clearConfigCache } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -57,6 +58,11 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
+  /**
+   * Handles gateway restart after the server has closed.
+   * Attempts full process restart first, falls back to in-process restart if that fails.
+   * Clears config cache to ensure fresh config is loaded on in-process restart.
+   */
   const handleRestartAfterServerClose = async () => {
     const hadLock = await releaseLockIfHeld();
     // Release the lock BEFORE spawning so the child can acquire it immediately.
@@ -79,6 +85,8 @@ export async function runGatewayLoop(params: {
         `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
       );
     }
+    // Clear config cache before in-process restart to ensure fresh config load
+    clearConfigCache();
     if (hadLock && !(await reacquireLockForInProcessRestart())) {
       return;
     }
