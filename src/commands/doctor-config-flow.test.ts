@@ -126,6 +126,69 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("warns when discord account allowlist mode overrides parent guilds with empty guilds", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "123": {
+              channels: {
+                "456": { allow: true },
+              },
+            },
+          },
+          accounts: {
+            default: {
+              groupPolicy: "allowlist",
+              guilds: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("channels.discord.accounts.default.guilds is empty") &&
+          line.includes('effective groupPolicy is "allowlist"') &&
+          line.includes("guilds is empty"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when discord account empty guild override inherits allowlist policy from parent", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "123": {
+              channels: {
+                "456": { allow: true },
+              },
+            },
+          },
+          accounts: {
+            default: {
+              guilds: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("channels.discord.accounts.default.guilds is empty") &&
+          line.includes('effective groupPolicy is "allowlist"') &&
+          line.includes("guilds is empty"),
+      ),
+    ).toBe(true);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
