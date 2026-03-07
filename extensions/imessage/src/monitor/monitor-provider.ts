@@ -513,7 +513,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     // Synthesize an IMessagePayload so the standard message pipeline handles it.
     const syntheticMessage: IMessagePayload = {
-      id: reaction.target_id,
+      id: undefined, // Synthetic reaction, no real message ID
       chat_id: reaction.chat_id,
       sender: reaction.sender,
       is_from_me: false,
@@ -527,7 +527,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       attachments: null,
     };
 
-    await handleMessageNow(syntheticMessage);
+    await inboundDebouncer.enqueue({ message: syntheticMessage });
   };
 
   await waitForTransportReady({
