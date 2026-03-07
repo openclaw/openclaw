@@ -280,6 +280,7 @@ Docs: https://docs.openclaw.ai
 - Podman/.env gateway bind precedence: evaluate `OPENCLAW_GATEWAY_BIND` after sourcing `.env` in `run-openclaw-podman.sh` so env-file overrides are honored. (#38785) Thanks @majinyu666.
 - Models/default alias refresh: bump `gpt` to `openai/gpt-5.4` and Gemini defaults to `gemini-3.1` preview aliases (including normalization/default wiring) to track current model IDs. (#38638) Thanks @ademczuk.
 - Config/env substitution degraded mode: convert missing `${VAR}` resolution in config reads from hard-fail to warning-backed degraded behavior, while preventing unresolved placeholders from being accepted as gateway credentials. (#39050) Thanks @akz142857.
+- Discord inbound listener non-blocking dispatch: make `MESSAGE_CREATE` listener handoff asynchronous (no per-listener queue blocking), so long runs no longer stall unrelated incoming events. (#39154) Thanks @yaseenkadlemakki.
 
 ## 2026.3.2
 
