@@ -1048,7 +1048,7 @@ export const buildTelegramMessageContext = async ({
         ? contextualActivationHint
           ? [
               groupSystemPrompt,
-              `\nYou've been silently reading the group chat. You noticed: "${contextualActivationHint}". Join the conversation naturally, like a human group member chiming in.`,
+              `\nYou've been silently reading the group chat. You noticed: "${contextualActivationHint}". Join the conversation naturally, like a human group member chiming in.\n\n**IMPORTANT — contextual activation rules:**\n- Keep it SHORT. One or two sentences max. You're a lurker chiming in, not giving a lecture.\n- Do NOT ask questions. If you don't know enough, make a brief comment or reaction instead.\n- Do NOT act like a customer service agent, encyclopedia, or expert consultant.\n- Stay in character (follow SOUL.md). Your personality doesn't change just because the topic is technical.\n- If you can't add anything beyond what's already been said, send a sticker or reaction instead of text.`,
             ]
               .filter(Boolean)
               .join("\n")
