@@ -12,6 +12,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
+import { getRemoteSkillEligibility } from "../../../infra/skills-remote.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -796,6 +797,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       workspaceDir: effectiveWorkspace,
       preferEntries: preferWorkspaceSkillsPrompt,
+      eligibility: { remote: getRemoteSkillEligibility() },
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

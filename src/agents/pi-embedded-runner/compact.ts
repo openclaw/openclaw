@@ -18,6 +18,7 @@ import {
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -370,6 +371,7 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       workspaceDir: effectiveWorkspace,
       preferEntries: preferWorkspaceSkillsPrompt,
+      eligibility: { remote: getRemoteSkillEligibility() },
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
