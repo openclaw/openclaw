@@ -229,16 +229,41 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
-    } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+      // Different physical paths with same plugin ID - prefer higher-precedence origin
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (candidateRank < existingRank) {
+        // Current candidate has higher precedence - replace existing record
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        // No warning: this is expected behavior (user override of bundled plugin)
+      } else if (candidateRank > existingRank) {
+        // Current candidate has lower precedence - skip it
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id "${manifest.id}" skipped: already loaded from higher-precedence origin (${existing.candidate.source})`,
+        });
+      } else {
+        // Same precedence - this is a true duplicate (shouldn't happen in practice)
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
+      continue;
     }
 
+    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(
       buildRecord({
         manifest,

@@ -141,16 +141,47 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirA,
-        origin: "bundled",
+        origin: "global", // higher precedence
       }),
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirB,
-        origin: "global",
+        origin: "bundled", // lower precedence
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    // When bundled comes after global, it should be skipped with a warning
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("prefers higher-precedence origin for distinct plugins with same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "precedence-plugin",
+        rootDir: dirA,
+        origin: "bundled", // lower precedence (rank 3)
+      }),
+      createPluginCandidate({
+        idHint: "precedence-plugin",
+        rootDir: dirB,
+        origin: "global", // higher precedence (rank 2)
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    // Global should override bundled without warning (expected behavior)
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
