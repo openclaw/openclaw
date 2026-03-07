@@ -367,6 +367,58 @@ describe("gateway auth", () => {
     expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
     expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
   });
+
+  it("does not record rate-limit failure for missing token (misconfigured client, not brute-force)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: null,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not record rate-limit failure for missing password (misconfigured client, not brute-force)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: null,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_missing");
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("still records rate-limit failure for wrong token (brute-force attempt)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
+
+  it("still records rate-limit failure for wrong password (brute-force attempt)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
 });
 
 describe("trusted-proxy auth", () => {
