@@ -4,6 +4,7 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
+import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
@@ -48,9 +49,21 @@ export async function deliverWebReply(params: {
   }
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
-  const convertedText = markdownToWhatsApp(
-    convertMarkdownTables(replyResult.text || "", tableMode),
-  );
+  // Run message_sending plugin hook (may modify content or cancel).
+  let replyText = replyResult.text || "";
+  if (replyText) {
+    const hookResult = await runOutboundMessageHook({
+      to: msg.from,
+      content: replyText,
+      channel: "whatsapp",
+    });
+    if (hookResult === null) {
+      return; // Plugin cancelled this reply.
+    }
+    replyText = hookResult.content;
+  }
+
+  const convertedText = markdownToWhatsApp(convertMarkdownTables(replyText, tableMode));
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
