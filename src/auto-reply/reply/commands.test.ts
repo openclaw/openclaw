@@ -106,8 +106,9 @@ vi.mock("../../gateway/call.js", () => ({
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 vi.mock("../../process/exec.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+  const actual = await vi.importActual<typeof import("../../process/exec.js")>(
+    "../../process/exec.js",
+  );
   return {
     ...actual,
     runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),

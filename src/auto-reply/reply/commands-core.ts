@@ -19,6 +19,7 @@ import {
 } from "./commands-info.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handleSummarizeCommand } from "./commands-summarize.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -28,7 +29,6 @@ import {
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
-import { handleSummarizeCommand } from "./commands-summarize.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type {
   CommandHandler,

@@ -2,7 +2,14 @@
 name: youtube-summary
 description: Summarize a YouTube video by extracting transcript text with summarize CLI and returning summary-only output (never transcript text).
 user-invocable: false
-metadata: { "openclaw": { "emoji": "🎬", "requires": { "bins": ["summarize"] } } }
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🎬",
+        "requires": { "bins": ["summarize"] },
+      },
+  }
 ---
 
 # YouTube Summary
