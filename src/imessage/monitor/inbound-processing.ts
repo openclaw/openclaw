@@ -138,7 +138,7 @@ export function resolveIMessageInboundDecision(params: {
     groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
   );
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
-  const selfChatScope = buildIMessageEchoScope({
+  const selfChatScope = buildIMessageSelfChatScope({
     accountId: params.accountId,
     isGroup,
     chatId,
@@ -508,6 +508,19 @@ export function buildIMessageEchoScope(params: {
   sender: string;
 }): string {
   return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
+}
+
+function buildIMessageSelfChatScope(params: {
+  accountId: string;
+  isGroup: boolean;
+  chatId?: number;
+  sender: string;
+}): string {
+  if (!params.isGroup) {
+    return buildIMessageEchoScope(params);
+  }
+  const chatTarget = formatIMessageChatTarget(params.chatId) || "chat_id:unknown";
+  return `${params.accountId}:${chatTarget}:imessage:${params.sender}`;
 }
 
 export function describeIMessageEchoDropLog(params: {

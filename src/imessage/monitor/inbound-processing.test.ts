@@ -241,6 +241,69 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it("does not drop other participants in the same group thread", () => {
+    const selfChatCache = createSelfChatCache();
+    const createdAt = "2026-03-02T20:58:10.649Z";
+
+    expect(
+      resolveIMessageInboundDecision({
+        cfg,
+        accountId: "default",
+        message: {
+          id: 9751,
+          chat_id: 123,
+          sender: "+15555550123",
+          text: "same text",
+          created_at: createdAt,
+          is_from_me: true,
+          is_group: true,
+        },
+        opts: undefined,
+        messageText: "same text",
+        bodyText: "same text",
+        allowFrom: [],
+        groupAllowFrom: [],
+        groupPolicy: "open",
+        dmPolicy: "open",
+        storeAllowFrom: [],
+        historyLimit: 0,
+        groupHistories: new Map(),
+        echoCache: undefined,
+        selfChatCache,
+        logVerbose: undefined,
+      }),
+    ).toEqual({ kind: "drop", reason: "from me" });
+
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 9752,
+        chat_id: 123,
+        sender: "+15555550999",
+        text: "same text",
+        created_at: createdAt,
+        is_from_me: false,
+        is_group: true,
+      },
+      opts: undefined,
+      messageText: "same text",
+      bodyText: "same text",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache,
+      logVerbose: undefined,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("sanitizes reflected duplicate previews before logging", () => {
     const selfChatCache = createSelfChatCache();
     const logVerbose = vi.fn();
