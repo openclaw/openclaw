@@ -196,9 +196,7 @@ describe("registerSkillsCli", () => {
         config: { gateway: {} },
       });
       expect(progressMock.done).toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("Installed peekaboo"),
-      );
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Installed peekaboo"));
       expect(runtime.exit).not.toHaveBeenCalled();
     });
 
@@ -232,9 +230,7 @@ describe("registerSkillsCli", () => {
 
       await runCli(["skills", "install", "peekaboo"]);
 
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Install failed: peekaboo (exit 127)",
-      );
+      expect(runtime.error).toHaveBeenCalledWith("Install failed: peekaboo (exit 127)");
       expect(runtime.log).toHaveBeenCalledWith("command not found: brew");
       expect(runtime.exit).toHaveBeenCalledWith(1);
     });
@@ -244,9 +240,7 @@ describe("registerSkillsCli", () => {
 
       await runCli(["skills", "install", "nonexistent"]);
 
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Skill not found: nonexistent",
-      );
+      expect(runtime.error).toHaveBeenCalledWith("Skill not found: nonexistent");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(installSkillMock).not.toHaveBeenCalled();
     });
@@ -272,13 +266,7 @@ describe("registerSkillsCli", () => {
         stderr: "",
       });
 
-      await runCli([
-        "skills",
-        "install",
-        "peekaboo",
-        "--install-id",
-        "custom-id",
-      ]);
+      await runCli(["skills", "install", "peekaboo", "--install-id", "custom-id"]);
 
       expect(installSkillMock).toHaveBeenCalledWith(
         expect.objectContaining({ installId: "custom-id" }),
@@ -296,9 +284,7 @@ describe("registerSkillsCli", () => {
 
       await runCli(["skills", "install", "peekaboo", "--timeout", "60000"]);
 
-      expect(installSkillMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs: 60_000 }),
-      );
+      expect(installSkillMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
     });
   });
 });
