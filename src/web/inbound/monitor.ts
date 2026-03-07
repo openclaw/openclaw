@@ -100,10 +100,25 @@ export async function monitorWebInbox(options: {
         .map((entry) => entry.body)
         .filter(Boolean)
         .join("\n");
+      // Collect all media from batched messages
+      const allMediaPaths: string[] = [];
+      const allMediaTypes: string[] = [];
+      const allMediaFileNames: string[] = [];
+      for (const entry of entries) {
+        if (entry.mediaPath) {
+          allMediaPaths.push(entry.mediaPath);
+          allMediaTypes.push(entry.mediaType ?? "");
+          allMediaFileNames.push(entry.mediaFileName ?? "");
+        }
+      }
       const combinedMessage: WebInboundMessage = {
         ...last,
         body: combinedBody,
         mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+        // Include batched media arrays when media messages were combined
+        mediaPaths: allMediaPaths.length > 0 ? allMediaPaths : undefined,
+        mediaTypes: allMediaTypes.length > 0 ? allMediaTypes : undefined,
+        mediaFileNames: allMediaFileNames.length > 0 ? allMediaFileNames : undefined,
       };
       await options.onMessage(combinedMessage);
     },
