@@ -53,6 +53,7 @@ describe("isTransientNetworkError", () => {
       "ESOCKETTIMEDOUT",
       "ECONNABORTED",
       "EPIPE",
+      "EPROTO",
       "EHOSTUNREACH",
       "ENETUNREACH",
       "EAI_AGAIN",
@@ -82,6 +83,16 @@ describe("isTransientNetworkError", () => {
   it("returns true for fetch failed with unclassified cause", () => {
     const cause = Object.assign(new Error("unknown socket state"), { code: "UNKNOWN" });
     const error = Object.assign(new TypeError("fetch failed"), { cause });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for wrapped fetch failed messages even when cause is missing", () => {
+    const error = new Error("Failed to get gateway information from Discord: fetch failed");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for wrapped TLS protocol message snippets", () => {
+    const error = new Error("tlsv1 alert protocol version");
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
