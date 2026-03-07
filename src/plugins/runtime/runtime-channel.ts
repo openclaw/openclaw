@@ -113,6 +113,16 @@ import { monitorTelegramProvider } from "../../telegram/monitor.js";
 import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
+import {
+  DEFAULT_ACCOUNT_ID as X_DEFAULT_ACCOUNT_ID,
+  isXAccountConfigured,
+  listXAccountIds,
+  resolveDefaultXAccountId,
+  resolveXAccount,
+} from "../../x/accounts.js";
+import { removeClientManager as removeXClientManager } from "../../x/client.js";
+import { probeX } from "../../x/probe.js";
+import { chunkTextForX, sendMessageX } from "../../x/send.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -258,6 +268,17 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
       monitorLineProvider,
+    },
+    x: {
+      defaultAccountId: X_DEFAULT_ACCOUNT_ID,
+      listXAccountIds,
+      resolveXAccount,
+      isXAccountConfigured,
+      resolveDefaultXAccountId,
+      chunkTextForX,
+      sendMessageX,
+      probeX,
+      removeClientManager: removeXClientManager,
     },
   };
 }

@@ -161,4 +161,15 @@ export type PluginRuntimeChannel = {
     buildTemplateMessageFromPayload: typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
     monitorLineProvider: typeof import("../../line/monitor.js").monitorLineProvider;
   };
+  x: {
+    defaultAccountId: string;
+    listXAccountIds: typeof import("../../x/accounts.js").listXAccountIds;
+    resolveXAccount: typeof import("../../x/accounts.js").resolveXAccount;
+    isXAccountConfigured: typeof import("../../x/accounts.js").isXAccountConfigured;
+    resolveDefaultXAccountId: typeof import("../../x/accounts.js").resolveDefaultXAccountId;
+    chunkTextForX: typeof import("../../x/send.js").chunkTextForX;
+    sendMessageX: typeof import("../../x/send.js").sendMessageX;
+    probeX: typeof import("../../x/probe.js").probeX;
+    removeClientManager: typeof import("../../x/client.js").removeClientManager;
+  };
 };

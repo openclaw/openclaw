@@ -36,6 +36,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
+import { buildContextDigestAnchorPrompt } from "./context-digest-anchor.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
@@ -357,6 +358,10 @@ export async function runPreparedReply(
   const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
   const bodyWithEvents = prependEvents(effectiveBaseBody);
   prefixedBodyBase = prependEvents(prefixedBodyBase);
+  const digestAnchor = await buildContextDigestAnchorPrompt({ workspaceDir });
+  if (digestAnchor) {
+    extraSystemPromptParts.push(digestAnchor);
+  }
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
