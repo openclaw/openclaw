@@ -1179,7 +1179,15 @@ export const registerTelegramHandlers = ({
       // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
       const modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
-        const modelData = await buildModelsProviderData(cfg);
+        const sessionState = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          messageThreadId,
+          resolvedThreadId,
+          senderId,
+        });
+        const modelData = await buildModelsProviderData(cfg, sessionState.agentId);
         const { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
@@ -1238,14 +1246,15 @@ export const registerTelegramHandlers = ({
           const safePage = Math.max(1, Math.min(page, totalPages));
 
           // Resolve current model from session (prefer overrides)
-          const sessionState = resolveTelegramSessionState({
+          const currentSessionState = resolveTelegramSessionState({
             chatId,
             isGroup,
             isForum,
             messageThreadId,
             resolvedThreadId,
+            senderId,
           });
-          const currentModel = sessionState.model;
+          const currentModel = currentSessionState.model;
 
           const buttons = buildModelsKeyboard({
             provider,
@@ -1259,8 +1268,8 @@ export const registerTelegramHandlers = ({
             provider,
             total: models.length,
             cfg,
-            agentDir: resolveAgentDir(cfg, sessionState.agentId),
-            sessionEntry: sessionState.sessionEntry,
+            agentDir: resolveAgentDir(cfg, currentSessionState.agentId),
+            sessionEntry: currentSessionState.sessionEntry,
           });
           await editMessageWithButtons(text, buttons);
           return;
