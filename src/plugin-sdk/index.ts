@@ -835,3 +835,20 @@ export {
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
+
+// Media provider plugin types
+export type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
+  ImageDescriptionRequest,
+  ImageDescriptionResult,
+  TextToSpeechRequest,
+  TextToSpeechResult,
+} from "../plugins/types.js";
+export type {
+  PluginImageDescriptionRequest,
+  PluginAudioTranscriptionRequest,
+  PluginVideoDescriptionRequest,
+} from "../plugins/types.js";

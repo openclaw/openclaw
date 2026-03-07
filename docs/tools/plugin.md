@@ -1038,6 +1038,119 @@ Notes:
 - `onModelSelected` is the post-selection hook for provider-specific follow-up
   work such as pulling a local model.
 
+### Register a provider with capabilities
+
+Plugins can register **providers** that declare capabilities for chat, embeddings,
+media (ASR, TTS, image, video), or other AI services. Use the `capabilities` array
+to declare what the provider supports.
+
+```ts
+api.registerProvider({
+  id: "my-tts",
+  label: "My TTS",
+  capabilities: ["tts", "embedding"], // "chat" | "embedding" | "audio" | "image" | "video" | "tts"
+  textToSpeech: async (req) => {
+    // req.text: string to synthesize
+    // req.model?: string
+    // req.voice?: string
+    // req.apiKey: string
+    // req.baseUrl?: string
+    // req.timeoutMs: number
+    // req.fetchFn?: typeof fetch
+
+    // Return audio buffer and MIME type
+    return {
+      audio: Buffer.from(/* audio data */),
+      mime: "audio/mp3",
+      sampleRate: 24000, // optional, required for telephony
+    };
+  },
+  embed: async (req) => {
+    // req.text: string to embed
+    // req.model?: string
+    // req.apiKey: string
+    // req.baseUrl?: string
+    // req.timeoutMs: number
+    // req.fetchFn?: typeof fetch
+
+    return {
+      embedding: [0.1, 0.2 /* ... */],
+      model: req.model,
+    };
+  },
+  embedBatch: async (req) => {
+    // req.texts: strings to embed
+    // req.model?: string
+    // req.apiKey: string
+    // req.baseUrl?: string
+    // req.timeoutMs: number
+    // req.fetchFn?: typeof fetch
+
+    return {
+      embeddings: [
+        [0.1, 0.2 /* ... */],
+        [0.3, 0.4 /* ... */],
+      ],
+      model: req.model,
+    };
+  },
+  transcribeAudio: async (req) => {
+    // req.buffer: Buffer with audio data
+    // req.fileName: string
+    // req.mime?: string
+    // req.model?: string
+    // req.language?: string
+    // req.apiKey: string
+    // req.timeoutMs: number
+
+    return {
+      text: "transcribed text",
+      model: req.model,
+    };
+  },
+  describeImage: async (req) => {
+    // req.buffer: Buffer with image data
+    // req.fileName: string
+    // req.mime?: string
+    // req.model?: string
+    // req.prompt?: string
+    // req.maxTokens?: number
+    // req.apiKey: string
+    // req.baseUrl?: string
+    // req.timeoutMs: number
+
+    return {
+      text: "image description",
+      model: req.model,
+    };
+  },
+  describeVideo: async (req) => {
+    // req.buffer: Buffer with video data
+    // req.fileName: string
+    // req.mime?: string
+    // req.model?: string
+    // req.prompt?: string
+    // req.apiKey: string
+    // req.baseUrl?: string
+    // req.timeoutMs: number
+
+    return {
+      text: "video description",
+      model: req.model,
+    };
+  },
+});
+```
+
+Notes:
+
+- Declare which capabilities your provider supports in the `capabilities` array.
+- Implement only the methods for capabilities you support.
+- Providers are tried in this order: user's configured provider → other plugin providers → built-in providers.
+- For TTS, return `sampleRate` in the result if your provider will be used for telephony (voice calls).
+- The `apiKey`, `baseUrl`, and other fields come from the user's `tools.media.*` config.
+- For custom providers (not openai/elevenlabs), `apiKey` may be empty — plugins should get credentials from environment variables or their own configuration.
+
 ### Register a messaging channel
 
 Plugins can register **channel plugins** that behave like built‑in channels

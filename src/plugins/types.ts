@@ -219,10 +219,43 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
+export type ProviderCapability = "chat" | "embedding" | "audio" | "image" | "video" | "tts";
+
+export type ProviderEmbedRequest = {
+  text: string;
+  model?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+};
+
+export type ProviderEmbedResult = {
+  embedding: number[];
+  model?: string;
+};
+
+export type ProviderEmbedBatchRequest = {
+  texts: string[];
+  model?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+};
+
+export type ProviderEmbedBatchResult = {
+  embeddings: number[][];
+  model?: string;
+};
+
 export type ProviderPlugin = {
   id: string;
   pluginId?: string;
   label: string;
+  capabilities?: ProviderCapability[];
   docsPath?: string;
   aliases?: string[];
   envVars?: string[];
@@ -232,6 +265,144 @@ export type ProviderPlugin = {
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+  embed?: (req: ProviderEmbedRequest) => Promise<ProviderEmbedResult>;
+  embedBatch?: (req: ProviderEmbedBatchRequest) => Promise<ProviderEmbedBatchResult>;
+  embedBatchInputs?: (req: {
+    inputs: {
+      text: string;
+      parts?: (
+        | { type: "text"; text: string }
+        | { type: "inline-data"; mimeType: string; data: string }
+      )[];
+    }[];
+    model?: string;
+    apiKey: string;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+    timeoutMs: number;
+    fetchFn?: typeof fetch;
+  }) => Promise<{ embeddings: number[][]; model?: string }>;
+  transcribeAudio?: (req: {
+    buffer: Buffer;
+    fileName: string;
+    mime?: string;
+    model?: string;
+    language?: string;
+    prompt?: string;
+    query?: Record<string, string | number | boolean>;
+    apiKey: string;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+    timeoutMs: number;
+    fetchFn?: typeof fetch;
+  }) => Promise<{ text: string; model?: string }>;
+  describeImage?: (req: {
+    buffer: Buffer;
+    fileName: string;
+    mime?: string;
+    model: string;
+    provider: string;
+    prompt?: string;
+    maxTokens?: number;
+    timeoutMs: number;
+    profile?: string;
+    preferredProfile?: string;
+    agentDir: string;
+    apiKey: string;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+    fetchFn?: typeof fetch;
+  }) => Promise<{ text: string; model?: string }>;
+  describeVideo?: (req: {
+    buffer: Buffer;
+    fileName: string;
+    mime?: string;
+    model?: string;
+    prompt?: string;
+    apiKey: string;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+    timeoutMs: number;
+    fetchFn?: typeof fetch;
+  }) => Promise<{ text: string; model?: string }>;
+  textToSpeech?: (req: {
+    text: string;
+    model?: string;
+    modelId?: string;
+    voice?: string;
+    voiceId?: string;
+    apiKey: string;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+    timeoutMs: number;
+    fetchFn?: typeof fetch;
+    telephony?: boolean;
+  }) => Promise<{ audio: Buffer; mime: string; sampleRate?: number }>;
+};
+
+// =============================================================================
+// Plugin Media Providers (STT, TTS, Image, Video)
+// Re-export types from media-understanding for plugin SDK
+// =============================================================================
+
+export {
+  type AudioTranscriptionRequest,
+  type AudioTranscriptionResult,
+  type VideoDescriptionRequest,
+  type VideoDescriptionResult,
+  type ImageDescriptionRequest,
+  type ImageDescriptionResult,
+  type TextToSpeechRequest,
+  type TextToSpeechResult,
+} from "../media-understanding/types.js";
+
+// Plugin-specific request types (used by plugin callbacks)
+// =============================================================================
+
+export type PluginImageDescriptionRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  model: string;
+  provider: string;
+  prompt?: string;
+  maxTokens?: number;
+  timeoutMs: number;
+  profile?: string;
+  preferredProfile?: string;
+  agentDir: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  fetchFn?: typeof fetch;
+};
+
+export type PluginAudioTranscriptionRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  model?: string;
+  language?: string;
+  prompt?: string;
+  query?: Record<string, string | number | boolean>;
+  timeoutMs: number;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  fetchFn?: typeof fetch;
+};
+
+export type PluginVideoDescriptionRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  model?: string;
+  prompt?: string;
+  timeoutMs: number;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  fetchFn?: typeof fetch;
 };
 
 export type OpenClawPluginGatewayMethod = {

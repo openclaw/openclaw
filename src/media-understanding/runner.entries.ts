@@ -340,6 +340,7 @@ async function resolveProviderExecutionAuth(params: {
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
+  requireApiKey?: boolean;
 }) {
   const auth = await resolveApiKeyForProvider({
     provider: params.providerId,
@@ -348,10 +349,14 @@ async function resolveProviderExecutionAuth(params: {
     preferredProfile: params.entry.preferredProfile,
     agentDir: params.agentDir,
   });
+  // Default to not requiring API key - let providers handle missing keys themselves
+  // This allows plugin providers (like local engines) to work without API keys
+  const requireKey = params.requireApiKey !== undefined ? params.requireApiKey : false;
+  const primaryKey = requireKey ? requireApiKey(auth, params.providerId) : (auth.apiKey ?? "");
   return {
     apiKeys: collectProviderApiKeysForExecution({
       provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
+      primaryApiKey: primaryKey,
     }),
     providerConfig: params.cfg.models?.providers?.[params.providerId],
   };
@@ -363,12 +368,14 @@ async function resolveProviderExecutionContext(params: {
   entry: MediaUnderstandingModelConfig;
   config?: MediaUnderstandingConfig;
   agentDir?: string;
+  requireApiKey?: boolean;
 }) {
   const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
     agentDir: params.agentDir,
+    requireApiKey: params.requireApiKey,
   });
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
@@ -430,12 +437,25 @@ export async function runProviderEntry(params: {
     throw new Error(`Provider entry missing provider for ${capability}`);
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
+  const fetchFn = resolveProxyFetchFromEnv();
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
     cfg,
     config: params.config,
   });
+
+  // Check if this is a plugin provider by checking the active plugin registry
+  // Use normalizeMediaProviderId for consistency with the media registry keys
+  // This is computed once and used for all capability types (image, audio, video)
+  const { getActivePluginRegistry } = await import("../plugins/runtime.js");
+  const pluginRegistry = getActivePluginRegistry();
+  const isPluginProvider =
+    pluginRegistry?.providers.some(
+      (pluginEntry: { provider: { id: string; capabilities?: string[] } }) =>
+        normalizeMediaProviderId(pluginEntry.provider.id) === providerId &&
+        pluginEntry.provider.capabilities?.some((c) => c === capability),
+    ) ?? false;
 
   if (capability === "image") {
     if (!params.agentDir) {
@@ -451,21 +471,73 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-    const imageInput = {
-      buffer: media.buffer,
-      fileName: media.fileName,
-      mime: media.mime,
-      model: modelId,
-      provider: providerId,
-      prompt,
-      timeoutMs,
-      profile: entry.profile,
-      preferredProfile: entry.preferredProfile,
+    let result: { text: string; model?: string };
+
+    // Get auth for all providers (built-in and plugins)
+    // Don't require API key for plugins (they may be local engines without auth)
+    const imageAuth = await resolveProviderExecutionContext({
+      providerId,
+      cfg,
+      entry,
+      config: params.config,
       agentDir: params.agentDir,
-      cfg: params.cfg,
-    };
-    const describeImage = provider?.describeImage ?? describeImageWithModel;
-    const result = await describeImage(imageInput);
+      requireApiKey: !isPluginProvider,
+    });
+
+    if (isPluginProvider && provider?.describeImage) {
+      // For plugin providers, pass resolved apiKey from config
+      result = await (
+        provider.describeImage as (req: {
+          buffer: Buffer;
+          fileName: string;
+          mime?: string;
+          model: string;
+          provider: string;
+          prompt?: string;
+          timeoutMs: number;
+          profile?: string;
+          preferredProfile?: string;
+          agentDir: string;
+          apiKey?: string;
+          baseUrl?: string;
+          headers?: Record<string, string>;
+          fetchFn?: typeof fetch;
+        }) => Promise<{ text: string; model?: string }>
+      )({
+        buffer: media.buffer,
+        fileName: media.fileName,
+        mime: media.mime,
+        model: modelId,
+        provider: providerId,
+        prompt,
+        timeoutMs,
+        profile: entry.profile,
+        preferredProfile: entry.preferredProfile,
+        agentDir: params.agentDir,
+        apiKey: imageAuth.apiKeys[0] ?? "",
+        baseUrl: imageAuth.baseUrl,
+        headers: imageAuth.headers,
+        fetchFn,
+      });
+    } else {
+      // Built-in provider uses cfg
+      const imageInput = {
+        buffer: media.buffer,
+        fileName: media.fileName,
+        mime: media.mime,
+        model: modelId,
+        provider: providerId,
+        prompt,
+        timeoutMs,
+        profile: entry.profile,
+        preferredProfile: entry.preferredProfile,
+        agentDir: params.agentDir,
+        cfg: params.cfg,
+      };
+      // For non-plugin providers, use their describeImage if available, otherwise built-in
+      const describeImageFn = provider?.describeImage ?? describeImageWithModel;
+      result = await describeImageFn(imageInput);
+    }
     return {
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
@@ -480,39 +552,50 @@ export async function runProviderEntry(params: {
     throw new Error(`Media provider not available: ${providerId}`);
   }
 
-  // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
-  // so provider HTTP calls are routed through the proxy when configured.
-  const fetchFn = resolveProxyFetchFromEnv();
-
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
-    const transcribeAudio = provider.transcribeAudio;
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+
+    let apiKeys: string[] = [];
+    let baseUrl: string | undefined;
+    let headers: Record<string, string> | undefined;
+
+    // Get auth for all providers (built-in and plugins)
+    // Require API key for built-in, allow plugins without keys (local engines)
+    const auth = await resolveProviderExecutionContext({
       providerId,
       cfg,
       entry,
       config: params.config,
       agentDir: params.agentDir,
+      requireApiKey: !isPluginProvider,
     });
+    apiKeys = auth.apiKeys;
+    baseUrl = auth.baseUrl;
+    headers = auth.headers;
+
     const providerQuery = resolveProviderQuery({
       providerId,
       config: params.config,
       entry,
     });
     const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
-    const result = await executeWithApiKeyRotation({
+
+    let audioResult: { text: string; model?: string };
+
+    const transcribeFn = provider.transcribeAudio;
+    audioResult = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,
       execute: async (apiKey) =>
-        transcribeAudio({
+        transcribeFn({
           buffer: media.buffer,
           fileName: media.fileName,
           mime: media.mime,
@@ -530,16 +613,15 @@ export async function runProviderEntry(params: {
     return {
       kind: "audio.transcription",
       attachmentIndex: params.attachmentIndex,
-      text: trimOutput(result.text, maxChars),
+      text: trimOutput(audioResult.text, maxChars),
       provider: providerId,
-      model: result.model ?? model,
+      model: audioResult.model ?? model,
     };
   }
 
   if (!provider.describeVideo) {
     throw new Error(`Video understanding provider "${providerId}" not available.`);
   }
-  const describeVideo = provider.describeVideo;
   const media = await params.cache.getBuffer({
     attachmentIndex: params.attachmentIndex,
     maxBytes,
@@ -553,18 +635,33 @@ export async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+
+  let apiKeys: string[] = [];
+  let baseUrl: string | undefined;
+  let headers: Record<string, string> | undefined;
+
+  // Get auth for all providers (built-in and plugins)
+  // Require API key for built-in, allow plugins without keys (local engines)
+  const videoAuth = await resolveProviderExecutionContext({
     providerId,
     cfg,
     entry,
     config: params.config,
     agentDir: params.agentDir,
+    requireApiKey: !isPluginProvider,
   });
-  const result = await executeWithApiKeyRotation({
+  apiKeys = videoAuth.apiKeys;
+  baseUrl = videoAuth.baseUrl;
+  headers = videoAuth.headers;
+
+  let videoResult: { text: string; model?: string };
+
+  const describeVideoFn = provider.describeVideo;
+  videoResult = await executeWithApiKeyRotation({
     provider: providerId,
     apiKeys,
     execute: (apiKey) =>
-      describeVideo({
+      describeVideoFn({
         buffer: media.buffer,
         fileName: media.fileName,
         mime: media.mime,
@@ -580,9 +677,9 @@ export async function runProviderEntry(params: {
   return {
     kind: "video.description",
     attachmentIndex: params.attachmentIndex,
-    text: trimOutput(result.text, maxChars),
+    text: trimOutput(videoResult.text, maxChars),
     provider: providerId,
-    model: result.model ?? entry.model,
+    model: videoResult.model ?? entry.model,
   };
 }
 
