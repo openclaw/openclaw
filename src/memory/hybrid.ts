@@ -33,7 +33,8 @@ export type HybridKeywordResult = {
 export function buildFtsQuery(raw: string): string | null {
   const tokens =
     raw
-      .match(/[\p{L}\p{N}_]+/gu)
+      .normalize("NFC")
+      .match(/[\p{L}\p{M}\p{N}_]+/gu)
       ?.map((t) => t.trim())
       .filter(Boolean) ?? [];
   if (tokens.length === 0) {
