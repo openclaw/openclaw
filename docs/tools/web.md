@@ -104,7 +104,7 @@ Brave provides paid plans; check the Brave API portal for the current limits and
       search: {
         enabled: true,
         provider: "brave",
-        apiKey: "BSA...", // optional if BRAVE_API_KEY is set
+        apiKey: "BSA...", // pragma: allowlist secret; optional if BRAVE_API_KEY is set
       },
     },
   },
@@ -132,7 +132,7 @@ which returns AI-synthesized answers backed by live Google Search results with c
         provider: "gemini",
         gemini: {
           // API key (optional if GEMINI_API_KEY is set)
-          apiKey: "AIza...",
+          apiKey: "AIza...", // pragma: allowlist secret
           // Model (defaults to "gemini-2.5-flash")
           model: "gemini-2.5-flash",
         },

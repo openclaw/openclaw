@@ -95,7 +95,7 @@ describe("doctor command", () => {
           mode: "local",
           auth: {
             token: "token-value",
-            password: "password-value",
+            password: "password-value", // pragma: allowlist secret
           },
         },
       },

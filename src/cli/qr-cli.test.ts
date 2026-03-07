@@ -227,7 +227,7 @@ describe("registerQrCli", () => {
 
     const expected = encodePairingSetupCode({
       url: "ws://gateway.local:18789",
-      password: "local-password-secret",
+      password: "local-password-secret", // pragma: allowlist secret
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
@@ -245,7 +245,7 @@ describe("registerQrCli", () => {
 
     const expected = encodePairingSetupCode({
       url: "ws://gateway.local:18789",
-      password: "password-from-env",
+      password: "password-from-env", // pragma: allowlist secret
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
@@ -282,7 +282,7 @@ describe("registerQrCli", () => {
 
     const expected = encodePairingSetupCode({
       url: "ws://gateway.local:18789",
-      password: "inferred-password",
+      password: "inferred-password", // pragma: allowlist secret
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();

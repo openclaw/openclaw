@@ -73,7 +73,7 @@ function buildConfig(params: {
           [params.accountId]: {
             enabled: true,
             appId: "cli_test",
-            appSecret: "secret_test",
+            appSecret: "secret_test", // pragma: allowlist secret
             connectionMode: "webhook",
             webhookHost: "127.0.0.1",
             webhookPort: params.port,

@@ -1088,7 +1088,7 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "sec_test",
+          appSecret: "sec_test", // pragma: allowlist secret
           groups: {
             "oc-group": {
               requireMention: false,
@@ -1151,7 +1151,7 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           appId: "cli_scope_bug",
-          appSecret: "sec_scope_bug",
+          appSecret: "sec_scope_bug", // pragma: allowlist secret
           groups: {
             "oc-group": {
               requireMention: false,

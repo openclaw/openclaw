@@ -156,7 +156,7 @@ const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
       providers: {
         openai: {
           api: "openai-responses",
-          apiKey: "sk-test",
+          apiKey: "sk-test", // pragma: allowlist secret
           baseUrl: "https://example.com",
           models: [
             {

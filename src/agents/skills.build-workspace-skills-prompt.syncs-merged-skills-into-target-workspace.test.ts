@@ -178,7 +178,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       const enabledPrompt = buildPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: {
-          skills: { entries: { "nano-banana-pro": { apiKey: "test-key" } } },
+          skills: { entries: { "nano-banana-pro": { apiKey: "test-key" } } }, // pragma: allowlist secret
         },
       });
       expect(enabledPrompt).toContain("nano-banana-pro");
