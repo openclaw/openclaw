@@ -10,7 +10,7 @@ describe("Volcengine and BytePlus providers", () => {
   it("includes volcengine and volcengine-plan when VOLCANO_ENGINE_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY"]);
-    process.env.VOLCANO_ENGINE_API_KEY = "test-key";
+    process.env.VOLCANO_ENGINE_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });
@@ -26,7 +26,7 @@ describe("Volcengine and BytePlus providers", () => {
   it("includes byteplus and byteplus-plan when BYTEPLUS_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["BYTEPLUS_API_KEY"]);
-    process.env.BYTEPLUS_API_KEY = "test-key";
+    process.env.BYTEPLUS_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });

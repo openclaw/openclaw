@@ -81,7 +81,7 @@ describe("sendGoogleChatMessage", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"); // pragma: allowlist secret
     expect(JSON.parse(String(init?.body))).toMatchObject({
       text: "hello",
       thread: { name: "spaces/AAA/threads/xyz" },

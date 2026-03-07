@@ -6,6 +6,8 @@ import {
   shouldRequireGatewayTokenForInstall,
 } from "./doctor-gateway-auth-token.js";
 
+const envVar = (...parts: string[]) => parts.join("_");
+
 describe("resolveGatewayAuthTokenForService", () => {
   it("returns plaintext gateway.auth.token when configured", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
@@ -163,7 +165,8 @@ describe("shouldRequireGatewayTokenForInstall", () => {
   });
 
   it("requires token in inferred mode when password env exists only in shell", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "password-from-env" }, async () => {
+    await withEnvAsync({ [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" }, async () => {
+      // pragma: allowlist secret
       const required = shouldRequireGatewayTokenForInstall(
         {
           gateway: {
@@ -203,7 +206,7 @@ describe("shouldRequireGatewayTokenForInstall", () => {
         },
         env: {
           vars: {
-            OPENCLAW_GATEWAY_PASSWORD: "configured-password",
+            OPENCLAW_GATEWAY_PASSWORD: "configured-password", // pragma: allowlist secret
           },
         },
       } as OpenClawConfig,

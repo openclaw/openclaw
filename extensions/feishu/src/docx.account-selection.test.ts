@@ -27,8 +27,8 @@ describe("feishu_doc account selection", () => {
         feishu: {
           enabled: true,
           accounts: {
-            a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } },
-            b: { appId: "app-b", appSecret: "sec-b", tools: { doc: true } },
+            a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } }, // pragma: allowlist secret
+            b: { appId: "app-b", appSecret: "sec-b", tools: { doc: true } }, // pragma: allowlist secret
           },
         },
       },

@@ -51,7 +51,7 @@ describe("Ollama provider", () => {
   };
 
   async function withOllamaApiKey<T>(run: () => Promise<T>): Promise<T> {
-    process.env.OLLAMA_API_KEY = "test-key";
+    process.env.OLLAMA_API_KEY = "test-key"; // pragma: allowlist secret
     try {
       return await run();
     } finally {
@@ -245,7 +245,7 @@ describe("Ollama provider", () => {
         ollama: {
           baseUrl: "http://remote-ollama:11434/v1",
           models: explicitModels,
-          apiKey: "config-ollama-key",
+          apiKey: "config-ollama-key", // pragma: allowlist secret
         },
       },
     });
@@ -271,7 +271,7 @@ describe("Ollama provider", () => {
           baseUrl: "http://remote-ollama:11434/v1",
           api: "openai-completions",
           models: [],
-          apiKey: "config-ollama-key",
+          apiKey: "config-ollama-key", // pragma: allowlist secret
         },
       },
     });

@@ -2391,11 +2391,11 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       const accountA: ResolvedBlueBubblesAccount = {
-        ...createMockAccount({ dmHistoryLimit: 3, password: "password-a" }),
+        ...createMockAccount({ dmHistoryLimit: 3, password: "password-a" }), // pragma: allowlist secret
         accountId: "acc-a",
       };
       const accountB: ResolvedBlueBubblesAccount = {
-        ...createMockAccount({ dmHistoryLimit: 3, password: "password-b" }),
+        ...createMockAccount({ dmHistoryLimit: 3, password: "password-b" }), // pragma: allowlist secret
         accountId: "acc-b",
       };
       const config: OpenClawConfig = {};

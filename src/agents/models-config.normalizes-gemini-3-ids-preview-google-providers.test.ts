@@ -14,7 +14,7 @@ describe("models-config", () => {
           providers: {
             google: {
               baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              apiKey: "GEMINI_KEY",
+              apiKey: "GEMINI_KEY", // pragma: allowlist secret
               api: "google-generative-ai",
               models: [
                 {

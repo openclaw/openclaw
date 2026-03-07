@@ -31,7 +31,7 @@ describe("runtime config snapshot writes", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
               models: [],
             },
           },
@@ -64,7 +64,7 @@ describe("runtime config snapshot writes", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
+            apiKey: "sk-runtime-resolved", // pragma: allowlist secret
             models: [],
           },
         },
@@ -96,7 +96,7 @@ describe("runtime config snapshot writes", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
               models: [],
             },
           },

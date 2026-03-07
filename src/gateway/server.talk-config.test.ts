@@ -67,7 +67,7 @@ describe("gateway talk.config", () => {
     await writeConfigFile({
       talk: {
         voiceId: "voice-123",
-        apiKey: "secret-key-abc",
+        apiKey: "secret-key-abc", // pragma: allowlist secret
       },
       session: {
         mainKey: "main-test",
@@ -103,7 +103,7 @@ describe("gateway talk.config", () => {
   });
 
   it("requires operator.talk.secrets for includeSecrets", async () => {
-    await writeTalkConfig({ apiKey: "secret-key-abc" });
+    await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
 
     await withServer(async (ws) => {
       await connectOperator(ws, ["operator.read"]);
@@ -114,7 +114,7 @@ describe("gateway talk.config", () => {
   });
 
   it("returns secrets for operator.talk.secrets scope", async () => {
-    await writeTalkConfig({ apiKey: "secret-key-abc" });
+    await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
 
     await withServer(async (ws) => {
       await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);

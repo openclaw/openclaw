@@ -213,7 +213,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           expect(text).toContain("api-key");
           expect(text).not.toContain("sk-test");
           expect(text).not.toContain("abcdef");
-          expect(text).not.toContain("1234567890abcdef");
+          expect(text).not.toContain("1234567890abcdef"); // pragma: allowlist secret
           expect(text).toContain("(anthropic:work)");
           expect(text).not.toContain("mixed");
           expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();

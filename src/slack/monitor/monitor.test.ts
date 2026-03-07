@@ -65,7 +65,7 @@ describe("resolveSlackChannelConfig", () => {
     // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345).
     // Users commonly copy them in lowercase from docs or older CLI output.
     const res = resolveSlackChannelConfig({
-      channelId: "C0ABC12345",
+      channelId: "C0ABC12345", // pragma: allowlist secret
       channels: { c0abc12345: { allow: true, requireMention: false } },
       defaultRequireMention: true,
     });
@@ -75,7 +75,7 @@ describe("resolveSlackChannelConfig", () => {
   it("matches channel config key stored in uppercase when user types lowercase channel ID", () => {
     // Defensive: also handle the inverse direction.
     const res = resolveSlackChannelConfig({
-      channelId: "c0abc12345",
+      channelId: "c0abc12345", // pragma: allowlist secret
       channels: { C0ABC12345: { allow: true, requireMention: false } },
       defaultRequireMention: true,
     });

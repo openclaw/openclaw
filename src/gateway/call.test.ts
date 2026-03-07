@@ -635,7 +635,7 @@ describe("callGateway password resolution", () => {
   const explicitAuthCases = [
     {
       label: "password",
-      authKey: "password",
+      authKey: "password", // pragma: allowlist secret
       envKey: "OPENCLAW_GATEWAY_PASSWORD",
       envValue: "from-env",
       configValue: "from-config",
@@ -643,7 +643,7 @@ describe("callGateway password resolution", () => {
     },
     {
       label: "token",
-      authKey: "token",
+      authKey: "token", // pragma: allowlist secret
       envKey: "OPENCLAW_GATEWAY_TOKEN",
       envValue: "env-token",
       configValue: "local-token",
@@ -721,7 +721,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("resolves gateway.auth.password SecretInput refs for gateway calls", async () => {
-    process.env.LOCAL_REF_PASSWORD = "resolved-local-ref-password";
+    process.env.LOCAL_REF_PASSWORD = "resolved-local-ref-password"; // pragma: allowlist secret
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -866,7 +866,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("resolves gateway.remote.password SecretInput refs when remote password is required", async () => {
-    process.env.REMOTE_REF_PASSWORD = "resolved-remote-ref-password";
+    process.env.REMOTE_REF_PASSWORD = "resolved-remote-ref-password"; // pragma: allowlist secret
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -898,7 +898,7 @@ describe("callGateway password resolution", () => {
         remote: {
           url: "wss://remote.example:18789",
           token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
-          password: "remote-password",
+          password: "remote-password", // pragma: allowlist secret
         },
       },
       secrets: {

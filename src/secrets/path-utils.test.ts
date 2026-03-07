@@ -51,7 +51,7 @@ describe("secrets path utils", () => {
   it("setPathExistingStrict updates an existing leaf", () => {
     const config = asConfig({
       talk: {
-        apiKey: "old",
+        apiKey: "old", // pragma: allowlist secret
       },
     });
     const changed = setPathExistingStrict(config, ["talk", "apiKey"], "new");
@@ -69,7 +69,7 @@ describe("secrets path utils", () => {
   it("setPathCreateStrict leaves value unchanged when equal", () => {
     const config = asConfig({
       talk: {
-        apiKey: "same",
+        apiKey: "same", // pragma: allowlist secret
       },
     });
     const changed = setPathCreateStrict(config, ["talk", "apiKey"], "same");

@@ -123,7 +123,7 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(onboardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        mistralApiKey: "sk-mistral-test",
+        mistralApiKey: "sk-mistral-test", // pragma: allowlist secret
       }),
       runtime,
     );

@@ -12,7 +12,7 @@ import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     source: "test",
     mode: "api-key",
   })),

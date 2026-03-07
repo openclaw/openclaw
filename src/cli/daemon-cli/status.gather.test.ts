@@ -205,7 +205,7 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password";
+    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password"; // pragma: allowlist secret
 
     await gatherDaemonStatus({
       rpc: {},
@@ -215,7 +215,7 @@ describe("gatherDaemonStatus", () => {
 
     expect(callGatewayStatusProbe).toHaveBeenCalledWith(
       expect.objectContaining({
-        password: "daemon-secretref-password",
+        password: "daemon-secretref-password", // pragma: allowlist secret
       }),
     );
   });

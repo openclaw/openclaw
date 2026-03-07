@@ -697,7 +697,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
     );
     expect(identifiers.length).toBeGreaterThan(0);
-    expect(identifiers).toContain("A1B2C3D4E5F6");
+    expect(identifiers).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
 
     const summary = [
       "## Decisions",
@@ -724,7 +724,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
     );
-    expect(identifiers.filter((id) => id === "A1B2C3D4E5F6")).toHaveLength(1);
+    expect(identifiers.filter((id) => id === "A1B2C3D4E5F6")).toHaveLength(1); // pragma: allowlist secret
   });
 
   it("dedupes identifiers before applying the result cap", () => {
@@ -843,9 +843,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
         "## Pending user asks",
         "Provide status.",
         "## Exact identifiers",
-        "a1b2c3d4e5f6",
+        "a1b2c3d4e5f6", // pragma: allowlist secret
       ].join("\n"),
-      identifiers: ["A1B2C3D4E5F6"],
+      identifiers: ["A1B2C3D4E5F6"], // pragma: allowlist secret
       latestAsk: "Provide status.",
       identifierPolicy: "strict",
     });
@@ -1522,7 +1522,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
-      apiKey: "sk-test",
+      apiKey: "sk-test", // pragma: allowlist secret
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).not.toHaveBeenCalled();

@@ -159,7 +159,7 @@ describe("applyAuthChoiceMiniMax", () => {
     },
     {
       name: "uses env token for minimax-api-key-cn as keyRef in ref mode",
-      opts: { secretInputMode: "ref" as const },
+      opts: { secretInputMode: "ref" as const }, // pragma: allowlist secret
       expectKey: undefined,
       expectKeyRef: {
         source: "env",
@@ -172,7 +172,7 @@ describe("applyAuthChoiceMiniMax", () => {
     const { agentDir, result, text, confirm } = await runMiniMaxChoice({
       authChoice: "minimax-api-key-cn",
       opts,
-      env: { apiKey: "mm-env-token" },
+      env: { apiKey: "mm-env-token" }, // pragma: allowlist secret
     });
 
     expect(result).not.toBeNull();

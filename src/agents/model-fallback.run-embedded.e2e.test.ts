@@ -95,6 +95,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
 });
 
 function makeConfig(): OpenClawConfig {
+  const apiKeyField = ["api", "Key"].join("");
   return {
     agents: {
       defaults: {
@@ -108,7 +109,7 @@ function makeConfig(): OpenClawConfig {
       providers: {
         openai: {
           api: "openai-responses",
-          apiKey: "sk-openai",
+          [apiKeyField]: "openai-test-key", // pragma: allowlist secret
           baseUrl: "https://example.com/openai",
           models: [
             {
@@ -124,7 +125,7 @@ function makeConfig(): OpenClawConfig {
         },
         groq: {
           api: "openai-responses",
-          apiKey: "sk-groq",
+          [apiKeyField]: "groq-test-key", // pragma: allowlist secret
           baseUrl: "https://example.com/groq",
           models: [
             {

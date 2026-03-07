@@ -14,7 +14,7 @@ describe("runCapability video provider wiring", () => {
         models: {
           providers: {
             moonshot: {
-              apiKey: "provider-key",
+              apiKey: "provider-key", // pragma: allowlist secret
               baseUrl: "https://provider.example/v1",
               headers: { "X-Provider": "1" },
               models: [],
@@ -85,7 +85,7 @@ describe("runCapability video provider wiring", () => {
             models: {
               providers: {
                 moonshot: {
-                  apiKey: "moonshot-key",
+                  apiKey: "moonshot-key", // pragma: allowlist secret
                   models: [],
                 },
               },

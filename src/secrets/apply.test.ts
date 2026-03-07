@@ -72,7 +72,7 @@ async function createApplyFixture(): Promise<ApplyFixture> {
     env: {
       OPENCLAW_STATE_DIR: paths.stateDir,
       OPENCLAW_CONFIG_PATH: paths.configPath,
-      OPENAI_API_KEY: "sk-live-env",
+      OPENAI_API_KEY: "sk-live-env", // pragma: allowlist secret
     },
   };
 }
@@ -91,19 +91,19 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
       "openai:default": {
         type: "api_key",
         provider: "openai",
-        key: "sk-openai-plaintext",
+        key: "sk-openai-plaintext", // pragma: allowlist secret
       },
     },
   });
   await writeJsonFile(fixture.authJsonPath, {
     openai: {
       type: "api_key",
-      key: "sk-openai-plaintext",
+      key: "sk-openai-plaintext", // pragma: allowlist secret
     },
   });
   await fs.writeFile(
     fixture.envPath,
-    "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n",
+    "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
     "utf8",
   );
 }
@@ -369,7 +369,7 @@ describe("secrets apply", () => {
         entries: {
           "qa-secret-test": {
             enabled: true,
-            apiKey: "sk-skill-plaintext",
+            apiKey: "sk-skill-plaintext", // pragma: allowlist secret
           },
         },
       },
@@ -406,7 +406,7 @@ describe("secrets apply", () => {
       `${JSON.stringify(
         {
           talk: {
-            apiKey: "sk-talk-plaintext",
+            apiKey: "sk-talk-plaintext", // pragma: allowlist secret
           },
         },
         null,
@@ -500,7 +500,7 @@ describe("secrets apply", () => {
                 id: "main",
                 memorySearch: {
                   remote: {
-                    apiKey: "sk-memory-plaintext",
+                    apiKey: "sk-memory-plaintext", // pragma: allowlist secret
                   },
                 },
               },
@@ -533,7 +533,7 @@ describe("secrets apply", () => {
       },
     };
 
-    fixture.env.MEMORY_REMOTE_API_KEY = "sk-memory-live-env";
+    fixture.env.MEMORY_REMOTE_API_KEY = "sk-memory-live-env"; // pragma: allowlist secret
     const result = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(result.changed).toBe(true);
 
