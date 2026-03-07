@@ -490,9 +490,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           historyKey: prepared.historyKey,
           limit: ctx.historyLimit,
         });
+      } else {
+        // Record this message even though no reply was delivered, so
+        // the next message still sees it as part of the sliding window.
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: ctx.channelHistories,
+          historyKey: prepared.historyKey,
+          limit: ctx.historyLimit,
+          entry: {
+            sender: prepared.ctxPayload.SenderName ?? "unknown",
+            body: prepared.ctxPayload.RawBody ?? "",
+            timestamp: prepared.ctxPayload.Timestamp,
+            messageId: prepared.ctxPayload.MessageSid,
+          },
+        });
       }
-      // When requireMention is false, retain history so the next message
-      // still sees recent channel context as a sliding window.
     }
     return;
   }
