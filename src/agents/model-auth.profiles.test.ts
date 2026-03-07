@@ -426,4 +426,12 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('bailian') returns DASHSCOPE_API_KEY when set", async () => {
+    await withEnvAsync({ DASHSCOPE_API_KEY: "dashscope-test-key" }, async () => {
+      const resolved = resolveEnvApiKey("bailian");
+      expect(resolved?.apiKey).toBe("dashscope-test-key");
+      expect(resolved?.source).toContain("DASHSCOPE_API_KEY");
+    });
+  });
 });

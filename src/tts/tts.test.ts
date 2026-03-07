@@ -4,6 +4,7 @@ import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -51,6 +52,15 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
+vi.mock("../media/ffmpeg-exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../media/ffmpeg-exec.js")>("../media/ffmpeg-exec.js");
+  return {
+    ...actual,
+    runFfmpeg: vi.fn(async () => ""),
+  };
+});
+
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
@@ -97,6 +107,7 @@ describe("tts", () => {
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
     );
+    vi.mocked(runFfmpeg).mockResolvedValue("");
   });
 
   describe("isValidVoiceId", () => {
@@ -294,6 +305,14 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts bailian as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=bailian]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("bailian");
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
@@ -489,6 +508,7 @@ describe("tts", () => {
             OPENAI_API_KEY: "test-openai-key",
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            DASHSCOPE_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-openai.json",
           expected: "openai",
@@ -498,6 +518,7 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: "test-elevenlabs-key",
             XI_API_KEY: undefined,
+            DASHSCOPE_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-elevenlabs.json",
           expected: "elevenlabs",
@@ -507,6 +528,17 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            DASHSCOPE_API_KEY: "test-dashscope-key",
+          },
+          prefsPath: "/tmp/tts-prefs-bailian.json",
+          expected: "bailian",
+        },
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            DASHSCOPE_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-edge.json",
           expected: "edge",
@@ -692,6 +724,21 @@ describe("tts", () => {
       },
     };
 
+    const bailianCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "bailian",
+          bailian: {
+            apiKey: "test-dashscope-key",
+            model: "qwen3-tts-flash",
+            voice: "Cherry",
+          },
+        },
+      },
+    };
+
     it("applies inbound auto-TTS gating by audio status and cleaned text length", async () => {
       const cases = [
         {
@@ -760,6 +807,86 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("transcodes bailian audio to voice-compatible opus for telegram", async () => {
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              output: { audio: { url: "https://example.com/generated.wav" } },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { "content-type": "audio/wav" },
+          }),
+        );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      try {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "This is a test sentence for Bailian TTS." },
+          cfg: bailianCfg,
+          kind: "final",
+          channel: "telegram",
+        });
+
+        expect(runFfmpeg).toHaveBeenCalledTimes(1);
+        expect(result.audioAsVoice).toBe(true);
+        expect(result.mediaUrl).toMatch(/\.ogg$/);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("falls back to the original bailian audio when opus transcoding fails", async () => {
+      vi.mocked(runFfmpeg).mockRejectedValueOnce(new Error("ffmpeg missing"));
+
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              output: { audio: { url: "https://example.com/generated.wav" } },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { "content-type": "audio/wav" },
+          }),
+        );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      try {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "This is a test sentence for Bailian fallback." },
+          cfg: bailianCfg,
+          kind: "final",
+          channel: "telegram",
+        });
+
+        expect(runFfmpeg).toHaveBeenCalledTimes(1);
+        expect(result.audioAsVoice).not.toBe(true);
+        expect(result.mediaUrl).toMatch(/\.wav$/);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

@@ -32,6 +32,7 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   openai: "gpt-4o-mini-transcribe",
   deepgram: "nova-3",
   mistral: "voxtral-mini-latest",
+  bailian: "qwen3-asr-flash",
 };
 
 export const AUTO_AUDIO_KEY_PROVIDERS = [
@@ -40,6 +41,7 @@ export const AUTO_AUDIO_KEY_PROVIDERS = [
   "deepgram",
   "google",
   "mistral",
+  "bailian",
 ] as const;
 export const AUTO_IMAGE_KEY_PROVIDERS = [
   "openai",
