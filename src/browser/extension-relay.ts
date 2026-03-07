@@ -538,6 +538,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
           const first = Array.from(connectedTargets.values())[0];
           return { targetInfo: first?.targetInfo };
         }
+        case "Target.attachToBrowserTarget": {
+          // Playwright calls this to create a browser-level CDP session before
+          // calling Target.attachToTarget for per-page sessions. Return a synthetic
+          // sessionId — subsequent commands on it route through the same switch.
+          const browserSessionId = `browser-session-${nextExtensionId++}`;
+          log.info(
+            `Target.attachToBrowserTarget: returning synthetic sessionId=${browserSessionId}`,
+          );
+          return { sessionId: browserSessionId };
+        }
         case "Target.attachToTarget": {
           const params = (cmd.params ?? {}) as { targetId?: string };
           const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
@@ -1022,27 +1032,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
               ensureTargetEventsForClient(ws, "discover");
             }
           }
-          if (cmd.method === "Target.attachToTarget") {
-            const params = (cmd.params ?? {}) as { targetId?: string };
-            const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
-            if (targetId) {
-              const target = Array.from(connectedTargets.values()).find(
-                (t) => t.targetId === targetId,
-              );
-              if (target) {
-                ws.send(
-                  JSON.stringify({
-                    method: "Target.attachedToTarget",
-                    params: {
-                      sessionId: target.sessionId,
-                      targetInfo: { ...target.targetInfo, attached: true },
-                      waitingForDebugger: false,
-                    },
-                  } satisfies CdpEvent),
-                );
-              }
-            }
-          }
+          // Note: we intentionally do NOT send Target.attachedToTarget after
+          // Target.attachToTarget here. All targets in connectedTargets were already
+          // announced to CDP clients via ensureTargetEventsForClient (triggered by
+          // Target.setAutoAttach). Sending the event again causes Playwright's
+          // _onAttachedToTarget to assert "Duplicate target" and crash.
+          // Playwright only needs the command response ({ sessionId }), not the event.
 
           sendResponseToCdp(ws, { id: cmd.id, sessionId: cmd.sessionId, result });
         } catch (err) {

@@ -503,13 +503,100 @@ async function findPageByTargetId(
   }
   if (cdpUrl) {
     try {
-      const matched = await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
-      if (matched) {
-        log.info(`findPageByTargetId: matched via target list fallback`, { targetId });
-        return matched;
+      const baseUrl = cdpUrl
+        .replace(/\/+$/, "")
+        .replace(/^ws:/, "http:")
+        .replace(/\/cdp$/, "");
+      const listUrl = `${baseUrl}/json/list`;
+      const response = await fetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
+      if (response.ok) {
+        const targets = (await response.json()) as Array<{
+          id: string;
+          url: string;
+          title?: string;
+        }>;
+        log.info(`findPageByTargetId: /json/list returned ${targets.length} targets`, {
+          targetId,
+          targetIds: targets.map((t) => t.id),
+        });
+        const target = targets.find((t) => t.id === targetId);
+        if (target) {
+          log.info(`findPageByTargetId: found target in /json/list`, {
+            targetId,
+            targetUrl: target.url,
+          });
+          // Try to find a page with matching URL
+          const urlMatch = pages.filter((p) => p.url() === target.url);
+          if (urlMatch.length === 1) {
+            log.info(`findPageByTargetId: unique URL match`, { targetId, url: target.url });
+            return urlMatch[0];
+          }
+          // If multiple URL matches, use index-based matching as fallback
+          // This works when Playwright and the relay enumerate tabs in the same order
+          if (urlMatch.length > 1) {
+            const sameUrlTargets = targets.filter((t) => t.url === target.url);
+            if (sameUrlTargets.length === urlMatch.length) {
+              const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
+              if (idx >= 0 && idx < urlMatch.length) {
+                log.info(`findPageByTargetId: index-based URL match`, {
+                  targetId,
+                  url: target.url,
+                  idx,
+                });
+                return urlMatch[idx];
+              }
+            }
+          }
+          // Origin-based fallback: SPA navigations (pushState/replaceState) can change
+          // the page URL without the relay knowing, making the relay URL stale.
+          // Match by origin (protocol+host) when exact URL matching fails.
+          if (urlMatch.length === 0 && target.url) {
+            try {
+              const targetOrigin = new URL(target.url).origin;
+              const originMatch = pages.filter((p) => {
+                try {
+                  return new URL(p.url()).origin === targetOrigin;
+                } catch {
+                  return false;
+                }
+              });
+              if (originMatch.length === 1) {
+                log.info(`findPageByTargetId: unique origin match`, {
+                  targetId,
+                  targetUrl: target.url,
+                  pageUrl: originMatch[0].url(),
+                });
+                return originMatch[0];
+              }
+              if (originMatch.length > 1) {
+                log.warn(`findPageByTargetId: multiple origin matches, cannot disambiguate`, {
+                  targetId,
+                  targetUrl: target.url,
+                  originMatchUrls: originMatch.map((p) => p.url()),
+                });
+              }
+            } catch {
+              // Invalid URL — fall through
+            }
+          }
+          log.warn(
+            `findPageByTargetId: target found in /json/list but no Playwright page matched`,
+            {
+              targetId,
+              targetUrl: target.url,
+              urlMatchCount: urlMatch.length,
+              pageUrls: pages.map((p) => p.url()),
+            },
+          );
+        } else {
+          log.warn(`findPageByTargetId: targetId not in /json/list`, {
+            targetId,
+            availableTargetIds: targets.map((t) => t.id),
+          });
+        }
       }
     } catch {
-      log.warn(`findPageByTargetId: target list fallback failed`, { targetId });
+      log.warn(`findPageByTargetId: /json/list fallback failed`, { targetId });
     }
   }
   log.warn(`findPageByTargetId: returning null — no resolution path succeeded`, {
