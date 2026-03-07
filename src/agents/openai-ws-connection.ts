@@ -446,11 +446,11 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       if (this.closed) {
         return;
       }
-      this._openConnection().catch((err: unknown) => {
-        // onError handler already emitted error event; schedule next retry.
-        void err;
-        this._scheduleReconnect();
-      });
+      // The onClose handler already calls _scheduleReconnect() for the next
+      // attempt, so we intentionally swallow the rejection here to avoid
+      // double-scheduling (which would double-increment retryCount per
+      // failed reconnect and exhaust the retry budget prematurely).
+      this._openConnection().catch(() => {});
     }, delayMs);
   }
 
