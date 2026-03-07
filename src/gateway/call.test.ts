@@ -5,6 +5,7 @@ import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  readConfigFileSnapshotMock,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
 
@@ -65,8 +66,23 @@ vi.mock("./client.js", () => ({
 const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
   await import("./call.js");
 
+const validConfigSnapshot = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  valid: true,
+  raw: "{}",
+  parsed: {},
+  resolved: {},
+  config: {},
+  issues: [],
+  warnings: [],
+  legacyIssues: [],
+};
+
 function resetGatewayCallMocks() {
   loadConfig.mockClear();
+  readConfigFileSnapshotMock.mockClear();
+  readConfigFileSnapshotMock.mockResolvedValue(validConfigSnapshot);
   resolveGatewayPort.mockClear();
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
@@ -319,6 +335,44 @@ describe("callGateway url resolution", () => {
 
     await callGatewayScoped({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toEqual([]);
+  });
+});
+
+describe("callGateway config validation", () => {
+  beforeEach(() => {
+    resetGatewayCallMocks();
+  });
+
+  it("throws when config is not passed and snapshot is invalid", async () => {
+    setLocalLoopbackGatewayConfig();
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...validConfigSnapshot,
+      exists: true,
+      valid: false,
+      path: "/home/user/.openclaw/openclaw.json",
+      issues: [{ path: "gateway.mode", message: "must be local or remote" }],
+    });
+    await expect(
+      callGatewayScoped({ method: "health", scopes: ["operator.read"] }),
+    ).rejects.toThrow(/Invalid config at/);
+    await expect(
+      callGatewayScoped({ method: "health", scopes: ["operator.read"] }),
+    ).rejects.toThrow(/openclaw doctor/);
+  });
+
+  it("proceeds when config is explicitly passed (skips snapshot check)", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...validConfigSnapshot,
+      exists: true,
+      valid: false,
+    });
+    setLocalLoopbackGatewayConfig();
+    await callGatewayScoped({
+      method: "health",
+      scopes: ["operator.read"],
+      config: { gateway: { mode: "local", bind: "loopback" } },
+    });
+    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
   });
 });
 

@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
+  readConfigFileSnapshot,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -674,6 +676,18 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 ): Promise<T> {
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
+  if (opts.config === undefined) {
+    const snapshot = await readConfigFileSnapshot();
+    if (snapshot.exists && !snapshot.valid) {
+      const issues =
+        snapshot.issues.length > 0
+          ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true }).join("\n")
+          : "Unknown validation issue.";
+      throw new Error(
+        `Invalid config at ${snapshot.path}.\n${issues}\nRun 'openclaw doctor' to repair, then retry.`,
+      );
+    }
+  }
   const resolvedCredentials = await resolveGatewayCredentials(context);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,

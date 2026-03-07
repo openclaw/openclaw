@@ -68,6 +68,7 @@ When validation fails:
 
 - The Gateway does not boot
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
+- Commands that contact the gateway (e.g. `cron add`, `message send`, `status --deep`) fail immediately with a clear Invalid config error (including the config file path) and a hint to run `openclaw doctor`; they do not proceed with a broken config
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (or `--yes`) to apply repairs
 
@@ -75,7 +76,7 @@ When validation fails:
 
 <AccordionGroup>
   <Accordion title="Set up a channel (WhatsApp, Telegram, Discord, etc.)">
-    Each channel has its own config section under `channels.<provider>`. See the dedicated channel page for setup steps:
+    Each channel has its own config section under `channels.&lt;provider&gt;`. See the dedicated channel page for setup steps:
 
     - [WhatsApp](/channels/whatsapp) — `channels.whatsapp`
     - [Telegram](/channels/telegram) — `channels.telegram`

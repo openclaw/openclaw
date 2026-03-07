@@ -3,6 +3,7 @@ import { vi } from "vitest";
 type TestMock = ReturnType<typeof vi.fn>;
 
 export const loadConfigMock: TestMock = vi.fn();
+export const readConfigFileSnapshotMock: TestMock = vi.fn();
 export const resolveGatewayPortMock: TestMock = vi.fn();
 export const pickPrimaryTailnetIPv4Mock: TestMock = vi.fn();
 export const pickPrimaryLanIPv4Mock: TestMock = vi.fn();
@@ -12,6 +13,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: loadConfigMock,
+    readConfigFileSnapshot: readConfigFileSnapshotMock,
     resolveGatewayPort: resolveGatewayPortMock,
   };
 });
