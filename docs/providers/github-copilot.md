@@ -70,3 +70,80 @@ openclaw models set github-copilot/gpt-4o
   another ID (for example `github-copilot/gpt-4.1`).
 - The login stores a GitHub token in the auth profile store and exchanges it for a
   Copilot API token when OpenClaw runs.
+
+## Overriding model defaults
+
+When new Copilot models ship (or existing definitions need corrections) before the
+upstream registry is updated, you can override API types and context windows in
+`openclaw.json`.
+
+### Context window overrides for existing models
+
+For models already in the registry, use per-model params — no explicit provider
+entry needed:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "models": {
+        "github-copilot/claude-opus-4.6": {
+          "params": { "contextWindow": 128000, "maxOutputTokens": 64000 }
+        }
+      }
+    }
+  }
+}
+```
+
+### Adding a model not yet in the registry
+
+Models not yet in the upstream registry need an explicit provider model entry
+with all required fields including headers:
+
+```json
+{
+  "models": {
+    "providers": {
+      "github-copilot": {
+        "baseUrl": "https://api.individual.githubcopilot.com",
+        "models": [
+          {
+            "id": "gpt-5.3-codex",
+            "name": "gpt-5.3-codex",
+            "api": "openai-responses",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "headers": {
+              "User-Agent": "GitHubCopilotChat/0.35.0",
+              "Editor-Version": "vscode/1.107.0",
+              "Editor-Plugin-Version": "copilot-chat/0.35.0",
+              "Copilot-Integration-Id": "vscode-chat"
+            },
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 128000,
+            "maxTokens": 128000
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+<Note>
+Explicit provider models require IDE headers (`Editor-Version`,
+`Editor-Plugin-Version`, `Copilot-Integration-Id`). Built-in registry models
+include these automatically.
+</Note>
+
+### API types
+
+Copilot routes different model families through different API formats. Use the
+correct `api` value when adding explicit model entries:
+
+| Model family          | API type             |
+| --------------------- | -------------------- |
+| Claude (Opus, Sonnet) | `anthropic-messages` |
+| GPT-5.x, Codex        | `openai-responses`   |
+| GPT-4.x, Gemini, Grok | `openai-completions` |

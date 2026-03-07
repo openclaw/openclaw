@@ -146,4 +146,115 @@ describe("context-window-guard", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
   });
+
+  it("uses agents.defaults.models[].params.contextWindow when present", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "github-copilot/claude-opus-4.6": {
+              params: { contextWindow: 150_000 },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("agentModelParams");
+    expect(info.tokens).toBe(150_000);
+  });
+
+  it("modelsConfig takes priority over agentModelParams", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.individual.githubcopilot.com",
+            models: [
+              {
+                id: "claude-opus-4.6",
+                name: "claude-opus-4.6",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 150_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "github-copilot/claude-opus-4.6": {
+              params: { contextWindow: 140_000 },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("modelsConfig");
+    expect(info.tokens).toBe(150_000);
+  });
+
+  it("agentModelParams takes priority over model metadata", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "github-copilot/claude-opus-4.6": {
+              params: { contextWindow: 150_000 },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("agentModelParams");
+    expect(info.tokens).toBe(150_000);
+  });
+
+  it("agentContextTokens cap applies to agentModelParams", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          contextTokens: 120_000,
+          models: {
+            "github-copilot/claude-opus-4.6": {
+              params: { contextWindow: 150_000 },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("agentContextTokens");
+    expect(info.tokens).toBe(120_000);
+  });
 });
