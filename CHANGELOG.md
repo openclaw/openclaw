@@ -247,6 +247,7 @@ Docs: https://docs.openclaw.ai
 - Discord/native slash command auth: honor `commands.allowFrom.discord` (and `commands.allowFrom["*"]`) in guild slash-command pre-dispatch authorization so allowlisted senders are no longer incorrectly rejected as unauthorized. (#38794) Thanks @jskoiz and @thewilloftheshadow.
 - Outbound/message target normalization: ignore empty legacy `to`/`channelId` fields when explicit `target` is provided so valid target-based sends no longer fail legacy-param validation; includes regression coverage. (#38944) Thanks @Narcooo.
 - Models/auth token prompts: guard cancelled manual token prompts so `Symbol(clack:cancel)` values cannot be persisted into auth profiles; adds regression coverage for cancelled `models auth paste-token`. (#38951) Thanks @MumuTW.
+- Gateway/loopback announce URLs: treat `http://` and `https://` aliases with the same loopback/private-network policy as websocket URLs so loopback cron announce delivery no longer fails secure URL validation. (#39064) Thanks @Narcooo.
 
 ## 2026.3.2
 
