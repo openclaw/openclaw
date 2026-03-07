@@ -106,4 +106,10 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
   });
+
+  it("stops at unquoted shell comments but keeps quoted hashes literal", () => {
+    expect(splitShellArgs(`echo hi # comment && whoami`)).toEqual(["echo", "hi"]);
+    expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
+    expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
+  });
 });

@@ -302,4 +302,21 @@ describe("resolveAllowAlwaysPatterns", () => {
       persistedPattern: echo,
     });
   });
+
+  it("does not persist comment-tailed payload paths that never execute", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const benign = makeExecutable(dir, "benign");
+    makeExecutable(dir, "payload");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: `${benign} warmup # && payload`,
+      secondCommand: "payload",
+      env,
+      persistedPattern: benign,
+    });
+  });
 });
