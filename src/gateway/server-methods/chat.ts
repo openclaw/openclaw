@@ -120,6 +120,7 @@ function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
   deliver?: boolean;
   entry?: ChatSendDeliveryEntry;
+  hasConnectedClient?: boolean;
   mainKey?: string;
   sessionKey: string;
 }): ChatSendOriginatingRoute {
@@ -168,11 +169,13 @@ function resolveChatSendOriginatingRoute(params: {
   // Keep explicit delivery for channel-scoped sessions, but refuse to inherit
   // stale external routes for shared-main and other channel-agnostic webchat/UI
   // turns where the session key does not encode the user's current target.
+  // Preserve the old configured-main contract: any connected non-webchat client
+  // may inherit the last external route even when client metadata is absent.
   const canInheritDeliverableRoute = Boolean(
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
     ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      (isConfiguredMainSessionScope && params.client && !isFromWebchatClient)),
+      (isConfiguredMainSessionScope && params.hasConnectedClient && !isFromWebchatClient)),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
@@ -976,6 +979,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         client: clientInfo,
         deliver: p.deliver,
         entry,
+        hasConnectedClient: client?.connect !== undefined,
         mainKey: cfg.session?.mainKey,
         sessionKey,
       });
