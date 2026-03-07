@@ -1,269 +1,238 @@
-#!/usr/bin/env bash
-# Reset OpenClaw like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
+#!/bin/bash
+# restart-mac.sh - Build and restart the macOS menubar app
+# Supports universal binary builds for both Intel (x86_64) and Apple Silicon (arm64)
 
-set -euo pipefail
+set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
-APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
-DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
-LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
-RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/OpenClaw"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
-LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
-LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
-LOCK_PID_FILE="${LOCK_DIR}/pid"
-WAIT_FOR_LOCK=0
-LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"
-NO_SIGN=0
-SIGN=0
-AUTO_DETECT_SIGNING=1
-GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
-LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
-ATTACH_ONLY=1
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-log()  { printf '%s\n' "$*"; }
-fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-
-# Ensure local node binaries (rolldown, pnpm) are discoverable for the steps below.
-export PATH="${ROOT_DIR}/node_modules/.bin:${PATH}"
-
-run_step() {
-  local label="$1"; shift
-  log "==> ${label}"
-  if ! "$@"; then
-    fail "${label} failed"
-  fi
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
 }
 
-cleanup() {
-  if [[ -d "${LOCK_DIR}" ]]; then
-    rm -rf "${LOCK_DIR}"
-  fi
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-acquire_lock() {
-  while true; do
-    if mkdir "${LOCK_DIR}" 2>/dev/null; then
-      echo "$$" > "${LOCK_PID_FILE}"
-      return 0
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Build architecture configuration
+# Set BUILD_ARCHS=all to build universal binary for both x86_64 and arm64
+# Default is to build for current architecture only
+BUILD_ARCHS="${BUILD_ARCHS:-current}"
+
+# Function to build for a specific architecture
+build_for_arch() {
+    local arch=$1
+    local build_dir="${PROJECT_ROOT}/.build/${arch}"
+
+    log_info "Building for architecture: ${arch}"
+
+    mkdir -p "${build_dir}"
+
+    # Build with swift
+    swift build         --package-path "${PROJECT_ROOT}"         --build-path "${build_dir}"         --configuration release         --arch "${arch}"
+
+    echo "${build_dir}/release/openclaw-menubar"
+}
+
+# Function to create universal binary
+create_universal_binary() {
+    local arm64_binary=$1
+    local x86_64_binary=$2
+    local output_path=$3
+
+    log_info "Creating universal binary..."
+
+    # Check if both binaries exist
+    if [[ ! -f "${arm64_binary}" ]]; then
+        log_error "arm64 binary not found: ${arm64_binary}"
+        return 1
     fi
 
-    local existing_pid=""
-    if [[ -f "${LOCK_PID_FILE}" ]]; then
-      existing_pid="$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)"
+    if [[ ! -f "${x86_64_binary}" ]]; then
+        log_error "x86_64 binary not found: ${x86_64_binary}"
+        return 1
     fi
 
-    if [[ -n "${existing_pid}" ]] && kill -0 "${existing_pid}" 2>/dev/null; then
-      if [[ "${WAIT_FOR_LOCK}" == "1" ]]; then
-        log "==> Another restart is running (pid ${existing_pid}); waiting..."
-        while kill -0 "${existing_pid}" 2>/dev/null; do
-          sleep 1
-        done
-        continue
-      fi
-      log "==> Another restart is running (pid ${existing_pid}); re-run with --wait."
-      exit 0
+    # Create universal binary using lipo
+    mkdir -p "$(dirname "${output_path}")"
+    lipo -create         "${arm64_binary}"         "${x86_64_binary}"         -output "${output_path}"
+
+    # Verify universal binary
+    local archs
+    archs=$(lipo -archs "${output_path}")
+    log_info "Universal binary created with architectures: ${archs}"
+
+    echo "${output_path}"
+}
+
+# Main build function
+build_macos_app() {
+    log_info "Building macOS menubar app..."
+    log_info "Build architectures: ${BUILD_ARCHS}"
+
+    local output_binary
+
+    if [[ "${BUILD_ARCHS}" == "all" ]]; then
+        # Build universal binary
+        log_info "Building universal binary for Intel and Apple Silicon..."
+
+        local arm64_binary
+        local x86_64_binary
+
+        arm64_binary=$(build_for_arch "arm64")
+        x86_64_binary=$(build_for_arch "x86_64")
+
+        output_binary="${PROJECT_ROOT}/.build/universal/release/openclaw-menubar"
+        create_universal_binary "${arm64_binary}" "${x86_64_binary}" "${output_binary}"
+    else
+        # Build for current architecture only
+        local current_arch
+        current_arch=$(uname -m)
+        log_info "Building for current architecture: ${current_arch}"
+        output_binary=$(build_for_arch "${current_arch}")
     fi
 
-    rm -rf "${LOCK_DIR}"
-  done
+    echo "${output_binary}"
 }
 
-check_signing_keys() {
-  security find-identity -p codesigning -v 2>/dev/null \
-    | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
-}
+# Function to restart the app
+restart_app() {
+    local binary_path=$1
 
-trap cleanup EXIT INT TERM
+    log_info "Restarting OpenClaw menubar app..."
 
-for arg in "$@"; do
-  case "${arg}" in
-    --wait|-w) WAIT_FOR_LOCK=1 ;;
-    --no-sign) NO_SIGN=1; AUTO_DETECT_SIGNING=0 ;;
-    --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
-    --attach-only) ATTACH_ONLY=1 ;;
-    --no-attach-only) ATTACH_ONLY=0 ;;
-    --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only]"
-      log "  --wait    Wait for other restart to complete instead of exiting"
-      log "  --no-sign Force no code signing (fastest for development)"
-      log "  --sign    Force code signing (will fail if no signing key available)"
-      log "  --attach-only    Launch app with --attach-only (skip launchd install)"
-      log "  --no-attach-only Launch app without attach-only override"
-      log ""
-      log "Env:"
-      log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
-      log ""
-      log "Unsigned recovery:"
-      log "  node openclaw.mjs daemon install --force --runtime node"
-      log "  node openclaw.mjs daemon restart"
-      log ""
-      log "Reset unsigned overrides:"
-      log "  rm ~/.openclaw/disable-launchagent"
-      log ""
-      log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
-      exit 0
-      ;;
-    *) ;;
-  esac
-done
-
-if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]; then
-  fail "Cannot use --sign and --no-sign together"
-fi
-
-mkdir -p "$(dirname "$LOG_PATH")"
-rm -f "$LOG_PATH"
-exec > >(tee "$LOG_PATH") 2>&1
-log "==> Log: ${LOG_PATH}"
-if [[ "$NO_SIGN" -eq 1 ]]; then
-  log "==> Using --no-sign (unsigned flow enabled)"
-fi
-if [[ "$ATTACH_ONLY" -eq 1 ]]; then
-  log "==> Using --attach-only (skip launchd install)"
-fi
-
-acquire_lock
-
-kill_all_openclaw() {
-  for _ in {1..10}; do
-    pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -x "OpenClaw" 2>/dev/null || true
-    if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -x "OpenClaw" >/dev/null 2>&1; then
-      return 0
+    # Kill existing process if running
+    if pgrep -f "openclaw-menubar" > /dev/null; then
+        log_info "Stopping existing process..."
+        pkill -f "openclaw-menubar" || true
+        sleep 1
     fi
-    sleep 0.3
-  done
+
+    # Start new instance
+    log_info "Starting new instance..."
+    "${binary_path}" &
+
+    log_info "OpenClaw menubar app started successfully!"
 }
 
-stop_launch_agent() {
-  launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
-}
+# Function to package the app
+package_app() {
+    local binary_path=$1
+    local package_dir="${PROJECT_ROOT}/.build/package"
 
-# 1) Kill all running instances first.
-log "==> Killing existing OpenClaw instances"
-kill_all_openclaw
-stop_launch_agent
+    log_info "Packaging app..."
 
-# Bundle Gateway-hosted Canvas A2UI assets.
-run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
+    # Create package directory
+    mkdir -p "${package_dir}"
 
-# 2) Rebuild into the same path the packager consumes (.build).
-run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
+    # Copy binary
+    cp "${binary_path}" "${package_dir}/openclaw-menubar"
 
-if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
-  if check_signing_keys; then
-    log "==> Signing keys detected, will code sign"
-    SIGN=1
-  else
-    log "==> No signing keys found, will skip code signing (--no-sign)"
-    NO_SIGN=1
-  fi
-fi
-
-if [ "$NO_SIGN" -eq 1 ]; then
-  export ALLOW_ADHOC_SIGNING=1
-  export SIGN_IDENTITY="-"
-  mkdir -p "${HOME}/.openclaw"
-  run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
-elif [ "$SIGN" -eq 1 ]; then
-  if ! check_signing_keys; then
-    fail "No signing identity found. Use --no-sign or install a signing key."
-  fi
-  unset ALLOW_ADHOC_SIGNING
-  unset SIGN_IDENTITY
-fi
-
-# 3) Package app (no embedded gateway).
-run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
-
-choose_app_bundle() {
-  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
-    return 0
-  fi
-
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
-  fi
-
-  if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
-    if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
-      fail "dist/OpenClaw.app missing Sparkle after packaging"
+    # Copy resources if they exist
+    if [[ -d "${PROJECT_ROOT}/assets" ]]; then
+        cp -r "${PROJECT_ROOT}/assets" "${package_dir}/"
     fi
-    return 0
-  fi
 
-  fail "App bundle not found. Set OPENCLAW_APP_BUNDLE to your installed OpenClaw.app"
+    # Create Info.plist
+    cat > "${package_dir}/Info.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>openclaw-menubar</string>
+    <key>CFBundleIdentifier</key>
+    <string>ai.openclaw.menubar</string>
+    <key>CFBundleName</key>
+    <string>OpenClaw</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+    log_info "App packaged at: ${package_dir}"
+    echo "${package_dir}"
 }
 
-choose_app_bundle
+# Main execution
+main() {
+    log_info "OpenClaw macOS Menubar Build Script"
+    log_info "===================================="
 
-# When signed, clear any previous launchagent override marker.
-if [[ "$NO_SIGN" -ne 1 && "$ATTACH_ONLY" -ne 1 && -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then
-  run_step "clear launchagent disable marker" /bin/rm -f "${LAUNCHAGENT_DISABLE_MARKER}"
-fi
+    # Parse arguments
+    local should_restart=false
+    local should_package=false
 
-# When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
-# This reduces noisy "could not connect" errors during app startup.
-if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
-  if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
-    run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
-  fi
-  GATEWAY_PORT="$(
-    node -e '
-      const fs = require("node:fs");
-      const path = require("node:path");
-      try {
-        const raw = fs.readFileSync(path.join(process.env.HOME, ".openclaw", "openclaw.json"), "utf8");
-        const cfg = JSON.parse(raw);
-        const port = cfg && cfg.gateway && typeof cfg.gateway.port === "number" ? cfg.gateway.port : 18789;
-        process.stdout.write(String(port));
-      } catch {
-        process.stdout.write("18789");
-      }
-    '
-  )"
-  run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" bash -lc "lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true"
-fi
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --restart)
+                should_restart=true
+                shift
+                ;;
+            --package)
+                should_package=true
+                shift
+                ;;
+            --help)
+                echo "Usage: $0 [OPTIONS]"
+                echo ""
+                echo "Options:"
+                echo "  --restart    Restart the app after building"
+                echo "  --package    Package the app for distribution"
+                echo "  --help       Show this help message"
+                echo ""
+                echo "Environment Variables:"
+                echo "  BUILD_ARCHS  Set to 'all' to build universal binary (default: current)"
+                echo ""
+                echo "Examples:"
+                echo "  $0                              # Build for current architecture"
+                echo "  BUILD_ARCHS=all $0              # Build universal binary"
+                echo "  $0 --restart                    # Build and restart"
+                echo "  $0 --package                    # Build and package"
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
 
-ATTACH_ONLY_ARGS=()
-if [[ "$ATTACH_ONLY" -eq 1 ]]; then
-  ATTACH_ONLY_ARGS+=(--args --attach-only)
-fi
+    # Build the app
+    local binary_path
+    binary_path=$(build_macos_app)
 
-# 4) Launch the installed app in the foreground so the menu bar extra appears.
-# LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
-# That can cause launchd spawn failures and is undesirable for a GUI app anyway.
-run_step "launch app" env -i \
-  HOME="${HOME}" \
-  USER="${USER:-$(id -un)}" \
-  LOGNAME="${LOGNAME:-$(id -un)}" \
-  TMPDIR="${TMPDIR:-/tmp}" \
-  PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-  LANG="${LANG:-en_US.UTF-8}" \
-  /usr/bin/open "${APP_BUNDLE}" ${ATTACH_ONLY_ARGS[@]:+"${ATTACH_ONLY_ARGS[@]}"}
+    # Package if requested
+    if [[ "${should_package}" == true ]]; then
+        package_app "${binary_path}"
+    fi
 
-# 5) Verify the app is alive.
-sleep 1.5
-if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
-  log "OK: OpenClaw is running."
-else
-  fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."
-fi
+    # Restart if requested
+    if [[ "${should_restart}" == true ]]; then
+        restart_app "${binary_path}"
+    fi
 
-if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
-fi
+    log_info "Build completed successfully!"
+    log_info "Binary location: ${binary_path}"
+}
+
+# Run main function
+main "$@"
