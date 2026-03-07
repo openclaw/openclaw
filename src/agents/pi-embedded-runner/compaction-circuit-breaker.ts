@@ -11,6 +11,8 @@ type CircuitState = {
 
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 3;
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+// Evict stale entries 1 hour after their cooldown expires to prevent unbounded map growth.
+const EVICTION_GRACE_MS = 60 * 60 * 1000; // 1 hour
 
 const states = resolveProcessScopedMap<CircuitState>(CIRCUIT_BREAKER_KEY);
 
@@ -32,12 +34,15 @@ export function isCompactionCircuitOpen(
   sessionKey: string,
   opts?: { maxConsecutiveFailures?: number; nowMs?: number },
 ): boolean {
+  const now = opts?.nowMs ?? Date.now();
+  // Lazily evict stale entries to prevent unbounded map growth in long-lived processes.
+  evictStaleEntries(now);
+
   const state = states.get(sessionKey);
   if (!state) {
     return false; // No failures recorded — circuit is closed
   }
   const max = opts?.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_FAILURES;
-  const now = opts?.nowMs ?? Date.now();
 
   if (state.consecutiveFailures < max) {
     return false;
@@ -50,16 +55,29 @@ export function isCompactionCircuitOpen(
   return false;
 }
 
+let lastEvictionAt = 0;
+function evictStaleEntries(now: number): void {
+  // Run at most once per eviction grace period to avoid per-call iteration cost.
+  if (now - lastEvictionAt < EVICTION_GRACE_MS) {
+    return;
+  }
+  lastEvictionAt = now;
+  for (const [key, state] of states) {
+    if (state.cooldownUntil > 0 && now > state.cooldownUntil + EVICTION_GRACE_MS) {
+      states.delete(key);
+    }
+  }
+}
+
 export function recordCompactionSuccess(sessionKey: string): void {
-  const state = getState(sessionKey);
-  if (state.consecutiveFailures > 0) {
+  const existing = states.get(sessionKey);
+  if (existing && existing.consecutiveFailures > 0) {
     log.info(
-      `[compaction-circuit-breaker] reset after success: sessionKey=${sessionKey} priorFailures=${state.consecutiveFailures}`,
+      `[compaction-circuit-breaker] reset after success: sessionKey=${sessionKey} priorFailures=${existing.consecutiveFailures}`,
     );
   }
-  state.consecutiveFailures = 0;
-  state.lastFailureAt = 0;
-  state.cooldownUntil = 0;
+  // Successful sessions don't need state — delete to prevent unbounded map growth.
+  states.delete(sessionKey);
 }
 
 export function recordCompactionFailure(
@@ -97,4 +115,8 @@ export const __testing = {
   states,
   DEFAULT_MAX_CONSECUTIVE_FAILURES,
   DEFAULT_COOLDOWN_MS,
+  EVICTION_GRACE_MS,
+  resetLastEvictionAt: () => {
+    lastEvictionAt = 0;
+  },
 };
