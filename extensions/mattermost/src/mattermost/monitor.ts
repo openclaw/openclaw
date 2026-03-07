@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/mattermost";
 import {
   buildAgentMediaPayload,
+  buildModelsProviderData,
   DM_GROUP_ACCESS_REASON,
   createScopedPairingAccess,
   createReplyPrefixOptions,
@@ -29,7 +30,6 @@ import {
   listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
-import { buildModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -895,6 +895,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
+        // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text
@@ -1012,13 +1013,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
     }
 
-    const currentModel = resolveMattermostModelPickerCurrentModel({
-      cfg,
-      route,
-      data,
-    });
-
     if (pickerState.action === "providers" || pickerState.action === "back") {
+      const currentModel = resolveMattermostModelPickerCurrentModel({
+        cfg,
+        route,
+        data,
+      });
       const view = renderMattermostProviderPickerView({
         ownerUserId: pickerState.ownerUserId,
         data,
@@ -1033,6 +1033,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     if (pickerState.action === "list") {
+      const currentModel = resolveMattermostModelPickerCurrentModel({
+        cfg,
+        route,
+        data,
+      });
       const view = renderMattermostModelsPickerView({
         ownerUserId: pickerState.ownerUserId,
         data,
@@ -1055,40 +1060,49 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       };
     }
 
-    await runModelPickerCommand({
-      commandText: `/model ${targetModelRef}`,
-      route,
-      channelId: params.payload.channel_id,
-      senderId: params.payload.user_id,
-      senderName: params.userName,
-      kind,
-      chatType,
-      channelName,
-      channelDisplay,
-      roomLabel,
-      teamId,
-      postId: params.payload.post_id,
-      deliverReplies: true,
-    });
-    const updatedModel = resolveMattermostModelPickerCurrentModel({
-      cfg,
-      route,
-      data,
-    });
-    const view = renderMattermostModelsPickerView({
-      ownerUserId: pickerState.ownerUserId,
-      data,
-      provider: pickerState.provider,
-      page: pickerState.page,
-      currentModel: updatedModel,
-    });
+    void (async () => {
+      try {
+        await runModelPickerCommand({
+          commandText: `/model ${targetModelRef}`,
+          route,
+          channelId: params.payload.channel_id,
+          senderId: params.payload.user_id,
+          senderName: params.userName,
+          kind,
+          chatType,
+          channelName,
+          channelDisplay,
+          roomLabel,
+          teamId,
+          postId: params.payload.post_id,
+          deliverReplies: true,
+        });
+        const updatedModel = resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route,
+          data,
+          skipCache: true,
+        });
+        const view = renderMattermostModelsPickerView({
+          ownerUserId: pickerState.ownerUserId,
+          data,
+          provider: pickerState.provider,
+          page: pickerState.page,
+          currentModel: updatedModel,
+        });
 
-    return await updateModelPickerPost({
-      channelId: params.payload.channel_id,
-      postId: params.payload.post_id,
-      message: view.text,
-      buttons: view.buttons,
-    });
+        await updateModelPickerPost({
+          channelId: params.payload.channel_id,
+          postId: params.payload.post_id,
+          message: view.text,
+          buttons: view.buttons,
+        });
+      } catch (err) {
+        runtime.error?.(`mattermost model picker select failed: ${String(err)}`);
+      }
+    })();
+
+    return {};
   }
 
   const handlePost = async (

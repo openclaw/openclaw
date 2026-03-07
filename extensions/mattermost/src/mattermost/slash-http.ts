@@ -6,15 +6,17 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import {
+  buildModelsProviderData,
   createReplyPrefixOptions,
   createTypingCallbacks,
   isDangerousNameMatchingEnabled,
   logTypingFailure,
   resolveControlCommandGate,
+  type OpenClawConfig,
+  type ReplyPayload,
+  type RuntimeEnv,
 } from "openclaw/plugin-sdk/mattermost";
-import { buildModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {

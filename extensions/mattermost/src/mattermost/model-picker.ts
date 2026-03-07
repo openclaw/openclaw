@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
-import { normalizeProviderId } from "../../../../src/agents/model-selection.js";
-import type { ModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
-import { resolveStoredModelOverride } from "../../../../src/auto-reply/reply/model-selection.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { loadSessionStore, resolveStorePath } from "../../../../src/config/sessions.js";
+import {
+  loadSessionStore,
+  normalizeProviderId,
+  resolveStorePath,
+  resolveStoredModelOverride,
+  type ModelsProviderData,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/mattermost";
 import type { MattermostInteractiveButtonInput } from "./interactions.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";
@@ -215,13 +218,16 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
+  skipCache?: boolean;
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const sessionStore = params.skipCache
+      ? loadSessionStore(storePath, { skipCache: true })
+      : loadSessionStore(storePath);
     const sessionEntry = sessionStore[params.route.sessionKey];
     const override = resolveStoredModelOverride({
       sessionEntry,
