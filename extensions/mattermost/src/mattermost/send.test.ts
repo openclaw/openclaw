@@ -15,6 +15,7 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostChannelByName: vi.fn(),
   fetchMattermostMe: vi.fn(),
   fetchMattermostUserTeams: vi.fn(),
+  fetchMattermostUser: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
   uploadMattermostFile: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("./client.js", () => ({
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
   fetchMattermostMe: mockState.fetchMattermostMe,
   fetchMattermostUserTeams: mockState.fetchMattermostUserTeams,
+  fetchMattermostUser: mockState.fetchMattermostUser,
   fetchMattermostUserByUsername: mockState.fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl: mockState.normalizeMattermostBaseUrl,
   uploadMattermostFile: mockState.uploadMattermostFile,
@@ -78,6 +80,7 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostChannelByName.mockReset();
     mockState.fetchMattermostMe.mockReset();
     mockState.fetchMattermostUserTeams.mockReset();
+    mockState.fetchMattermostUser.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.uploadMattermostFile.mockReset();
     mockState.createMattermostClient.mockReturnValue({});
@@ -264,5 +267,98 @@ describe("parseMattermostTarget", () => {
     });
     expect(parseMattermostTarget("User:XYZ")).toEqual({ kind: "user", id: "XYZ" });
     expect(parseMattermostTarget("Mattermost:QRS")).toEqual({ kind: "user", id: "QRS" });
+  });
+});
+
+// Valid 26-char Mattermost IDs for user-first resolution tests
+// These IDs match /^[a-z0-9]{26}$/ and trigger ambiguous resolution
+const FAKE_USER_ID = "abcdef1234567890abcdef1234"; // 26 chars
+const FAKE_CHANNEL_ID = "zzzzzz0987654321zzzzzz9876"; // 26 chars
+
+describe("sendMessageMattermost user-first resolution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
+    mockState.createMattermostDirectChannel.mockResolvedValue({ id: "dm-channel-id" });
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+    });
+  });
+
+  it("resolves unprefixed 26-char id as user and sends via DM channel", async () => {
+    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: FAKE_USER_ID });
+
+    const res = await sendMessageMattermost(FAKE_USER_ID, "hello");
+
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
+    expect(mockState.createMattermostDirectChannel).toHaveBeenCalledTimes(1);
+    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    expect(params.channelId).toBe("dm-channel-id");
+    expect(res.channelId).toBe("dm-channel-id");
+    expect(res.messageId).toBe("post-id");
+  });
+
+  it("falls back to channel id when user lookup returns 404", async () => {
+    const err = new Error("Mattermost API 404: user not found");
+    mockState.fetchMattermostUser.mockRejectedValueOnce(err);
+
+    const res = await sendMessageMattermost(FAKE_CHANNEL_ID, "hello");
+
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
+    expect(mockState.createMattermostDirectChannel).not.toHaveBeenCalled();
+    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    expect(params.channelId).toBe(FAKE_CHANNEL_ID);
+    expect(res.channelId).toBe(FAKE_CHANNEL_ID);
+  });
+
+  it("falls back to channel id without caching negative result on transient error", async () => {
+    const transientErr = new Error("Mattermost API 503: service unavailable");
+    mockState.fetchMattermostUser
+      .mockRejectedValueOnce(transientErr)
+      .mockResolvedValueOnce({ id: FAKE_USER_ID });
+
+    // First call: transient error → fall back to channel, do NOT cache negative
+    const res1 = await sendMessageMattermost(FAKE_USER_ID, "first");
+    expect(res1.channelId).toBe(FAKE_USER_ID);
+
+    // Second call with same id: should retry user lookup (not cached)
+    vi.clearAllMocks();
+    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostPost.mockResolvedValue({ id: "post-id-2" });
+    mockState.createMattermostDirectChannel.mockResolvedValue({ id: "dm-channel-id" });
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token-2", // different token to bypass cache
+      baseUrl: "https://mattermost.example.com",
+    });
+    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: FAKE_USER_ID });
+
+    const res2 = await sendMessageMattermost(FAKE_USER_ID, "second");
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
+    expect(res2.channelId).toBe("dm-channel-id");
+  });
+
+  it("does not apply user-first resolution for explicit user: prefix", async () => {
+    const res = await sendMessageMattermost(`user:${FAKE_USER_ID}`, "hello");
+
+    // explicit user: prefix → no fetchMattermostUser probe, goes straight to DM
+    expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
+    expect(mockState.createMattermostDirectChannel).toHaveBeenCalledTimes(1);
+    expect(res.channelId).toBe("dm-channel-id");
+  });
+
+  it("does not apply user-first resolution for explicit channel: prefix", async () => {
+    const res = await sendMessageMattermost(`channel:${FAKE_USER_ID}`, "hello");
+
+    expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
+    expect(mockState.createMattermostDirectChannel).not.toHaveBeenCalled();
+    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    expect(params.channelId).toBe(FAKE_USER_ID);
+    expect(res.channelId).toBe(FAKE_USER_ID);
   });
 });
