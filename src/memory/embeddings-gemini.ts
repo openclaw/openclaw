@@ -17,6 +17,8 @@ export type GeminiEmbeddingClient = {
   model: string;
   modelPath: string;
   apiKeys: string[];
+  /** Optional proxy URL (e.g., "http://127.0.0.1:7890") */
+  proxy?: string;
 };
 
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -83,6 +85,7 @@ export async function createGeminiEmbeddingProvider(
     const payload = await withRemoteHttpResponse({
       url: endpoint,
       ssrfPolicy: client.ssrfPolicy,
+      mode: client.proxy ? "TRUSTED_ENV_PROXY" : undefined,
       init: {
         method: "POST",
         headers,
@@ -191,5 +194,5 @@ export async function resolveGeminiEmbeddingClient(
     embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
     batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
   });
-  return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys };
+  return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys, proxy: remote?.proxy };
 }
