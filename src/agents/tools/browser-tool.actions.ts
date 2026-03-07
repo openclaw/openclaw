@@ -54,12 +54,44 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   };
 }
 
-function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
+export function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
   if (profile !== "chrome") {
     return false;
   }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
+  const msg = String(err).toLowerCase();
+  // "no attached" means the relay has no tabs at all — dropping targetId won't help.
+  if (msg.includes("no attached")) {
+    return false;
+  }
+  // Match 404 stale-target responses or an explicit stale-targetId signal.
+  return (msg.includes("404:") && msg.includes("tab not found")) || msg.includes("stale targetid");
+}
+
+async function throwWithTabContext(
+  cause: unknown,
+  profile: string | undefined,
+  baseUrl: string | undefined,
+  proxyRequest: BrowserProxyRequest | null,
+): Promise<never> {
+  const tabs = proxyRequest
+    ? ((
+        (await proxyRequest({
+          method: "GET",
+          path: "/tabs",
+          profile,
+        })) as { tabs?: unknown[] }
+      ).tabs ?? [])
+    : await browserTabs(baseUrl, { profile }).catch(() => []);
+  if (!tabs.length) {
+    throw new Error(
+      "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+      { cause },
+    );
+  }
+  throw new Error(
+    `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+    { cause },
+  );
 }
 
 function stripTargetIdFromActRequest(
@@ -133,12 +165,29 @@ export async function executeSnapshotAction(params: {
     typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
   const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
   const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
-  const snapshot = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/snapshot",
-        profile,
-        query: {
+  let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
+  try {
+    snapshot = proxyRequest
+      ? ((await proxyRequest({
+          method: "GET",
+          path: "/snapshot",
+          profile,
+          query: {
+            format,
+            targetId,
+            limit,
+            ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+            refs,
+            interactive,
+            compact,
+            depth,
+            selector,
+            frame,
+            labels,
+            mode,
+          },
+        })) as Awaited<ReturnType<typeof browserSnapshot>>)
+      : await browserSnapshot(baseUrl, {
           format,
           targetId,
           limit,
@@ -151,23 +200,52 @@ export async function executeSnapshotAction(params: {
           frame,
           labels,
           mode,
-        },
-      })) as Awaited<ReturnType<typeof browserSnapshot>>)
-    : await browserSnapshot(baseUrl, {
-        format,
-        targetId,
-        limit,
-        ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-        refs,
-        interactive,
-        compact,
-        depth,
-        selector,
-        frame,
-        labels,
-        mode,
-        profile,
-      });
+          profile,
+        });
+  } catch (err) {
+    if (!isChromeStaleTargetError(profile, err) || !targetId) {
+      throw err;
+    }
+    // Retry once without targetId — relay will fall back to the currently attached tab.
+    try {
+      snapshot = proxyRequest
+        ? ((await proxyRequest({
+            method: "GET",
+            path: "/snapshot",
+            profile,
+            query: {
+              format,
+              limit,
+              ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+              refs,
+              interactive,
+              compact,
+              depth,
+              selector,
+              frame,
+              labels,
+              mode,
+            },
+          })) as Awaited<ReturnType<typeof browserSnapshot>>)
+        : await browserSnapshot(baseUrl, {
+            format,
+            limit,
+            ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+            refs,
+            interactive,
+            compact,
+            depth,
+            selector,
+            frame,
+            labels,
+            mode,
+            profile,
+          });
+    } catch {
+      // Retry failed — surface actionable relay guidance.
+      await throwWithTabContext(err, profile, baseUrl, proxyRequest);
+    }
+  }
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -323,25 +401,7 @@ export async function executeActAction(params: {
           // Fall through to explicit stale-target guidance.
         }
       }
-      const tabs = proxyRequest
-        ? ((
-            (await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            })) as { tabs?: unknown[] }
-          ).tabs ?? [])
-        : await browserTabs(baseUrl, { profile }).catch(() => []);
-      if (!tabs.length) {
-        throw new Error(
-          "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
-          { cause: err },
-        );
-      }
-      throw new Error(
-        `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
-        { cause: err },
-      );
+      await throwWithTabContext(err, profile, baseUrl, proxyRequest);
     }
     throw err;
   }

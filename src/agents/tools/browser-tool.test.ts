@@ -525,7 +525,7 @@ describe("browser tool external content wrapping", () => {
   });
 });
 
-describe("browser tool act stale target recovery", () => {
+describe("browser tool stale target recovery", () => {
   registerBrowserToolAfterEachReset();
 
   it("retries chrome act once without targetId when tab id is stale", async () => {
@@ -558,5 +558,207 @@ describe("browser tool act stale target recovery", () => {
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(result?.details).toMatchObject({ ok: true });
+  });
+
+  it("retries chrome snapshot once without targetId when tab id is stale", async () => {
+    browserClientMocks.browserSnapshot
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockResolvedValueOnce({
+        ok: true,
+        format: "ai",
+        targetId: "fresh-tab",
+        url: "https://example.com",
+        snapshot: "ok",
+      });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "snapshot",
+      profile: "chrome",
+      targetId: "stale-tab",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(2);
+    expect(browserClientMocks.browserSnapshot).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({ targetId: "stale-tab", profile: "chrome" }),
+    );
+    expect(browserClientMocks.browserSnapshot).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      expect.not.objectContaining({ targetId: expect.anything() }),
+    );
+    expect(result?.details).toMatchObject({ ok: true, targetId: "fresh-tab" });
+  });
+
+  it("retries chrome navigate once without targetId when tab id is stale", async () => {
+    browserActionsMocks.browserNavigate
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockResolvedValueOnce({ ok: true, targetId: "fresh-tab", url: "https://example.com" });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "navigate",
+      profile: "chrome",
+      targetId: "stale-tab",
+      url: "https://example.com",
+    });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledTimes(2);
+    expect(browserActionsMocks.browserNavigate).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({ targetId: "stale-tab", profile: "chrome" }),
+    );
+    expect(browserActionsMocks.browserNavigate).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      expect.not.objectContaining({ targetId: expect.anything() }),
+    );
+    expect(result?.details).toMatchObject({ ok: true });
+  });
+
+  it("retries chrome snapshot on explicit stale targetid signal", async () => {
+    browserClientMocks.browserSnapshot
+      .mockRejectedValueOnce(new Error("Stale TargetId detected"))
+      .mockResolvedValueOnce({
+        ok: true,
+        format: "ai",
+        targetId: "fresh-tab",
+        url: "https://example.com",
+        snapshot: "ok",
+      });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "snapshot",
+      profile: "chrome",
+      targetId: "stale-tab",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(2);
+    expect(result?.details).toMatchObject({ ok: true, targetId: "fresh-tab" });
+  });
+
+  it("does NOT retry chrome snapshot when error is no attached tabs", async () => {
+    browserClientMocks.browserSnapshot.mockRejectedValue(
+      new Error(
+        'tab not found (no attached Chrome tabs for profile "chrome"). Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).',
+      ),
+    );
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "chrome",
+        targetId: "stale-tab",
+      }),
+    ).rejects.toThrow(/no attached Chrome tabs/i);
+
+    // Should have been called only once — no retry when relay has no tabs.
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry chrome navigate when error is no attached tabs", async () => {
+    browserActionsMocks.browserNavigate.mockRejectedValue(
+      new Error(
+        'tab not found (no attached Chrome tabs for profile "chrome"). Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).',
+      ),
+    );
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "navigate",
+        profile: "chrome",
+        targetId: "stale-tab",
+        url: "https://example.com",
+      }),
+    ).rejects.toThrow(/no attached Chrome tabs/i);
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces relay guidance when snapshot retry also fails and no tabs are attached", async () => {
+    browserClientMocks.browserSnapshot.mockRejectedValue(new Error("404: tab not found"));
+    // browserTabs returns [] by default in mock setup
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "chrome",
+        targetId: "stale-tab",
+      }),
+    ).rejects.toThrow(/No Chrome tabs are attached via the OpenClaw Browser Relay/);
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces relay guidance when navigate retry also fails and no tabs are attached", async () => {
+    browserActionsMocks.browserNavigate.mockRejectedValue(new Error("404: tab not found"));
+    // browserTabs returns [] by default in mock setup
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "navigate",
+        profile: "chrome",
+        targetId: "stale-tab",
+        url: "https://example.com",
+      }),
+    ).rejects.toThrow(/No Chrome tabs are attached via the OpenClaw Browser Relay/);
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces stale-targetId guidance when snapshot retry fails but other tabs are present", async () => {
+    browserClientMocks.browserSnapshot.mockRejectedValue(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockResolvedValue([
+      { targetId: "live-tab", url: "https://example.com", type: "page" },
+    ]);
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "chrome",
+        targetId: "stale-tab",
+      }),
+    ).rejects.toThrow(/stale targetId/i);
+  });
+
+  it("surfaces stale-targetId guidance when navigate retry fails but other tabs are present", async () => {
+    browserActionsMocks.browserNavigate.mockRejectedValue(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockResolvedValue([
+      { targetId: "live-tab", url: "https://example.com", type: "page" },
+    ]);
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "navigate",
+        profile: "chrome",
+        targetId: "stale-tab",
+        url: "https://example.com",
+      }),
+    ).rejects.toThrow(/stale targetId/i);
+  });
+
+  it("does not trigger stale-target recovery for non-chrome profile", async () => {
+    browserClientMocks.browserSnapshot.mockRejectedValue(new Error("404: tab not found"));
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        profile: "openclaw",
+        targetId: "some-tab",
+      }),
+    ).rejects.toThrow("404: tab not found");
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledTimes(1);
   });
 });

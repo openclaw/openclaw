@@ -15,6 +15,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  browserTabs,
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
@@ -25,6 +26,7 @@ import {
   executeConsoleAction,
   executeSnapshotAction,
   executeTabsAction,
+  isChromeStaleTargetError,
 } from "./browser-tool.actions.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
@@ -503,25 +505,70 @@ export function createBrowserTool(opts?: {
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
-          if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "POST",
-              path: "/navigate",
-              profile,
-              body: {
+          try {
+            if (proxyRequest) {
+              const result = await proxyRequest({
+                method: "POST",
+                path: "/navigate",
+                profile,
+                body: {
+                  url: targetUrl,
+                  targetId,
+                },
+              });
+              return jsonResult(result);
+            }
+            return jsonResult(
+              await browserNavigate(baseUrl, {
                 url: targetUrl,
                 targetId,
-              },
-            });
-            return jsonResult(result);
+                profile,
+              }),
+            );
+          } catch (err) {
+            if (!isChromeStaleTargetError(profile, err) || !targetId) {
+              throw err;
+            }
+            // Retry once without targetId — relay will fall back to the currently attached tab.
+            try {
+              if (proxyRequest) {
+                const retryResult = await proxyRequest({
+                  method: "POST",
+                  path: "/navigate",
+                  profile,
+                  body: { url: targetUrl },
+                });
+                return jsonResult(retryResult);
+              }
+              return jsonResult(
+                await browserNavigate(baseUrl, {
+                  url: targetUrl,
+                  profile,
+                }),
+              );
+            } catch {
+              // Retry failed — surface actionable relay guidance.
+              const tabs = proxyRequest
+                ? ((
+                    (await proxyRequest({
+                      method: "GET",
+                      path: "/tabs",
+                      profile,
+                    })) as { tabs?: unknown[] }
+                  ).tabs ?? [])
+                : await browserTabs(baseUrl, { profile }).catch(() => []);
+              if (!tabs.length) {
+                throw new Error(
+                  "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+                  { cause: err },
+                );
+              }
+              throw new Error(
+                `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+                { cause: err },
+              );
+            }
           }
-          return jsonResult(
-            await browserNavigate(baseUrl, {
-              url: targetUrl,
-              targetId,
-              profile,
-            }),
-          );
         }
         case "console":
           return await executeConsoleAction({
