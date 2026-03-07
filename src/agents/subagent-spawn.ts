@@ -73,6 +73,13 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /** When true, sub-agent completion is delivered as a silent system event
+   *  instead of a visible channel message. Used for ambient enrichment shards. */
+  silentAnnounce?: boolean;
+  /** When true (with silentAnnounce), the parent session is woken after the
+   *  enrichment is enqueued. Enables autonomous cognition loops where the agent
+   *  acts on shard returns without external nudge. */
+  wakeOnReturn?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -611,7 +618,6 @@ export async function spawnSubagentDirect(
           }
           buf = strictBuf;
         } else {
-          // Avoid allocating oversized UTF-8 buffers before enforcing file limits.
           const estimatedBytes = Buffer.byteLength(contentVal, "utf8");
           if (estimatedBytes > maxFileBytes) {
             fail(
@@ -803,6 +809,8 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      ...(params.silentAnnounce ? { silentAnnounce: true } : {}),
+      ...(params.wakeOnReturn ? { wakeOnReturn: true } : {}),
     });
   } catch (err) {
     if (attachmentAbsDir) {

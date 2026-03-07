@@ -57,6 +57,10 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "memory_get",
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
+  // Continuation delegates - sub-agents use bracket syntax at announce boundary (#196).
+  // The tool's pending-delegate store is only consumed by agent-runner.ts (main sessions),
+  // not pi-embedded-runner, so the tool would silently no-op in sub-agent context.
+  "continue_delegate",
 ];
 
 /**
