@@ -336,6 +336,43 @@ describe("config paths", () => {
     expect(parseConfigPath("__proto__.polluted").ok).toBe(false);
     expect(parseConfigPath("constructor.polluted").ok).toBe(false);
     expect(parseConfigPath("prototype.polluted").ok).toBe(false);
+    expect(parseConfigPath('["__proto__"].polluted').ok).toBe(false);
+    expect(parseConfigPath("['constructor'].polluted").ok).toBe(false);
+    expect(parseConfigPath("[prototype].polluted").ok).toBe(false);
+  });
+
+  it("parses paths with array bracket notation", () => {
+    expect(parseConfigPath('models.providers["llama.cpp"].baseUrl').path).toEqual([
+      "models",
+      "providers",
+      "llama.cpp",
+      "baseUrl",
+    ]);
+    expect(parseConfigPath("models.providers['llama.cpp'].baseUrl").path).toEqual([
+      "models",
+      "providers",
+      "llama.cpp",
+      "baseUrl",
+    ]);
+    expect(parseConfigPath("foo[bar].baz").path).toEqual(["foo", "bar", "baz"]);
+    expect(parseConfigPath('foo[" bar "]').path).toEqual(["foo", " bar "]);
+    expect(parseConfigPath("agents.list[0].id").path).toEqual(["agents", "list", 0, "id"]);
+    expect(parseConfigPath("agents.list[10].name").path).toEqual(["agents", "list", 10, "name"]);
+  });
+
+  it("rejects invalid path formats", () => {
+    expect(parseConfigPath("foo..bar").ok).toBe(false);
+    expect(parseConfigPath("foo. .bar").ok).toBe(false);
+    expect(parseConfigPath("foo.bar.").ok).toBe(false);
+    expect(parseConfigPath('foo["bar').ok).toBe(false);
+    expect(parseConfigPath('models.providers["llama.cpp"]baseUrl').ok).toBe(false);
+    expect(parseConfigPath("foo[bar]baz").ok).toBe(false);
+    expect(parseConfigPath("foo[]").ok).toBe(false);
+    expect(parseConfigPath(".foo").ok).toBe(false);
+    expect(parseConfigPath("agents.list[10001].id")).toEqual({
+      ok: false,
+      error: "Invalid path. Array index is too large.",
+    });
   });
 
   it("sets, gets, and unsets nested values", () => {
@@ -346,6 +383,19 @@ describe("config paths", () => {
     }
     setConfigValueAtPath(root, parsed.path, 123);
     expect(getConfigValueAtPath(root, parsed.path)).toBe(123);
+    expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+    expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
+  });
+
+  it("supports numeric path segments for array traversal", () => {
+    const root: Record<string, unknown> = {};
+    const parsed = parseConfigPath("agents.list[0].id");
+    if (!parsed.ok || !parsed.path) {
+      throw new Error("path parse failed");
+    }
+
+    setConfigValueAtPath(root, parsed.path, "agent-1");
+    expect(getConfigValueAtPath(root, parsed.path)).toBe("agent-1");
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });

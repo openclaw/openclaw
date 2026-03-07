@@ -32,12 +32,140 @@ describe("runtime overrides", () => {
     expect(next.channels?.whatsapp?.allowFrom).toEqual(["+1"]);
   });
 
+  it("merges indexed array overrides without clobbering other array items", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            runtime: { type: "subagent" },
+          },
+          {
+            id: "helper",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list[0].id", "patched-main");
+
+    const next = applyConfigOverrides(cfg);
+    expect(Array.isArray(next.agents?.list)).toBe(true);
+    expect(next.agents?.list?.[0]).toMatchObject({
+      id: "patched-main",
+      runtime: { type: "subagent" },
+    });
+    expect(next.agents?.list?.[1]).toMatchObject({ id: "helper" });
+  });
+
+  it("merges sparse array index overrides without scanning missing entries", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "agent-0" }, { id: "agent-1" }, { id: "agent-2" }, { id: "agent-3" }],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list[3].id", "patched-agent-3");
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.list).toEqual([
+      { id: "agent-0" },
+      { id: "agent-1" },
+      { id: "agent-2" },
+      { id: "patched-agent-3" },
+    ]);
+  });
+
+  it("treats numeric-key object overrides as array patches", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", runtime: { type: "subagent" } }, { id: "helper" }],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list", {
+      0: { id: "patched-main" },
+    });
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.list?.[0]).toMatchObject({
+      id: "patched-main",
+      runtime: { type: "subagent" },
+    });
+    expect(next.agents?.list?.[1]).toMatchObject({ id: "helper" });
+  });
+
+  it("ignores numeric object keys that exceed the array index limit", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main" }, { id: "helper" }],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list", {
+      10001: { id: "patched-out-of-range" },
+    });
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.list).toEqual([{ id: "main" }, { id: "helper" }]);
+  });
+
+  it("merges numeric object keys into array indexes", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            runtime: { type: "subagent" },
+          },
+          {
+            id: "helper",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list.0.id", "patched-main");
+
+    const next = applyConfigOverrides(cfg);
+    expect(Array.isArray(next.agents?.list)).toBe(true);
+    expect(next.agents?.list?.[0]).toMatchObject({
+      id: "patched-main",
+      runtime: { type: "subagent" },
+    });
+    expect(next.agents?.list?.[1]).toMatchObject({ id: "helper" });
+  });
+
   it("unsets overrides and prunes empty branches", () => {
     setConfigOverride("channels.whatsapp.dmPolicy", "open");
     const removed = unsetConfigOverride("channels.whatsapp.dmPolicy");
     expect(removed.ok).toBe(true);
     expect(removed.removed).toBe(true);
     expect(Object.keys(getConfigOverrides()).length).toBe(0);
+  });
+
+  it("does not retarget later array overrides when unsetting an earlier index", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", name: "Main" },
+          { id: "helper", name: "Helper" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    setConfigOverride("agents.list[0].id", "patched-main");
+    setConfigOverride("agents.list[1].id", "patched-helper");
+
+    const removed = unsetConfigOverride("agents.list[0].id");
+    expect(removed.ok).toBe(true);
+    expect(removed.removed).toBe(true);
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.list).toEqual([
+      { id: "main", name: "Main" },
+      { id: "patched-helper", name: "Helper" },
+    ]);
   });
 
   it("rejects prototype pollution paths", () => {
@@ -47,6 +175,14 @@ describe("runtime overrides", () => {
       expect(result.ok).toBe(false);
       expect(Object.keys(getConfigOverrides()).length).toBe(0);
     }
+  });
+
+  it("rejects bracket index overrides that exceed the array index limit", () => {
+    const result = setConfigOverride("agents.list[10001].id", "patched-out-of-range");
+    expect(result).toEqual({
+      ok: false,
+      error: "Invalid path. Array index is too large.",
+    });
   });
 
   it("blocks __proto__ keys inside override object values", () => {

@@ -1,11 +1,27 @@
 import { isPlainObject } from "../utils.js";
-import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import {
+  MAX_CONFIG_ARRAY_INDEX,
+  parseConfigPath,
+  setConfigValueAtPath,
+  unsetConfigValueAtPath,
+} from "./config-paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
 
 let overrides: OverrideTree = {};
+
+function parseArrayIndexKey(key: string): number | undefined {
+  if (!/^\d+$/.test(key)) {
+    return undefined;
+  }
+  const index = Number.parseInt(key, 10);
+  if (index > MAX_CONFIG_ARRAY_INDEX) {
+    return undefined;
+  }
+  return index;
+}
 
 function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (Array.isArray(value)) {
@@ -30,9 +46,47 @@ function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): un
 }
 
 function mergeOverrides(base: unknown, override: unknown): unknown {
+  if (Array.isArray(override)) {
+    if (!Array.isArray(base)) {
+      return override;
+    }
+
+    const next = [...base];
+    for (const key of Object.keys(override)) {
+      const idx = parseArrayIndexKey(key);
+      if (idx === undefined) {
+        continue;
+      }
+      const value = override[idx];
+      if (value === undefined) {
+        continue;
+      }
+      next[idx] = mergeOverrides(base[idx], value);
+    }
+    return next;
+  }
+
+  if (Array.isArray(base) && isPlainObject(override)) {
+    const next = [...base];
+    for (const [key, value] of Object.entries(override)) {
+      if (value === undefined || isBlockedObjectKey(key)) {
+        continue;
+      }
+
+      const index = parseArrayIndexKey(key);
+      if (index === undefined) {
+        continue;
+      }
+
+      next[index] = mergeOverrides(base[index], value);
+    }
+    return next;
+  }
+
   if (!isPlainObject(base) || !isPlainObject(override)) {
     return override;
   }
+
   const next: OverrideTree = { ...base };
   for (const [key, value] of Object.entries(override)) {
     if (value === undefined || isBlockedObjectKey(key)) {
