@@ -31,6 +31,7 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<Ipv6Range>([
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
 export type Ipv4SpecialUseBlockOptions = {
+  allowRfc2544BenchmarkRange?: boolean;
   allowCidrs?: Array<[ipaddr.IPv4 | ipaddr.IPv6, number]>;
 };
 
@@ -257,9 +258,10 @@ export function isCarrierGradeNatIpv4Address(raw: string | undefined): boolean {
 
 export function isBlockedSpecialUseIpv4Address(
   address: ipaddr.IPv4,
-  options?: Ipv4SpecialUseBlockOptions,
+  options: Ipv4SpecialUseBlockOptions = {},
 ): boolean {
-  if (options?.allowCidrs) {
+  // Check allowCidrs — if the address matches any allowed CIDR, it's not blocked
+  if (options.allowCidrs) {
     for (const cidr of options.allowCidrs) {
       const [base, prefix] = cidr;
       if (base.kind() !== "ipv4") {
@@ -274,10 +276,14 @@ export function isBlockedSpecialUseIpv4Address(
       }
     }
   }
-  if (BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range())) {
-    return true;
+
+  // Check RFC 2544 benchmark range (198.18.0.0/15)
+  const inRfc2544BenchmarkRange = address.match(RFC2544_BENCHMARK_PREFIX);
+  if (inRfc2544BenchmarkRange && options.allowRfc2544BenchmarkRange === true) {
+    return false;
   }
-  return address.match(RFC2544_BENCHMARK_PREFIX);
+
+  return BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range()) || inRfc2544BenchmarkRange;
 }
 
 function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
