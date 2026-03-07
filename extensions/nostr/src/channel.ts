@@ -3,8 +3,11 @@ import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   createReplyPrefixOptions,
+  createScopedPairingAccess,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  readStoreAllowFromForDmPolicy,
+  resolveEffectiveAllowFromLists,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/nostr";
 import type { NostrProfile } from "./config-schema.js";
@@ -216,6 +219,89 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           );
 
           const cfg = runtime.config.loadConfig();
+
+          // Enforce DM access policy before dispatching
+          const resolvedAccount = resolveNostrAccount({
+            cfg,
+            accountId: account.accountId,
+          });
+          const dmPolicy = resolvedAccount.config.dmPolicy ?? "pairing";
+
+          if (dmPolicy === "disabled") {
+            ctx.log?.debug?.(
+              `[${account.accountId}] drop DM from ${senderPubkey} (dmPolicy=disabled)`,
+            );
+            return;
+          }
+
+          const pairing = createScopedPairingAccess({
+            core: runtime,
+            channel: "nostr",
+            accountId: account.accountId,
+          });
+
+          const configAllowFrom = (resolvedAccount.config.allowFrom ?? []).map((e) => {
+            try {
+              return normalizePubkey(String(e));
+            } catch {
+              return String(e);
+            }
+          });
+
+          const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+            provider: "nostr",
+            accountId: account.accountId,
+            dmPolicy,
+            readStore: pairing.readStoreForDmPolicy,
+          });
+          const storeAllowList = storeAllowFrom.map((e) => {
+            try {
+              return normalizePubkey(e);
+            } catch {
+              return e;
+            }
+          });
+
+          const { effectiveAllowFrom } = resolveEffectiveAllowFromLists({
+            allowFrom: configAllowFrom,
+            groupAllowFrom: [],
+            storeAllowFrom: storeAllowList,
+            dmPolicy,
+          });
+
+          if (dmPolicy !== "open") {
+            const normalizedSender = normalizePubkey(senderPubkey);
+            const isAllowed =
+              effectiveAllowFrom.includes("*") || effectiveAllowFrom.includes(normalizedSender);
+
+            if (!isAllowed) {
+              if (dmPolicy === "pairing") {
+                const { code, created } = await pairing.upsertPairingRequest({
+                  id: normalizedSender,
+                  meta: {},
+                });
+                if (created) {
+                  try {
+                    const pairingReply = runtime.channel.pairing.buildPairingReply({
+                      channel: "nostr",
+                      idLine: `Your Nostr pubkey: ${senderPubkey}`,
+                      code,
+                    });
+                    await reply(pairingReply);
+                  } catch (err) {
+                    ctx.log?.error?.(
+                      `[${account.accountId}] pairing reply failed for ${senderPubkey}: ${String(err)}`,
+                    );
+                  }
+                }
+              }
+              ctx.log?.debug?.(
+                `[${account.accountId}] drop DM from ${senderPubkey} (dmPolicy=${dmPolicy})`,
+              );
+              return;
+            }
+          }
+
           const route = runtime.channel.routing.resolveAgentRoute({
             cfg,
             channel: "nostr",
@@ -240,6 +326,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             body: text,
           });
 
+          // Sender passed DM policy check — resolve command authorization
+          const isInConfigAllowFrom = configAllowFrom.includes(normalizePubkey(senderPubkey));
+          const commandAuthorized = isInConfigAllowFrom;
+
           const ctxPayload = runtime.channel.reply.finalizeInboundContext({
             Body: body,
             BodyForAgent: text,
@@ -257,7 +347,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             MessageSid: `nostr-${Date.now()}`,
             Timestamp: Date.now(),
             WasMentioned: true, // DMs are always "mentioned"
-            CommandAuthorized: true,
+            CommandAuthorized: commandAuthorized,
             OriginatingChannel: "nostr",
             OriginatingTo: `nostr:${account.publicKey}`,
           });

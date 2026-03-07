@@ -3,6 +3,7 @@
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
@@ -16,4 +17,9 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
+export { createScopedPairingAccess } from "./pairing-access.js";
 export { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
+export {
+  readStoreAllowFromForDmPolicy,
+  resolveEffectiveAllowFromLists,
+} from "../security/dm-policy-shared.js";
