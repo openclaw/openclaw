@@ -111,6 +111,10 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -159,7 +163,7 @@ export class GatewayBrowserClient {
   }
 
   private async sendConnect() {
-    if (this.connectSent) {
+    if (this.closed || this.connectSent) {
       return;
     }
     this.connectSent = true;
