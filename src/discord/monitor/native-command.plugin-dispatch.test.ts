@@ -87,6 +87,75 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createStatusCommand(cfg: OpenClawConfig) {
+  const commandSpec: NativeCommandSpec = {
+    name: "status",
+    description: "Status",
+    acceptsArgs: false,
+  };
+  return createDiscordNativeCommand({
+    command: commandSpec,
+    cfg,
+    discordConfig: cfg.channels?.discord ?? {},
+    accountId: "default",
+    sessionPrefix: "discord:slash",
+    ephemeralDefault: true,
+    threadBindings: createNoopThreadBindingManager("default"),
+  });
+}
+
+function setConfiguredBinding(channelId: string, boundSessionKey: string) {
+  persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
+    spec: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: channelId,
+      agentId: "codex",
+      mode: "persistent",
+    },
+    record: {
+      bindingId: `config:acp:discord:default:${channelId}`,
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: channelId,
+      },
+      status: "active",
+      boundAt: 0,
+    },
+  });
+  persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
+    ok: true,
+    sessionKey: boundSessionKey,
+  });
+}
+
+function createDispatchSpy() {
+  return vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
+    counts: {
+      final: 1,
+      block: 0,
+      tool: 0,
+    },
+  } as never);
+}
+
+function expectBoundSessionDispatch(
+  dispatchSpy: ReturnType<typeof createDispatchSpy>,
+  boundSessionKey: string,
+) {
+  expect(dispatchSpy).toHaveBeenCalledTimes(1);
+  const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
+    ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
+  };
+  expect(dispatchCall.ctx?.SessionKey).toBe(boundSessionKey);
+  expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
+  expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
+  expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
+}
+
 describe("Discord native plugin command dispatch", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -169,20 +238,7 @@ describe("Discord native plugin command dispatch", () => {
         },
       ],
     } as OpenClawConfig;
-    const commandSpec: NativeCommandSpec = {
-      name: "status",
-      description: "Status",
-      acceptsArgs: false,
-    };
-    const command = createDiscordNativeCommand({
-      command: commandSpec,
-      cfg,
-      discordConfig: cfg.channels?.discord ?? {},
-      accountId: "default",
-      sessionPrefix: "discord:slash",
-      ephemeralDefault: true,
-      threadBindings: createNoopThreadBindingManager("default"),
-    });
+    const command = createStatusCommand(cfg);
     const interaction = createInteraction({
       channelType: ChannelType.GuildText,
       channelId,
@@ -190,53 +246,14 @@ describe("Discord native plugin command dispatch", () => {
       guildName: "Ops",
     });
 
-    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
-      spec: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: channelId,
-        agentId: "codex",
-        mode: "persistent",
-      },
-      record: {
-        bindingId: "config:acp:discord:default:1478836151241412759",
-        targetSessionKey: boundSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: channelId,
-        },
-        status: "active",
-        boundAt: 0,
-      },
-    });
-    persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
-      ok: true,
-      sessionKey: boundSessionKey,
-    });
+    setConfiguredBinding(channelId, boundSessionKey);
 
     vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({
-        counts: {
-          final: 1,
-          block: 0,
-          tool: 0,
-        },
-      } as never);
+    const dispatchSpy = createDispatchSpy();
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
-    };
-    expect(dispatchCall.ctx?.SessionKey).toBe(boundSessionKey);
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
-    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
-    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
+    expectBoundSessionDispatch(dispatchSpy, boundSessionKey);
   });
 
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {
@@ -266,71 +283,19 @@ describe("Discord native plugin command dispatch", () => {
         },
       },
     } as OpenClawConfig;
-    const commandSpec: NativeCommandSpec = {
-      name: "status",
-      description: "Status",
-      acceptsArgs: false,
-    };
-    const command = createDiscordNativeCommand({
-      command: commandSpec,
-      cfg,
-      discordConfig: cfg.channels?.discord ?? {},
-      accountId: "default",
-      sessionPrefix: "discord:slash",
-      ephemeralDefault: true,
-      threadBindings: createNoopThreadBindingManager("default"),
-    });
+    const command = createStatusCommand(cfg);
     const interaction = createInteraction({
       channelType: ChannelType.DM,
       channelId,
     });
 
-    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
-      spec: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: channelId,
-        agentId: "codex",
-        mode: "persistent",
-      },
-      record: {
-        bindingId: "config:acp:discord:default:dm-1",
-        targetSessionKey: boundSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: channelId,
-        },
-        status: "active",
-        boundAt: 0,
-      },
-    });
-    persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
-      ok: true,
-      sessionKey: boundSessionKey,
-    });
+    setConfiguredBinding(channelId, boundSessionKey);
 
     vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({
-        counts: {
-          final: 1,
-          block: 0,
-          tool: 0,
-        },
-      } as never);
+    const dispatchSpy = createDispatchSpy();
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
-    };
-    expect(dispatchCall.ctx?.SessionKey).toBe(boundSessionKey);
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(boundSessionKey);
-    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
-    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
+    expectBoundSessionDispatch(dispatchSpy, boundSessionKey);
   });
 });
