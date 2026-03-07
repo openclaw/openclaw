@@ -1,7 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyNoRouteAllowlistWarning,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -143,30 +142,25 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         groupPolicy: account.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
       const groupAllowlistConfigured =
         Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0;
-      if (groupAllowlistConfigured) {
-        return [
-          buildOpenGroupPolicyRestrictSendersWarning({
-            surface: "WhatsApp groups",
-            openScope: "any member in allowed groups",
-            groupPolicyPath: "channels.whatsapp.groupPolicy",
-            groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
-          }),
-        ];
-      }
-      return [
-        buildOpenGroupPolicyNoRouteAllowlistWarning({
+      return collectOpenGroupPolicyRouteAllowlistWarnings({
+        groupPolicy,
+        routeAllowlistConfigured: groupAllowlistConfigured,
+        restrictSenders: {
+          surface: "WhatsApp groups",
+          openScope: "any member in allowed groups",
+          groupPolicyPath: "channels.whatsapp.groupPolicy",
+          groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+        },
+        noRouteAllowlist: {
           surface: "WhatsApp groups",
           routeAllowlistPath: "channels.whatsapp.groups",
           routeScope: "group",
           groupPolicyPath: "channels.whatsapp.groupPolicy",
           groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
-        }),
-      ];
+        },
+      });
     },
   },
   setup: {

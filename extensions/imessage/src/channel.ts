@@ -1,6 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRestrictSendersWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -151,18 +151,14 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        buildOpenGroupPolicyRestrictSendersWarning({
-          surface: "iMessage groups",
-          openScope: "any member",
-          groupPolicyPath: "channels.imessage.groupPolicy",
-          groupAllowFromPath: "channels.imessage.groupAllowFrom",
-          mentionGated: false,
-        }),
-      ];
+      return collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: "iMessage groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.imessage.groupPolicy",
+        groupAllowFromPath: "channels.imessage.groupAllowFrom",
+        mentionGated: false,
+      });
     },
   },
   groups: {
