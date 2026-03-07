@@ -296,6 +296,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pre-commit
 
+      - name: Ensure base commit is available
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: refs/heads/${{ github.event.pull_request.base.ref }}
+
       - name: Detect secrets
         run: |
           set -euo pipefail
