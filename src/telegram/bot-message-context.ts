@@ -108,6 +108,23 @@ type ResolveGroupActivation = (params: {
 
 type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
+function buildMediaUntrustedContext(params: {
+  mediaPaths: string[];
+  mediaTypes?: string[];
+}): string[] | undefined {
+  if (params.mediaPaths.length === 0) {
+    return undefined;
+  }
+  const lines = [
+    `Inbound media paths (${params.mediaPaths.length}):`,
+    ...params.mediaPaths.map((path, idx) => {
+      const type = params.mediaTypes?.[idx];
+      return type ? `- [${idx + 1}] ${path} (${type})` : `- [${idx + 1}] ${path}`;
+    }),
+  ];
+  return lines;
+}
+
 export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
@@ -740,6 +757,14 @@ export const buildTelegramMessageContext = async ({
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
+  const mediaPaths = contextMedia.map((m) => m.path);
+  const mediaTypes = contextMedia.map((m) => m.contentType);
+  const mediaUntrustedContext = buildMediaUntrustedContext({
+    mediaPaths,
+    mediaTypes: mediaTypes.some((entry) => Boolean(entry))
+      ? mediaTypes.map((entry) => entry ?? "application/octet-stream")
+      : undefined,
+  });
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
@@ -795,6 +820,7 @@ export const buildTelegramMessageContext = async ({
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
+    UntrustedContext: mediaUntrustedContext,
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
