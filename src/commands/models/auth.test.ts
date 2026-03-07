@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { WizardCancelledError } from "../../wizard/prompts.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
 
 const mocks = vi.hoisted(() => ({
+  cancel: vi.fn(),
+  isCancel: vi.fn(),
+  clackConfirm: vi.fn(),
+  clackSelect: vi.fn(),
+  clackText: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   resolveAgentDir: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -15,6 +22,14 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+}));
+
+vi.mock("@clack/prompts", () => ({
+  cancel: mocks.cancel,
+  isCancel: mocks.isCancel,
+  confirm: mocks.clackConfirm,
+  select: mocks.clackSelect,
+  text: mocks.clackText,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -64,7 +79,7 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-const { modelsAuthLoginCommand } = await import("./auth.js");
+const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -92,7 +107,7 @@ function withInteractiveStdin() {
   };
 }
 
-describe("modelsAuthLoginCommand", () => {
+describe("models auth commands", () => {
   let restoreStdin: (() => void) | null = null;
   let currentConfig: OpenClawConfig;
   let lastUpdatedConfig: OpenClawConfig | null;
@@ -103,6 +118,10 @@ describe("modelsAuthLoginCommand", () => {
     currentConfig = {};
     lastUpdatedConfig = null;
 
+    mocks.clackConfirm.mockResolvedValue(true);
+    mocks.clackSelect.mockResolvedValue("anthropic");
+    mocks.clackText.mockResolvedValue("test-token");
+    mocks.isCancel.mockReturnValue(false);
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
@@ -157,7 +176,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.3-codex (use --set-default to apply)",
+      `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
     );
   });
 
@@ -167,9 +186,9 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
 
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai-codex/gpt-5.3-codex",
+      primary: OPENAI_CODEX_DEFAULT_MODEL,
     });
-    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.3-codex");
+    expect(runtime.log).toHaveBeenCalledWith(`Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`);
   });
 
   it("keeps existing plugin error behavior for non built-in providers", async () => {
@@ -178,5 +197,21 @@ describe("modelsAuthLoginCommand", () => {
     await expect(modelsAuthLoginCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
       "No provider plugins found.",
     );
+  });
+
+  it("throws WizardCancelledError and skips writes when token paste prompt is cancelled", async () => {
+    const runtime = createRuntime();
+    const cancelSymbol = Symbol.for("clack:cancel");
+    mocks.clackText.mockResolvedValueOnce(cancelSymbol);
+    mocks.isCancel.mockImplementation((value: unknown) => value === cancelSymbol);
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai", profileId: "openai:manual" }, runtime),
+    ).rejects.toBeInstanceOf(WizardCancelledError);
+
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(mocks.cancel).toHaveBeenCalled();
   });
 });
