@@ -89,6 +89,10 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.enabled).toBe(false);
     expect(policy.isAllowed("main", "main")).toBe(true);
     expect(policy.isAllowed("main", "ops")).toBe(false);
+    expect(policy.evaluateAccess("main", "ops")).toEqual({
+      allowed: false,
+      reason: "disabled",
+    });
   });
 
   it("honors allow patterns when enabled", () => {
@@ -104,6 +108,137 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.isAllowed("ops-a", "ops-b")).toBe(true);
     expect(policy.isAllowed("main", "ops-a")).toBe(true);
     expect(policy.isAllowed("guest", "ops-a")).toBe(false);
+  });
+
+  it("uses requester outbound overrides when present", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "david", "kelly"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              agentToAgent: {
+                allow: ["david"],
+              },
+            },
+          },
+          {
+            id: "kelly",
+            tools: {
+              agentToAgent: {
+                allow: [],
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "david")).toEqual({ allowed: true });
+    expect(policy.evaluateAccess("main", "kelly")).toEqual({
+      allowed: false,
+      reason: "per_agent_outbound",
+    });
+    expect(policy.isAllowed("main", "kelly")).toBe(false);
+  });
+
+  it("treats an empty requester outbound override as deny-all cross-agent", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "david"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              agentToAgent: {
+                allow: [],
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "david")).toEqual({
+      allowed: false,
+      reason: "per_agent_outbound",
+    });
+  });
+
+  it("keeps the global participation gate for requester and target", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["david"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              agentToAgent: {
+                allow: ["david"],
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "david")).toEqual({
+      allowed: false,
+      reason: "global_participation",
+    });
+    expect(policy.evaluateAccess("david", "main")).toEqual({
+      allowed: false,
+      reason: "global_participation",
+    });
+  });
+
+  it("ignores target outbound overrides in outbound-only mode", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "david"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              agentToAgent: {
+                allow: ["david"],
+              },
+            },
+          },
+          {
+            id: "david",
+            tools: {
+              agentToAgent: {
+                allow: [],
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "david")).toEqual({ allowed: true });
   });
 });
 

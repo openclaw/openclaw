@@ -102,6 +102,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     mode: Type.Optional(Type.String()),
     dmPolicy: Type.Optional(Type.String()),
     allowFrom: Type.Optional(Type.Array(Type.String())),
+    allowSendTo: Type.Optional(Type.Array(Type.String())),
     tokenSource: Type.Optional(Type.String()),
     botTokenSource: Type.Optional(Type.String()),
     appTokenSource: Type.Optional(Type.String()),

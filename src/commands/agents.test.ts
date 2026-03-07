@@ -246,4 +246,21 @@ describe("agents helpers", () => {
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
   });
+
+  it("scrubs deleted agent from per-agent outbound A2A allowlists", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "work", tools: { agentToAgent: { allow: ["home"] } } },
+          { id: "home", tools: { agentToAgent: { allow: ["work", "ops"] } } },
+        ],
+      },
+      bindings: [],
+      tools: { agentToAgent: { enabled: true, allow: ["work", "home", "ops"] } },
+    };
+
+    const result = pruneAgentConfig(cfg, "work");
+    const home = result.config.agents?.list?.find((a) => a.id === "home");
+    expect(home?.tools?.agentToAgent?.allow).toEqual(["ops"]);
+  });
 });
