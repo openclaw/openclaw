@@ -13,7 +13,7 @@ describe("loadControlUiBootstrapConfig", () => {
         assistantName: "Ops",
         assistantAvatar: "O",
         assistantAgentId: "main",
-        serverVersion: "2026.3.2",
+        serverVersion: "2026.3.7",
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -35,7 +35,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
     expect(state.assistantAgentId).toBe("main");
-    expect(state.serverVersion).toBe("2026.3.2");
+    expect(state.serverVersion).toBe("2026.3.7");
 
     vi.unstubAllGlobals();
   });
