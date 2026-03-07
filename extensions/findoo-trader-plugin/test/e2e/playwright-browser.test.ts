@@ -550,14 +550,14 @@ function createMockServer() {
       if (!riskConfig.enabled) {
         return json(res, 403, { error: "Trading is disabled" });
       }
-      const estimatedUsd = ((body.currentPrice as number) ?? 0) * ((body.quantity as number) ?? 0);
+      const estimatedUsd = ((body.price as number) ?? 0) * ((body.amount as number) ?? 0);
       if (estimatedUsd > riskConfig.confirmThresholdUsd) {
         return json(res, 403, { error: "Order rejected by risk controller" });
       }
       if (estimatedUsd > riskConfig.maxAutoTradeUsd) {
         const event = addEvent({
           type: "trade_pending",
-          title: `${((body.side as string) || "buy").toUpperCase()} ${body.quantity} ${body.symbol}`,
+          title: `${((body.side as string) || "buy").toUpperCase()} ${body.amount} ${body.symbol}`,
           detail: `$${estimatedUsd.toFixed(0)} requires user confirmation`,
           status: "pending",
           actionParams: body,
@@ -569,16 +569,16 @@ function createMockServer() {
         id: `ord-${orderCounter}`,
         symbol: body.symbol as string,
         side: body.side as string,
-        quantity: body.quantity as number,
-        price: body.currentPrice as number,
+        quantity: body.amount as number,
+        price: body.price as number,
         status: "filled",
         timestamp: new Date().toISOString(),
       };
       orders.push(order);
       addEvent({
         type: "trade_executed",
-        title: `${(body.side as string).toUpperCase()} ${body.quantity} ${body.symbol}`,
-        detail: `Auto-executed at $${body.currentPrice}`,
+        title: `${(body.side as string).toUpperCase()} ${body.amount} ${body.symbol}`,
+        detail: `Auto-executed at $${body.price}`,
         status: "completed",
       });
       return json(res, 201, order);
@@ -816,6 +816,10 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
   beforeEach(async () => {
     mock.reset();
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
   });
 
   // ══════════════════════════════════════════════════════════════════
@@ -1066,8 +1070,8 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
           body: JSON.stringify({
             symbol: "BTC/USDT",
             side: "buy",
-            quantity: 0.001,
-            currentPrice: 65000,
+            amount: 0.001,
+            price: 65000,
           }),
         });
         return { status: r.status, body: await r.json() };
@@ -1240,8 +1244,8 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
           body: JSON.stringify({
             symbol: "BTC/USDT",
             side: "buy",
-            quantity: 0.001,
-            currentPrice: 65000,
+            amount: 0.001,
+            price: 65000,
           }),
         });
         return { status: r.status };

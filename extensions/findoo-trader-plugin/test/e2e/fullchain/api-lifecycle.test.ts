@@ -189,8 +189,8 @@ describe("Phase F — Full Lifecycle Journey (B12)", () => {
         symbol: "BTC/USDT",
         side: "buy",
         type: "market",
-        quantity: 0.001,
-        currentPrice: 65000,
+        amount: 0.001,
+        price: 65000,
         strategyId,
       }),
     });
@@ -262,8 +262,8 @@ describe("Phase F — Full Lifecycle Journey (B12)", () => {
         symbol: "BTC/USDT",
         side: "buy",
         type: "market",
-        quantity: 0.01,
-        currentPrice: 65000,
+        amount: 0.01,
+        price: 65000,
         strategyId,
       }),
     });

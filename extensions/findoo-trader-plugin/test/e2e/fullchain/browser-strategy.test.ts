@@ -65,6 +65,10 @@ d("Phase F — A2: Browser Strategy", () => {
 
   beforeEach(async () => {
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
   });
 
   afterEach(async () => {
@@ -180,7 +184,7 @@ d("Phase F — A2: Browser Strategy", () => {
 
     // "All" should be active by default
     const allBtnClass = await page
-      .locator('#lbFilters .race-filter[data-lf="all"]')
+      .locator('#lbFilters .race-filter[data-rbl="all"]')
       .getAttribute("class");
     expect(allBtnClass).toContain("active");
   });

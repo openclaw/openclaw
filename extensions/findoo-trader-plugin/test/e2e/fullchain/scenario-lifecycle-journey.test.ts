@@ -139,6 +139,10 @@ bd("J1-Browser — Empty State Flow in Browser", () => {
 
   it("empty Flow page shows 'No strategies' in all pipeline columns", async () => {
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(500);
@@ -178,28 +182,33 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
 
   afterAll(() => ctx?.cleanup());
 
-  it("ColdStartSeeder creates 10 strategies at L1 when registry is empty", async () => {
+  it("ColdStartSeeder creates 10 strategies across 4 levels when registry is empty", async () => {
     // Verify empty
     expect(ctx.services.strategyRegistry.list().length).toBe(0);
 
     // Run ColdStartSeeder (same as index.ts does on boot)
     const seeder = new ColdStartSeeder({
       strategyRegistry: ctx.services.strategyRegistry,
-      backtestEngine: ctx.services.backtestEngine,
+      bridge: ctx.services.backtestBridge,
       eventStore: ctx.services.eventStore,
-      dataProviderResolver: () => undefined, // no data provider in test
+      wakeBridge: ctx.services.wakeBridge,
     });
 
     const result = await seeder.maybeSeed();
     expect(result.seeded).toBe(10);
     expect(result.skipped).toBe(false);
 
-    // All 10 should be at L1_BACKTEST
+    // 10 strategies distributed: 2×L0, 5×L1, 2×L2, 1×L3
     const strategies = ctx.services.strategyRegistry.list();
     expect(strategies.length).toBe(10);
-    for (const s of strategies) {
-      expect(s.level).toBe("L1_BACKTEST");
-    }
+    const l0 = strategies.filter((s) => s.level === "L0_INCUBATE");
+    const l1 = strategies.filter((s) => s.level === "L1_BACKTEST");
+    const l2 = strategies.filter((s) => s.level === "L2_PAPER");
+    const l3 = strategies.filter((s) => s.level === "L3_LIVE");
+    expect(l0.length).toBe(2);
+    expect(l1.length).toBe(5);
+    expect(l2.length).toBe(2);
+    expect(l3.length).toBe(1);
 
     // Event store should have the seeding event
     const events = ctx.services.eventStore.listEvents();
@@ -210,9 +219,9 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
   it("second maybeSeed() is idempotent (skips when registry non-empty)", async () => {
     const seeder = new ColdStartSeeder({
       strategyRegistry: ctx.services.strategyRegistry,
-      backtestEngine: ctx.services.backtestEngine,
+      bridge: ctx.services.backtestBridge,
       eventStore: ctx.services.eventStore,
-      dataProviderResolver: () => undefined,
+      wakeBridge: ctx.services.wakeBridge,
     });
 
     const result = await seeder.maybeSeed();
@@ -241,14 +250,14 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
       expect(res.status).toBe(201);
     }
 
-    // Now 15 total: 10 seeder (L1) + 5 manual (L0)
+    // Now 15 total: 10 seeder (2×L0+5×L1+2×L2+1×L3) + 5 manual (L0)
     const all = ctx.services.strategyRegistry.list();
     expect(all.length).toBe(15);
 
     const l0 = all.filter((s) => s.level === "L0_INCUBATE");
     const l1 = all.filter((s) => s.level === "L1_BACKTEST");
-    expect(l0.length).toBe(5);
-    expect(l1.length).toBe(10);
+    expect(l0.length).toBe(7); // 2 seeder L0 + 5 manual L0
+    expect(l1.length).toBe(5); // 5 seeder L1
   });
 
   it("Flow JSON reflects all 15 strategies in correct pipeline columns", async () => {
@@ -268,8 +277,8 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
       },
       {} as Record<string, number>,
     );
-    expect(levels.L0_INCUBATE).toBe(5);
-    expect(levels.L1_BACKTEST).toBe(10);
+    expect(levels.L0_INCUBATE).toBe(7); // 2 seeder L0 + 5 manual L0
+    expect(levels.L1_BACKTEST).toBe(5); // 5 seeder L1
   });
 
   it("runCycle auto-promotes L0→L1 and eligible L1→L2 from seed pool", async () => {
@@ -421,12 +430,12 @@ bd("J4 — Browser Cold Start with Seeds", () => {
   beforeAll(async () => {
     ctx = await createFullChainServer();
 
-    // Run ColdStartSeeder to populate 10 strategies at L1
+    // Run ColdStartSeeder to populate 10 strategies across L0/L1/L2/L3
     const seeder = new ColdStartSeeder({
       strategyRegistry: ctx.services.strategyRegistry,
-      backtestEngine: ctx.services.backtestEngine,
+      bridge: ctx.services.backtestBridge,
       eventStore: ctx.services.eventStore,
-      dataProviderResolver: () => undefined,
+      wakeBridge: ctx.services.wakeBridge,
     });
     await seeder.maybeSeed();
 
@@ -434,7 +443,7 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     ctx.services.activityLog.append({
       category: "seed",
       action: "cold_start_seeded",
-      detail: "Cold start: 10 strategies seeded to L1",
+      detail: "Cold start: 10 strategies seeded across L0/L1/L2/L3",
     });
     ctx.services.activityLog.append({
       category: "heartbeat",
@@ -450,33 +459,41 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     ctx?.cleanup();
   });
 
-  it("J4.1 seeded strategies appear in L1 column with names", async () => {
+  it("J4.1 seeded strategies appear in pipeline columns with names", async () => {
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(500);
 
-    // L1 column should have 10 strategy cards
+    // L1 column should have 5 strategy cards (seeder distributes 2×L0, 5×L1, 2×L2, 1×L3)
     const l1Cards = page.locator('[data-level="L1_BACKTEST"] .pipeline-col__cards');
     const l1Text = await l1Cards.textContent();
     expect(l1Text).toContain("SMA Crossover");
     expect(l1Text).toContain("RSI Mean Reversion");
 
-    // L1 count should show 10
+    // L1 count should show 5
     const countText = await page.locator("#countL1").textContent();
-    expect(countText?.trim()).toBe("10");
+    expect(countText?.trim()).toBe("5");
 
-    // L0 column should show "No strategies" (empty)
+    // L0 column should have 2 strategies (not empty)
     const l0Text = await page
       .locator('[data-level="L0_INCUBATE"] .pipeline-col__cards')
       .textContent();
-    expect(l0Text).toContain("No strategies");
+    expect(l0Text).not.toContain("No strategies");
 
     await page.close();
   });
 
   it("J4.2 activity timeline shows seed + heartbeat entries", async () => {
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(800);
@@ -488,13 +505,17 @@ bd("J4 — Browser Cold Start with Seeds", () => {
 
     // Verify content includes our seed entry
     const timelineText = await page.locator("#timelineEntries").textContent();
-    expect(timelineText).toContain("10 strategies seeded");
+    expect(timelineText).toContain("10 strategies seeded across");
 
     await page.close();
   });
 
   it("J4.3 navigation from Overview to Flow works", async () => {
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/overview`, {
       waitUntil: "domcontentloaded",
       timeout: 15000,

@@ -99,11 +99,11 @@ describe("Scenario — Day 14-30 Paper Trading Monitoring", () => {
 
   it("submits 5 paper orders for different symbols", async () => {
     const orders = [
-      { symbol: "BTC/USDT", quantity: 0.001, currentPrice: 50_000 },
-      { symbol: "ETH/USDT", quantity: 0.01, currentPrice: 3_000 },
-      { symbol: "SOL/USDT", quantity: 0.1, currentPrice: 150 },
-      { symbol: "DOGE/USDT", quantity: 10, currentPrice: 0.08 },
-      { symbol: "XRP/USDT", quantity: 1, currentPrice: 0.6 },
+      { symbol: "BTC/USDT", amount: 0.001, price: 50_000 },
+      { symbol: "ETH/USDT", amount: 0.01, price: 3_000 },
+      { symbol: "SOL/USDT", amount: 0.1, price: 150 },
+      { symbol: "DOGE/USDT", amount: 10, price: 0.08 },
+      { symbol: "XRP/USDT", amount: 1, price: 0.6 },
     ];
 
     for (const o of orders) {
@@ -114,8 +114,8 @@ describe("Scenario — Day 14-30 Paper Trading Monitoring", () => {
           symbol: o.symbol,
           side: "buy",
           type: "market",
-          quantity: o.quantity,
-          currentPrice: o.currentPrice,
+          amount: o.amount,
+          price: o.price,
           strategyId,
           accountId,
         }),

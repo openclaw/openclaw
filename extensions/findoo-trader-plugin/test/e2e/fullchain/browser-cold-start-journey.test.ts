@@ -95,6 +95,12 @@ d("L5 — Browser Cold-Start Journey", () => {
   async function navigateTo(path: string): Promise<boolean> {
     await page.goto(`${ctx.baseUrl}${path}`);
     await page.waitForLoadState("domcontentloaded");
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.evaluate(() => {
+      const overlay = document.getElementById("onboardOverlay");
+      if (overlay) overlay.remove();
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
     return (await page.evaluate(() => document.contentType)) === "text/html";
   }
 
@@ -128,7 +134,10 @@ d("L5 — Browser Cold-Start Journey", () => {
   // ═══════════════════════════════════════════════════════════════
 
   it("J2: onboarding overlay displays 5-step guide on cold start", async () => {
-    const isHtml = await navigateTo(PAGES.overview);
+    // Use direct page.goto (not navigateTo) to avoid auto-dismissing the overlay
+    await page.goto(`${ctx.baseUrl}${PAGES.overview}`);
+    await page.waitForLoadState("domcontentloaded");
+    const isHtml = (await page.evaluate(() => document.contentType)) === "text/html";
     if (!isHtml) return;
 
     // Wait for SSE data to populate and trigger onboarding logic
@@ -167,9 +176,15 @@ d("L5 — Browser Cold-Start Journey", () => {
     const strategies = ctx.services.strategyRegistry.list();
     expect(strategies.length).toBe(10);
 
-    // All should be at L1_BACKTEST level
+    // Seeder distributes: 2×L0, 5×L1, 2×L2, 1×L3
+    const l0Count = strategies.filter((s) => s.level === "L0_INCUBATE").length;
     const l1Count = strategies.filter((s) => s.level === "L1_BACKTEST").length;
-    expect(l1Count).toBe(10);
+    const l2Count = strategies.filter((s) => s.level === "L2_PAPER").length;
+    const l3Count = strategies.filter((s) => s.level === "L3_LIVE").length;
+    expect(l0Count).toBe(2);
+    expect(l1Count).toBe(5);
+    expect(l2Count).toBe(2);
+    expect(l3Count).toBe(1);
 
     // Verify in browser: navigate to overview and check strategy count
     const isHtml = await navigateTo(PAGES.overview);

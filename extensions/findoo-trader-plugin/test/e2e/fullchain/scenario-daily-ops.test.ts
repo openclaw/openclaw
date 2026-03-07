@@ -241,8 +241,8 @@ describe("Phase F — Scenario: Daily Operations", () => {
         symbol: "BTC/USDT",
         side: "buy",
         type: "market",
-        quantity: 0.1,
-        currentPrice: 50,
+        amount: 0.1,
+        price: 50,
         reason: "dashboard data test",
       }),
     });

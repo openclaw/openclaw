@@ -65,6 +65,10 @@ d("Phase F — A1: Browser Overview", () => {
 
   beforeEach(async () => {
     page = await browser.newPage();
+    // Dismiss onboarding overlay so it doesn't block pointer events
+    await page.addInitScript(() => {
+      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+    });
   });
 
   afterEach(async () => {

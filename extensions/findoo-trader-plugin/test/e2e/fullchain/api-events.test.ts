@@ -59,8 +59,8 @@ describe("B5 — Events & Approval API full-chain", () => {
         symbol: "BTC/USDT",
         side: "buy",
         type: "market",
-        quantity: 3,
-        currentPrice: 200,
+        amount: 3,
+        price: 200,
       }),
     });
 
@@ -100,8 +100,8 @@ describe("B5 — Events & Approval API full-chain", () => {
         symbol: "ETH/USDT",
         side: "buy",
         type: "market",
-        quantity: 2,
-        currentPrice: 300,
+        amount: 2,
+        price: 300,
       }),
     });
 
@@ -319,8 +319,8 @@ describe("B5 — Events & Approval API full-chain", () => {
         symbol: "SOL/USDT",
         side: "buy",
         type: "market",
-        quantity: 2,
-        currentPrice: 150,
+        amount: 2,
+        price: 150,
       }),
     });
     await fetchJson(`${ctx.baseUrl}/api/v1/finance/orders`, {
@@ -330,8 +330,8 @@ describe("B5 — Events & Approval API full-chain", () => {
         symbol: "DOGE/USDT",
         side: "sell",
         type: "market",
-        quantity: 5,
-        currentPrice: 100,
+        amount: 5,
+        price: 100,
       }),
     });
 
