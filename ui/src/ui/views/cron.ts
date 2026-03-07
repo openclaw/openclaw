@@ -1591,6 +1591,9 @@ function renderJob(job: CronJob, props: CronProps) {
 }
 
 function renderJobPayload(job: CronJob) {
+  if (!job.payload) {
+    return nothing;
+  }
   if (job.payload.kind === "systemEvent") {
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>

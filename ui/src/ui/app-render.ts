@@ -183,7 +183,7 @@ export function renderApp(state: AppViewState) {
         ...resolveConfiguredCronModelSuggestions(configValue),
         ...state.cronJobs
           .map((job) => {
-            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+            if (job.payload?.kind !== "agentTurn" || typeof job.payload.model !== "string") {
               return "";
             }
             return job.payload.model.trim();
