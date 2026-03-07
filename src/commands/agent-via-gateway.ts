@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { resolveAgentTimeoutSeconds } from "../agents/timeout.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
@@ -57,7 +58,7 @@ function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout
   const raw =
     opts.timeout !== undefined
       ? Number.parseInt(String(opts.timeout), 10)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+      : resolveAgentTimeoutSeconds(opts.cfg);
   if (Number.isNaN(raw) || raw < 0) {
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
