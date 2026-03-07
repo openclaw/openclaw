@@ -436,30 +436,49 @@ function collectAgentSandboxDockerEnvAssignments(params: {
   const list = Array.isArray(agents.list) ? agents.list : [];
   const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : "off";
 
-  // Defaults env refs are active when any agent's effective sandbox mode is not "off".
-  // When a list exists, each agent's effective mode (agent override ?? defaults) is checked;
-  // when the list is empty, defaults mode applies directly.
+  // Per-key activity: a defaults env key is active when at least one agent consumes it.
+  // An agent consumes a defaults env key when it is enabled, its effective sandbox mode
+  // is not "off", and either its scope is "shared" (agent docker ignored, defaults env
+  // used directly) or it does not override that key in its own sandbox.docker.env.
   if (defaultsEnv) {
-    const anyAgentSandboxed =
-      list.length === 0
-        ? defaultsMode !== "off"
-        : list.some((rawAgent) => {
-            if (!isRecord(rawAgent) || rawAgent.enabled === false) {
-              return false;
-            }
-            const agentSandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
-            const effectiveMode =
-              typeof agentSandbox?.mode === "string" ? agentSandbox.mode : defaultsMode;
-            return effectiveMode !== "off";
-          });
-    collectSandboxDockerEnvAssignments({
-      env: defaultsEnv,
-      pathPrefix: "agents.defaults.sandbox.docker.env",
-      defaults: params.defaults,
-      context: params.context,
-      active: anyAgentSandboxed,
-      inactiveReason: "sandbox mode is off; env refs are not consumed.",
-    });
+    for (const [key, value] of Object.entries(defaultsEnv)) {
+      const active =
+        list.length === 0
+          ? defaultsMode !== "off"
+          : list.some((rawAgent) => {
+              if (!isRecord(rawAgent) || rawAgent.enabled === false) {
+                return false;
+              }
+              const agentSandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+              const effectiveMode =
+                typeof agentSandbox?.mode === "string" ? agentSandbox.mode : defaultsMode;
+              if (effectiveMode === "off") {
+                return false;
+              }
+              const effectiveScope = computeEffectiveSandboxScope(agentSandbox, defaultsSandbox);
+              if (effectiveScope === "shared") {
+                return true;
+              }
+              const docker = isRecord(agentSandbox?.docker) ? agentSandbox.docker : undefined;
+              const agentEnv = isRecord(docker?.env) ? docker.env : undefined;
+              return !agentEnv || !Object.prototype.hasOwnProperty.call(agentEnv, key);
+            });
+
+      collectSecretInputAssignment({
+        value,
+        path: `agents.defaults.sandbox.docker.env.${key}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason: active
+          ? undefined
+          : "defaults env key is not consumed by any active agent.",
+        apply: (resolved) => {
+          defaultsEnv[key] = resolved as string;
+        },
+      });
+    }
   }
 
   list.forEach((rawAgent, index) => {

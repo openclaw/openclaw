@@ -2516,6 +2516,62 @@ describe("secrets runtime snapshot", () => {
     expect(env?.SHARED_KEY).toBe("shared-resolved");
   });
 
+  it("treats defaults env key as inactive when all active agents override it", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                OVERRIDDEN: { source: "env", provider: "default", id: "MISSING_OVERRIDDEN" },
+                NOT_OVERRIDDEN: { source: "env", provider: "default", id: "NOT_OVERRIDDEN_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "agent-a",
+            sandbox: {
+              docker: {
+                env: { OVERRIDDEN: "agent-a-value" },
+              },
+            },
+          },
+          {
+            id: "agent-b",
+            sandbox: {
+              docker: {
+                env: { OVERRIDDEN: "agent-b-value" },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { NOT_OVERRIDDEN_SECRET: "resolved-not-overridden" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    // OVERRIDDEN is shadowed by all agents — should be inactive (unresolved ref stays).
+    expect(env?.OVERRIDDEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_OVERRIDDEN",
+    });
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.defaults.sandbox.docker.env.OVERRIDDEN",
+    );
+    // NOT_OVERRIDDEN is consumed by both agents — should resolve.
+    expect(env?.NOT_OVERRIDDEN).toBe("resolved-not-overridden");
+  });
+
   it("resolves mixed plain string and SecretRef values in sandbox.docker.env", async () => {
     const config = asConfig({
       agents: {
