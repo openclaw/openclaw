@@ -68,10 +68,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             BASE="${{ github.event.before }}"
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="$PR_BASE_SHA"
           fi
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
@@ -322,15 +322,17 @@ jobs:
       - name: Detect secrets
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             echo "Skipping detect-secrets on main until the allowlist cleanup lands."
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
@@ -343,13 +345,13 @@ jobs:
             [ -f "$path" ] || continue
             changed_files+=("$path")
           done < <(
-            gh api "repos/$GITHUB_REPO_NAME/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
+            gh api "repos/$GITHUB_REPO_NAME/pulls/$PR_NUMBER/files?per_page=100" \
               --paginate \
               --jq '.[].filename'
           )
 
           if [ "${#changed_files[@]}" -eq 0 ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="$PR_BASE_SHA"
             if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
               while IFS= read -r path; do
                 [ -n "$path" ] || continue
@@ -371,16 +373,31 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+          workflow_files=()
+
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            BASE="$PUSH_BASE_SHA"
+            mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            mapfile -t workflow_files < <(
+              gh api "repos/$GITHUB_REPO_NAME/pulls/$PR_NUMBER/files?per_page=100" \
+                --paginate \
+                --jq '.[] | .filename | select(test("^\.github/workflows/.*\.ya?ml$"))'
+            )
+            if [ "${#workflow_files[@]}" -eq 0 ]; then
+              BASE="$PR_BASE_SHA"
+              mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+            fi
           fi
 
-          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if [ "${#workflow_files[@]}" -eq 0 ]; then
             echo "No workflow changes detected; skipping zizmor."
             exit 0
