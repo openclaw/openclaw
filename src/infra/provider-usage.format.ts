@@ -105,9 +105,12 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
     lines.push(`  ${entry.displayName}${planSuffix}`);
     for (const window of entry.windows) {
       const remaining = clampPercent(100 - window.usedPercent);
+      const used = clampPercent(window.usedPercent);
       const reset = formatResetRemaining(window.resetAt, opts?.now);
       const resetSuffix = reset ? ` · resets ${reset}` : "";
-      lines.push(`    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
+      lines.push(
+        `    ${window.label}: ${remaining.toFixed(0)}% left · ${used.toFixed(0)}% used${resetSuffix}`,
+      );
     }
   }
   return lines;

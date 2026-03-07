@@ -548,4 +548,112 @@ export const usageStylesPart3 = `
     color: var(--text);
     border-color: var(--border-strong);
   }
+
+  /* ===== QUOTA PANEL ===== */
+  .quota-providers {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .quota-provider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+  }
+  .quota-provider-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .quota-provider-label {
+    font-size: 13px;
+    font-weight: 600;
+    flex: 1;
+  }
+  .quota-status-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 500;
+  }
+  .quota-status-unconfigured {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .quota-status-error {
+    background: rgba(201, 55, 44, 0.1);
+    border: 1px solid rgba(201, 55, 44, 0.3);
+    color: #c9372c;
+  }
+  .quota-status-warn {
+    background: rgba(197, 122, 0, 0.1);
+    border: 1px solid rgba(197, 122, 0, 0.3);
+    color: #c57a00;
+  }
+  .quota-plan-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--accent-subtle);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .quota-provider-hint {
+    font-size: 11px;
+    line-height: 1.4;
+    margin-top: 2px;
+  }
+  .quota-windows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .quota-window-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .quota-window-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+  }
+  .quota-window-label {
+    color: var(--muted);
+  }
+  .quota-window-pct {
+    font-weight: 600;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .quota-window-pct.good { color: #1f8f4e; }
+  .quota-window-pct.warn { color: #c57a00; }
+  .quota-window-pct.bad  { color: #c9372c; }
+  .quota-bar-track {
+    height: 6px;
+    border-radius: 4px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .quota-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+  }
+  .quota-bar-ok       { background: #1f8f4e; }
+  .quota-bar-warn     { background: #c57a00; }
+  .quota-bar-critical { background: #c9372c; }
+  .quota-window-reset {
+    font-size: 10px;
+    text-align: right;
+  }
 `;

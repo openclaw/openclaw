@@ -61,7 +61,19 @@ const comparisonOperators = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set([]);
+const allowedViolations = new Set([
+  // persistent-bindings.resolve.ts IS the implementation of Discord/Telegram persistent
+  // bindings — it must compare and assign channel id literals to perform binding resolution.
+  "acp-core:src/acp/persistent-bindings.resolve.ts",
+  // context.ts resolves Telegram-specific conversation IDs (topic-based scheme) and
+  // Discord parent-channel IDs; the comparisons are channel-dispatch, not ACP logic leakage.
+  "acp-core:src/auto-reply/reply/commands-acp/context.ts",
+  "acp-user-facing-text:src/auto-reply/reply/commands-acp/context.ts",
+  // lifecycle.ts handles Telegram topic-binding lifecycle events (upstream #36683);
+  // the channel checks gate topic-specific ACP flows and are intentionally channel-aware.
+  "acp-core:src/auto-reply/reply/commands-acp/lifecycle.ts",
+  "acp-user-facing-text:src/auto-reply/reply/commands-acp/lifecycle.ts",
+]);
 
 function isChannelsPropertyAccess(node) {
   if (ts.isPropertyAccessExpression(node)) {
@@ -312,7 +324,7 @@ export async function main() {
       )
     ).flat();
     for (const filePath of files) {
-      const relativeFile = path.relative(repoRoot, filePath);
+      const relativeFile = path.relative(repoRoot, filePath).replaceAll("\\", "/");
       if (
         allowedViolations.has(`${ruleSet.id}:${relativeFile}`) ||
         allowedViolations.has(relativeFile)

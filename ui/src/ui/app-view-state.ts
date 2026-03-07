@@ -157,6 +157,8 @@ export type AppViewState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: import("./types.js").ProviderUsageSummary | null;
+  usageProviderSummaryError: string | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;

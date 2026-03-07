@@ -8,6 +8,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
   minimax: "MiniMax",
+  moonshot: "Kimi",
   "openai-codex": "Codex",
   xiaomi: "Xiaomi",
   zai: "z.ai",
@@ -18,6 +19,7 @@ export const usageProviders: UsageProviderId[] = [
   "github-copilot",
   "google-gemini-cli",
   "minimax",
+  "moonshot",
   "openai-codex",
   "xiaomi",
   "zai",
@@ -28,6 +30,9 @@ export function resolveUsageProviderId(provider?: string | null): UsageProviderI
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (normalized === "kimi-coding" || normalized === "kimi-code") {
+    return "moonshot";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;
