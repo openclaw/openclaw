@@ -504,6 +504,8 @@ export function resolveAgentModelResolutionState(params: {
     };
   }
 
+  const strictModelId = splitTrailingAuthProfile(resolved.model).model;
+
   const configuredProviders = collectConfiguredProviderIds(params.cfg);
   const providerKnownByConfig = configuredProviders.has(resolved.provider);
   const configuredProvider = findNormalizedProviderValue(
@@ -526,7 +528,7 @@ export function resolveAgentModelResolutionState(params: {
     const modelExistsInCatalog = params.catalog.some(
       (entry) =>
         normalizeProviderId(entry.provider) === resolved.provider &&
-        entry.id.toLowerCase().trim() === resolved.model.toLowerCase().trim(),
+        entry.id.toLowerCase().trim() === strictModelId.toLowerCase().trim(),
     );
     if (!modelExistsInCatalog) {
       return {
@@ -544,7 +546,7 @@ export function resolveAgentModelResolutionState(params: {
     configuredProvider.models.length > 0
   ) {
     const modelExistsInConfiguredProvider = configuredProvider.models.some(
-      (entry) => entry.id.toLowerCase().trim() === resolved.model.toLowerCase().trim(),
+      (entry) => entry.id.toLowerCase().trim() === strictModelId.toLowerCase().trim(),
     );
     if (!modelExistsInConfiguredProvider) {
       return {

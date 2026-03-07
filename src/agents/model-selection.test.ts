@@ -811,6 +811,40 @@ describe("strict model resolution", () => {
     }
   });
 
+  it("strips trailing auth profile suffix before strict model existence checks", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [strictTestModelDefinition("gpt-4.1-mini")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini@work",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "openai", id: "gpt-4.1-mini", name: "gpt-4.1-mini" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "openai", model: "gpt-4.1-mini@work" },
+    });
+  });
+
   it("ignores non-model allowlist keys when inferring configured providers", () => {
     const cfg = {
       models: {
