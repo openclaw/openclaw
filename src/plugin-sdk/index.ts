@@ -536,6 +536,9 @@ export {
   buildOpenGroupPolicyNoRouteAllowlistWarning,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "../channels/plugins/group-policy-warnings.js";
 export {
   buildAccountScopedDmSecurityPolicy,

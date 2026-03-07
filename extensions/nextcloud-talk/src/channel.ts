@@ -1,7 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyNoRouteAllowlistWarning,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -140,30 +139,25 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
       const roomAllowlistConfigured =
         account.config.rooms && Object.keys(account.config.rooms).length > 0;
-      if (roomAllowlistConfigured) {
-        return [
-          buildOpenGroupPolicyRestrictSendersWarning({
-            surface: "Nextcloud Talk rooms",
-            openScope: "any member in allowed rooms",
-            groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-            groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-          }),
-        ];
-      }
-      return [
-        buildOpenGroupPolicyNoRouteAllowlistWarning({
+      return collectOpenGroupPolicyRouteAllowlistWarnings({
+        groupPolicy,
+        routeAllowlistConfigured: roomAllowlistConfigured,
+        restrictSenders: {
+          surface: "Nextcloud Talk rooms",
+          openScope: "any member in allowed rooms",
+          groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+          groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+        },
+        noRouteAllowlist: {
           surface: "Nextcloud Talk rooms",
           routeAllowlistPath: "channels.nextcloud-talk.rooms",
           routeScope: "room",
           groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
           groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-        }),
-      ];
+        },
+      });
     },
   },
   groups: {
