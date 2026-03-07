@@ -109,7 +109,9 @@ class PipelineExecutor:
                 "final_response": str,
                 "brigade": str,
                 "chain_executed": [str],
-                "steps": [{"role": ..., "model": ..., "response": ...}]
+                "steps": [{"role": ..., "model": ..., "response": ...}],
+                "status": "completed" | "ask_user",
+                "question": str (if ask_user)
             }
         """
         chain = self.get_chain(brigade)[:max_steps]
@@ -120,6 +122,7 @@ class PipelineExecutor:
                 "brigade": brigade,
                 "chain_executed": [],
                 "steps": [],
+                "status": "completed"
             }
 
         logger.info(f"Pipeline START: brigade={brigade}, chain={' → '.join(chain)}")
@@ -179,13 +182,95 @@ class PipelineExecutor:
                 active_mcp = self.openclaw_mcp if brigade == "OpenClaw" else self.dmarket_mcp
                 response = await self._call_ollama(model, system_prompt, step_prompt, role_name, role_config, active_mcp)
 
-            steps_results.append(
-                {
-                    "role": role_name,
-                    "model": model,
-                    "response": response,
-                }
-            )
+            # --- HANDOFF AND ASK_USER INTERCEPTION ---
+            json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+            extracted_json_str = None
+            if json_match:
+                extracted_json_str = json_match.group(1)
+            else:
+                try:
+                    if response.strip().startswith('{') or response.strip().startswith('['):
+                        json.loads(response.strip())
+                        extracted_json_str = response.strip()
+                except ValueError:
+                    pass
+
+            did_handoff = False
+            if extracted_json_str:
+                try:
+                    parsed_json = json.loads(extracted_json_str)
+                    if isinstance(parsed_json, dict) and parsed_json.get("action") == "ask_user":
+                        logger.info("Pipeline suspended for ask_user")
+                        steps_results.append({
+                            "role": role_name,
+                            "model": model,
+                            "response": response,
+                        })
+                        return {
+                            "status": "ask_user",
+                            "question": parsed_json.get("question", "Уточните запрос."),
+                            "brigade": brigade,
+                            "chain_executed": [s["role"] for s in steps_results],
+                            "steps": steps_results,
+                            "final_response": response,
+                        }
+                    
+                    if "Planner" in role_name or "Foreman" in role_name:
+                        logger.info("JSON instructions detected from Planner, executing Handoff to qwen2.5-coder:14b")
+                        steps_results.append({
+                            "role": role_name,
+                            "model": model,
+                            "response": response,
+                        })
+                        
+                        await self._force_unload(model)
+                        
+                        executor_role = "Executor_Tools"
+                        executor_model = "qwen2.5-coder:14b"
+                        executor_sys = "Ты — исполнитель. Твоя задача брать JSON-план Оркестратора и нативно вызывать инструменты MCP. Верни только результат выполнения и проанализируй его."
+                        executor_prompt = f"Выполни эту инструкцию через MCP инструменты SQLite или Filesystem:\n```json\n{extracted_json_str}\n```"
+                        
+                        if status_callback:
+                            await status_callback(
+                                executor_role,
+                                executor_model,
+                                "🛠 Исполнитель вызывает инструменты MCP..."
+                            )
+                        
+                        executor_config = {"model": executor_model}
+                        async with self._vram_protection(executor_model, model):
+                            executor_response = await self._call_ollama(
+                                executor_model, executor_sys, executor_prompt, executor_role, executor_config, active_mcp
+                            )
+                        
+                        steps_results.append({
+                            "role": executor_role,
+                            "model": executor_model,
+                            "response": executor_response
+                        })
+                        
+                        did_handoff = True
+                        # Pipeline logical break since executor has completed the task
+                        break
+
+                except json.JSONDecodeError:
+                    steps_results.append({
+                        "role": role_name,
+                        "model": model,
+                        "response": response,
+                    })
+            else:
+                steps_results.append(
+                    {
+                        "role": role_name,
+                        "model": model,
+                        "response": response,
+                    }
+                )
+            
+            if did_handoff:
+                break
+            # -----------------------------------------
 
             # Git Hygiene: Auto-commit after each successful pipeline execution step
             try:
@@ -207,6 +292,7 @@ class PipelineExecutor:
             "brigade": brigade,
             "chain_executed": [s["role"] for s in steps_results],
             "steps": steps_results,
+            "status": "completed"
         }
 
     async def _call_ollama(self, model: str, system_prompt: str, user_prompt: str, role_name: str, role_config: Dict[str, Any], mcp_client: OpenClawMCPClient) -> str:

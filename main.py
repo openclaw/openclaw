@@ -12,7 +12,7 @@ from typing import Optional
 import structlog
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ForceReply
 from prometheus_client import Counter, Gauge, start_http_server
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -504,6 +504,17 @@ class OpenClawGateway:
         prompt = message.text
         logger.info("received_prompt", prompt=prompt)
 
+        # Check if it's a reply to ask_user
+        is_reply = False
+        if message.reply_to_message and getattr(message.reply_to_message.from_user, "id", None) == message.bot.id:
+            if hasattr(self, 'pending_ask_user') and message.from_user.id in self.pending_ask_user:
+                is_reply = True
+                context = self.pending_ask_user.pop(message.from_user.id)
+                brigade = context["brigade"]
+                original_prompt = context["original_prompt"]
+                prompt = f"Ранее я просил: {original_prompt}\nТвой вопрос ко мне. Вот мой ответ/уточнение: {prompt}\nПродолжай задачу с учетом этих новых данных."
+                logger.info("Resuming pipeline with user clarification", brigade=brigade)
+
         # Session Management: Context Auto-Reset
         if not hasattr(self, '_session_msg_count'):
             self._session_msg_count = 0
@@ -519,7 +530,8 @@ class OpenClawGateway:
             await message.reply(f"🔄 **Внимание:** Достигнут лимит сессии ({reset_limit} сообщений). Окно контекста и память очищены для экономии VRAM.", parse_mode="Markdown")
 
         # 1. Intent Classification (LLM-based with keyword fallback)
-        brigade = await self.classify_intent(prompt)
+        if not is_reply:
+            brigade = await self.classify_intent(prompt)
 
         status_msg = await message.reply(
             f"🤖 *Pipeline ({brigade})* запущен...\n_Маршрутизация задачи в бригаду..._",
@@ -544,6 +556,35 @@ class OpenClawGateway:
             brigade=brigade,
             status_callback=update_status,
         )
+
+        if result.get("status") == "ask_user":
+            question = result.get("question", "Оркестратору нужно уточнение.")
+            if not hasattr(self, 'pending_ask_user'):
+                self.pending_ask_user = {}
+                
+            self.pending_ask_user[message.from_user.id] = {
+                "original_prompt": prompt,
+                "brigade": brigade
+            }
+            
+            markup = ForceReply(selective=True)
+            try:
+                await status_msg.edit_text(
+                    f"❓ *Вопрос от Оркестратора:*\n\n{question}",
+                    parse_mode="Markdown"
+                )
+                await message.reply("Ответьте на это сообщение для продолжения (Reply):", reply_markup=markup)
+            except Exception:
+                await message.reply(
+                    f"❓ *Вопрос от Оркестратора:*\n\n{question}",
+                    parse_mode="Markdown",
+                    reply_markup=markup
+                )
+                
+            await self.archivist.send_status(
+                f"Router ({brigade})", "Clarification Loop", "Пайплайн приостановлен. Ожидается ответ пользователя."
+            )
+            return
 
         llm_response = result["final_response"]
         chain_str = " → ".join(result["chain_executed"])
