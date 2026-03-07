@@ -383,7 +383,7 @@ describe("GatewayClient connect auth payload", () => {
     );
   }
 
-  it("uses explicit shared token and does not inject stored device token", () => {
+  it("includes stored device token for fallback auth when explicit shared token is provided", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
@@ -398,7 +398,7 @@ describe("GatewayClient connect auth payload", () => {
     expect(connectFrameFrom(ws)).toMatchObject({
       token: "shared-token",
     });
-    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    expect(connectFrameFrom(ws).deviceToken).toBe("stored-device-token");
     client.stop();
   });
 

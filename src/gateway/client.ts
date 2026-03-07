@@ -253,10 +253,10 @@ export class GatewayClient {
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    // Keep shared gateway credentials explicit. Persisted per-device tokens only
-    // participate when no explicit shared token is provided.
-    const resolvedDeviceToken =
-      explicitDeviceToken ?? (!explicitGatewayToken ? (storedToken ?? undefined) : undefined);
+    // Always include the device token when available. The server uses auth.deviceToken
+    // as a fallback when auth.token fails shared auth validation (e.g., when gateway.auth.token
+    // is configured but the client sends its per-device token from paired.json).
+    const resolvedDeviceToken = explicitDeviceToken ?? storedToken ?? undefined;
     // Legacy compatibility: keep `auth.token` populated for device-token auth when
     // no explicit shared token is present.
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
