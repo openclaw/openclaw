@@ -760,11 +760,11 @@ export async function compactEmbeddedPiSessionDirect(
         // Measure compactedCount from the original pre-limiting transcript so compaction
         // lifecycle metrics represent total reduction through the compaction pipeline.
         const messageCountCompactionInput = messageCountOriginal;
-        // Note: session.compact() does not accept an abort signal directly,
-        // but the merged signal ensures Promise.race resolves immediately
-        // on external abort, and the caller's session.abort() handles cleanup.
+        // session.compact() does not accept an abort signal directly (Pi SDK limitation).
+        // The merged signal inside compactWithSafetyTimeout ensures Promise.race rejects
+        // immediately on external abort; the caller's session.abort() handles cleanup.
         const result = await compactWithSafetyTimeout(
-          () => session.compact(params.customInstructions),
+          (_signal) => session.compact(params.customInstructions),
           compactionTimeoutMs,
           params.abortSignal,
         );
