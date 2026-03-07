@@ -2,29 +2,60 @@ import { isIP } from "node:net";
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
 
-function normalizeNoProxyEntry(entry: string): string {
+type NoProxyEntry = {
+  pattern: string;
+  port?: string;
+};
+
+function normalizeNoProxyEntry(entry: string): NoProxyEntry | null {
   const value = entry.trim().toLowerCase();
   if (!value) {
-    return "";
+    return null;
+  }
+  if (value === "*" || value.includes("/")) {
+    return { pattern: value };
   }
   if (value.startsWith("[")) {
     const closingBracket = value.indexOf("]");
     if (closingBracket > 0) {
-      return value.slice(1, closingBracket);
+      const pattern = value.slice(1, closingBracket);
+      const remainder = value.slice(closingBracket + 1);
+      if (!remainder) {
+        return { pattern };
+      }
+      if (/^:\d+$/.test(remainder)) {
+        return { pattern, port: remainder.slice(1) };
+      }
+      return { pattern: value };
     }
   }
   const colonCount = value.split(":").length - 1;
-  if (colonCount === 1 && !value.startsWith(".")) {
-    return value.slice(0, value.lastIndexOf(":"));
+  if (colonCount === 1) {
+    const lastColon = value.lastIndexOf(":");
+    const pattern = value.slice(0, lastColon);
+    const port = value.slice(lastColon + 1);
+    if (pattern && /^\d+$/.test(port)) {
+      return { pattern, port };
+    }
   }
-  return value;
+  return { pattern: value };
 }
 
-function getNoProxyEntries(env: NodeJS.ProcessEnv): string[] {
+function getNoProxyEntries(env: NodeJS.ProcessEnv): NoProxyEntry[] {
   return [env.NO_PROXY, env.no_proxy]
     .flatMap((value) => String(value ?? "").split(","))
     .map(normalizeNoProxyEntry)
-    .filter(Boolean);
+    .filter((entry): entry is NoProxyEntry => Boolean(entry));
+}
+
+function getDefaultPort(protocol: string): string {
+  if (protocol === "http:") {
+    return "80";
+  }
+  if (protocol === "https:") {
+    return "443";
+  }
+  return "";
 }
 
 function parseIpv4(value: string): number | null {
@@ -66,12 +97,15 @@ function matchesIpv4Cidr(hostname: string, cidr: string): boolean {
 
 function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
   let hostname: string;
+  let port: string;
   try {
-    const rawHostname = new URL(targetUrl).hostname.trim().toLowerCase();
+    const target = new URL(targetUrl);
+    const rawHostname = target.hostname.trim().toLowerCase();
     hostname =
       rawHostname.startsWith("[") && rawHostname.endsWith("]")
         ? rawHostname.slice(1, -1)
         : rawHostname;
+    port = target.port || getDefaultPort(target.protocol);
   } catch {
     return false;
   }
@@ -88,18 +122,21 @@ function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
 
   const entries = getNoProxyEntries(env);
   return entries.some((entry) => {
-    if (entry === "*") {
+    if (entry.pattern === "*") {
       return true;
+    }
+    if (entry.port && port && entry.port !== port) {
+      return false;
     }
     // Support the CIDR-style no_proxy values commonly used in local/self-hosted
     // deployments even though undici's EnvHttpProxyAgent does not reliably do so.
-    if (entry.includes("/")) {
-      return isIP(hostname) === 4 && matchesIpv4Cidr(hostname, entry);
+    if (entry.pattern.includes("/")) {
+      return isIP(hostname) === 4 && matchesIpv4Cidr(hostname, entry.pattern);
     }
-    if (entry.startsWith(".")) {
-      return hostname.endsWith(entry);
+    if (entry.pattern.startsWith(".")) {
+      return hostname.endsWith(entry.pattern);
     }
-    return hostname === entry || hostname.endsWith(`.${entry}`);
+    return hostname === entry.pattern || hostname.endsWith(`.${entry.pattern}`);
   });
 }
 

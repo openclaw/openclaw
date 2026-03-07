@@ -123,6 +123,31 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps proxy fetch when no_proxy host:port only matches a different port", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "internal.example:8443,.example.internal:8443");
+
+    expect(resolveProxyFetchFromEnv("http://internal.example:8080/health")).toBeDefined();
+    expect(resolveProxyFetchFromEnv("http://api.example.internal:8080/health")).toBeDefined();
+    expect(envAgentSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns undefined for no_proxy suffix host:port matches", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", ".example.internal:8443");
+
+    expect(resolveProxyFetchFromEnv("http://api.example.internal:8443/health")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for no_proxy host:port entries that match the default scheme port", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "example.com:443");
+
+    expect(resolveProxyFetchFromEnv("https://example.com/v1/models")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     // Stub empty vars first — on Windows, process.env is case-insensitive so
     // HTTPS_PROXY and https_proxy share the same slot. Value must be set LAST.
