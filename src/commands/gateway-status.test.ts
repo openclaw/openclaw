@@ -149,7 +149,7 @@ function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok
   };
 }
 
-function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
+function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") { // pragma: allowlist secret
   loadConfig.mockReturnValueOnce({
     secrets: {
       providers: {
