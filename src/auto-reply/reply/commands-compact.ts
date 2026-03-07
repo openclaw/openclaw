@@ -16,6 +16,7 @@ import { formatContextUsageShort, formatTokenCount } from "../status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { runLearnForSession } from "./commands-learn.js";
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -68,6 +69,38 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     abortEmbeddedPiRun(sessionId);
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+
+  const learnResult = await runLearnForSession({
+    sessionId,
+    sessionKey: params.sessionKey,
+    messageChannel: params.command.channel,
+    groupId: params.sessionEntry.groupId,
+    groupChannel: params.sessionEntry.groupChannel,
+    groupSpace: params.sessionEntry.space,
+    spawnedBy: params.sessionEntry.spawnedBy,
+    sessionFile: resolveSessionFilePath(
+      sessionId,
+      params.sessionEntry,
+      resolveSessionFilePathOptions({
+        agentId: params.agentId,
+        storePath: params.storePath,
+      }),
+    ),
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    config: params.cfg,
+    skillsSnapshot: params.sessionEntry.skillsSnapshot,
+    provider: params.provider,
+    model: params.model,
+    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    customFocus: "What insights and lessons should be remembered before context compaction?",
+    senderIsOwner: params.command.senderIsOwner,
+    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+  });
+  if (learnResult.ok) {
+    logVerbose(`Pre-compaction learning completed for session ${params.sessionKey}`);
+  }
+
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,

@@ -13,6 +13,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleLearnCommand } from "./commands-learn.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -40,6 +41,11 @@ import type {
   HandleCommandsParams,
 } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
+import { runLearnForSession } from "./commands-learn.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions.js";
 
 let HANDLERS: CommandHandler[] | null = null;
 
@@ -194,6 +200,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleModelsCommand,
       handleStopCommand,
       handleCompactCommand,
+      handleLearnCommand,
       handleAbortTrigger,
     ];
   }
@@ -204,6 +211,40 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+
+  // Trigger learning before reset/new commands
+  if (resetRequested && params.command.isAuthorizedSender && params.sessionEntry?.sessionId) {
+    const learnResult = await runLearnForSession({
+      sessionId: params.sessionEntry.sessionId,
+      sessionKey: params.sessionKey,
+      messageChannel: params.command.channel,
+      groupId: params.sessionEntry.groupId,
+      groupChannel: params.sessionEntry.groupChannel,
+      groupSpace: params.sessionEntry.space,
+      spawnedBy: params.sessionEntry.spawnedBy,
+      sessionFile: resolveSessionFilePath(
+        params.sessionEntry.sessionId,
+        params.sessionEntry,
+        resolveSessionFilePathOptions({
+          agentId: params.agentId,
+          storePath: params.storePath,
+        }),
+      ),
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      config: params.cfg,
+      skillsSnapshot: params.sessionEntry.skillsSnapshot,
+      provider: params.provider,
+      model: params.model,
+      thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+      customFocus: "What insights and lessons should be remembered before starting a new session?",
+      senderIsOwner: params.command.senderIsOwner,
+      ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    });
+    if (learnResult.ok) {
+      logVerbose(`Pre-reset learning completed for session ${params.sessionKey}`);
+    }
   }
 
   // Trigger internal hook for reset/new commands
