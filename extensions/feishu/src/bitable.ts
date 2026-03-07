@@ -212,8 +212,24 @@ async function createRecord(
   client: Lark.Client,
   appToken: string,
   tableId: string,
-  fields: Record<string, unknown>,
+  fields: Record<string, unknown> | Record<string, unknown>[],
 ) {
+  // Batch mode: fields is an array of records
+  if (Array.isArray(fields)) {
+    const records = fields.map((f) => ({ fields: f }));
+    const res = await client.bitable.appTableRecord.batchCreate({
+      path: { app_token: appToken, table_id: tableId },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      data: { records: records as any },
+    });
+    ensureLarkSuccess(res, "bitable.appTableRecord.batchCreate", { appToken, tableId });
+    return {
+      records: res.data?.records,
+      total: res.data?.records?.length ?? 0,
+    };
+  }
+
+  // Single record mode
   const res = await client.bitable.appTableRecord.create({
     path: { app_token: appToken, table_id: tableId },
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -478,14 +494,18 @@ const GetRecordSchema = Type.Object({
   record_id: Type.String({ description: "Record ID to retrieve" }),
 });
 
+const FieldsRecord = Type.Record(Type.String(), Type.Any(), {
+  description:
+    "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
+});
 const CreateRecordSchema = Type.Object({
   app_token: Type.String({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Union([FieldsRecord, Type.Array(FieldsRecord)], {
     description:
-      "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
+      "Single record: {field: value}. Batch: [{field: value}, ...] (up to 500 rows per call, uses batchCreate internally).",
   }),
 });
 
@@ -645,7 +665,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   registerBitableTool<{
     app_token: string;
     table_id: string;
-    fields: Record<string, unknown>;
+    fields: Record<string, unknown> | Record<string, unknown>[];
     accountId?: string;
   }>({
     name: "feishu_bitable_create_record",
