@@ -3,6 +3,7 @@ summary: "Use ACP runtime sessions for Pi, Claude Code, Codex, OpenCode, Gemini 
 read_when:
   - Running coding harnesses through ACP
   - Setting up thread-bound ACP sessions on thread-capable channels
+  - Binding Discord channels or Telegram forum topics to persistent ACP sessions
   - Troubleshooting ACP backend and plugin wiring
   - Operating /acp commands from chat
 title: "ACP Agents"
@@ -78,12 +79,135 @@ Required feature flags for thread-bound ACP:
 - `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch)
 - Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
 
 ### Thread supporting channels
 
 - Any channel adapter that exposes session/thread binding capability.
-- Current built-in support: Discord.
+- Current built-in support:
+  - Discord threads/channels
+  - Telegram topics (forum topics in groups/supergroups and DM topics)
 - Plugin channels can add support through the same binding interface.
+
+## Channel specific settings
+
+For non-ephemeral workflows, configure persistent ACP bindings in top-level `bindings[]` entries.
+
+### Binding model
+
+- `bindings[].type="acp"` marks a persistent ACP conversation binding.
+- `bindings[].match` identifies the target conversation:
+  - Discord channel or thread: `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
+  - Telegram forum topic: `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
+- `bindings[].agentId` is the owning OpenClaw agent id.
+- Optional ACP overrides live under `bindings[].acp`:
+  - `mode` (`persistent` or `oneshot`)
+  - `label`
+  - `cwd`
+  - `backend`
+
+### Runtime defaults per agent
+
+Use `agents.list[].runtime` to define ACP defaults once per agent:
+
+- `agents.list[].runtime.type="acp"`
+- `agents.list[].runtime.acp.agent` (harness id, for example `codex` or `claude`)
+- `agents.list[].runtime.acp.backend`
+- `agents.list[].runtime.acp.mode`
+- `agents.list[].runtime.acp.cwd`
+
+Override precedence for ACP bound sessions:
+
+1. `bindings[].acp.*`
+2. `agents.list[].runtime.acp.*`
+3. global ACP defaults (for example `acp.backend`)
+
+Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+      {
+        id: "claude",
+        runtime: {
+          type: "acp",
+          acp: { agent: "claude", backend: "acpx", mode: "persistent" },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "222222222222222222" },
+      },
+      acp: { label: "codex-main" },
+    },
+    {
+      type: "acp",
+      agentId: "claude",
+      match: {
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "-1001234567890:topic:42" },
+      },
+      acp: { cwd: "/workspace/repo-b" },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "discord", accountId: "default" },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "telegram", accountId: "default" },
+    },
+  ],
+  channels: {
+    discord: {
+      guilds: {
+        "111111111111111111": {
+          channels: {
+            "222222222222222222": { requireMention: false },
+          },
+        },
+      },
+    },
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          topics: { "42": { requireMention: false } },
+        },
+      },
+    },
+  },
+}
+```
+
+Behavior:
+
+- OpenClaw ensures the configured ACP session exists before use.
+- Messages in that channel or topic route to the configured ACP session.
+- In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
+- Temporary runtime bindings (for example created by thread-focus flows) still apply where present.
 
 ## Start ACP sessions (interfaces)
 
@@ -182,7 +306,9 @@ If no target resolves, OpenClaw returns a clear error (`Unable to resolve sessio
 Notes:
 
 - On non-thread binding surfaces, default behavior is effectively `off`.
-- Thread-bound spawn requires channel policy support (for Discord: `channels.discord.threadBindings.spawnAcpSessions=true`).
+- Thread-bound spawn requires channel policy support:
+  - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
 
 ## ACP controls
 

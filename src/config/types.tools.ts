@@ -1,6 +1,7 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
@@ -327,7 +328,7 @@ export type MemorySearchConfig = {
   provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
@@ -443,7 +444,7 @@ export type ToolsConfig = {
       /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
       provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
-      apiKey?: string;
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -453,7 +454,7 @@ export type ToolsConfig = {
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
         /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         baseUrl?: string;
         /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
@@ -462,7 +463,7 @@ export type ToolsConfig = {
       /** Grok-specific configuration (used when provider="grok"). */
       grok?: {
         /** API key for xAI (defaults to XAI_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use (defaults to "grok-4-1-fast"). */
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
@@ -471,14 +472,14 @@ export type ToolsConfig = {
       /** Gemini-specific configuration (used when provider="gemini"). */
       gemini?: {
         /** Gemini API key (defaults to GEMINI_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
         model?: string;
       };
       /** Kimi-specific configuration (used when provider="kimi"). */
       kimi?: {
         /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
