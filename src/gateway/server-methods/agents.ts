@@ -825,25 +825,63 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
+
+    // Determine whether the resolved ioPath is within the workspace root or in an
+    // operator-trusted external directory (allowedExternalPaths symlink target).
+    // For workspace-internal files: use the existing relative-path + workspaceReal root.
+    // For external symlink targets: write directly to ioPath using its parent as the
+    // root, so writeFileWithinRoot never receives a `..`-prefixed relative path that
+    // would be rejected by the root-boundary checks in openWritableFileWithinRoot.
     const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
-    if (
-      !relativeWritePath ||
-      relativeWritePath.startsWith("..") ||
-      path.isAbsolute(relativeWritePath)
-    ) {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
-    }
-    try {
-      await writeFileWithinRoot({
-        rootDir: resolvedPath.workspaceReal,
-        relativePath: relativeWritePath,
-        data: content,
-        encoding: "utf8",
-      });
-    } catch {
-      respondWorkspaceFileUnsafe(respond, name);
-      return;
+    const isExternalSymlinkTarget =
+      relativeWritePath.startsWith("..") || path.isAbsolute(relativeWritePath);
+
+    if (isExternalSymlinkTarget) {
+      // Only allow if the target was explicitly cleared by allowedExternalPaths during
+      // resolveWorkspaceFilePathOrRespond above.  That function would have returned
+      // undefined (already responded with an error) if the target was not permitted,
+      // so reaching this point means allowedExternalPaths approved the ioPath.
+      if (!allowedExternalPaths.length) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await writeFileWithinRoot({
+          rootDir: path.dirname(resolvedPath.ioPath),
+          relativePath: path.basename(resolvedPath.ioPath),
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+    } else {
+      if (!relativeWritePath) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      // Reject in-workspace symlink aliases: if the resolved ioPath doesn't match
+      // the requested file name, the workspace file is a symlink pointing to a
+      // different location within the workspace.  Allow reads (for shared context
+      // files) but reject writes to prevent an agent from overwriting an arbitrary
+      // workspace file via a symlink alias.
+      const normalizedName = path.normalize(name);
+      if (relativeWritePath !== normalizedName) {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
+      try {
+        await writeFileWithinRoot({
+          rootDir: resolvedPath.workspaceReal,
+          relativePath: relativeWritePath,
+          data: content,
+          encoding: "utf8",
+        });
+      } catch {
+        respondWorkspaceFileUnsafe(respond, name);
+        return;
+      }
     }
     const meta = await statFileSafely(resolvedPath.ioPath, allowedExternalPaths);
     respond(

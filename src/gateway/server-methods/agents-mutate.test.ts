@@ -909,3 +909,115 @@ describe("agents.files.get allowedExternalPaths", () => {
     );
   });
 });
+
+describe("agents.files.set allowedExternalPaths", () => {
+  const workspace = "/workspace/test-agent";
+  const candidate = path.resolve(workspace, "AGENTS.md");
+  const externalTarget = "/home/clawd/shared/AGENTS.md";
+  const externalTargetStat = makeFileStat({ size: 42, mtimeMs: 9999 });
+
+  function setupExternalSymlinkForSet(target: string, targetStat: ReturnType<typeof makeFileStat>) {
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      if (p === candidate) {
+        return target;
+      }
+      if (p === target) {
+        return target;
+      }
+      if (p === path.dirname(target)) {
+        return path.dirname(target);
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeSymlinkStat();
+      }
+      if (p === target) {
+        return targetStat;
+      }
+      throw createEnoentError();
+    });
+    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === target) {
+        return targetStat;
+      }
+      throw createEnoentError();
+    });
+    mocks.fsOpen.mockImplementation(
+      async () =>
+        ({
+          stat: async () => targetStat,
+          readFile: async () => Buffer.from(""),
+          truncate: async () => {},
+          writeFile: async () => {},
+          close: async () => {},
+        }) as unknown,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+    mocks.fsMkdir.mockResolvedValue(undefined);
+  });
+
+  it("writes through an external symlink when target is within allowedExternalPaths", async () => {
+    setupExternalSymlinkForSet(externalTarget, externalTargetStat);
+    mocks.loadConfigReturn = {
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared/"] } } },
+    };
+
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "AGENTS.md",
+      content: "updated content",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+  });
+
+  it("rejects agents.files.set when symlink target is outside allowedExternalPaths", async () => {
+    setupExternalSymlinkForSet("/home/clawd/other/secret.md", makeFileStat({ size: 10 }));
+    mocks.loadConfigReturn = {
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared/"] } } },
+    };
+
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "AGENTS.md",
+      content: "should be rejected",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("rejects agents.files.set on external symlink when no allowedExternalPaths configured", async () => {
+    setupExternalSymlinkForSet(externalTarget, externalTargetStat);
+    mocks.loadConfigReturn = {};
+
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "AGENTS.md",
+      content: "should be rejected",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+});
