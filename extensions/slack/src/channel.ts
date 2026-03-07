@@ -1,5 +1,6 @@
 import {
   applyAccountNameToChannelSection,
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -443,19 +444,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
               "botTokenStatus",
               "appTokenStatus",
             ])) ?? isSlackAccountConfigured(account);
-      return {
+      const base = buildComputedAccountStatusSnapshot({
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
         configured,
-        ...projectCredentialSnapshotFields(account),
-        running: runtime?.running ?? false,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
+        runtime,
         probe,
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      });
+      return {
+        ...base,
+        ...projectCredentialSnapshotFields(account),
       };
     },
   },
