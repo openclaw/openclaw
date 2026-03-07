@@ -1,4 +1,4 @@
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
