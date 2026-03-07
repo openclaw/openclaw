@@ -10,8 +10,8 @@ const baseParams = {
 };
 
 describe("buildReplyPayloads media filter integration", () => {
-  it("strips media URL from payload when in messagingToolSentMediaUrls", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
@@ -21,8 +21,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBeUndefined();
   });
 
-  it("preserves media URL when not in messagingToolSentMediaUrls", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
@@ -32,8 +32,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
-  it("applies media filter after text filter", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("applies media filter after text filter", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentTexts: ["hello world!"],
@@ -44,8 +44,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("does not dedupe text for cross-target messaging sends", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("does not dedupe text for cross-target messaging sends", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "telegram",
@@ -58,8 +58,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 
-  it("does not dedupe media for cross-target messaging sends", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("does not dedupe media for cross-target messaging sends", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
       messageProvider: "telegram",
@@ -72,8 +72,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
-  it("suppresses same-target replies when messageProvider is synthetic but originatingChannel is set", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("suppresses same-target replies when messageProvider is synthetic but originatingChannel is set", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
@@ -86,8 +86,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("suppresses same-target replies when message tool target provider is generic", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("suppresses same-target replies when message tool target provider is generic", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
@@ -100,8 +100,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("suppresses same-target replies when target provider is channel alias", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("suppresses same-target replies when target provider is channel alias", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
@@ -114,8 +114,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("does not suppress same-target replies when accountId differs", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("does not suppress same-target replies when accountId differs", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
