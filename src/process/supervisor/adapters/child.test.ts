@@ -65,15 +65,8 @@ describe("createChildAdapter", () => {
       options?: { detached?: boolean };
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
-    // On Windows, detached defaults to false (headless Scheduled Task compat);
-    // on POSIX, detached is true with a no-detach fallback.
-    if (process.platform === "win32") {
-      expect(spawnArgs.options?.detached).toBe(false);
-      expect(spawnArgs.fallbacks).toEqual([]);
-    } else {
-      expect(spawnArgs.options?.detached).toBe(true);
-      expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
-    }
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.fallbacks ?? []).toEqual([]);
 
     adapter.kill();
 
@@ -81,13 +74,13 @@ describe("createChildAdapter", () => {
     expect(killMock).not.toHaveBeenCalled();
   });
 
-  it("uses direct child.kill for non-SIGKILL signals", async () => {
+  it("uses process-tree kill for SIGTERM with extended grace", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
     adapter.kill("SIGTERM");
 
-    expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expect(killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(killProcessTreeMock).toHaveBeenCalledWith(7654, { graceMs: 10_000 });
+    expect(killMock).not.toHaveBeenCalled();
   });
 
   it("keeps inherited env when no override env is provided", async () => {
