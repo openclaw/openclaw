@@ -18,6 +18,39 @@ function normalizePositiveInt(value: unknown): number | null {
   return int > 0 ? int : null;
 }
 
+function resolveCodexConfigContextWindow(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  modelId: string,
+): number | null {
+  if (provider !== "openai-codex") {
+    return null;
+  }
+  const models = cfg?.agents?.defaults?.models as
+    | Record<string, { params?: Record<string, unknown> }>
+    | undefined;
+  if (!models) {
+    return null;
+  }
+  const key = `${provider}/${modelId}`.trim().toLowerCase();
+  let modelParams: Record<string, unknown> | undefined;
+  for (const [rawKey, entry] of Object.entries(models)) {
+    if (rawKey.trim().toLowerCase() === key) {
+      modelParams = entry?.params;
+      break;
+    }
+  }
+  if (!modelParams) {
+    return null;
+  }
+  const hardCap = normalizePositiveInt(modelParams.modelContextWindow);
+  const compactLimit = normalizePositiveInt(modelParams.modelAutoCompactTokenLimit);
+  if (compactLimit && hardCap) {
+    return Math.min(compactLimit, hardCap);
+  }
+  return compactLimit ?? hardCap;
+}
+
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -25,6 +58,17 @@ export function resolveContextWindowInfo(params: {
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
+  // Codex config params take highest priority — they represent the user's
+  // intended effective context window for compaction and pruning.
+  const fromCodexConfig = resolveCodexConfigContextWindow(
+    params.cfg,
+    params.provider,
+    params.modelId,
+  );
+  if (fromCodexConfig) {
+    return { tokens: fromCodexConfig, source: "modelsConfig" };
+  }
+
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
       | Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>
