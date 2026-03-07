@@ -107,20 +107,44 @@ export async function enqueueDelivery(
   return id;
 }
 
-/** Remove a successfully delivered entry from the queue. */
+/** Remove a successfully delivered entry from the queue.
+ *
+ * Uses a two-phase approach so that a crash between delivery and cleanup
+ * does not cause the message to be replayed on the next recovery scan:
+ *   Phase 1: atomic rename  {id}.json → {id}.delivered
+ *   Phase 2: unlink the .delivered marker
+ * If the process dies between phase 1 and phase 2 the marker is cleaned up
+ * by {@link loadPendingDeliveries} on the next startup without re-sending.
+ */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const queueDir = resolveQueueDir(stateDir);
+  const jsonPath = path.join(queueDir, `${id}.json`);
+  const deliveredPath = path.join(queueDir, `${id}.delivered`);
   try {
-    await fs.promises.unlink(filePath);
+    // Phase 1: atomic rename marks the delivery as complete.
+    await fs.promises.rename(jsonPath, deliveredPath);
   } catch (err) {
     const code =
       err && typeof err === "object" && "code" in err
         ? String((err as { code?: unknown }).code)
         : null;
-    if (code !== "ENOENT") {
-      throw err;
+    if (code === "ENOENT") {
+      // .json already gone — may have been renamed by a previous ack attempt.
+      // Try to clean up a leftover .delivered marker if present.
+      try {
+        await fs.promises.unlink(deliveredPath);
+      } catch {
+        // marker already gone — no-op.
+      }
+      return;
     }
-    // Already removed — no-op.
+    throw err;
+  }
+  // Phase 2: remove the marker file.
+  try {
+    await fs.promises.unlink(deliveredPath);
+  } catch {
+    // Best-effort; loadPendingDeliveries will clean it up on next startup.
   }
 }
 
@@ -156,6 +180,19 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
     }
     throw err;
   }
+  // Clean up .delivered markers left by ackDelivery if the process crashed
+  // between the rename and the unlink.
+  for (const file of files) {
+    if (!file.endsWith(".delivered")) {
+      continue;
+    }
+    try {
+      await fs.promises.unlink(path.join(queueDir, file));
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+
   const entries: QueuedDelivery[] = [];
   for (const file of files) {
     if (!file.endsWith(".json")) {
