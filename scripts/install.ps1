@@ -214,9 +214,12 @@ function Install-OpenClawNpm {
     Write-Host "Installing OpenClaw (openclaw@$Version)..." -Level info
     
     try {
-        npm install -g openclaw@$Version --no-fund --no-audit 2>&1
+        npm install -g openclaw@$Version --no-fund --no-audit 2>&1 | Out-Null
         # npm is a native command — non-zero exit codes don't throw in
         # PowerShell, so check $LASTEXITCODE explicitly.
+        # Out-Null prevents output from polluting the function's return
+        # pipeline (a multi-element array always evaluates as $true,
+        # silently swallowing failures in boolean checks).
         if ($LASTEXITCODE -ne 0) {
             Write-Host "npm install failed (exit code $LASTEXITCODE)" -Level error
             return $false
@@ -236,14 +239,14 @@ function Install-OpenClawGit {
 
     if (!(Test-Path $RepoDir)) {
         Write-Host "  Cloning repository..." -Level info
-        git clone https://github.com/openclaw/openclaw.git $RepoDir 2>&1
+        git clone https://github.com/openclaw/openclaw.git $RepoDir 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "git clone failed (exit code $LASTEXITCODE)" -Level error
             return $false
         }
     } elseif ($Update) {
         Write-Host "  Updating repository..." -Level info
-        git -C $RepoDir pull --rebase 2>&1
+        git -C $RepoDir pull --rebase 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "git pull failed (exit code $LASTEXITCODE)" -Level error
             return $false
@@ -253,7 +256,7 @@ function Install-OpenClawGit {
     # Install pnpm if not present
     if (!(Get-Command pnpm -ErrorAction SilentlyContinue)) {
         Write-Host "  Installing pnpm..." -Level info
-        npm install -g pnpm 2>&1
+        npm install -g pnpm 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "pnpm install failed (exit code $LASTEXITCODE)" -Level error
             return $false
@@ -262,7 +265,7 @@ function Install-OpenClawGit {
 
     # Install dependencies
     Write-Host "  Installing dependencies..." -Level info
-    pnpm install --dir $RepoDir 2>&1
+    pnpm install --dir $RepoDir 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "pnpm install failed (exit code $LASTEXITCODE)" -Level error
         return $false
@@ -270,7 +273,7 @@ function Install-OpenClawGit {
 
     # Build
     Write-Host "  Building..." -Level info
-    pnpm --dir $RepoDir build 2>&1
+    pnpm --dir $RepoDir build 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "build failed (exit code $LASTEXITCODE)" -Level error
         return $false
