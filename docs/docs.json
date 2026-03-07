@@ -806,6 +806,18 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy-policy"
+    },
+    {
+      "source": "/terms",
+      "destination": "/terms-and-conditions"
+    },
+    {
+      "source": "/terms-and-conditions/",
+      "destination": "/terms-and-conditions"
     }
   ],
   "navigation": {
@@ -844,6 +856,10 @@
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
+              },
+              {
+                "group": "Legal",
+                "pages": ["privacy-policy", "terms-and-conditions"]
               }
             ]
           },

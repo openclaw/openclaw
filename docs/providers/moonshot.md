@@ -15,20 +15,11 @@ Kimi Coding with `kimi-coding/k2p5`.
 
 Current Kimi K2 model IDs:
 
-<!-- markdownlint-disable MD037 -->
-
-{/_ moonshot-kimi-k2-ids:start _/ && null}
-
-<!-- markdownlint-enable MD037 -->
-
 - `kimi-k2.5`
 - `kimi-k2-0905-preview`
 - `kimi-k2-turbo-preview`
 - `kimi-k2-thinking`
 - `kimi-k2-thinking-turbo`
-  <!-- markdownlint-disable MD037 -->
-  {/_ moonshot-kimi-k2-ids:end _/ && null}
-  <!-- markdownlint-enable MD037 -->
 
 ```bash
 openclaw onboard --auth-choice moonshot-api-key

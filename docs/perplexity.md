@@ -13,7 +13,7 @@ Perplexity Search returns structured results (title, URL, snippet) for fast rese
 
 ## Getting a Perplexity API key
 
-1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
+1. Create a Perplexity account at [Perplexity API settings](https://www.perplexity.ai/settings/api)
 2. Generate an API key in the dashboard
 3. Store the key in config (recommended) or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
