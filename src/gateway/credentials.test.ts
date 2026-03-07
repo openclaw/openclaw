@@ -496,7 +496,7 @@ describe("resolveGatewayCredentialsFromValues", () => {
   it("accepts config credentials that do not contain env var references", () => {
     const resolved = resolveGatewayCredentialsFromValues({
       configToken: "real-token-value",
-      configPassword: "real-password",
+      configPassword: "real-password", // pragma: allowlist secret
       env: {} as NodeJS.ProcessEnv,
       tokenPrecedence: "config-first",
       passwordPrecedence: "config-first",
