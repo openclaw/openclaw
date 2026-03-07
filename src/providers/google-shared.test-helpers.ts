@@ -1,4 +1,6 @@
-import type { Model } from "@mariozechner/pi-ai/dist/types.js";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { Model } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
@@ -80,4 +82,23 @@ export function expectConvertedRoles(contents: Array<{ role?: string }>, expecte
   for (const [index, role] of expectedRoles.entries()) {
     expect(contents[index]?.role).toBe(role);
   }
+}
+
+export async function loadGoogleSharedModule(): Promise<{
+  convertMessages: (...args: unknown[]) => unknown;
+  convertTools: (...args: unknown[]) => unknown;
+}> {
+  const rootEntryUrl = import.meta.resolve("@mariozechner/pi-ai");
+  const distRoot = path.dirname(fileURLToPath(rootEntryUrl));
+  const modulePath = path.join(distRoot, "providers/google-shared.js");
+  const moduleUrl = pathToFileURL(modulePath).href;
+  const mod = (await import(moduleUrl)) as {
+    convertMessages: (...args: unknown[]) => unknown;
+    convertTools: (...args: unknown[]) => unknown;
+  };
+
+  return {
+    convertMessages: mod.convertMessages,
+    convertTools: mod.convertTools,
+  };
 }
