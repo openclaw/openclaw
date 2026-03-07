@@ -68,24 +68,25 @@ export async function runDiscordGatewayLifecycle(params: {
         return;
       }
       const at = Date.now();
-      const error = new Error(
-        `discord reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms`,
-      );
+      const errorMsg = `discord reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms`;
+      // FIX: Do not propagate error to main process (triggers gateway restart).
+      // Instead, just update status and let channel health monitor handle restart.
       pushStatus({
         connected: false,
         lastEventAt: at,
         lastDisconnect: {
           at,
-          error: error.message,
+          error: errorMsg,
         },
-        lastError: error.message,
+        lastError: errorMsg,
+        // Mark as reconnect failed, but don't force-stop the lifecycle
+        reconnectFailed: true,
       });
-      params.runtime.error?.(
-        danger(
-          `discord: reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms; force-stopping monitor task`,
-        ),
+      // REMOVED: triggerForceStop(error) - this was causing gateway-wide restart
+      // The channel health monitor will detect this and restart only the Discord channel
+      params.runtime.log?.(
+        `discord: reconnect timeout, marking channel as failed (no gateway restart)`,
       );
-      triggerForceStop(error);
     },
   });
 
