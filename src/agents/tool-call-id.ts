@@ -68,12 +68,27 @@ export function extractToolCallsFromAssistant(
   return toolCalls;
 }
 
+// OpenAI-compatible providers may send tool call IDs like "functions.exec:0"
+// which can get mangled to "functions exec:0" (dot replaced with space).
+// This regex detects and fixes that pattern.
+const MANGLED_TOOL_CALL_ID_RE = /^(functions)\s+([a-zA-Z0-9_-]+):/i;
+
+/**
+ * Normalize a potentially mangled tool call ID.
+ * Some OpenAI-compatible providers send IDs like "functions.exec:0" which get
+ * corrupted to "functions exec:0" (space instead of dot).
+ */
+function normalizeMangledToolCallId(id: string): string {
+  return id.replace(MANGLED_TOOL_CALL_ID_RE, "$1.$2:");
+}
+
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) {
-    return toolCallId;
+    // Normalize potentially mangled tool call IDs
+    return normalizeMangledToolCallId(toolCallId);
   }
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
   if (typeof toolUseId === "string" && toolUseId) {
@@ -225,12 +240,15 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const used = new Set<string>();
 
   const resolve = (id: string) => {
-    const existing = map.get(id);
+    // Normalize mangled IDs before lookup to ensure "functions.exec:0" and "functions exec:0"
+    // are treated as the same key and map to the same sanitized value.
+    const normalizedId = normalizeMangledToolCallId(id);
+    const existing = map.get(normalizedId);
     if (existing) {
       return existing;
     }
-    const next = makeUniqueToolId({ id, used, mode });
-    map.set(id, next);
+    const next = makeUniqueToolId({ id: normalizedId, used, mode });
+    map.set(normalizedId, next);
     used.add(next);
     return next;
   };
