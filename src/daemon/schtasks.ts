@@ -163,7 +163,40 @@ export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   if (!statusRaw) {
     return { status: "unknown" };
   }
-  if (statusRaw !== "running") {
+  // Windows Task Scheduler localizes the "Running" status.
+  // English: "running"
+  // German: "wird ausgeführt"
+  // French: "en cours d'exécution"
+  // Spanish: "ejecutando"
+  // Italian: "in esecuzione"
+  // Portuguese (Brazil): "executando"
+  // Japanese: "実行中"
+  // Chinese (Simplified): "正在运行"
+  // Chinese (Traditional): "正在執行"
+  // Korean: "실행 중"
+  // Russian: "Выполняется"
+  // Polish: "Działający"
+  // Dutch: "Wordt uitgevoerd"
+  // Swedish: "Körs"
+  const runningPatterns = [
+    "running",
+    "wird ausgeführt", // German
+    "en cours d'exécution", // French
+    "en cours d'execution", // French (no accent)
+    "ejecutando", // Spanish
+    "in esecuzione", // Italian
+    "executando", // Portuguese
+    "実行中", // Japanese
+    "正在运行", // Chinese Simplified
+    "正在執行", // Chinese Traditional
+    "실행 중", // Korean
+    "выполняется", // Russian
+    "działający", // Polish
+    "wordt uitgevoerd", // Dutch
+    "körs", // Swedish
+  ];
+  const isRunning = runningPatterns.some((pattern) => statusRaw === pattern);
+  if (!isRunning) {
     return { status: "stopped" };
   }
 

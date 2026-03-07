@@ -35,6 +35,33 @@ describe("scheduled task runtime derivation", () => {
     ).toEqual({ status: "running" });
   });
 
+  it("treats German localized 'Wird ausgeführt' as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Wird ausgeführt",
+        lastRunResult: "0x41301",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats French localized 'En cours d'exécution' as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "En cours d'exécution",
+        lastRunResult: "0x41301",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats Spanish localized 'Ejecutando' as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Ejecutando",
+        lastRunResult: "0x41301",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
   it("treats Running + decimal 267009 as running", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({
