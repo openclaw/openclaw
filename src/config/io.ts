@@ -696,6 +696,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
+      // Snapshot env before primary resolution so .bak fallback starts clean.
+      const envBeforePrimaryResolve = { ...deps.env };
       const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
@@ -729,8 +731,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           try {
             const bakRaw = deps.fs.readFileSync(bakPath, "utf-8");
             const bakParsed = deps.json5.parse(bakRaw);
-            // Use a cloned env so invalid .bak config entries don't pollute process env
-            const bakEnv = { ...deps.env };
+            // Start from pre-primary-resolution env so invalid primary config.env
+            // entries don't leak into .bak resolution
+            const bakEnv = { ...envBeforePrimaryResolve };
             const { resolvedConfigRaw: bakResolved } = resolveConfigForRead(
               resolveConfigIncludesForRead(bakParsed, bakPath, deps),
               bakEnv,
