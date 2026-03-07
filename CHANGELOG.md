@@ -258,6 +258,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction thresholding: apply `agents.defaults.contextTokens` cap to the model passed into embedded run and `/compact` session creation so auto-compaction thresholds use the effective context window, not native model max context. (#39099) Thanks @MumuTW.
 - Models/merge mode provider precedence: when `models.mode: "merge"` is active and config explicitly sets a provider `baseUrl`, keep config as source of truth instead of preserving stale runtime `models.json` `baseUrl` values; includes normalized provider-key coverage. (#39103) Thanks @BigUncle.
 - UI/Control chat tool streaming: render tool events live in webchat without requiring refresh by enabling `tool-events` capability, fixing stream/event correlation, and resetting/reloading stream state around tool results and terminal events. (#39104) Thanks @jakepresent.
+- Models/provider apiKey persistence hardening: when a provider `apiKey` value equals a known provider env var value, persist the canonical env var name into `models.json` instead of resolved plaintext secrets. (#38889) Thanks @gambletan.
 
 ## 2026.3.2
 
