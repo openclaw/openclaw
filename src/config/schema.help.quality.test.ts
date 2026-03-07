@@ -372,6 +372,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.maxHistoryShare",
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.recentTurnsPreserve",
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries",
@@ -795,6 +796,10 @@ describe("config help copy quality", () => {
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
