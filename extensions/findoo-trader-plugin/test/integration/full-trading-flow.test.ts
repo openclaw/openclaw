@@ -436,8 +436,8 @@ describe("Full trading flow integration", () => {
       mockReq({
         symbol: "BTC/USDT",
         side: "buy",
-        quantity: 0.01,
-        currentPrice: 50000, // 0.01 * 50000 = 500 USD → confirm tier
+        amount: 0.01,
+        price: 50000, // 0.01 * 50000 = 500 USD → confirm tier
         type: "market",
       }),
       res,
