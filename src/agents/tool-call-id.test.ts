@@ -257,9 +257,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "functions.exec:0", name: "exec", arguments: {} },
-        ],
+        content: [{ type: "toolCall", id: "functions.exec:0", name: "exec", arguments: {} }],
       },
       {
         role: "toolResult",

@@ -68,10 +68,7 @@ function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> 
     return false;
   }
   const normalized = normalizePrefixedToolName(trimmed);
-  if (
-    normalized.length > TOOL_CALL_NAME_MAX_CHARS ||
-    !TOOL_CALL_NAME_RE.test(normalized)
-  ) {
+  if (normalized.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(normalized)) {
     return false;
   }
   if (!allowedToolNames) {
@@ -107,8 +104,8 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   const rawName = typeof block.name === "string" ? block.name : undefined;
   const trimmedName = rawName?.trim();
   const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
+  const normalizedName = hasTrimmedName ? normalizePrefixedToolName(trimmedName) : undefined;
+  const nameChanged = hasTrimmedName && rawName !== normalizedName;
 
   const isSessionsSpawn = normalizedName?.toLowerCase() === "sessions_spawn";
 
@@ -288,10 +285,11 @@ export function repairToolCallInputs(
         ) {
           // Only sanitize (redact) sessions_spawn blocks; all others are passed through
           // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
-          const blockName =
+          const rawBlockName =
             typeof (block as { name?: unknown }).name === "string"
               ? (block as { name: string }).name.trim()
               : undefined;
+          const blockName = rawBlockName ? normalizePrefixedToolName(rawBlockName) : undefined;
           if (blockName?.toLowerCase() === "sessions_spawn") {
             const sanitized = sanitizeToolCallBlock(block);
             if (sanitized !== block) {
