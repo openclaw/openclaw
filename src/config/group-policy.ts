@@ -28,6 +28,13 @@ export type ContextualActivationConfig = {
   schedule?: Array<{ time: string; baseRate: number }>;
   /** Fallback timeout (seconds) after which engaged mode auto-expires if no new messages arrive. Default: 300. */
   engagedTimeout?: number;
+  /** Filter mentions/replies through the decision model instead of always responding. */
+  mentionFilter?: {
+    enabled?: boolean;
+    prompt?: string;
+    promptExtra?: string;
+    rate?: number;
+  };
 };
 
 export type ChannelGroupConfig = {

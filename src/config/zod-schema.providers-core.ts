@@ -79,6 +79,15 @@ export const ContextualActivationSchema = z
     schedule: z.array(ScheduleRuleSchema).optional(),
     timezone: z.string().optional(),
     engagedTimeout: z.number().int().min(10).max(3600).optional(),
+    mentionFilter: z
+      .object({
+        enabled: z.boolean().optional(),
+        prompt: z.string().optional(),
+        promptExtra: z.string().optional(),
+        rate: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

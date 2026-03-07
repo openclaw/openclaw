@@ -13,6 +13,17 @@ export type ScheduleRule = {
   baseRate: number;
 };
 
+export type MentionFilterConfig = {
+  /** Enable filtering mentions/replies through the decision model. Default: false. */
+  enabled?: boolean;
+  /** Fully replace the default mention filter prompt. */
+  prompt?: string;
+  /** Extra rules appended to the default mention filter prompt (ignored when `prompt` is set). */
+  promptExtra?: string;
+  /** Probability (0-1) of calling the decision model on mentions/replies. Default: 1. */
+  rate?: number;
+};
+
 export type ContextualActivationConfig = {
   /** Model reference in "provider/model" format (e.g. "openrouter/meta-llama/llama-3.1-8b-instruct:free"). */
   model: string;
@@ -36,6 +47,8 @@ export type ContextualActivationConfig = {
   timezone?: string;
   /** Fallback timeout (seconds) after which engaged mode auto-expires if no new messages arrive. Default: 300. */
   engagedTimeout?: number;
+  /** Filter mentions/replies through the decision model instead of always responding. */
+  mentionFilter?: MentionFilterConfig;
 };
 
 export type GroupHistoryMessage = {
@@ -67,6 +80,10 @@ type DecisionRecord = {
   durationMs: number;
   sender?: string;
   body?: string;
+  messageId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
 };
 
 const MAX_DECISION_HISTORY = 8;
@@ -126,6 +143,10 @@ function writeDecisionLog(groupKey: string, record: DecisionRecord) {
       ms: record.durationMs,
       ...(record.sender ? { sender: record.sender } : {}),
       ...(record.body ? { body: record.body } : {}),
+      ...(record.messageId ? { msgId: record.messageId } : {}),
+      ...(record.replyToId ? { replyId: record.replyToId } : {}),
+      ...(record.replyToBody ? { replyBody: record.replyToBody } : {}),
+      ...(record.replyToSender ? { replySender: record.replyToSender } : {}),
     };
     fs.appendFileSync(logFile, JSON.stringify(entry) + "\n");
   } catch {
@@ -214,6 +235,32 @@ Respond with a JSON object (no markdown fencing):
 {"decision":"CONTINUE","reason":"brief reason"}
 or
 {"decision":"DISENGAGE","reason":"brief reason"}`;
+
+const DEFAULT_MENTION_FILTER_PROMPT = `You are a group chat participation advisor for an AI assistant named {botName}.
+
+Someone just mentioned or replied to the assistant in a group chat. Your job is to decide whether the assistant should RESPOND or IGNORE this message.
+
+**RESPOND — the message genuinely needs a reply:**
+1. Someone is directly asking the assistant a question or requesting help
+2. Someone is continuing a substantive conversation with the assistant
+3. Someone is sharing something and clearly wants the assistant's reaction or input
+4. The message contains meaningful content directed at the assistant
+
+**IGNORE — the message does NOT need a reply:**
+1. A trivial conversation-ender: "ok", "好的", "嗯", "got it", "thanks", "👍", "lol", etc.
+2. Someone is quoting/replying to the assistant's message but is actually talking to someone else
+3. Someone mentioned the assistant casually without expecting a response (e.g. "像{botName}之前说的...")
+4. The topic has clearly concluded and this is just an acknowledgment
+5. A single emoji reaction or sticker with no substantive content
+6. Someone is just forwarding or referencing the assistant's message for context
+
+**Key principle:** Not every mention or reply deserves a response. A real person wouldn't reply to every "ok" or "got it" — neither should the assistant. When in doubt, lean towards IGNORE for short, low-effort messages.
+
+**Output format:**
+Respond with a JSON object (no markdown fencing):
+{"decision":"RESPOND","reason":"brief reason"}
+or
+{"decision":"IGNORE","reason":"brief reason"}`;
 
 export type ContextualActivationResult = {
   shouldProcess: boolean;
@@ -724,6 +771,10 @@ export async function shouldParticipateInGroup(params: {
       durationMs: 0,
       sender: currentMessage.sender,
       body: currentMessage.body,
+      messageId: currentMessage.messageId,
+      replyToId: currentMessage.replyToId,
+      replyToBody: currentMessage.replyToBody,
+      replyToSender: currentMessage.replyToSender,
     });
   }
 
@@ -801,6 +852,10 @@ export async function shouldParticipateInGroup(params: {
       durationMs: result.durationMs,
       sender: currentMessage.sender,
       body: currentMessage.body,
+      messageId: currentMessage.messageId,
+      replyToId: currentMessage.replyToId,
+      replyToBody: currentMessage.replyToBody,
+      replyToSender: currentMessage.replyToSender,
     });
     state.lastActivityAt = Date.now();
     return { shouldProcess: true, reason };
@@ -859,6 +914,10 @@ export async function shouldParticipateInGroup(params: {
       durationMs: result.durationMs,
       sender: currentMessage.sender,
       body: currentMessage.body,
+      messageId: currentMessage.messageId,
+      replyToId: currentMessage.replyToId,
+      replyToBody: currentMessage.replyToBody,
+      replyToSender: currentMessage.replyToSender,
     });
     state.mode = "engaged";
     state.lastActivityAt = Date.now();
@@ -881,5 +940,90 @@ export async function shouldParticipateInGroup(params: {
     sender: currentMessage.sender,
     body: currentMessage.body,
   });
+  return { shouldProcess: false };
+}
+
+// ---------------------------------------------------------------------------
+// Mention filter — decide whether to respond when mentioned/replied to
+// ---------------------------------------------------------------------------
+
+export async function shouldRespondToMention(params: {
+  cfg: OpenClawConfig;
+  config: ContextualActivationConfig;
+  recentMessages: GroupHistoryMessage[];
+  currentMessage: GroupHistoryMessage;
+  groupKey: string;
+  botName?: string;
+}): Promise<ContextualActivationResult> {
+  const { cfg, config, recentMessages, currentMessage, groupKey, botName } = params;
+  const mentionFilter = config.mentionFilter;
+  if (!mentionFilter?.enabled) {
+    return { shouldProcess: true };
+  }
+
+  // Probabilistic pre-filter
+  const rate = mentionFilter.rate ?? 1;
+  if (rate <= 0) {
+    return { shouldProcess: false };
+  }
+  if (rate < 1 && Math.random() > rate) {
+    return { shouldProcess: true };
+  }
+
+  const contextLimit = config.contextMessages ?? DEFAULT_CONTEXT_MESSAGES;
+  const allMessages = [...recentMessages, currentMessage];
+  const chatContent = formatMessagesForDecision(allMessages, contextLimit, allMessages);
+  const botLabel = botName ?? "AI Assistant";
+
+  const basePrompt =
+    mentionFilter.prompt ??
+    (mentionFilter.promptExtra
+      ? `${DEFAULT_MENTION_FILTER_PROMPT}\n\n**Additional rules:**\n${mentionFilter.promptExtra}`
+      : DEFAULT_MENTION_FILTER_PROMPT);
+  const systemPrompt = basePrompt.replace(/\{botName\}/g, botLabel);
+  const userPrompt = [
+    "**Recent group chat messages:**",
+    chatContent,
+    "",
+    "The last message mentions or replies to the assistant. Should the assistant respond?",
+  ].join("\n");
+
+  const result = await callDecisionModel({
+    cfg,
+    config,
+    systemPrompt,
+    userPrompt,
+    imagePaths: currentMessage.imagePaths,
+  });
+  if (result.error) {
+    logVerbose(
+      `[contextual-activation] ${groupKey}: mention filter error: ${result.error} (${result.durationMs}ms)`,
+    );
+    // On error, default to responding (fail-open for mentions)
+    return { shouldProcess: true };
+  }
+
+  const parsed = parseDecisionResponse(result.content);
+  const isRespond = parsed.decision === "RESPOND" || parsed.decision === "YES";
+  const reason =
+    parsed.reason || (isRespond ? "mention warrants response" : "mention filtered out");
+
+  logVerbose(
+    `[contextual-activation] ${groupKey}: mention filter ${isRespond ? "RESPOND" : "IGNORE"} (${result.model}, ${result.durationMs}ms) — ${reason}`,
+  );
+  recordDecision(groupKey, {
+    timestamp: Date.now(),
+    mode: "engaged",
+    decision: isRespond ? "stay" : "skip",
+    reason: `[mention-filter] ${reason}`,
+    model: result.model,
+    durationMs: result.durationMs,
+    sender: currentMessage.sender,
+    body: currentMessage.body,
+  });
+
+  if (isRespond) {
+    return { shouldProcess: true, reason };
+  }
   return { shouldProcess: false };
 }
