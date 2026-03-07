@@ -365,6 +365,10 @@ function WorkspacePageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const initialPathHandled = useRef(false);
+  // Counts how many renders have happened since hydration completed.
+  // The URL sync effect skips render 0 (the same render where hydration ran)
+  // because React state (activePath, etc.) hasn't updated yet.
+  const rendersSinceHydration = useRef(-1);
   const lastPushedQs = useRef<string | null>(null);
 
   // Chat panel ref for session management
@@ -1165,6 +1169,13 @@ function WorkspacePageInner() {
   useEffect(() => {
     if (!initialPathHandled.current) return;
 
+    // Skip the render where hydration just ran — React state (activePath, etc.)
+    // hasn't updated yet, so we'd compute empty params and wipe the URL.
+    if (rendersSinceHydration.current === 0) {
+      rendersSinceHydration.current = 1;
+      return;
+    }
+
     const current = new URLSearchParams(window.location.search);
     const params = new URLSearchParams();
 
@@ -1235,6 +1246,7 @@ function WorkspacePageInner() {
   useEffect(() => {
     if (initialPathHandled.current || treeLoading || tree.length === 0) return;
 
+    rendersSinceHydration.current = 0;
     const urlState = parseUrlState(searchParams);
 
     if (urlState.path) {
