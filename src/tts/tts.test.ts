@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { withEnv } from "../test-utils/env.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
@@ -50,6 +51,14 @@ vi.mock("../media/ffmpeg-exec.js", async () => {
     runFfmpeg: vi.fn(async () => ""),
   };
 });
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: vi.fn(async ({ url, init }: { url: string; init?: RequestInit }) => ({
+    response: await fetch(url, init),
+    finalUrl: url,
+    release: async () => {},
+  })),
+}));
 
 vi.mock("../utils/fetch-timeout.js", () => ({
   fetchWithTimeout: vi.fn((input: string | URL | Request, init?: RequestInit) =>
@@ -106,6 +115,13 @@ describe("tts", () => {
     vi.mocked(fetchWithTimeout).mockImplementation(
       (input: string | URL | Request, init?: RequestInit) =>
         fetch(input as RequestInfo | URL, init),
+    );
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => ({
+        response: await fetch(url, init),
+        finalUrl: url,
+        release: async () => {},
+      }),
     );
   });
 
@@ -771,27 +787,31 @@ describe("tts", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-03-07T00:00:00.000Z"));
 
-      vi.mocked(fetchWithTimeout)
-        .mockImplementationOnce(async (_input, _init, timeoutMs) => {
-          expect(timeoutMs).toBe(30_000);
-          vi.setSystemTime(new Date("2026-03-07T00:00:05.000Z"));
-          return new Response(
-            JSON.stringify({
-              output: { audio: { url: "https://example.com/generated.wav" } },
-            }),
-            {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            },
-          );
-        })
-        .mockImplementationOnce(async (_input, _init, timeoutMs) => {
-          expect(timeoutMs).toBe(25_000);
-          return new Response(new Uint8Array([1, 2, 3]), {
+      vi.mocked(fetchWithTimeout).mockImplementationOnce(async (_input, _init, timeoutMs) => {
+        expect(timeoutMs).toBe(30_000);
+        vi.setSystemTime(new Date("2026-03-07T00:00:05.000Z"));
+        return new Response(
+          JSON.stringify({
+            output: { audio: { url: "https://example.com/generated.wav" } },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      });
+      vi.mocked(fetchWithSsrFGuard).mockImplementationOnce(async ({ timeoutMs, url }) => {
+        expect(timeoutMs).toBe(25_000);
+        expect(url).toBe("https://example.com/generated.wav");
+        return {
+          response: new Response(new Uint8Array([1, 2, 3]), {
             status: 200,
             headers: { "content-type": "audio/wav" },
-          });
-        });
+          }),
+          finalUrl: url,
+          release: async () => {},
+        };
+      });
 
       try {
         const result = await tts.textToSpeech({
@@ -801,10 +821,47 @@ describe("tts", () => {
         });
 
         expect(result.success).toBe(true);
-        expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+        expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+        expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("uses the SSRF guard for bailian audio downloads", async () => {
+      vi.mocked(fetchWithTimeout).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: { audio: { url: "https://example.com/generated.wav" } },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+      vi.mocked(fetchWithSsrFGuard).mockResolvedValueOnce({
+        response: new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/wav" },
+        }),
+        finalUrl: "https://example.com/generated.wav",
+        release: async () => {},
+      });
+
+      const result = await tts.textToSpeech({
+        text: "This is an SSRF guard test for Bailian TTS.",
+        cfg: bailianCfg,
+        channel: "discord",
+      });
+
+      expect(result.success).toBe(true);
+      expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://example.com/generated.wav",
+          auditContext: "tts-bailian-audio-download",
+        }),
+      );
     });
   });
 });

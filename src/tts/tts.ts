@@ -23,6 +23,7 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
@@ -331,25 +332,32 @@ async function bailianTTS(params: {
     throw new Error("response missing output.audio.url");
   }
 
-  const audioRes = await fetchWithTimeout(
-    audioUrl,
-    {},
-    resolveRemainingTimeoutMs(startedAtMs, params.timeoutMs),
-  );
-  if (!audioRes.ok) {
-    const detail = await readTtsErrorResponse(audioRes);
-    throw new Error(
-      `audio download failed (HTTP ${audioRes.status})${detail ? `: ${detail}` : ""}`,
-    );
-  }
+  const { response: audioRes, release } = await fetchWithSsrFGuard({
+    url: audioUrl,
+    timeoutMs: resolveRemainingTimeoutMs(startedAtMs, params.timeoutMs),
+    auditContext: "tts-bailian-audio-download",
+  });
+  try {
+    if (!audioRes.ok) {
+      const detail = await readTtsErrorResponse(audioRes);
+      throw new Error(
+        `audio download failed (HTTP ${audioRes.status})${detail ? `: ${detail}` : ""}`,
+      );
+    }
 
-  const extension = resolveDownloadedAudioExtension(audioUrl, audioRes.headers.get("content-type"));
-  const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
-  return {
-    audioBuffer,
-    outputFormat: extension.replace(/^\./, ""),
-    extension,
-  };
+    const extension = resolveDownloadedAudioExtension(
+      audioUrl,
+      audioRes.headers.get("content-type"),
+    );
+    const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+    return {
+      audioBuffer,
+      outputFormat: extension.replace(/^\./, ""),
+      extension,
+    };
+  } finally {
+    await release();
+  }
 }
 
 export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
