@@ -1190,7 +1190,9 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
+        // Do not advance the schedule — the main lane is busy and the wake
+        // layer will retry shortly.  Advancing here pushes nextDueMs forward
+        // on every retry, eventually stalling the runner until restart.
         scheduleNext();
         return res;
       }
