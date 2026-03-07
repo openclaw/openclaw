@@ -52,6 +52,8 @@ import type {
   PluginHookBeforeMessageWriteResult,
   PluginHookBeforeLlmCallEvent,
   PluginHookBeforeLlmCallResult,
+  PluginHookAfterLlmCallEvent,
+  PluginHookAfterLlmCallResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -741,6 +743,33 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     );
   }
 
+  /**
+   * Run after_llm_call hook.
+   * Fires after the LLM response is received, before tool execution.
+   * Allows plugins to block all tool execution or filter individual tool calls.
+   * Results are stored as a Promise in the gate and enforced deterministically
+   * by the tool wrapper.
+   */
+  async function runAfterLlmCall(
+    event: PluginHookAfterLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookAfterLlmCallResult | undefined> {
+    return runModifyingHook<"after_llm_call", PluginHookAfterLlmCallResult>(
+      "after_llm_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block || acc?.block,
+        blockReason: acc?.blockReason ?? next.blockReason,
+        // Intersection: if both handlers provide tool lists, keep only tools in both.
+        toolCalls:
+          acc?.toolCalls !== undefined && next.toolCalls !== undefined
+            ? next.toolCalls.filter((t) => acc.toolCalls!.some((a) => a.id === t.id))
+            : (next.toolCalls ?? acc?.toolCalls),
+      }),
+    );
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -792,6 +821,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runGatewayStop,
     // LLM call hooks
     runBeforeLlmCall,
+    runAfterLlmCall,
     // Utility
     hasHooks,
     getHookCount,
