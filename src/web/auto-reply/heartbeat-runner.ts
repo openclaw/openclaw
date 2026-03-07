@@ -6,7 +6,7 @@ import {
   stripHeartbeatToken,
 } from "../../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
-import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
+import { DEFAULT_HEARTBEAT_ACK_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -51,7 +51,7 @@ export async function runWebHeartbeatOnce(opts: {
 
   // Resolve heartbeat visibility settings for WhatsApp
   const visibility = resolveHeartbeatVisibility({ cfg, channel: "whatsapp" });
-  const heartbeatOkText = cfg?.agents?.defaults?.heartbeat?.ackToken?.trim() || HEARTBEAT_TOKEN;
+  const heartbeatOkText = cfg?.agents?.defaults?.heartbeat?.ackToken?.trim() || DEFAULT_HEARTBEAT_ACK_TOKEN;
 
   const maybeSendHeartbeatOk = async (): Promise<boolean> => {
     if (!visibility.showOk) {
@@ -209,6 +209,7 @@ export async function runWebHeartbeatOnce(opts: {
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",
       maxAckChars: ackMaxChars,
+      ackToken: heartbeatOkText,
     });
     if (stripped.shouldSkip && !hasMedia) {
       // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.
