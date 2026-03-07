@@ -6,6 +6,7 @@
 
 import type { CommandDefinition, CommandResult, ParsedEmail, EmailListenerConfig } from "./types.js";
 import { logger } from "./logger.js";
+import { createTask, type TaskPriority } from "./task-creator.js";
 
 /**
  * Command registry - maps command names to handlers
@@ -57,6 +58,13 @@ export function initializeCommands(): void {
     description: "Test connectivity",
     risk: "safe",
     handler: handlePing,
+  });
+
+  registerCommand({
+    name: "CREATE_TASK",
+    description: "Create a task from email content",
+    risk: "safe",
+    handler: handleCreateTask,
   });
 
   logger.info("Initialized command registry", { count: commands.size });
@@ -232,4 +240,51 @@ async function handlePing(_args: string[], _email: ParsedEmail): Promise<Command
       timestamp: new Date().toISOString(),
     },
   };
+}
+
+async function handleCreateTask(args: string[], email: ParsedEmail): Promise<CommandResult> {
+  const title = args[0]?.trim();
+  if (!title) {
+    return {
+      success: false,
+      message: "Cannot create task: no title provided",
+    };
+  }
+
+  const priority = (args[1] as TaskPriority) || "medium";
+  const description = args.slice(2).join(" ") || undefined;
+
+  try {
+    const task = await createTask({
+      title,
+      description,
+      priority,
+      sourceEmail: {
+        subject: email.subject,
+        from: email.sender,
+        fromName: email.senderName,
+        date: email.timestamp,
+        messageId: email.messageId,
+      },
+      tags: ["email", "natural-language"],
+      metadata: { createdBy: "intent-parser" },
+    });
+
+    return {
+      success: true,
+      message: `Task created: "${task.title}"`,
+      data: {
+        taskId: task.id,
+        title: task.title,
+        priority: task.priority,
+        status: task.status,
+      },
+    };
+  } catch (error) {
+    logger.error("Failed to create task", { error: String(error) });
+    return {
+      success: false,
+      message: `Failed to create task: ${String(error)}`,
+    };
+  }
 }

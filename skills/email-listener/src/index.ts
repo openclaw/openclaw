@@ -22,6 +22,8 @@ import {
   executeCommand,
   getAllCommands,
 } from "./execute_command.js";
+import { parseIntent } from "./intent-parser.js";
+import type { ParsedIntent } from "./types.js";
 import {
   sendCommandResult,
   sendUnauthorizedResponse,
@@ -334,17 +336,101 @@ async function handleUnauthorized(email: ParsedEmail): Promise<void> {
 }
 
 /**
- * Handle a freeform email - forward to agent
+ * Dispatch an intent to appropriate command
+ */
+async function dispatchIntent(
+  intent: ParsedIntent,
+  email: ParsedEmail,
+  cfg: EmailListenerConfig
+): Promise<CommandResult> {
+  switch (intent.action) {
+    case "CREATE_TASK":
+      return executeCommand(
+        "CREATE_TASK",
+        [
+          intent.params.taskTitle ?? email.subject,
+          intent.params.taskPriority ?? "medium",
+          ...(intent.params.taskDescription ? [intent.params.taskDescription] : []),
+        ],
+        email,
+        cfg
+      );
+    case "STATUS":
+      return executeCommand("STATUS", [], email, cfg);
+    case "PING":
+      return executeCommand("PING", [], email, cfg);
+    case "AGENT_STATUS":
+      return executeCommand("AGENT_STATUS", [], email, cfg);
+    case "MOVE_EMAIL":
+      return {
+        success: true,
+        message: `Noted move request to "${intent.params.targetFolder ?? "unknown"}". Full folder management via natural language is coming soon.`,
+      };
+    default:
+      return {
+        success: false,
+        message:
+          "I understood your message but could not determine a specific action. Use TIM: prefix for precise commands.",
+      };
+  }
+}
+
+/**
+ * Handle a freeform email - try intent parser first, then fallback to agent
  */
 async function handleFreeform(email: ParsedEmail): Promise<void> {
   if (!config) return;
 
-  const { agentName, messageTimeoutMs } = config.agent;
+  const { agentName, messageTimeoutMs, intentParserEnabled, intentParserModel, intentConfidenceThreshold } =
+    config.agent;
 
-  // Combine subject and body as the message
+  // Try intent parser if enabled
+  if (intentParserEnabled) {
+    logger.debug("Attempting to parse intent from email");
+
+    const intent = await parseIntent(email.subject, email.body, intentParserModel);
+
+    if (
+      intent &&
+      intent.confidence >= intentConfidenceThreshold &&
+      intent.action !== "UNKNOWN"
+    ) {
+      logger.info("Intent parsed with sufficient confidence", {
+        action: intent.action,
+        confidence: intent.confidence,
+      });
+
+      // Execute the intent
+      const result = await dispatchIntent(intent, email, config);
+
+      // Send response
+      await sendCommandResult(
+        config.imap,
+        { sender: email.sender, messageId: email.messageId, subject: email.subject },
+        result
+      );
+
+      return;
+    }
+
+    if (intent && intent.action === "UNKNOWN") {
+      logger.debug("Intent parser returned UNKNOWN action", {
+        confidence: intent.confidence,
+      });
+    } else if (intent) {
+      logger.debug("Intent confidence below threshold", {
+        confidence: intent.confidence,
+        threshold: intentConfidenceThreshold,
+      });
+    } else {
+      logger.debug("Intent parsing failed or returned null");
+    }
+  }
+
+  // Fallback to subprocess
   const message = `${email.subject}\n\n${email.body}`.trim();
 
-  logger.info("Forwarding freeform email to agent", {
+  logger.info("Forwarding freeform email to agent subprocess", {
     agent: agentName,
     from: email.sender,
     preview: message.substring(0, 100),

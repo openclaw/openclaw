@@ -17,6 +17,12 @@ export interface AgentConfig {
   enableFreeform: boolean;
   /** Timeout for agent response in milliseconds */
   messageTimeoutMs: number;
+  /** Whether intent parser is enabled */
+  intentParserEnabled: boolean;
+  /** Model to use for intent parsing */
+  intentParserModel: string;
+  /** Confidence threshold for intent parser (0.0 to 1.0) */
+  intentConfidenceThreshold: number;
 }
 
 /**
@@ -162,6 +168,34 @@ export interface CommandResult {
 }
 
 /**
+ * Intent action types that Claude can extract
+ */
+export type IntentAction =
+  | "CREATE_TASK" | "STATUS" | "PING" | "AGENT_STATUS" | "MOVE_EMAIL" | "UNKNOWN";
+
+/**
+ * Parameters extracted for an intent action
+ */
+export interface IntentParams {
+  taskTitle?: string;
+  taskDescription?: string;
+  taskPriority?: "low" | "medium" | "high" | "urgent";
+  taskDueDate?: string;       // ISO date string if mentioned
+  targetFolder?: string;      // for MOVE_EMAIL
+  rawArgs?: string[];
+}
+
+/**
+ * Parsed intent from natural language
+ */
+export interface ParsedIntent {
+  action: IntentAction;
+  confidence: number;         // 0.0 to 1.0
+  reasoning: string;
+  params: IntentParams;
+}
+
+/**
  * Email response
  */
 export interface EmailResponse {
@@ -256,13 +290,16 @@ export const DEFAULT_CONFIG: Partial<EmailListenerConfig> = {
     confirmationTimeout: 300000, // 5 minutes
   },
   commands: {
-    enabled: ["STATUS", "SECURITY_AUDIT", "CHECK_UPDATES", "MEMORY_COMPACT", "AGENT_STATUS"],
+    enabled: ["STATUS", "SECURITY_AUDIT", "CHECK_UPDATES", "MEMORY_COMPACT", "AGENT_STATUS", "CREATE_TASK"],
     disabled: [],
   },
   agent: {
     agentName: "tim",
     enableFreeform: true,
     messageTimeoutMs: 120000, // 2 minutes
+    intentParserEnabled: true,
+    intentParserModel: "claude-haiku-4-5-20251001",
+    intentConfidenceThreshold: 0.7,
   },
   cleanup: {
     enabled: true,

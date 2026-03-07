@@ -95,6 +95,9 @@ function loadAgentConfig(): AgentConfig {
     agentName: getEnv("AGENT_NAME", "tim"),
     enableFreeform: getEnv("ENABLE_FREEFORM", "true").toLowerCase() === "true",
     messageTimeoutMs: parseInt(getEnv("MESSAGE_TIMEOUT", "120000"), 10),
+    intentParserEnabled: getEnv("INTENT_PARSER_ENABLED", "true").toLowerCase() === "true",
+    intentParserModel: getEnv("INTENT_PARSER_MODEL", "claude-haiku-4-5-20251001"),
+    intentConfidenceThreshold: parseFloat(getEnv("INTENT_CONFIDENCE_THRESHOLD", "0.7")),
   };
 }
 
@@ -110,7 +113,11 @@ function loadCleanupConfig(): CleanupConfig {
   };
 }
 
-const enabled = getEnv("ENABLED_COMMANDS", "STATUS,SECURITY_AUDIT,CHECK_UPDATES,MEMORY_COMPACT,AGENT_STATUS")
+/**
+ * Load command configuration from environment variables
+ */
+function loadCommandConfig() {
+  const enabled = getEnv("ENABLED_COMMANDS", "STATUS,SECURITY_AUDIT,CHECK_UPDATES,MEMORY_COMPACT,AGENT_STATUS")
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
