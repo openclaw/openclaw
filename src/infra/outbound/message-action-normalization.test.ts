@@ -17,6 +17,23 @@ describe("normalizeMessageActionInput", () => {
     expect("channelId" in normalized).toBe(false);
   });
 
+  it("ignores empty legacy target fields when explicit target is present", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {
+        channel: "telegram",
+        target: "1214056829",
+        to: " ",
+        channelId: "",
+        filePath: "/workspace/example.png",
+      },
+    });
+
+    expect(normalized.target).toBe("1214056829");
+    expect(normalized.to).toBe("1214056829");
+    expect(normalized.channelId).toBe("");
+  });
+
   it("maps legacy target fields into canonical target", () => {
     const normalized = normalizeMessageActionInput({
       action: "send",
