@@ -1,13 +1,91 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { expandHomePrefix } from "./home-dir.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
+export * from "./exec-approvals-analysis.js";
+export * from "./exec-approvals-allowlist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+
+export function normalizeExecHost(value?: string | null): ExecHost | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecAsk(value?: string | null): ExecAsk | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized;
+  }
+  return null;
+}
+
+export type SystemRunApprovalBinding = {
+  argv: string[];
+  cwd: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  envHash: string | null;
+};
+
+export type SystemRunApprovalPlan = {
+  argv: string[];
+  cwd: string | null;
+  rawCommand: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+};
+
+export type ExecApprovalRequestPayload = {
+  command: string;
+  commandArgv?: string[];
+  // Optional UI-safe env key preview for approval prompts.
+  envKeys?: string[];
+  systemRunBinding?: SystemRunApprovalBinding | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
+  cwd?: string | null;
+  nodeId?: string | null;
+  host?: string | null;
+  security?: string | null;
+  ask?: string | null;
+  agentId?: string | null;
+  resolvedPath?: string | null;
+  sessionKey?: string | null;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+};
+
+export type ExecApprovalRequest = {
+  id: string;
+  request: ExecApprovalRequestPayload;
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+export type ExecApprovalResolved = {
+  id: string;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  ts: number;
+  request?: ExecApprovalRequest["request"];
+};
 
 export type ExecApprovalsDefaults = {
   security?: ExecSecurity;
@@ -56,13 +134,15 @@ export type ExecApprovalsResolved = {
   file: ExecApprovalsFile;
 };
 
+// Keep CLI + gateway defaults in sync.
+export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
+
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
 const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -71,25 +151,12 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
-
 export function resolveExecApprovalsPath(): string {
-  return expandHome(DEFAULT_FILE);
+  return expandHomePrefix(DEFAULT_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHome(DEFAULT_SOCKET);
+  return expandHomePrefix(DEFAULT_SOCKET);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
@@ -132,6 +199,37 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
+// entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
+function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) {
+    return Array.isArray(allowlist) ? (allowlist as ExecAllowlistEntry[]) : undefined;
+  }
+  let changed = false;
+  const result: ExecAllowlistEntry[] = [];
+  for (const item of allowlist) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) {
+        result.push({ pattern: trimmed });
+        changed = true;
+      } else {
+        changed = true; // dropped empty string
+      }
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      const pattern = (item as { pattern?: unknown }).pattern;
+      if (typeof pattern === "string" && pattern.trim().length > 0) {
+        result.push(item as ExecAllowlistEntry);
+      } else {
+        changed = true; // dropped invalid entry
+      }
+    } else {
+      changed = true; // dropped invalid entry
+    }
+  }
+  return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
+}
+
 function ensureAllowlistIds(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
@@ -160,7 +258,8 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
-    const allowlist = ensureAllowlistIds(agent.allowlist);
+    const coerced = coerceAllowlistEntries(agent.allowlist);
+    const allowlist = ensureAllowlistIds(coerced);
     if (allowlist !== agent.allowlist) {
       agents[key] = { ...agent, allowlist };
     }
@@ -180,6 +279,24 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     agents,
   };
   return normalized;
+}
+
+export function mergeExecApprovalsSocketDefaults(params: {
+  normalized: ExecApprovalsFile;
+  current?: ExecApprovalsFile;
+}): ExecApprovalsFile {
+  const currentSocketPath = params.current?.socket?.path?.trim();
+  const currentToken = params.current?.socket?.token?.trim();
+  const socketPath =
+    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
+  return {
+    ...params.normalized,
+    socket: {
+      path: socketPath,
+      token,
+    },
+  };
 }
 
 function generateToken(): string {
@@ -293,7 +410,7 @@ export function resolveExecApprovals(
     agentId,
     overrides,
     path: resolveExecApprovalsPath(),
-    socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
     token: file.socket?.token ?? "",
   });
 }
@@ -344,7 +461,7 @@ export function resolveExecApprovalsFromFile(params: {
   ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
-    socketPath: expandHome(
+    socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
     token: params.token ?? file.socket?.token ?? "",
@@ -1354,56 +1471,23 @@ export async function requestExecApprovalViaSocket(params: {
     return null;
   }
   const timeoutMs = params.timeoutMs ?? 15_000;
-  return await new Promise((resolve) => {
-    const client = new net.Socket();
-    let settled = false;
-    let buffer = "";
-    const finish = (value: ExecApprovalDecision | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        client.destroy();
-      } catch {
-        // ignore
-      }
-      resolve(value);
-    };
+  const payload = JSON.stringify({
+    type: "request",
+    token,
+    id: crypto.randomUUID(),
+    request,
+  });
 
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    const payload = JSON.stringify({
-      type: "request",
-      token,
-      id: crypto.randomUUID(),
-      request,
-    });
-
-    client.on("error", () => finish(null));
-    client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
-    });
-    client.on("data", (data) => {
-      buffer += data.toString("utf8");
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        if (!line) {
-          continue;
-        }
-        try {
-          const msg = JSON.parse(line) as { type?: string; decision?: ExecApprovalDecision };
-          if (msg?.type === "decision" && msg.decision) {
-            clearTimeout(timer);
-            finish(msg.decision);
-            return;
-          }
-        } catch {
-          // ignore
-        }
+  return await requestJsonlSocket({
+    socketPath,
+    payload,
+    timeoutMs,
+    accept: (value) => {
+      const msg = value as { type?: string; decision?: ExecApprovalDecision };
+      if (msg?.type === "decision" && msg.decision) {
+        return msg.decision;
       }
-    });
+      return undefined;
+    },
   });
 }

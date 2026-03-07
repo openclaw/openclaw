@@ -95,6 +95,7 @@ vi.mock("./onboard-channels.js", () => ({
   setupChannels: vi.fn(),
 }));
 
+import { WizardCancelledError } from "../wizard/prompts.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
 describe("runConfigureWizard", () => {
@@ -132,5 +133,29 @@ describe("runConfigureWizard", () => {
         gateway: expect.objectContaining({ mode: "local" }),
       }),
     );
+  });
+
+  it("exits with code 1 when configure wizard is cancelled", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.clackSelect.mockRejectedValueOnce(new WizardCancelledError());
+
+    await runConfigureWizard({ command: "configure" }, runtime);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

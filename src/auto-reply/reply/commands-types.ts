@@ -12,6 +12,7 @@ export type CommandContext = {
   channel: string;
   channelId?: ChannelId;
   ownerList: string[];
+  senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   senderId?: string;
   abortKey?: string;
@@ -19,13 +20,17 @@ export type CommandContext = {
   commandBodyNormalized: string;
   from?: string;
   to?: string;
+  /** Internal marker to prevent duplicate reset-hook emission across command pipelines. */
+  resetHookTriggered?: boolean;
 };
 
 export type HandleCommandsParams = {
   ctx: MsgContext;
+  rootCtx?: MsgContext;
   cfg: OpenClawConfig;
   command: CommandContext;
   agentId?: string;
+  agentDir?: string;
   directives: InlineDirectives;
   elevated: {
     enabled: boolean;

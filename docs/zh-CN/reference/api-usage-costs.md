@@ -34,7 +34,7 @@ x-i18n:
 
 - `openclaw status --usage` 和 `openclaw channels list` 显示提供商**用量窗口**（配额快照，非每条消息的费用）。
 
-详情和示例请参阅 [Token 用量与费用](/token-use)。
+详情和示例请参阅 [Token 用量与费用](/reference/token-use)。
 
 ## 密钥的发现方式
 
@@ -51,7 +51,7 @@ OpenClaw 可以从以下来源获取凭据：
 
 每次回复或工具调用都使用**当前模型提供商**（OpenAI、Anthropic 等）。这是用量和费用的主要来源。
 
-定价配置请参阅[模型](/providers/models)，显示方式请参阅 [Token 用量与费用](/token-use)。
+定价配置请参阅[模型](/providers/models)，显示方式请参阅 [Token 用量与费用](/reference/token-use)。
 
 ### 2）媒体理解（音频/图像/视频）
 

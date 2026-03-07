@@ -40,6 +40,7 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
   - defaults (`prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`)
   - provider overrides (`baseUrl`, `headers`, `providerOptions`)
   - Deepgram audio options via `tools.media.audio.providerOptions.deepgram`
+  - audio transcript echo controls (`echoTranscript`, default `false`; `echoFormat`)
   - optional **per‑capability `models` list** (preferred before shared models)
   - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
   - `scope` (optional gating by channel/chatType/session key)
@@ -57,6 +58,8 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
       },
       audio: {
         /* optional overrides */
+        echoTranscript: true,
+        echoFormat: '📝 "{transcript}"',
       },
       video: {
         /* optional overrides */
@@ -123,6 +126,7 @@ Recommended defaults:
 Rules:
 
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
+- Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
 - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
@@ -160,6 +164,20 @@ To disable auto-detection, set:
 
 Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (we expand `~`), or set an explicit CLI model with a full command path.
 
+### Proxy environment support (provider models)
+
+When provider-based **audio** and **video** media understanding is enabled, OpenClaw
+honors standard outbound proxy environment variables for provider HTTP calls:
+
+- `HTTPS_PROXY`
+- `HTTP_PROXY`
+- `https_proxy`
+- `http_proxy`
+
+If no proxy env vars are set, media understanding uses direct egress.
+If the proxy value is malformed, OpenClaw logs a warning and falls back to direct
+fetch.
+
 ## Capabilities (optional)
 
 If you set `capabilities`, the entry only runs for those media types. For shared
@@ -175,29 +193,19 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                             | Notes                                             |
-| ---------- | ------------------------------------------------ | ------------------------------------------------- |
-| Image      | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works.    |
-| Audio      | OpenAI, Groq, Deepgram, Google                   | Provider transcription (Whisper/Deepgram/Gemini). |
-| Video      | Google (Gemini API)                              | Provider video understanding.                     |
+| Capability | Provider integration                             | Notes                                                     |
+| ---------- | ------------------------------------------------ | --------------------------------------------------------- |
+| Image      | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works.            |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral). |
+| Video      | Google (Gemini API)                              | Provider video understanding.                             |
 
-## Recommended providers
+## Model selection guidance
 
-**Image**
-
-- Prefer your active model if it supports images.
-- Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-5`, `google/gemini-3-pro-preview`.
-
-**Audio**
-
-- `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, or `deepgram/nova-3`.
-- CLI fallback: `whisper-cli` (whisper-cpp) or `whisper`.
-- Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
-
-**Video**
-
-- `google/gemini-3-flash-preview` (fast), `google/gemini-3-pro-preview` (richer).
-- CLI fallback: `gemini` CLI (supports `read_file` on video/audio).
+- Prefer the strongest latest-generation model available for each media capability when quality and safety matter.
+- For tool-enabled agents handling untrusted inputs, avoid older/weaker media models.
+- Keep at least one fallback per capability for availability (quality model + faster/cheaper model).
+- CLI fallbacks (`whisper-cli`, `whisper`, `gemini`) are useful when provider APIs are unavailable.
+- `parakeet-mlx` note: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when output format is `txt` (or unspecified); non-`txt` formats fall back to stdout.
 
 ## Attachment policy
 
@@ -300,7 +308,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
         maxChars: 500,
         models: [
           { provider: "openai", model: "gpt-5.2" },
-          { provider: "anthropic", model: "claude-opus-4-5" },
+          { provider: "anthropic", model: "claude-opus-4-6" },
           {
             type: "cli",
             command: "gemini",

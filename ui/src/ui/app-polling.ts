@@ -1,7 +1,7 @@
-import type { OpenClawApp } from "./app";
-import { loadDebug } from "./controllers/debug";
-import { loadLogs } from "./controllers/logs";
-import { loadNodes } from "./controllers/nodes";
+import type { OpenClawApp } from "./app.ts";
+import { loadDebug } from "./controllers/debug.ts";
+import { loadLogs } from "./controllers/logs.ts";
+import { loadNodes } from "./controllers/nodes.ts";
 
 type PollingHost = {
   nodesPollInterval: number | null;

@@ -8,7 +8,7 @@ echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running doctor install switch E2E..."
-docker run --rm -t "$IMAGE_NAME" bash -lc '
+docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 
   # Keep logs focused; the npm global install step can emit noisy deprecation warnings.
@@ -37,8 +37,10 @@ case "$cmd" in
     unit="${args[1]:-}"
     unit_path="$HOME/.config/systemd/user/${unit}"
     if [ -f "$unit_path" ]; then
+      echo "enabled"
       exit 0
     fi
+    echo "disabled" >&2
     exit 1
     ;;
   show)
@@ -80,10 +82,20 @@ LOGINCTL
   fi
   npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz"
 
-  npm_bin="/tmp/npm-prefix/bin/openclaw"
-  npm_entry="/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.js"
-  git_entry="/app/dist/index.js"
-  git_cli="/app/openclaw.mjs"
+	  npm_bin="/tmp/npm-prefix/bin/openclaw"
+	  npm_root="/tmp/npm-prefix/lib/node_modules/openclaw"
+	  if [ -f "$npm_root/dist/index.mjs" ]; then
+	    npm_entry="$npm_root/dist/index.mjs"
+	  else
+	    npm_entry="$npm_root/dist/index.js"
+	  fi
+
+	  if [ -f "/app/dist/index.mjs" ]; then
+	    git_entry="/app/dist/index.mjs"
+	  else
+	    git_entry="/app/dist/index.js"
+	  fi
+	  git_cli="/app/openclaw.mjs"
 
   assert_entrypoint() {
     local unit_path="$1"
@@ -136,13 +148,13 @@ LOGINCTL
     "npm-to-git" \
     "$npm_bin daemon install --force" \
     "$npm_entry" \
-    "node $git_cli doctor --repair --force" \
+    "node $git_cli doctor --repair --force --yes" \
     "$git_entry"
 
   run_flow \
     "git-to-npm" \
     "node $git_cli daemon install --force" \
     "$git_entry" \
-    "$npm_bin doctor --repair --force" \
+    "$npm_bin doctor --repair --force --yes" \
     "$npm_entry"
 '

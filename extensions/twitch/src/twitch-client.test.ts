@@ -10,8 +10,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { TwitchClientManager } from "./twitch-client.js";
+import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn().mockResolvedValue(undefined);
@@ -86,7 +86,7 @@ describe("TwitchClientManager", () => {
 
   const testAccount: TwitchAccountConfig = {
     username: "testbot",
-    token: "oauth:test123456",
+    accessToken: "test123456",
     clientId: "test-client-id",
     channel: "testchannel",
     enabled: true,
@@ -94,7 +94,7 @@ describe("TwitchClientManager", () => {
 
   const testAccount2: TwitchAccountConfig = {
     username: "testbot2",
-    token: "oauth:test789",
+    accessToken: "test789",
     clientId: "test-client-id-2",
     channel: "testchannel2",
     enabled: true,
@@ -145,8 +145,8 @@ describe("TwitchClientManager", () => {
     it("should use account username as default channel when channel not specified", async () => {
       const accountWithoutChannel: TwitchAccountConfig = {
         ...testAccount,
-        channel: undefined,
-      };
+        channel: "",
+      } as unknown as TwitchAccountConfig;
 
       await manager.getClient(accountWithoutChannel);
 
@@ -172,7 +172,7 @@ describe("TwitchClientManager", () => {
     it("should normalize token by removing oauth: prefix", async () => {
       const accountWithPrefix: TwitchAccountConfig = {
         ...testAccount,
-        token: "oauth:actualtoken123",
+        accessToken: "oauth:actualtoken123",
       };
 
       // Override the mock to return a specific token for this test
@@ -207,8 +207,8 @@ describe("TwitchClientManager", () => {
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,
-        clientId: undefined,
-      };
+        clientId: "" as unknown as string,
+      } as unknown as TwitchAccountConfig;
 
       await expect(manager.getClient(accountWithoutClientId)).rejects.toThrow(
         "Missing Twitch client ID",

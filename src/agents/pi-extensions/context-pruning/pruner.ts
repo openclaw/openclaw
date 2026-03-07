@@ -96,31 +96,38 @@ function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boo
   return false;
 }
 
+function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "text") {
+      chars += block.text.length;
+    }
+    if (block.type === "image") {
+      chars += IMAGE_CHAR_ESTIMATE;
+    }
+  }
+  return chars;
+}
+
 function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
       return content.length;
     }
-    let chars = 0;
-    for (const b of content) {
-      if (b.type === "text") {
-        chars += b.text.length;
-      }
-      if (b.type === "image") {
-        chars += IMAGE_CHAR_ESTIMATE;
-      }
-    }
-    return chars;
+    return estimateTextAndImageChars(content);
   }
 
   if (message.role === "assistant") {
     let chars = 0;
     for (const b of message.content) {
-      if (b.type === "text") {
+      if (!b || typeof b !== "object") {
+        continue;
+      }
+      if (b.type === "text" && typeof b.text === "string") {
         chars += b.text.length;
       }
-      if (b.type === "thinking") {
+      if (b.type === "thinking" && typeof b.thinking === "string") {
         chars += b.thinking.length;
       }
       if (b.type === "toolCall") {
@@ -135,16 +142,7 @@ function estimateMessageChars(message: AgentMessage): number {
   }
 
   if (message.role === "toolResult") {
-    let chars = 0;
-    for (const b of message.content) {
-      if (b.type === "text") {
-        chars += b.text.length;
-      }
-      if (b.type === "image") {
-        chars += IMAGE_CHAR_ESTIMATE;
-      }
-    }
-    return chars;
+    return estimateTextAndImageChars(message.content);
   }
 
   return 256;

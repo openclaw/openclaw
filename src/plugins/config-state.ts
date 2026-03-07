@@ -1,3 +1,4 @@
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginRecord } from "./registry.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -10,10 +11,23 @@ export type NormalizedPluginsConfig = {
   slots: {
     memory?: string | null;
   };
-  entries: Record<string, { enabled?: boolean; config?: unknown }>;
+  entries: Record<
+    string,
+    {
+      enabled?: boolean;
+      hooks?: {
+        allowPromptInjection?: boolean;
+      };
+      config?: unknown;
+    }
+  >;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>();
+export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "device-pair",
+  "phone-control",
+  "talk-voice",
+]);
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
@@ -50,8 +64,23 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
       continue;
     }
     const entry = value as Record<string, unknown>;
+    const hooksRaw = entry.hooks;
+    const hooks =
+      hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
+        ? {
+            allowPromptInjection: (hooksRaw as { allowPromptInjection?: unknown })
+              .allowPromptInjection,
+          }
+        : undefined;
+    const normalizedHooks =
+      hooks && typeof hooks.allowPromptInjection === "boolean"
+        ? {
+            allowPromptInjection: hooks.allowPromptInjection,
+          }
+        : undefined;
     normalized[key] = {
       enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
+      hooks: normalizedHooks,
       config: "config" in entry ? entry.config : undefined,
     };
   }
@@ -188,6 +217,42 @@ export function resolveEnableState(
     return { enabled: false, reason: "bundled (disabled by default)" };
   }
   return { enabled: true };
+}
+
+export function isBundledChannelEnabledByChannelConfig(
+  cfg: OpenClawConfig | undefined,
+  pluginId: string,
+): boolean {
+  if (!cfg) {
+    return false;
+  }
+  const channelId = normalizeChatChannelId(pluginId);
+  if (!channelId) {
+    return false;
+  }
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const entry = channels?.[channelId];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  return (entry as Record<string, unknown>).enabled === true;
+}
+
+export function resolveEffectiveEnableState(params: {
+  id: string;
+  origin: PluginRecord["origin"];
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+}): { enabled: boolean; reason?: string } {
+  const base = resolveEnableState(params.id, params.origin, params.config);
+  if (
+    !base.enabled &&
+    base.reason === "bundled (disabled by default)" &&
+    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+  ) {
+    return { enabled: true };
+  }
+  return base;
 }
 
 export function resolveMemorySlotDecision(params: {

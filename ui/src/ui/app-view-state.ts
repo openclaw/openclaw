@@ -1,33 +1,38 @@
-import type { EventLogEntry } from "./app-events";
-import type { DevicePairingList } from "./controllers/devices";
-import type { ExecApprovalRequest } from "./controllers/exec-approval";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
-import type { SkillMessage } from "./controllers/skills";
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
-import type { Tab } from "./navigation";
-import type { UiSettings } from "./storage";
-import type { ThemeMode } from "./theme";
-import type { ThemeTransitionContext } from "./theme-transition";
+import type { EventLogEntry } from "./app-events.ts";
+import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
+import type { DevicePairingList } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillMessage } from "./controllers/skills.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type { ThemeTransitionContext } from "./theme-transition.ts";
+import type { ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
-  CronJob,
-  CronRunLogEntry,
-  CronStatus,
+  ConfigUiHints,
   HealthSnapshot,
   LogEntry,
   LogLevel,
   NostrProfile,
   PresenceEntry,
+  SessionsUsageResult,
+  CostUsageSummary,
+  SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
+  ToolsCatalogResult,
   StatusSummary,
-} from "./types";
-import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
+} from "./types.ts";
+import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -40,6 +45,7 @@ export type AppViewState = {
   themeResolved: "light" | "dark";
   hello: GatewayHelloOk | null;
   lastError: string | null;
+  lastErrorCode: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
@@ -51,15 +57,24 @@ export type AppViewState = {
   chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
   chatToolMessages: unknown[];
+  chatStreamSegments: Array<{ text: string; ts: number }>;
   chatStream: string | null;
+  chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  compactionStatus: CompactionStatus | null;
+  fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
+  chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
-  scrollToBottom: () => void;
+  sidebarOpen: boolean;
+  sidebarContent: string | null;
+  sidebarError: string | null;
+  splitRatio: number;
+  scrollToBottom: (opts?: { smooth?: boolean }) => void;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
@@ -83,13 +98,18 @@ export type AppViewState = {
   configSaving: boolean;
   configApplying: boolean;
   updateRunning: boolean;
+  applySessionKey: string;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown;
+  configSchemaVersion: string | null;
   configSchemaLoading: boolean;
-  configUiHints: Record<string, unknown>;
+  configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
+  configSearchQuery: string;
+  configActiveSection: string | null;
+  configActiveSubsection: string | null;
   channelsLoading: boolean;
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
@@ -109,6 +129,9 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
+  toolsCatalogLoading: boolean;
+  toolsCatalogError: string | null;
+  toolsCatalogResult: ToolsCatalogResult | null;
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
@@ -131,96 +154,169 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
-  cronLoading: boolean;
-  cronJobs: CronJob[];
-  cronStatus: CronStatus | null;
-  cronError: string | null;
-  cronForm: CronFormState;
-  cronRunsJobId: string | null;
-  cronRuns: CronRunLogEntry[];
-  cronBusy: boolean;
-  skillsLoading: boolean;
-  skillsReport: SkillStatusReport | null;
-  skillsError: string | null;
-  skillsFilter: string;
-  skillEdits: Record<string, string>;
-  skillMessages: Record<string, SkillMessage>;
-  skillsBusyKey: string | null;
-  debugLoading: boolean;
-  debugStatus: StatusSummary | null;
-  debugHealth: HealthSnapshot | null;
-  debugModels: unknown[];
-  debugHeartbeat: unknown;
-  debugCallMethod: string;
-  debugCallParams: string;
-  debugCallResult: string | null;
-  debugCallError: string | null;
-  logsLoading: boolean;
-  logsError: string | null;
-  logsFile: string | null;
-  logsEntries: LogEntry[];
-  logsFilterText: string;
-  logsLevelFilters: Record<LogLevel, boolean>;
-  logsAutoFollow: boolean;
-  logsTruncated: boolean;
-  client: GatewayBrowserClient | null;
-  connect: () => void;
-  setTab: (tab: Tab) => void;
-  setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
-  applySettings: (next: UiSettings) => void;
-  loadOverview: () => Promise<void>;
-  loadAssistantIdentity: () => Promise<void>;
-  loadCron: () => Promise<void>;
-  handleWhatsAppStart: (force: boolean) => Promise<void>;
-  handleWhatsAppWait: () => Promise<void>;
-  handleWhatsAppLogout: () => Promise<void>;
-  handleChannelConfigSave: () => Promise<void>;
-  handleChannelConfigReload: () => Promise<void>;
-  handleNostrProfileEdit: (accountId: string, profile: NostrProfile | null) => void;
-  handleNostrProfileCancel: () => void;
-  handleNostrProfileFieldChange: (field: keyof NostrProfile, value: string) => void;
-  handleNostrProfileSave: () => Promise<void>;
-  handleNostrProfileImport: () => Promise<void>;
-  handleNostrProfileToggleAdvanced: () => void;
-  handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
-  handleGatewayUrlConfirm: () => void;
-  handleGatewayUrlCancel: () => void;
-  handleConfigLoad: () => Promise<void>;
-  handleConfigSave: () => Promise<void>;
-  handleConfigApply: () => Promise<void>;
-  handleConfigFormUpdate: (path: string, value: unknown) => void;
-  handleConfigFormModeChange: (mode: "form" | "raw") => void;
-  handleConfigRawChange: (raw: string) => void;
-  handleInstallSkill: (key: string) => Promise<void>;
-  handleUpdateSkill: (key: string) => Promise<void>;
-  handleToggleSkillEnabled: (key: string, enabled: boolean) => Promise<void>;
-  handleUpdateSkillEdit: (key: string, value: string) => void;
-  handleSaveSkillApiKey: (key: string, apiKey: string) => Promise<void>;
-  handleCronToggle: (jobId: string, enabled: boolean) => Promise<void>;
-  handleCronRun: (jobId: string) => Promise<void>;
-  handleCronRemove: (jobId: string) => Promise<void>;
-  handleCronAdd: () => Promise<void>;
-  handleCronRunsLoad: (jobId: string) => Promise<void>;
-  handleCronFormUpdate: (path: string, value: unknown) => void;
-  handleSessionsLoad: () => Promise<void>;
-  handleSessionsPatch: (key: string, patch: unknown) => Promise<void>;
-  handleLoadNodes: () => Promise<void>;
-  handleLoadPresence: () => Promise<void>;
-  handleLoadSkills: () => Promise<void>;
-  handleLoadDebug: () => Promise<void>;
-  handleLoadLogs: () => Promise<void>;
-  handleDebugCall: () => Promise<void>;
-  handleRunUpdate: () => Promise<void>;
-  setPassword: (next: string) => void;
-  setSessionKey: (next: string) => void;
-  setChatMessage: (next: string) => void;
-  handleChatSend: () => Promise<void>;
-  handleChatAbort: () => Promise<void>;
-  handleChatSelectQueueItem: (id: string) => void;
-  handleChatDropQueueItem: (id: string) => void;
-  handleChatClearQueue: () => void;
-  handleLogsFilterChange: (next: string) => void;
-  handleLogsLevelFilterToggle: (level: LogLevel) => void;
-  handleLogsAutoFollowToggle: (next: boolean) => void;
-  handleCallDebugMethod: (method: string, params: string) => Promise<void>;
-};
+  sessionsHideCron: boolean;
+  usageLoading: boolean;
+  usageResult: SessionsUsageResult | null;
+  usageCostSummary: CostUsageSummary | null;
+  usageError: string | null;
+  usageStartDate: string;
+  usageEndDate: string;
+  usageSelectedSessions: string[];
+  usageSelectedDays: string[];
+  usageSelectedHours: number[];
+  usageChartMode: "tokens" | "cost";
+  usageDailyChartMode: "total" | "by-type";
+  usageTimeSeriesMode: "cumulative" | "per-turn";
+  usageTimeSeriesBreakdownMode: "total" | "by-type";
+  usageTimeSeries: SessionUsageTimeSeries | null;
+  usageTimeSeriesLoading: boolean;
+  usageTimeSeriesCursorStart: number | null;
+  usageTimeSeriesCursorEnd: number | null;
+  usageSessionLogs: SessionLogEntry[] | null;
+  usageSessionLogsLoading: boolean;
+  usageSessionLogsExpanded: boolean;
+  usageQuery: string;
+  usageQueryDraft: string;
+  usageQueryDebounceTimer: number | null;
+  usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
+  usageSessionSortDir: "asc" | "desc";
+  usageRecentSessions: string[];
+  usageTimeZone: "local" | "utc";
+  usageContextExpanded: boolean;
+  usageHeaderPinned: boolean;
+  usageSessionsTab: "all" | "recent";
+  usageVisibleColumns: string[];
+  usageLogFilterRoles: import("./views/usage.js").SessionLogRole[];
+  usageLogFilterTools: string[];
+  usageLogFilterHasTools: boolean;
+  usageLogFilterQuery: string;
+} & Pick<
+  CronState,
+  | "cronLoading"
+  | "cronJobsLoadingMore"
+  | "cronJobs"
+  | "cronJobsTotal"
+  | "cronJobsHasMore"
+  | "cronJobsNextOffset"
+  | "cronJobsLimit"
+  | "cronJobsQuery"
+  | "cronJobsEnabledFilter"
+  | "cronJobsScheduleKindFilter"
+  | "cronJobsLastStatusFilter"
+  | "cronJobsSortBy"
+  | "cronJobsSortDir"
+  | "cronStatus"
+  | "cronError"
+  | "cronForm"
+  | "cronFieldErrors"
+  | "cronEditingJobId"
+  | "cronRunsJobId"
+  | "cronRunsLoadingMore"
+  | "cronRuns"
+  | "cronRunsTotal"
+  | "cronRunsHasMore"
+  | "cronRunsNextOffset"
+  | "cronRunsLimit"
+  | "cronRunsScope"
+  | "cronRunsStatuses"
+  | "cronRunsDeliveryStatuses"
+  | "cronRunsStatusFilter"
+  | "cronRunsQuery"
+  | "cronRunsSortDir"
+  | "cronBusy"
+> &
+  Pick<CronModelSuggestionsState, "cronModelSuggestions"> & {
+    skillsLoading: boolean;
+    skillsReport: SkillStatusReport | null;
+    skillsError: string | null;
+    skillsFilter: string;
+    skillEdits: Record<string, string>;
+    skillMessages: Record<string, SkillMessage>;
+    skillsBusyKey: string | null;
+    debugLoading: boolean;
+    debugStatus: StatusSummary | null;
+    debugHealth: HealthSnapshot | null;
+    debugModels: unknown[];
+    debugHeartbeat: unknown;
+    debugCallMethod: string;
+    debugCallParams: string;
+    debugCallResult: string | null;
+    debugCallError: string | null;
+    logsLoading: boolean;
+    logsError: string | null;
+    logsFile: string | null;
+    logsEntries: LogEntry[];
+    logsFilterText: string;
+    logsLevelFilters: Record<LogLevel, boolean>;
+    logsAutoFollow: boolean;
+    logsTruncated: boolean;
+    logsCursor: number | null;
+    logsLastFetchAt: number | null;
+    logsLimit: number;
+    logsMaxBytes: number;
+    logsAtBottom: boolean;
+    updateAvailable: import("./types.js").UpdateAvailable | null;
+    client: GatewayBrowserClient | null;
+    refreshSessionsAfterChat: Set<string>;
+    connect: () => void;
+    setTab: (tab: Tab) => void;
+    setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
+    applySettings: (next: UiSettings) => void;
+    loadOverview: () => Promise<void>;
+    loadAssistantIdentity: () => Promise<void>;
+    loadCron: () => Promise<void>;
+    handleWhatsAppStart: (force: boolean) => Promise<void>;
+    handleWhatsAppWait: () => Promise<void>;
+    handleWhatsAppLogout: () => Promise<void>;
+    handleChannelConfigSave: () => Promise<void>;
+    handleChannelConfigReload: () => Promise<void>;
+    handleNostrProfileEdit: (accountId: string, profile: NostrProfile | null) => void;
+    handleNostrProfileCancel: () => void;
+    handleNostrProfileFieldChange: (field: keyof NostrProfile, value: string) => void;
+    handleNostrProfileSave: () => Promise<void>;
+    handleNostrProfileImport: () => Promise<void>;
+    handleNostrProfileToggleAdvanced: () => void;
+    handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
+    handleGatewayUrlConfirm: () => void;
+    handleGatewayUrlCancel: () => void;
+    handleConfigLoad: () => Promise<void>;
+    handleConfigSave: () => Promise<void>;
+    handleConfigApply: () => Promise<void>;
+    handleConfigFormUpdate: (path: string, value: unknown) => void;
+    handleConfigFormModeChange: (mode: "form" | "raw") => void;
+    handleConfigRawChange: (raw: string) => void;
+    handleInstallSkill: (key: string) => Promise<void>;
+    handleUpdateSkill: (key: string) => Promise<void>;
+    handleToggleSkillEnabled: (key: string, enabled: boolean) => Promise<void>;
+    handleUpdateSkillEdit: (key: string, value: string) => void;
+    handleSaveSkillApiKey: (key: string, apiKey: string) => Promise<void>;
+    handleCronToggle: (jobId: string, enabled: boolean) => Promise<void>;
+    handleCronRun: (jobId: string) => Promise<void>;
+    handleCronRemove: (jobId: string) => Promise<void>;
+    handleCronAdd: () => Promise<void>;
+    handleCronRunsLoad: (jobId: string) => Promise<void>;
+    handleCronFormUpdate: (path: string, value: unknown) => void;
+    handleSessionsLoad: () => Promise<void>;
+    handleSessionsPatch: (key: string, patch: unknown) => Promise<void>;
+    handleLoadNodes: () => Promise<void>;
+    handleLoadPresence: () => Promise<void>;
+    handleLoadSkills: () => Promise<void>;
+    handleLoadDebug: () => Promise<void>;
+    handleLoadLogs: () => Promise<void>;
+    handleDebugCall: () => Promise<void>;
+    handleRunUpdate: () => Promise<void>;
+    setPassword: (next: string) => void;
+    setSessionKey: (next: string) => void;
+    setChatMessage: (next: string) => void;
+    handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    handleAbortChat: () => Promise<void>;
+    removeQueuedMessage: (id: string) => void;
+    handleChatScroll: (event: Event) => void;
+    resetToolStream: () => void;
+    resetChatScroll: () => void;
+    exportLogs: (lines: string[], label: string) => void;
+    handleLogsScroll: (event: Event) => void;
+    handleOpenSidebar: (content: string) => void;
+    handleCloseSidebar: () => void;
+    handleSplitRatioChange: (ratio: number) => void;
+  };

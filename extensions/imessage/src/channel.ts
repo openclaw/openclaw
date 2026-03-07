@@ -1,9 +1,11 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
+  formatTrimmedAllowFromEntries,
   getChatChannelMeta,
   imessageOnboardingAdapter,
   IMessageConfigSchema,
@@ -16,15 +18,66 @@ import {
   resolveChannelMediaMaxBytes,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type ResolvedIMessageAccount,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/imessage";
 import { getIMessageRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("imessage");
+
+function buildIMessageSetupPatch(input: {
+  cliPath?: string;
+  dbPath?: string;
+  service?: string;
+  region?: string;
+}) {
+  return {
+    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
+    ...(input.dbPath ? { dbPath: input.dbPath } : {}),
+    ...(input.service ? { service: input.service } : {}),
+    ...(input.region ? { region: input.region } : {}),
+  };
+}
+
+type IMessageSendFn = ReturnType<
+  typeof getIMessageRuntime
+>["channel"]["imessage"]["sendMessageIMessage"];
+
+async function sendIMessageOutbound(params: {
+  cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  accountId?: string;
+  deps?: { sendIMessage?: IMessageSendFn };
+  replyToId?: string;
+}) {
+  const send =
+    params.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
+  const maxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.imessage?.accounts?.[accountId]?.mediaMaxMb ??
+      cfg.channels?.imessage?.mediaMaxMb,
+    accountId: params.accountId,
+  });
+  return await send(params.to, params.text, {
+    config: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    maxBytes,
+    accountId: params.accountId ?? undefined,
+    replyToId: params.replyToId ?? undefined,
+  });
+}
 
 export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   id: "imessage",
@@ -72,12 +125,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       enabled: account.enabled,
       configured: account.configured,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+    resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
+    formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
+    resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -95,8 +145,12 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.imessage !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -132,13 +186,14 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         accountId,
         name: input.name,
       });
-      const next =
+      const next = (
         accountId !== DEFAULT_ACCOUNT_ID
           ? migrateBaseNameToDefaultAccount({
               cfg: namedConfig,
               channelKey: "imessage",
             })
-          : namedConfig;
+          : namedConfig
+      ) as typeof cfg;
       if (accountId === DEFAULT_ACCOUNT_ID) {
         return {
           ...next,
@@ -147,13 +202,10 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
             imessage: {
               ...next.channels?.imessage,
               enabled: true,
-              ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-              ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-              ...(input.service ? { service: input.service } : {}),
-              ...(input.region ? { region: input.region } : {}),
+              ...buildIMessageSetupPatch(input),
             },
           },
-        };
+        } as typeof cfg;
       }
       return {
         ...next,
@@ -167,15 +219,12 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
               [accountId]: {
                 ...next.channels?.imessage?.accounts?.[accountId],
                 enabled: true,
-                ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-                ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-                ...(input.service ? { service: input.service } : {}),
-                ...(input.region ? { region: input.region } : {}),
+                ...buildIMessageSetupPatch(input),
               },
             },
           },
         },
-      };
+      } as typeof cfg;
     },
   },
   outbound: {
@@ -183,34 +232,27 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
-      const maxBytes = resolveChannelMediaMaxBytes({
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
+      const result = await sendIMessageOutbound({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.imessage?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.imessage?.mediaMaxMb,
-        accountId,
-      });
-      const result = await send(to, text, {
-        maxBytes,
+        to,
+        text,
         accountId: accountId ?? undefined,
+        deps,
+        replyToId: replyToId ?? undefined,
       });
       return { channel: "imessage", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
-      const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
-      const maxBytes = resolveChannelMediaMaxBytes({
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
+      const result = await sendIMessageOutbound({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.imessage?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.imessage?.mediaMaxMb,
-        accountId,
-      });
-      const result = await send(to, text, {
+        to,
+        text,
         mediaUrl,
-        maxBytes,
+        mediaLocalRoots,
         accountId: accountId ?? undefined,
+        deps,
+        replyToId: replyToId ?? undefined,
       });
       return { channel: "imessage", ...result };
     },
@@ -225,21 +267,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       cliPath: null,
       dbPath: null,
     },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "imessage",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       running: snapshot.running ?? false,

@@ -1,13 +1,15 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { ModelRow } from "./list.types.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
-import { loadConfig } from "../../config/config.js";
+import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
+import { formatErrorWithStack } from "./list.errors.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
-import { DEFAULT_PROVIDER, ensureFlagCompatibility, modelKey } from "./shared.js";
+import type { ModelRow } from "./list.types.js";
+import { loadModelsConfigWithSource } from "./load-config.js";
+import { DEFAULT_PROVIDER, ensureFlagCompatibility, isLocalBaseUrl, modelKey } from "./shared.js";
 
 export async function modelsListCommand(
   opts: {
@@ -20,7 +22,11 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = loadConfig();
+  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");
+  const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
+    commandName: "models list",
+    runtime,
+  });
   const authStore = ensureAuthProfileStore();
   const providerFilter = (() => {
     const raw = opts.provider?.trim();
@@ -32,37 +38,31 @@ export async function modelsListCommand(
   })();
 
   let models: Model<Api>[] = [];
+  let modelRegistry: ModelRegistry | undefined;
   let availableKeys: Set<string> | undefined;
+  let availabilityErrorMessage: string | undefined;
   try {
-    const loaded = await loadModelRegistry(cfg);
+    const loaded = await loadModelRegistry(cfg, { sourceConfig });
+    modelRegistry = loaded.registry;
     models = loaded.models;
     availableKeys = loaded.availableKeys;
+    availabilityErrorMessage = loaded.availabilityErrorMessage;
   } catch (err) {
-    runtime.error(`Model registry unavailable: ${String(err)}`);
+    runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
+    process.exitCode = 1;
+    return;
   }
-
-  const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
+  if (availabilityErrorMessage !== undefined) {
+    runtime.error(
+      `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
+    );
+  }
+  const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
 
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
 
   const rows: ModelRow[] = [];
-
-  const isLocalBaseUrl = (baseUrl: string) => {
-    try {
-      const url = new URL(baseUrl);
-      const host = url.hostname.toLowerCase();
-      return (
-        host === "localhost" ||
-        host === "127.0.0.1" ||
-        host === "0.0.0.0" ||
-        host === "::1" ||
-        host.endsWith(".local")
-      );
-    } catch {
-      return false;
-    }
-  };
 
   if (opts.all) {
     const sorted = [...models].toSorted((a, b) => {
@@ -95,11 +95,22 @@ export async function modelsListCommand(
       );
     }
   } else {
+    const registry = modelRegistry;
+    if (!registry) {
+      runtime.error("Model registry unavailable.");
+      process.exitCode = 1;
+      return;
+    }
     for (const entry of entries) {
       if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
         continue;
       }
-      const model = modelByKey.get(entry.key);
+      const model = resolveModelWithRegistry({
+        provider: entry.ref.provider,
+        modelId: entry.ref.model,
+        modelRegistry: registry,
+        cfg,
+      });
       if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
         continue;
       }
@@ -115,6 +126,9 @@ export async function modelsListCommand(
           availableKeys,
           cfg,
           authStore,
+          allowProviderAvailabilityFallback: model
+            ? !discoveredKeys.has(modelKey(model.provider, model.id))
+            : false,
         }),
       );
     }

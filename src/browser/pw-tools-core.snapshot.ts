@@ -1,4 +1,10 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import {
+  assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -8,6 +14,7 @@ import {
 } from "./pw-role-snapshot.js";
 import {
   ensurePageState,
+  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
@@ -158,17 +165,55 @@ export async function navigateViaPlaywright(opts: {
   targetId?: string;
   url: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ url: string }> {
+  const isRetryableNavigateError = (err: unknown): boolean => {
+    const msg =
+      typeof err === "string"
+        ? err.toLowerCase()
+        : err instanceof Error
+          ? err.message.toLowerCase()
+          : "";
+    return (
+      msg.includes("frame has been detached") ||
+      msg.includes("target page, context or browser has been closed")
+    );
+  };
+
   const url = String(opts.url ?? "").trim();
   if (!url) {
     throw new Error("url is required");
   }
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.goto(url, {
-    timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
+  await assertBrowserNavigationAllowed({
+    url,
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
-  return { url: page.url() };
+  const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
+  let page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  try {
+    await page.goto(url, { timeout });
+  } catch (err) {
+    if (!isRetryableNavigateError(err)) {
+      throw err;
+    }
+    // Extension relays can briefly drop CDP during renderer swaps/navigation.
+    // Force a clean reconnect, then retry once on the refreshed page handle.
+    await forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      reason: "retry navigate after detached frame",
+    }).catch(() => {});
+    page = await getPageForTargetId(opts);
+    ensurePageState(page);
+    await page.goto(url, { timeout });
+  }
+  const finalUrl = page.url();
+  await assertBrowserNavigationResultAllowed({
+    url: finalUrl,
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  });
+  return { url: finalUrl };
 }
 
 export async function resizeViewportViaPlaywright(opts: {

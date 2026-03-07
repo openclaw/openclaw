@@ -7,6 +7,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     send: "to",
     broadcast: "none",
     poll: "to",
+    "poll-vote": "to",
     react: "to",
     reactions: "to",
     read: "to",
@@ -47,12 +48,15 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "category-create": "none",
     "category-edit": "none",
     "category-delete": "none",
+    "topic-create": "to",
     "voice-status": "none",
     "event-list": "none",
     "event-create": "none",
     timeout: "none",
     kick: "none",
     ban: "none",
+    "set-presence": "none",
+    "download-file": "none",
   };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {

@@ -29,7 +29,7 @@ OpenClaw features that can generate provider usage or paid API calls.
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows**
   (quota snapshots, not per-message costs).
 
-See [Token use & costs](/token-use) for details and examples.
+See [Token use & costs](/reference/token-use) for details and examples.
 
 ## How keys are discovered
 
@@ -48,7 +48,7 @@ OpenClaw can pick up credentials from:
 Every reply or tool call uses the **current model provider** (OpenAI, Anthropic, etc). This is the
 primary source of usage and cost.
 
-See [Models](/providers/models) for pricing config and [Token use & costs](/token-use) for display.
+See [Models](/providers/models) for pricing config and [Token use & costs](/reference/token-use) for display.
 
 ### 2) Media understanding (audio/image/video)
 
@@ -66,24 +66,24 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 
 - `memorySearch.provider = "openai"` → OpenAI embeddings
 - `memorySearch.provider = "gemini"` → Gemini embeddings
-- Optional fallback to OpenAI if local embeddings fail
+- `memorySearch.provider = "voyage"` → Voyage embeddings
+- `memorySearch.provider = "mistral"` → Mistral embeddings
+- `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
+- Optional fallback to a remote provider if local embeddings fail
 
 You can keep it local with `memorySearch.provider = "local"` (no API usage).
 
 See [Memory](/concepts/memory).
 
-### 4) Web search tool (Brave / Perplexity via OpenRouter)
+### 4) Web search tool
 
-`web_search` uses API keys and may incur usage charges:
+`web_search` uses API keys and may incur usage charges depending on your provider:
 
+- **Perplexity Search API**: `PERPLEXITY_API_KEY`
 - **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-- **Perplexity** (via OpenRouter): `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
-
-**Brave free tier (generous):**
-
-- **2,000 requests/month**
-- **1 request/second**
-- **Credit card required** for verification (no charge unless you upgrade)
+- **Gemini (Google Search)**: `GEMINI_API_KEY`
+- **Grok (xAI)**: `XAI_API_KEY`
+- **Kimi (Moonshot)**: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
 
 See [Web tools](/tools/web).
 
