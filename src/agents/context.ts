@@ -3,6 +3,8 @@
 
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
+import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
@@ -18,6 +20,12 @@ type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
+  initialMs: 1_000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0,
+};
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -66,53 +74,123 @@ export function applyConfiguredContextWindows(params: {
 }
 
 const MODEL_CACHE = new Map<string, number>();
-const loadPromise = (async () => {
-  let cfg: ReturnType<typeof loadConfig> | undefined;
-  try {
-    cfg = loadConfig();
-  } catch {
-    // If config can't be loaded, leave cache empty.
-    return;
-  }
+let loadPromise: Promise<void> | null = null;
+let configuredConfig: OpenClawConfig | undefined;
+let configLoadFailures = 0;
+let nextConfigLoadAttemptAtMs = 0;
 
-  try {
-    await ensureOpenClawModelsJson(cfg);
-  } catch {
-    // Continue with best-effort discovery/overrides.
+function getCommandPathFromArgv(argv: string[]): string[] {
+  const args = argv.slice(2);
+  const tokens: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(args, i);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    tokens.push(arg);
+    if (tokens.length >= 2) {
+      break;
+    }
   }
+  return tokens;
+}
 
+function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): boolean {
+  const [primary, secondary] = getCommandPathFromArgv(argv);
+  return primary === "config" && secondary === "validate";
+}
+
+function primeConfiguredContextWindows(): OpenClawConfig | undefined {
+  if (configuredConfig) {
+    return configuredConfig;
+  }
+  if (Date.now() < nextConfigLoadAttemptAtMs) {
+    return undefined;
+  }
   try {
-    const { discoverAuthStorage, discoverModels } = await import("./pi-model-discovery.js");
-    const agentDir = resolveOpenClawAgentDir();
-    const authStorage = discoverAuthStorage(agentDir);
-    const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
-    const models =
-      typeof modelRegistry.getAvailable === "function"
-        ? modelRegistry.getAvailable()
-        : modelRegistry.getAll();
-    applyDiscoveredContextWindows({
+    const cfg = loadConfig();
+    applyConfiguredContextWindows({
       cache: MODEL_CACHE,
-      models,
+      modelsConfig: cfg.models as ModelsConfig | undefined,
     });
+    configuredConfig = cfg;
+    configLoadFailures = 0;
+    nextConfigLoadAttemptAtMs = 0;
+    return cfg;
   } catch {
-    // If model discovery fails, continue with config overrides only.
+    configLoadFailures += 1;
+    const backoffMs = computeBackoff(CONFIG_LOAD_RETRY_POLICY, configLoadFailures);
+    nextConfigLoadAttemptAtMs = Date.now() + backoffMs;
+    // If config can't be loaded, leave cache empty and retry after backoff.
+    return undefined;
+  }
+}
+
+function ensureContextWindowCacheLoaded(): Promise<void> {
+  if (loadPromise) {
+    return loadPromise;
   }
 
-  applyConfiguredContextWindows({
-    cache: MODEL_CACHE,
-    modelsConfig: cfg.models as ModelsConfig | undefined,
+  const cfg = primeConfiguredContextWindows();
+  if (!cfg) {
+    return Promise.resolve();
+  }
+
+  loadPromise = (async () => {
+    try {
+      await ensureOpenClawModelsJson(cfg);
+    } catch {
+      // Continue with best-effort discovery/overrides.
+    }
+
+    try {
+      const { discoverAuthStorage, discoverModels } = await import("./pi-model-discovery.js");
+      const agentDir = resolveOpenClawAgentDir();
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+      const models =
+        typeof modelRegistry.getAvailable === "function"
+          ? modelRegistry.getAvailable()
+          : modelRegistry.getAll();
+      applyDiscoveredContextWindows({
+        cache: MODEL_CACHE,
+        models,
+      });
+    } catch {
+      // If model discovery fails, continue with config overrides only.
+    }
+
+    applyConfiguredContextWindows({
+      cache: MODEL_CACHE,
+      modelsConfig: cfg.models as ModelsConfig | undefined,
+    });
+  })().catch(() => {
+    // Keep lookup best-effort.
   });
-})().catch(() => {
-  // Keep lookup best-effort.
-});
+  return loadPromise;
+}
 
 export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading, but don't block.
-  void loadPromise;
+  void ensureContextWindowCacheLoaded();
   return MODEL_CACHE.get(modelId);
+}
+
+if (!shouldSkipEagerContextWindowWarmup()) {
+  // Keep prior behavior where model limits begin loading during startup.
+  // This avoids a cold-start miss on the first context token lookup.
+  void ensureContextWindowCacheLoaded();
 }
 
 function resolveConfiguredModelParams(

@@ -8,6 +8,25 @@ import {
   type PiSdkModule,
 } from "./model-catalog.test-harness.js";
 
+function mockPiDiscoveryModels(models: unknown[]) {
+  __setModelCatalogImportForTest(
+    async () =>
+      ({
+        discoverAuthStorage: () => ({}),
+        AuthStorage: class {},
+        ModelRegistry: class {
+          getAll() {
+            return models;
+          }
+        },
+      }) as unknown as PiSdkModule,
+  );
+}
+
+function mockSingleOpenAiCatalogModel() {
+  mockPiDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
+}
+
 describe("loadModelCatalog", () => {
   installModelCatalogTestHooks();
 
@@ -38,6 +57,7 @@ describe("loadModelCatalog", () => {
       __setModelCatalogImportForTest(
         async () =>
           ({
+            discoverAuthStorage: () => ({}),
             AuthStorage: class {},
             ModelRegistry: class {
               getAll() {
@@ -66,31 +86,21 @@ describe("loadModelCatalog", () => {
   });
 
   it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [
-                {
-                  id: "gpt-5.3-codex",
-                  provider: "openai-codex",
-                  name: "GPT-5.3 Codex",
-                  reasoning: true,
-                  contextWindow: 200000,
-                  input: ["text"],
-                },
-                {
-                  id: "gpt-5.2-codex",
-                  provider: "openai-codex",
-                  name: "GPT-5.2 Codex",
-                },
-              ];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 200000,
+        input: ["text"],
+      },
+      {
+        id: "gpt-5.2-codex",
+        provider: "openai-codex",
+        name: "GPT-5.2 Codex",
+      },
+    ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expect(result).toContainEqual(
@@ -104,18 +114,61 @@ describe("loadModelCatalog", () => {
     expect(spark?.reasoning).toBe(true);
   });
 
-  it("merges configured models for opted-in non-pi-native providers", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }];
-            }
-          },
-        }) as unknown as PiSdkModule,
+  it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.2",
+        provider: "openai",
+        name: "GPT-5.2",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.2-pro",
+        provider: "openai",
+        name: "GPT-5.2 Pro",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+      }),
     );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-pro",
+        name: "gpt-5.4-pro",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("merges configured models for opted-in non-pi-native providers", async () => {
+    mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
       config: {
@@ -151,17 +204,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not merge configured models for providers that are not opted in", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
       config: {
@@ -193,23 +236,13 @@ describe("loadModelCatalog", () => {
   });
 
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          AuthStorage: class {},
-          ModelRegistry: class {
-            getAll() {
-              return [
-                {
-                  id: "anthropic/claude-opus-4.6",
-                  provider: "kilocode",
-                  name: "Claude Opus 4.6",
-                },
-              ];
-            }
-          },
-        }) as unknown as PiSdkModule,
-    );
+    mockPiDiscoveryModels([
+      {
+        id: "anthropic/claude-opus-4.6",
+        provider: "kilocode",
+        name: "Claude Opus 4.6",
+      },
+    ]);
 
     const result = await loadModelCatalog({
       config: {

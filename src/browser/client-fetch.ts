@@ -9,6 +9,15 @@ import {
 } from "./control-service.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 
+// Application-level error from the browser control service (service is reachable
+// but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
+class BrowserServiceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserServiceError";
+  }
+}
+
 type LoopbackBrowserAuthDeps = {
   loadConfig: typeof loadConfig;
   resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
@@ -140,7 +149,7 @@ async function fetchHttpJson<T>(
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(text || `HTTP ${res.status}`);
+      throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
   } finally {
@@ -235,10 +244,13 @@ export async function fetchBrowserJson<T>(
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `HTTP ${result.status}`;
-      throw new Error(message);
+      throw new BrowserServiceError(message);
     }
     return result.body as T;
   } catch (err) {
+    if (err instanceof BrowserServiceError) {
+      throw err;
+    }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
 }
