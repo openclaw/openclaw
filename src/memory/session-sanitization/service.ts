@@ -1619,19 +1619,17 @@ export async function processMcpToolResult(params: {
   }
 
   // Always check for already-terminated sessions — trusted servers do not exempt
-  // a terminated session.
-  if (validationCfg.frequency.enabled) {
-    const existingFreqState = sessionFrequencyState.get(params.sessionId);
-    if (existingFreqState?.terminated) {
-      return {
-        ...buildBlockedResult(
-          ["session terminated: sustained suspicious input frequency"],
-          "blocked: session terminated (frequency tier3)",
-          1,
-        ),
-        terminated: true,
-      };
-    }
+  // a terminated session, and disabling frequency tracking does not un-terminate one.
+  const existingFreqState = sessionFrequencyState.get(params.sessionId);
+  if (existingFreqState?.terminated) {
+    return {
+      ...buildBlockedResult(
+        ["session terminated: sustained suspicious input frequency"],
+        "blocked: session terminated (frequency tier3)",
+        1,
+      ),
+      terminated: true,
+    };
   }
 
   if (trustedServer) {
