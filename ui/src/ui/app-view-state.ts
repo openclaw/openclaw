@@ -66,6 +66,8 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  sttActive: boolean;
+  sttText: string;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -318,4 +320,6 @@ export type AppViewState = {
     handleOpenSidebar: (content: string) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
+    handleSttToggle: (active: boolean) => void;
+    handleSttResult: (text: string, isFinal: boolean) => void;
   };

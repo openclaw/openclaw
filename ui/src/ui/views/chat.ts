@@ -7,6 +7,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { t } from "../i18n/index.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -62,6 +63,12 @@ export type ChatProps = {
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
+  // STT state
+  sttActive?: boolean;
+  sttText?: string;
+  onSttToggle?: (active: boolean) => void;
+  onSttResult?: (text: string, isFinal: boolean) => void;
+  onSttData?: (audio: string) => void;
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
@@ -244,6 +251,61 @@ export function renderChat(props: ChatProps) {
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && props.sttActive) {
+      e.preventDefault();
+      props.onSttToggle?.(false);
+      stopStt();
+      return;
+    }
+
+    if (
+      e.code === "Space" &&
+      !props.sttActive &&
+      document.activeElement?.tagName !== "TEXTAREA" &&
+      document.activeElement?.tagName !== "INPUT"
+    ) {
+      e.preventDefault();
+      props.onSttToggle?.(true);
+      void startStt(props);
+    }
+
+    if (e.key === "Enter") {
+      if (e.isComposing || e.keyCode === 229) {
+        return;
+      }
+      if (e.shiftKey) {
+        return;
+      } // Allow Shift+Enter for line breaks
+      if (!props.connected) {
+        return;
+      }
+      e.preventDefault();
+      if (canCompose) {
+        props.onSend();
+      }
+    }
+  };
+
+  const handleKeyUp = (e: KeyboardEvent) => {
+    if (e.code === "Space" && props.sttActive) {
+      e.preventDefault();
+      props.onSttToggle?.(false);
+      stopStt();
+    }
+  };
+
+  const toggleStt = () => {
+    const nextActive = !props.sttActive;
+    props.onSttToggle?.(nextActive);
+    if (nextActive) {
+      void startStt(props);
+    } else {
+      stopStt();
+    }
+  };
+
   const assistantIdentity = {
     name: props.assistantName,
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
@@ -421,6 +483,41 @@ export function renderChat(props: ChatProps) {
       }
 
       <div class="chat-compose">
+        ${
+          props.sttActive
+            ? html`
+          <div class="chat-stt-overlay">
+            <div
+            class="chat-stt-overlay"
+            tabindex="0"
+            @click=${() => toggleStt()}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                toggleStt();
+              }
+            }}
+            ${ref((el) => el && (el as HTMLElement).focus())}
+          >
+            <div class="chat-stt-overlay__content">
+              <div class="chat-stt-overlay__icon">${icons.mic}</div>
+              <div class="chat-stt-overlay__text">
+                ${
+                  // @ts-ignore
+                  props.sttText || t("chat.stt.listening")
+                }
+              </div>
+              <div style="font-size: 12px; opacity: 0.6; margin-top: 8px;">
+                ${
+                  // @ts-ignore
+                  t("chat.stt.help")
+                }
+              </div>
+            </div>
+          </div>
+        `
+            : nothing
+        }
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
@@ -430,24 +527,8 @@ export function renderChat(props: ChatProps) {
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key !== "Enter") {
-                  return;
-                }
-                if (e.isComposing || e.keyCode === 229) {
-                  return;
-                }
-                if (e.shiftKey) {
-                  return;
-                } // Allow Shift+Enter for line breaks
-                if (!props.connected) {
-                  return;
-                }
-                e.preventDefault();
-                if (canCompose) {
-                  props.onSend();
-                }
-              }}
+              @keydown=${handleKeyDown}
+              @keyup=${handleKeyUp}
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
@@ -458,6 +539,18 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <button
+              class="btn btn--icon ${props.sttActive ? "active" : ""}"
+              type="button"
+              ?disabled=${!props.connected}
+              @click=${toggleStt}
+              title=${
+                // @ts-ignore
+                t("chat.stt.micTitle")
+              }
+            >
+              ${icons.mic}
+            </button>
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
@@ -613,4 +706,123 @@ function messageKey(message: unknown, index: number): string {
     return `msg:${role}:${timestamp}:${index}`;
   }
   return `msg:${role}:${index}`;
+}
+
+let audioContext: AudioContext | null = null;
+let processor: ScriptProcessorNode | null = null;
+let input: MediaStreamAudioSourceNode | null = null;
+let globalStream: MediaStream | null = null;
+
+interface VoskRecognizer {
+  on(event: string, callback: (message: unknown) => void): void;
+  acceptWaveform(buffer: AudioBuffer): void;
+  remove(): void;
+}
+
+interface VoskModel {
+  KaldiRecognizer: new (sampleRate: number) => VoskRecognizer;
+}
+
+let voskModel: VoskModel | null = null;
+let voskRecognizer: VoskRecognizer | null = null;
+
+async function getVosk() {
+  if (voskModel) {
+    return { model: voskModel };
+  }
+
+  try {
+    console.log("Loading Vosk model...");
+    // @ts-ignore
+    console.log(t("chat.stt.loading"));
+    const { createModel } = await import("vosk-browser");
+    // Use local English model
+    const model = (await createModel(
+      "/models/vosk-model-small-en-us-0.15.zip",
+    )) as unknown as VoskModel;
+    voskModel = model;
+    console.log("Vosk model loaded successfully");
+    // @ts-ignore
+    console.log(t("chat.stt.loaded"));
+    return { model };
+  } catch (err) {
+    console.error("Failed to load Vosk model:", err);
+    throw err;
+  }
+}
+
+async function startStt(props: ChatProps) {
+  try {
+    // Request microphone permission first so user sees immediate feedback
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    globalStream = stream;
+
+    // Then load model (if not already loaded)
+    const { model } = await getVosk();
+
+    audioContext = new AudioContext({ sampleRate: 16000 });
+
+    // 根据 vosk-browser 0.0.8 的标准用法创建识别器
+    voskRecognizer = new model.KaldiRecognizer(16000);
+
+    interface VoskResult {
+      result: {
+        text: string;
+        partial: string;
+      };
+    }
+
+    voskRecognizer.on("result", (message: unknown) => {
+      const result = (message as VoskResult).result;
+      props.onSttResult?.(result.text, true);
+    });
+    voskRecognizer.on("partialresult", (message: unknown) => {
+      const result = (message as VoskResult).result;
+      props.onSttResult?.(result.partial, false);
+    });
+
+    input = audioContext.createMediaStreamSource(stream);
+    processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      if (voskRecognizer) {
+        // vosk-browser's acceptWaveform in version 0.0.8
+        // might expect AudioBuffer or specific Float32Array directly
+        voskRecognizer.acceptWaveform(e.inputBuffer);
+      }
+    };
+
+    input.connect(processor);
+    processor.connect(audioContext.destination);
+  } catch (err) {
+    console.error("Failed to start STT:", err);
+    // @ts-ignore
+    alert(t("chat.stt.error") + ": " + (err instanceof Error ? err.message : String(err)));
+    props.onSttToggle?.(false);
+    stopStt();
+  }
+}
+
+function stopStt() {
+  if (processor) {
+    processor.disconnect();
+    processor = null;
+  }
+  if (input) {
+    input.disconnect();
+    input = null;
+  }
+  if (audioContext) {
+    void audioContext.close();
+    audioContext = null;
+  }
+  if (globalStream) {
+    globalStream.getTracks().forEach((track) => track.stop());
+    globalStream = null;
+  }
+  // Keep model for next use, but destroy recognizer
+  if (voskRecognizer) {
+    voskRecognizer.remove();
+    voskRecognizer = null;
+  }
 }

@@ -17,7 +17,8 @@
     "marked": "^17.0.3",
     "signal-polyfill": "^0.2.2",
     "signal-utils": "^0.21.1",
-    "vite": "7.3.1"
+    "vite": "7.3.1",
+    "vosk-browser": "^0.0.8"
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.0.18",

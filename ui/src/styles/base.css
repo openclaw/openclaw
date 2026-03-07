@@ -19,6 +19,7 @@
   --panel-hover: #262a35;
   --chrome: rgba(18, 20, 26, 0.95);
   --chrome-strong: rgba(18, 20, 26, 0.98);
+  --bg-rgb: 18, 20, 26;
 
   /* Text - Slightly warmer */
   --text: #e4e4e7;
@@ -130,6 +131,7 @@
   --panel-hover: #ebebeb;
   --chrome: rgba(250, 250, 250, 0.95);
   --chrome-strong: rgba(250, 250, 250, 0.98);
+  --bg-rgb: 250, 250, 250;
 
   --text: #3f3f46;
   --text-strong: #18181b;
