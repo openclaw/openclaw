@@ -690,75 +690,81 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  it("denies approval-based execution when a script operand changes after approval", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-drift-"));
-    const script = path.join(tmp, "run.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-    fs.chmodSync(script, 0o755);
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "./run.sh"],
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
+  it.runIf(process.platform !== "win32")(
+    "denies approval-based execution when a script operand changes after approval",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-drift-"));
+      const script = path.join(tmp, "run.sh");
+      fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(script, 0o755);
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["/bin/sh", "./run.sh"],
+          cwd: tmp,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+
+        fs.writeFileSync(script, "#!/bin/sh\necho PWNED\n");
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.rawCommand,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          exact: true,
+        });
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
       }
+    },
+  );
 
-      fs.writeFileSync(script, "#!/bin/sh\necho PWNED\n");
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        rawCommand: prepared.plan.rawCommand,
-        systemRunPlan: prepared.plan,
-        cwd: prepared.plan.cwd ?? tmp,
-        approved: true,
-        security: "full",
-        ask: "off",
-      });
+  it.runIf(process.platform !== "win32")(
+    "keeps approved shell script execution working when the script is unchanged",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-stable-"));
+      const script = path.join(tmp, "run.sh");
+      fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(script, 0o755);
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["/bin/sh", "./run.sh"],
+          cwd: tmp,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
 
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(sendInvokeResult, {
-        message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
-        exact: true,
-      });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.rawCommand,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
 
-  it("keeps approved shell script execution working when the script is unchanged", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-stable-"));
-    const script = path.join(tmp, "run.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-    fs.chmodSync(script, 0o755);
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "./run.sh"],
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
       }
-
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        rawCommand: prepared.plan.rawCommand,
-        systemRunPlan: prepared.plan,
-        cwd: prepared.plan.cwd ?? tmp,
-        approved: true,
-        security: "full",
-        ask: "off",
-      });
-
-      expect(runCommand).toHaveBeenCalledTimes(1);
-      expectInvokeOk(sendInvokeResult);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
