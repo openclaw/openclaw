@@ -35,6 +35,7 @@ describe("diffs plugin registration", () => {
         return input;
       },
       on,
+      phases: { on() {} },
     });
 
     expect(registerTool).toHaveBeenCalledTimes(1);
@@ -111,6 +112,7 @@ describe("diffs plugin registration", () => {
         return input;
       },
       on() {},
+      phases: { on() {} },
     });
 
     const result = await registeredTool?.execute?.("tool-1", {

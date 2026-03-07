@@ -297,12 +297,20 @@ export type OpenClawPluginApi = {
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
   resolvePath: (input: string) => string;
-  /** Register a lifecycle hook handler */
+  /** Register a runtime hook handler */
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
   ) => void;
+  /** Register a curated phase alias over selected runtime hooks. */
+  phases: {
+    on: <P extends PluginPhase>(
+      phase: P,
+      handler: PluginPhaseHookHandlerMap[P],
+      opts?: PluginPhaseHookOptions,
+    ) => void;
+  };
 };
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
@@ -889,4 +897,43 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   source: string;
+};
+
+export const PLUGIN_PHASE_TO_HOOK = {
+  "model.pre": "before_model_resolve",
+  "prompt.pre": "before_prompt_build",
+  "agent.pre": "before_agent_start",
+  "request.pre": "message_received",
+  "message.pre": "message_sending",
+  "tool.pre": "before_tool_call",
+  "tool.post": "after_tool_call",
+} as const satisfies Record<string, PluginHookName>;
+
+export type PluginPhase = keyof typeof PLUGIN_PHASE_TO_HOOK;
+
+type PluginPhaseHookName<P extends PluginPhase> = (typeof PLUGIN_PHASE_TO_HOOK)[P];
+
+export type PluginPhasePayloadMap = {
+  [P in PluginPhase]: Parameters<PluginHookHandlerMap[PluginPhaseHookName<P>]>[0];
+};
+
+export type PluginPhaseHookContextMap = {
+  [P in PluginPhase]: Parameters<PluginHookHandlerMap[PluginPhaseHookName<P>]>[1] & {
+    phase: P;
+    hookName: PluginPhaseHookName<P>;
+  };
+};
+
+export type PluginPhaseHookContext<P extends PluginPhase = PluginPhase> =
+  PluginPhaseHookContextMap[P];
+
+export type PluginPhaseHookOptions = {
+  priority?: number;
+};
+
+export type PluginPhaseHookHandlerMap = {
+  [P in PluginPhase]: (
+    payload: PluginPhasePayloadMap[P],
+    context: PluginPhaseHookContext<P>,
+  ) => ReturnType<PluginHookHandlerMap[PluginPhaseHookName<P>]>;
 };

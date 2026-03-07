@@ -77,7 +77,7 @@ OpenClaw has two hook systems:
 
 See [Hooks](/automation/hooks) for setup and examples.
 
-### Plugin hooks (agent + gateway lifecycle)
+### Plugin hooks (runtime + phases)
 
 These run inside the agent loop or gateway pipeline:
 
@@ -91,6 +91,33 @@ These run inside the agent loop or gateway pipeline:
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
+
+Plugins can register these via:
+
+- `api.on("<hook_name>", handler, { priority })` for raw runtime hooks
+- `api.phases.on("<phase>", handler, { priority })` for a small abstraction over selected existing runtime hooks
+
+Current phase surface:
+
+- `model.pre` -> `before_model_resolve`
+- `prompt.pre` -> `before_prompt_build`
+- `agent.pre` -> `before_agent_start`
+- `request.pre` -> `message_received`
+- `message.pre` -> `message_sending`
+- `tool.pre` -> `before_tool_call`
+- `tool.post` -> `after_tool_call`
+
+Primary runtime wiring for `api.phases.on(...)`:
+
+| Phase         | Runtime hook           | Primary invocation site                                                                                                                                           |
+| ------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.pre`   | `before_model_resolve` | `src/agents/pi-embedded-runner/run.ts`                                                                                                                            |
+| `prompt.pre`  | `before_prompt_build`  | `src/agents/pi-embedded-runner/run/attempt.ts`                                                                                                                    |
+| `agent.pre`   | `before_agent_start`   | `src/agents/pi-embedded-runner/run.ts`, `src/agents/pi-embedded-runner/run/attempt.ts`                                                                            |
+| `request.pre` | `message_received`     | `src/auto-reply/reply/dispatch-from-config.ts`                                                                                                                    |
+| `message.pre` | `message_sending`      | `src/auto-reply/reply/dispatch-from-config.ts`, `src/infra/outbound/deliver.ts`, `src/telegram/bot/delivery.replies.ts`, `src/channels/plugins/outbound/slack.ts` |
+| `tool.pre`    | `before_tool_call`     | `src/agents/pi-tools.before-tool-call.ts`                                                                                                                         |
+| `tool.post`   | `after_tool_call`      | `src/agents/pi-embedded-subscribe.handlers.tools.ts`                                                                                                              |
 
 See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration details.
 

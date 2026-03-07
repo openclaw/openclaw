@@ -17,9 +17,14 @@ import type { PluginRuntime } from "./runtime/types.js";
 import {
   isPluginHookName,
   isPromptInjectionHookName,
+  PLUGIN_PHASE_TO_HOOK,
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
+  PluginPhase,
+  PluginPhaseHookContext,
+  PluginPhaseHookHandlerMap,
+  PluginPhaseHookOptions,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -572,6 +577,31 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     debug: logger.debug,
   });
 
+  const registerPhaseHook = <P extends PluginPhase>(
+    record: PluginRecord,
+    phase: P,
+    handler: PluginPhaseHookHandlerMap[P],
+    opts?: PluginPhaseHookOptions,
+    policy?: PluginTypedHookPolicy,
+  ) => {
+    const hookName = PLUGIN_PHASE_TO_HOOK[phase];
+    registerTypedHook(
+      record,
+      hookName,
+      ((
+        event: Parameters<PluginHookHandlerMap[typeof hookName]>[0],
+        ctx: Parameters<PluginHookHandlerMap[typeof hookName]>[1],
+      ) =>
+        handler(event, {
+          ...ctx,
+          phase,
+          hookName,
+        } as PluginPhaseHookContext<P>)) as PluginHookHandlerMap[typeof hookName],
+      opts,
+      policy,
+    );
+  };
+
   const createApi = (
     record: PluginRecord,
     params: {
@@ -604,6 +634,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+      phases: {
+        on: (phase, handler, opts) =>
+          registerPhaseHook(record, phase, handler, opts, params.hookPolicy),
+      },
     };
   };
 

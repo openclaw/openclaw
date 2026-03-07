@@ -548,9 +548,9 @@ Notes:
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
-### Agent lifecycle hooks (`api.on`)
+### Runtime hooks (`api.on`)
 
-For typed runtime lifecycle hooks, use `api.on(...)`:
+For typed runtime hooks, use `api.on(...)`:
 
 ```ts
 export default function register(api) {
@@ -600,6 +600,55 @@ Migration guidance:
 
 - Move static guidance from `prependContext` to `prependSystemContext` (or `appendSystemContext`) so providers can cache stable system-prefix content.
 - Keep `prependContext` for per-turn dynamic context that should stay tied to the user message.
+
+### Phase hooks (`api.phases.on`)
+
+Plugins can also register a small abstraction layer over selected existing runtime hooks:
+
+- `api.on("hook_name", handler, { priority })` for raw runtime hooks
+- `api.phases.on("phase", handler, { priority })` for curated phase names
+
+This phase API does not expose new runtime capability. It aliases a short list of existing runtime hooks:
+
+- `model.pre` -> `before_model_resolve`
+- `prompt.pre` -> `before_prompt_build`
+- `agent.pre` -> `before_agent_start`
+- `request.pre` -> `message_received`
+- `message.pre` -> `message_sending`
+- `tool.pre` -> `before_tool_call`
+- `tool.post` -> `after_tool_call`
+
+Example:
+
+```ts
+export default function register(api) {
+  api.phases.on(
+    "message.pre",
+    (event) => ({
+      content: `${event.content}\n\nSent via policy`,
+    }),
+    { priority: 10 },
+  );
+}
+```
+
+Phase handlers use the same payloads and return shapes as the underlying runtime hooks.
+They also receive the runtime hook context plus:
+
+- `phase`
+- `hookName`
+
+Primary runtime wiring:
+
+| Phase         | Runtime hook           | Primary invocation site                                                                                                                                           |
+| ------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.pre`   | `before_model_resolve` | `src/agents/pi-embedded-runner/run.ts`                                                                                                                            |
+| `prompt.pre`  | `before_prompt_build`  | `src/agents/pi-embedded-runner/run/attempt.ts`                                                                                                                    |
+| `agent.pre`   | `before_agent_start`   | `src/agents/pi-embedded-runner/run.ts`, `src/agents/pi-embedded-runner/run/attempt.ts`                                                                            |
+| `request.pre` | `message_received`     | `src/auto-reply/reply/dispatch-from-config.ts`                                                                                                                    |
+| `message.pre` | `message_sending`      | `src/auto-reply/reply/dispatch-from-config.ts`, `src/infra/outbound/deliver.ts`, `src/telegram/bot/delivery.replies.ts`, `src/channels/plugins/outbound/slack.ts` |
+| `tool.pre`    | `before_tool_call`     | `src/agents/pi-tools.before-tool-call.ts`                                                                                                                         |
+| `tool.post`   | `after_tool_call`      | `src/agents/pi-embedded-subscribe.handlers.tools.ts`                                                                                                              |
 
 ## Provider plugins (model auth)
 

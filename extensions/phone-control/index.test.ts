@@ -45,6 +45,7 @@ function createApi(params: {
       return input;
     },
     on() {},
+    phases: { on() {} },
   };
 }
 
