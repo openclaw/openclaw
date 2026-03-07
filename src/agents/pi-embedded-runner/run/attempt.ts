@@ -768,6 +768,7 @@ export async function runEmbeddedAttempt(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
@@ -777,6 +778,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      forceLoadEntries: preferWorkspaceSkillsPrompt,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -793,6 +795,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      preferEntries: preferWorkspaceSkillsPrompt,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

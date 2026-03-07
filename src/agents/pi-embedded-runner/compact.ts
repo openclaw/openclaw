@@ -338,6 +338,7 @@ export async function compactEmbeddedPiSessionDirect(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   await ensureSessionHeader({
     sessionFile: params.sessionFile,
@@ -352,6 +353,7 @@ export async function compactEmbeddedPiSessionDirect(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      forceLoadEntries: preferWorkspaceSkillsPrompt,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -367,6 +369,7 @@ export async function compactEmbeddedPiSessionDirect(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      preferEntries: preferWorkspaceSkillsPrompt,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

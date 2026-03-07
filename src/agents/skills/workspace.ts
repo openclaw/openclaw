@@ -642,7 +642,15 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  preferEntries?: boolean;
 }): string {
+  if (params.preferEntries && params.entries && params.entries.length > 0) {
+    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+      entries: params.entries,
+      config: params.config,
+    });
+    return prompt.trim() ? prompt : "";
+  }
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
