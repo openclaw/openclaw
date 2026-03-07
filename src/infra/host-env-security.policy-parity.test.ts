@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 type HostEnvSecurityPolicy = {
   blockedKeys: string[];
   blockedOverrideKeys?: string[];
+  blockedOverridePrefixes?: string[];
   blockedPrefixes: string[];
 };
 
@@ -40,6 +41,10 @@ describe("host env security policy parity", () => {
       generatedSource,
       "static let blockedOverrideKeys",
     );
+    const swiftBlockedOverridePrefixes = parseSwiftStringArray(
+      generatedSource,
+      "static let blockedOverridePrefixes",
+    );
     const swiftBlockedPrefixes = parseSwiftStringArray(
       generatedSource,
       "static let blockedPrefixes",
@@ -47,6 +52,7 @@ describe("host env security policy parity", () => {
 
     expect(swiftBlockedKeys).toEqual(policy.blockedKeys);
     expect(swiftBlockedOverrideKeys).toEqual(policy.blockedOverrideKeys ?? []);
+    expect(swiftBlockedOverridePrefixes).toEqual(policy.blockedOverridePrefixes ?? []);
     expect(swiftBlockedPrefixes).toEqual(policy.blockedPrefixes);
 
     expect(sanitizerSource).toContain(
@@ -54,6 +60,9 @@ describe("host env security policy parity", () => {
     );
     expect(sanitizerSource).toContain(
       "private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys",
+    );
+    expect(sanitizerSource).toContain(
+      "private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes",
     );
     expect(sanitizerSource).toContain(
       "private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes",
