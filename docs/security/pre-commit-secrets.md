@@ -10,10 +10,14 @@ Prevent secrets from being committed to your repository using TruffleHog.
 # macOS
 brew install trufflehog
 
-# Linux (download binary)
-curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+# Linux (verified binary — check https://github.com/trufflesecurity/trufflehog/releases for latest checksum)
+curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+  -o /tmp/install-trufflehog.sh
+# Verify the script before running (recommended):
+# sha256sum /tmp/install-trufflehog.sh
+bash /tmp/install-trufflehog.sh -b /usr/local/bin
 
-# Or via Go
+# Or via Go (reproducible build)
 go install github.com/trufflesecurity/trufflehog/v3@latest
 ```
 
@@ -30,7 +34,7 @@ set -euo pipefail
 
 echo "[pre-commit] Scanning staged files for secrets..."
 
-# Write staged content to a temp directory and scan it
+# List staged files (added, copied, modified)
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
 if [ -z "$STAGED_FILES" ]; then
@@ -38,20 +42,21 @@ if [ -z "$STAGED_FILES" ]; then
   exit 0
 fi
 
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+# Use a distinct variable name (not TMPDIR — that is a reserved OS variable)
+TH_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TH_TMPDIR"' EXIT
 
-# Extract staged versions of each file into tmpdir
+# Extract staged versions of each file into the temp directory
 while IFS= read -r file; do
-  mkdir -p "$TMPDIR/$(dirname "$file")"
-  git show ":$file" > "$TMPDIR/$file" 2>/dev/null || true
+  mkdir -p "$TH_TMPDIR/$(dirname "$file")"
+  git show ":$file" > "$TH_TMPDIR/$file" 2>/dev/null || true
 done <<< "$STAGED_FILES"
 
-# Scan staged content with TruffleHog filesystem mode
-if ! trufflehog filesystem "$TMPDIR" --only-verified --fail 2>/dev/null; then
+# Scan staged content — output is shown so users can see what triggered the block
+if ! trufflehog filesystem "$TH_TMPDIR" --only-verified --fail; then
   echo ""
   echo "🚨 SECRETS DETECTED in staged files! Commit blocked."
-  echo "Remove secrets before committing."
+  echo "Remove the secrets shown above before committing."
   echo ""
   exit 1
 fi
@@ -71,8 +76,9 @@ chmod +x .git/hooks/pre-commit
 1. Lists all staged files (`git diff --cached --name-only`)
 2. Extracts staged file content (`git show :filename`) into a temp directory
 3. Runs TruffleHog `filesystem` scan on the staged snapshot
-4. Blocks the commit if verified secrets are found
-5. Temp directory is cleaned up automatically
+4. Prints findings so you can identify and remove the secret
+5. Blocks the commit if verified secrets are found
+6. Temp directory is cleaned up automatically
 
 This approach correctly scans **staged (uncommitted) content** — not just git history.
 
@@ -99,4 +105,5 @@ Then commit `.githooks/pre-commit` to your repository.
 ## References
 
 - [TruffleHog Documentation](https://trufflesecurity.com/trufflehog)
+- [TruffleHog Releases & Checksums](https://github.com/trufflesecurity/trufflehog/releases)
 - [Catena-X TRG 8.03 - Secret Scanning](https://eclipse-tractusx.github.io/docs/release/trg-8/trg-8-03)

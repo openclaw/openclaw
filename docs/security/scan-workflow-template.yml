@@ -31,13 +31,13 @@ jobs:
           fetch-depth: 0
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           scan-type: "fs"
           scan-ref: "."
           severity: "CRITICAL,HIGH"
           format: "table"
-          exit-code: "0" # Set to '1' to fail on findings
+          exit-code: "1" # Fail the build on findings (set to '0' to report-only)
           ignore-unfixed: true
 
   kics-scan:
