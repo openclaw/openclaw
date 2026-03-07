@@ -1068,7 +1068,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     });
 
-    const data = await buildModelsProviderData(cfg);
+    const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       return await updateModelPickerPost({
         channelId: params.payload.channel_id,

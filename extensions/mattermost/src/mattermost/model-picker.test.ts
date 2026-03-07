@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import { buildModelsProviderData } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
 import {
   buildMattermostAllowedModelRefs,
@@ -5,6 +10,7 @@ import {
   renderMattermostModelSummaryView,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
+  resolveMattermostModelPickerCurrentModel,
   resolveMattermostModelPickerEntry,
 } from "./model-picker.js";
 
@@ -108,5 +114,41 @@ describe("Mattermost model picker", () => {
       model: "gpt-5",
     });
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
+  });
+
+  it("falls back to the routed agent default model when no override is stored", async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
+    try {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: path.join(testDir, "{agentId}.json"),
+        },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+          },
+          list: [
+            {
+              id: "support",
+              model: "openai/gpt-5",
+            },
+          ],
+        },
+      };
+      const providerData = await buildModelsProviderData(cfg, "support");
+
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: "agent:support:main",
+          },
+          data: providerData,
+        }),
+      ).toBe("openai/gpt-5");
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
   });
 });

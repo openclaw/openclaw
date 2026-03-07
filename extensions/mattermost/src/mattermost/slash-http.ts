@@ -387,7 +387,7 @@ async function handleSlashCommandAsync(params: {
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const data = await buildModelsProviderData(cfg);
+    const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       await sendMessageMattermost(to, "No models available.", {
         accountId: account.accountId,
