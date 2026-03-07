@@ -1,4 +1,4 @@
-import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
+import { collectOpenGroupPolicyRestrictSendersWarnings } from "openclaw/plugin-sdk";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -141,17 +141,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         groupPolicy: cfg.channels?.msteams?.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        buildOpenGroupPolicyRestrictSendersWarning({
-          surface: "MS Teams groups",
-          openScope: "any member",
-          groupPolicyPath: "channels.msteams.groupPolicy",
-          groupAllowFromPath: "channels.msteams.groupAllowFrom",
-        }),
-      ];
+      return collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: "MS Teams groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.msteams.groupPolicy",
+        groupAllowFromPath: "channels.msteams.groupAllowFrom",
+      });
     },
   },
   setup: {

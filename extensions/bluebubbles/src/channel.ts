@@ -1,6 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRestrictSendersWarnings,
 } from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
@@ -140,18 +140,14 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     },
     collectWarnings: ({ account }) => {
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        buildOpenGroupPolicyRestrictSendersWarning({
-          surface: "BlueBubbles groups",
-          openScope: "any member",
-          groupPolicyPath: "channels.bluebubbles.groupPolicy",
-          groupAllowFromPath: "channels.bluebubbles.groupAllowFrom",
-          mentionGated: false,
-        }),
-      ];
+      return collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: "BlueBubbles groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.bluebubbles.groupPolicy",
+        groupAllowFromPath: "channels.bluebubbles.groupAllowFrom",
+        mentionGated: false,
+      });
     },
   },
   messaging: {
