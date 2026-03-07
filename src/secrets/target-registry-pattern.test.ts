@@ -49,8 +49,8 @@ describe("target registry pattern helpers", () => {
       },
       talk: {
         providers: {
-          openai: { apiKey: "oa" },
-          anthropic: { apiKey: "an" },
+          openai: { apiKey: "oa" }, // pragma: allowlist secret
+          anthropic: { apiKey: "an" }, // pragma: allowlist secret
         },
       },
     };

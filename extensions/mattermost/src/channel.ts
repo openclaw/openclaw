@@ -34,10 +34,12 @@ import {
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
-import { sendMessageMattermost } from "./mattermost/send.js";
+import { resolveMattermostSendChannelId, sendMessageMattermost } from "./mattermost/send.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
 import { getMattermostRuntime } from "./runtime.js";
+
+const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -165,6 +167,10 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     if (params.buttons && Array.isArray(params.buttons)) {
       const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
       if (account.botToken) setInteractionSecret(account.accountId, account.botToken);
+      const channelId = await resolveMattermostSendChannelId(to, {
+        cfg,
+        accountId: account.accountId,
+      });
       const callbackUrl = resolveInteractionCallbackUrl(account.accountId, {
         gateway: cfg.gateway,
         interactions: account.config.interactions,
@@ -184,8 +190,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
           style: (btn.style as "default" | "primary" | "danger") ?? "default",
           context:
             typeof btn.context === "object" && btn.context !== null
-              ? (btn.context as Record<string, unknown>)
-              : undefined,
+              ? {
+                  ...(btn.context as Record<string, unknown>),
+                  [SIGNED_CHANNEL_ID_CONTEXT_KEY]: channelId,
+                }
+              : { [SIGNED_CHANNEL_ID_CONTEXT_KEY]: channelId },
         }))
         .filter((btn) => btn.id && btn.name);
 
