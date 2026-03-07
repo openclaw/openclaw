@@ -8,7 +8,9 @@ const getTtsProvider = vi.hoisted(() => vi.fn(() => "openai"));
 const resolveTtsAutoMode = vi.hoisted(() => vi.fn(() => "off"));
 const resolveTtsProviderOrder = vi.hoisted(() => vi.fn(() => ["openai", "edge"]));
 const isTtsProviderConfigured = vi.hoisted(() => vi.fn(() => false));
-const resolveTtsApiKey = vi.hoisted(() => vi.fn(() => undefined));
+const resolveTtsApiKey = vi.hoisted(() =>
+  vi.fn<(config: unknown, provider: string) => string | undefined>(() => undefined),
+);
 const setTtsProvider = vi.hoisted(() => vi.fn());
 const setTtsEnabled = vi.hoisted(() => vi.fn());
 const textToSpeech = vi.hoisted(() => vi.fn());
