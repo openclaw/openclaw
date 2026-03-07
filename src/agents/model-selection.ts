@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
@@ -318,9 +319,18 @@ export function resolveConfiguredModelRef(params: {
     }
 
     // User specified a model but it could not be resolved — warn before falling back.
-    log.warn(
-      `Model "${trimmed}" could not be resolved. Falling back to default "${params.defaultProvider}/${params.defaultModel}".`,
-    );
+    // Sanitize to prevent log forging / terminal escape injection (CWE-117).
+    const sanitizeLog = (v: string) => {
+      let out = stripAnsi(v);
+      // Strip C0 control chars (U+0000–U+001F) and DEL (U+007F).
+      for (let c = 0; c <= 0x1f; c++) {
+        out = out.replaceAll(String.fromCharCode(c), "");
+      }
+      return out.replaceAll(String.fromCharCode(0x7f), "");
+    };
+    const safe = sanitizeLog(trimmed);
+    const safeFallback = sanitizeLog(`${params.defaultProvider}/${params.defaultModel}`);
+    log.warn(`Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`);
   }
   // Before falling back to the hardcoded default, check if the default provider
   // is actually available. If it isn't but other providers are configured, prefer

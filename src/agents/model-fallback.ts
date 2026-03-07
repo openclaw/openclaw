@@ -4,6 +4,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -531,8 +532,16 @@ export async function runWithModelFallback<T>(params: {
     });
     if ("success" in attemptRun) {
       if (i > 0 && attempts[0]?.reason === "model_not_found") {
+        // Sanitize to prevent log forging / terminal escape injection (CWE-117).
+        const sanitize = (v: string) => {
+          let out = stripAnsi(v);
+          for (let c = 0; c <= 0x1f; c++) {
+            out = out.replaceAll(String.fromCharCode(c), "");
+          }
+          return out.replaceAll(String.fromCharCode(0x7f), "");
+        };
         log.warn(
-          `Model "${attempts[0].provider}/${attempts[0].model}" not found. Fell back to "${candidate.provider}/${candidate.model}".`,
+          `Model "${sanitize(attempts[0].provider)}/${sanitize(attempts[0].model)}" not found. Fell back to "${sanitize(candidate.provider)}/${sanitize(candidate.model)}".`,
         );
       }
       return attemptRun.success;
