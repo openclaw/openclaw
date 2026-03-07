@@ -2710,6 +2710,60 @@ public struct CronRunsParams: Codable, Sendable {
     }
 }
 
+public struct CronRunsParams: Codable, Sendable {
+    public let scope: AnyCodable?
+    public let id: String?
+    public let jobid: String?
+    public let limit: Int?
+    public let offset: Int?
+    public let statuses: [AnyCodable]?
+    public let status: AnyCodable?
+    public let deliverystatuses: [AnyCodable]?
+    public let deliverystatus: AnyCodable?
+    public let query: String?
+    public let sortdir: AnyCodable?
+
+    public init(
+        scope: AnyCodable?,
+        id: String?,
+        jobid: String?,
+        limit: Int?,
+        offset: Int?,
+        statuses: [AnyCodable]?,
+        status: AnyCodable?,
+        deliverystatuses: [AnyCodable]?,
+        deliverystatus: AnyCodable?,
+        query: String?,
+        sortdir: AnyCodable?)
+    {
+        self.scope = scope
+        self.id = id
+        self.jobid = jobid
+        self.limit = limit
+        self.offset = offset
+        self.statuses = statuses
+        self.status = status
+        self.deliverystatuses = deliverystatuses
+        self.deliverystatus = deliverystatus
+        self.query = query
+        self.sortdir = sortdir
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case id
+        case jobid = "jobId"
+        case limit
+        case offset
+        case statuses
+        case status
+        case deliverystatuses = "deliveryStatuses"
+        case deliverystatus = "deliveryStatus"
+        case query
+        case sortdir = "sortDir"
+    }
+}
+
 public struct CronRunLogEntry: Codable, Sendable {
     public let ts: Int
     public let jobid: String

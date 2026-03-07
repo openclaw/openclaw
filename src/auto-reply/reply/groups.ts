@@ -87,6 +87,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
+  const providerId = normalizeChannelId(params.sessionCtx.Provider?.trim());
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
 
   const lines: string[] = [];
@@ -101,6 +102,11 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   lines.push(
     "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
   );
+  if (providerId === "whatsapp") {
+    lines.push(
+      "When tagging in WhatsApp, use phone number format @<digits> from Participants data (e.g. @919953301972), NOT @Name or @nickname.",
+    );
+  }
   return lines.join(" ");
 }
 
