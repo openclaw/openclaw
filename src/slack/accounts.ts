@@ -43,7 +43,10 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.slack?.accounts, accountId);
 }
 
-function mergeSlackAccountConfig(cfg: OpenClawConfig, accountId: string): SlackAccountConfig {
+export function mergeSlackAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): SlackAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.slack ?? {}) as SlackAccountConfig & {
     accounts?: unknown;
   };
