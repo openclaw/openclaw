@@ -741,6 +741,9 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
 
+// Audio transcription for plugins
+export { transcribeFirstAudio } from "../media-understanding/audio-preflight.js";
+
 // Context engine
 export type {
   ContextEngine,

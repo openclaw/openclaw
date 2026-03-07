@@ -77,6 +77,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
+          accountId: ctx.accountId ?? undefined,
         },
         cfg as CoreConfig,
       );

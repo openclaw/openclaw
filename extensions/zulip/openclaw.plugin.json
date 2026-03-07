@@ -1,0 +1,9 @@
+{
+  "id": "zulip",
+  "channels": ["zulip"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

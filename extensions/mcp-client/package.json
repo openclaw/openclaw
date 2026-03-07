@@ -1,0 +1,7 @@
+{
+  "name": "@openclaw/mcp-client",
+  "version": "1.0.0",
+  "description": "Generic Model Context Protocol client for OpenClaw",
+  "type": "module",
+  "main": "index.ts"
+}

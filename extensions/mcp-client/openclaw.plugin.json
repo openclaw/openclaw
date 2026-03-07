@@ -1,0 +1,59 @@
+{
+  "id": "mcp-client",
+  "name": "MCP Client",
+  "description": "Generic Model Context Protocol client - connect to any MCP server (Filesystem, GitHub, Postgres, Slack, Skyline, etc.)",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable MCP client integration",
+        "default": false
+      },
+      "servers": {
+        "type": "object",
+        "description": "MCP servers to connect to (key = server name, value = config)",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "MCP server binary command"
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Command arguments"
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Environment variables"
+            },
+            "toolPrefix": {
+              "type": "string",
+              "description": "Prefix for tool names (default: servername_)"
+            },
+            "autoReconnect": {
+              "type": "boolean",
+              "description": "Auto-reconnect on disconnect",
+              "default": true
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable MCP Client"
+    },
+    "servers": {
+      "label": "MCP Servers",
+      "help": "Configure one or more MCP servers (filesystem, database, APIs, etc.)"
+    }
+  }
+}
