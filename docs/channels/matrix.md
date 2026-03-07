@@ -139,13 +139,26 @@ To get your recovery key: log into Element (or any Matrix client that supports c
 as the bot account and complete any cross-signing or secure backup setup it prompts you with.
 Save the recovery key phrase it generates — that is the value to use here.
 
-Use an environment variable to avoid storing the key in plain config:
+Store the key in an environment variable to avoid putting it in plain config:
 
 ```bash
 MATRIX_RECOVERY_KEY="EsTc LdvM MrJj zsCE DLbK Pjgs DcVT sj8p nRV2 EW5r"
 ```
 
-Or directly in config:
+Then reference it from config:
+
+```json5
+{
+  channels: {
+    matrix: {
+      encryption: true,
+      recoveryKey: "${MATRIX_RECOVERY_KEY}",
+    },
+  },
+}
+```
+
+Or directly in config (not recommended — treat the recovery key like a password):
 
 ```json5
 {
