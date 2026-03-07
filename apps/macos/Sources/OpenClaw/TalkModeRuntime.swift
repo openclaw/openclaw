@@ -185,6 +185,12 @@ actor TalkModeRuntime {
         }
         guard let audioEngine = self.audioEngine else { return }
 
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            self.logger.error("talk mode: no usable audio input device")
+            return
+        }
+
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
@@ -804,25 +810,59 @@ extension TalkModeRuntime {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func normalizedTalkProviderConfig(_ value: AnyCodable) -> [String: AnyCodable]? {
+        if let typed = value.value as? [String: AnyCodable] {
+            return typed
+        }
+        if let foundation = value.value as? [String: Any] {
+            return foundation.mapValues(AnyCodable.init)
+        }
+        if let nsDict = value.value as? NSDictionary {
+            var converted: [String: AnyCodable] = [:]
+            for case let (key as String, raw) in nsDict {
+                converted[key] = AnyCodable(raw)
+            }
+            return converted
+        }
+        return nil
+    }
+
+    private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {
+        guard let raw else { return [:] }
+        var providerMap: [String: AnyCodable] = [:]
+        if let typed = raw.value as? [String: AnyCodable] {
+            providerMap = typed
+        } else if let foundation = raw.value as? [String: Any] {
+            providerMap = foundation.mapValues(AnyCodable.init)
+        } else if let nsDict = raw.value as? NSDictionary {
+            for case let (key as String, value) in nsDict {
+                providerMap[key] = AnyCodable(value)
+            }
+        } else {
+            return [:]
+        }
+
+        return providerMap.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
+            guard
+                let providerID = Self.normalizedTalkProviderID(entry.key),
+                let providerConfig = Self.normalizedTalkProviderConfig(entry.value)
+            else { return }
+            acc[providerID] = providerConfig
+        }
+    }
+
     static func selectTalkProviderConfig(
         _ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection?
     {
         guard let talk else { return nil }
         let rawProvider = talk["provider"]?.stringValue
-        let rawProviders = talk["providers"]?.dictionaryValue
+        let rawProviders = talk["providers"]
         let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
         if hasNormalizedPayload {
-            let normalizedProviders =
-                rawProviders?.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
-                    guard
-                        let providerID = Self.normalizedTalkProviderID(entry.key),
-                        let providerConfig = entry.value.dictionaryValue
-                    else { return }
-                    acc[providerID] = providerConfig
-                } ?? [:]
+            let normalizedProviders = Self.normalizedTalkProviders(rawProviders)
             let providerID =
                 Self.normalizedTalkProviderID(rawProvider) ??
-                normalizedProviders.keys.sorted().first ??
+                normalizedProviders.keys.min() ??
                 Self.defaultTalkProvider
             return TalkProviderConfigSelection(
                 provider: providerID,
@@ -871,14 +911,14 @@ extension TalkModeRuntime {
             let apiKey = activeConfig?["apiKey"]?.stringValue
             let resolvedVoice: String? = if activeProvider == Self.defaultTalkProvider {
                 (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
-                (envVoice?.isEmpty == false ? envVoice : nil) ??
-                (sagVoice?.isEmpty == false ? sagVoice : nil)
+                    (envVoice?.isEmpty == false ? envVoice : nil) ??
+                    (sagVoice?.isEmpty == false ? sagVoice : nil)
             } else {
                 (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil)
             }
             let resolvedApiKey: String? = if activeProvider == Self.defaultTalkProvider {
                 (envApiKey?.isEmpty == false ? envApiKey : nil) ??
-                (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
+                    (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
             } else {
                 nil
             }

@@ -1,5 +1,6 @@
 const DATA_URL_PREFIX = "data:";
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:"]);
+const BLOCKED_DATA_IMAGE_MIME_TYPES = new Set(["image/svg+xml"]);
 
 function isAllowedDataImageUrl(url: string): boolean {
   if (!url.toLowerCase().startsWith(DATA_URL_PREFIX)) {
@@ -13,7 +14,11 @@ function isAllowedDataImageUrl(url: string): boolean {
 
   const metadata = url.slice(DATA_URL_PREFIX.length, commaIndex);
   const mimeType = metadata.split(";")[0]?.trim().toLowerCase() ?? "";
-  return mimeType.startsWith("image/");
+  if (!mimeType.startsWith("image/")) {
+    return false;
+  }
+
+  return !BLOCKED_DATA_IMAGE_MIME_TYPES.has(mimeType);
 }
 
 export type ResolveSafeExternalUrlOptions = {

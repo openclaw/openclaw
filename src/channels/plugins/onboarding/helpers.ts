@@ -1,9 +1,15 @@
+import {
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
+} from "../../../commands/auth-choice.apply-helpers.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../../config/types.js";
+import type { SecretInput } from "../../../config/types.secrets.js";
 import { promptAccountId as promptAccountIdSdk } from "../../../plugin-sdk/onboarding.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "../setup-helpers.js";
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   return await promptAccountIdSdk(params);
@@ -282,13 +288,21 @@ function patchConfigForScopedAccount(params: {
   ensureEnabled: boolean;
 }): OpenClawConfig {
   const { cfg, channel, accountId, patch, ensureEnabled } = params;
-  const channelConfig = (cfg.channels?.[channel] as Record<string, unknown> | undefined) ?? {};
+  const seededCfg =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? cfg
+      : moveSingleAccountChannelSectionToDefaultAccount({
+          cfg,
+          channelKey: channel,
+        });
+  const channelConfig =
+    (seededCfg.channels?.[channel] as Record<string, unknown> | undefined) ?? {};
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
-      ...cfg,
+      ...seededCfg,
       channels: {
-        ...cfg.channels,
+        ...seededCfg.channels,
         [channel]: {
           ...channelConfig,
           ...(ensureEnabled ? { enabled: true } : {}),
@@ -303,9 +317,9 @@ function patchConfigForScopedAccount(params: {
   const existingAccount = accounts[accountId] ?? {};
 
   return {
-    ...cfg,
+    ...seededCfg,
     channels: {
-      ...cfg.channels,
+      ...seededCfg.channels,
       [channel]: {
         ...channelConfig,
         ...(ensureEnabled ? { enabled: true } : {}),
@@ -346,7 +360,7 @@ export function applySingleTokenPromptResult(params: {
   tokenPatchKey: "token" | "botToken";
   tokenResult: {
     useEnv: boolean;
-    token: string | null;
+    token: SecretInput | null;
   };
 }): OpenClawConfig {
   let next = params.cfg;
@@ -408,6 +422,87 @@ export async function promptSingleChannelToken(params: {
   }
 
   return { useEnv: false, token: await promptToken() };
+}
+
+export type SingleChannelSecretInputPromptResult =
+  | { action: "keep" }
+  | { action: "use-env" }
+  | { action: "set"; value: SecretInput; resolvedValue: string };
+
+export async function promptSingleChannelSecretInput(params: {
+  cfg: OpenClawConfig;
+  prompter: Pick<WizardPrompter, "confirm" | "text" | "select" | "note">;
+  providerHint: string;
+  credentialLabel: string;
+  secretInputMode?: "plaintext" | "ref";
+  accountConfigured: boolean;
+  canUseEnv: boolean;
+  hasConfigToken: boolean;
+  envPrompt: string;
+  keepPrompt: string;
+  inputPrompt: string;
+  preferredEnvVar?: string;
+}): Promise<SingleChannelSecretInputPromptResult> {
+  const selectedMode = await resolveSecretInputModeForEnvSelection({
+    prompter: params.prompter as WizardPrompter,
+    explicitMode: params.secretInputMode,
+    copy: {
+      modeMessage: `How do you want to provide this ${params.credentialLabel}?`,
+      plaintextLabel: `Enter ${params.credentialLabel}`,
+      plaintextHint: "Stores the credential directly in OpenClaw config",
+      refLabel: "Use external secret provider",
+      refHint: "Stores a reference to env or configured external secret providers",
+    },
+  });
+
+  if (selectedMode === "plaintext") {
+    const plainResult = await promptSingleChannelToken({
+      prompter: params.prompter,
+      accountConfigured: params.accountConfigured,
+      canUseEnv: params.canUseEnv,
+      hasConfigToken: params.hasConfigToken,
+      envPrompt: params.envPrompt,
+      keepPrompt: params.keepPrompt,
+      inputPrompt: params.inputPrompt,
+    });
+    if (plainResult.useEnv) {
+      return { action: "use-env" };
+    }
+    if (plainResult.token) {
+      return { action: "set", value: plainResult.token, resolvedValue: plainResult.token };
+    }
+    return { action: "keep" };
+  }
+
+  if (params.hasConfigToken && params.accountConfigured) {
+    const keep = await params.prompter.confirm({
+      message: params.keepPrompt,
+      initialValue: true,
+    });
+    if (keep) {
+      return { action: "keep" };
+    }
+  }
+
+  const resolved = await promptSecretRefForOnboarding({
+    provider: params.providerHint,
+    config: params.cfg,
+    prompter: params.prompter as WizardPrompter,
+    preferredEnvVar: params.preferredEnvVar,
+    copy: {
+      sourceMessage: `Where is this ${params.credentialLabel} stored?`,
+      envVarPlaceholder: params.preferredEnvVar ?? "OPENCLAW_SECRET",
+      envVarFormatError:
+        'Use an env var name like "OPENCLAW_SECRET" (uppercase letters, numbers, underscores).',
+      noProvidersMessage:
+        "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
+    },
+  });
+  return {
+    action: "set",
+    value: resolved.ref,
+    resolvedValue: resolved.resolvedValue,
+  };
 }
 
 type ParsedAllowFromResult = { entries: string[]; error?: string };
