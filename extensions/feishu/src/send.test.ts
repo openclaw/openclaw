@@ -170,6 +170,42 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("extracts content from body.elements (card kit v2 wrapper)", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_body",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                body: {
+                  elements: [
+                    { tag: "markdown", content: "body wrapper text" },
+                    { tag: "div", text: { content: "second line" } },
+                  ],
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_body",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        content: "body wrapper text\nsecond line",
+      }),
+    );
+  });
+
   it("extracts content from i18n_elements when top-level elements is absent", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
