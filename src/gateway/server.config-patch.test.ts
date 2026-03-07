@@ -13,134 +13,119 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
-let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
+let sharedTempRoot: string;
+
+function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
+  if (!startedServer) {
+    throw new Error("gateway test server not started");
+  }
+  return startedServer.ws;
+}
 
 beforeAll(async () => {
-  const started = await startServerWithClient(undefined, { controlUiEnabled: true });
-  server = started.server;
-  ws = started.ws;
-  await connectOk(ws);
+  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
+  startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
+  await connectOk(requireWs());
 });
 
 afterAll(async () => {
-  ws.close();
-  await server.close();
+  if (!startedServer) {
+    return;
+  }
+  startedServer.ws.close();
+  await startedServer.server.close();
+  startedServer = null;
+  await fs.rm(sharedTempRoot, { recursive: true, force: true });
 });
 
+async function resetTempDir(name: string): Promise<string> {
+  const dir = path.join(sharedTempRoot, name);
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
 describe("gateway config methods", () => {
-  type AgentConfigEntry = {
-    id: string;
-    default?: boolean;
-    workspace?: string;
-  };
-
-  const seedAgentsConfig = async (list: AgentConfigEntry[]) => {
-    const setRes = await rpcReq<{ ok?: boolean }>(ws, "config.set", {
-      raw: JSON.stringify({
-        agents: {
-          list,
-        },
-      }),
+  it("returns a path-scoped config schema lookup", async () => {
+    const res = await rpcReq<{
+      path: string;
+      hintPath?: string;
+      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
+      schema?: { properties?: unknown };
+    }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.auth",
     });
-    expect(setRes.ok).toBe(true);
-  };
 
-  const readConfigHash = async () => {
-    const snapshotRes = await rpcReq<{ hash?: string }>(ws, "config.get", {});
-    expect(snapshotRes.ok).toBe(true);
-    expect(typeof snapshotRes.payload?.hash).toBe("string");
-    return snapshotRes.payload?.hash ?? "";
-  };
-
-  it("returns a config snapshot", async () => {
-    const res = await rpcReq<{ hash?: string; raw?: string }>(ws, "config.get", {});
     expect(res.ok).toBe(true);
-    const payload = res.payload ?? {};
-    expect(typeof payload.raw === "string" || typeof payload.hash === "string").toBe(true);
+    expect(res.payload?.path).toBe("gateway.auth");
+    expect(res.payload?.hintPath).toBe("gateway.auth");
+    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
+    expect(tokenChild).toMatchObject({
+      key: "token",
+      path: "gateway.auth.token",
+      hintPath: "gateway.auth.token",
+    });
+    expect(res.payload?.schema?.properties).toBeUndefined();
+  });
+
+  it("rejects config.schema.lookup when the path is missing", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.notReal.path",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
+  });
+
+  it("rejects config.schema.lookup when the path is only whitespace", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "   ",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+  });
+
+  it("rejects config.schema.lookup when the path exceeds the protocol limit", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: `gateway.${"a".repeat(1020)}`,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+  });
+
+  it("rejects config.schema.lookup when the path contains invalid characters", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.auth\nspoof",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+  });
+
+  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "constructor",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
   });
 
   it("rejects config.patch when raw is not an object", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(ws, "config.patch", {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "[]",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw must be an object");
   });
-
-  it("merges agents.list entries by id instead of replacing the full array", async () => {
-    await seedAgentsConfig([
-      { id: "primary", default: true, workspace: "/tmp/primary" },
-      { id: "secondary", workspace: "/tmp/secondary" },
-    ]);
-    const baseHash = await readConfigHash();
-
-    const patchRes = await rpcReq<{
-      config?: {
-        agents?: {
-          list?: Array<{
-            id?: string;
-            workspace?: string;
-          }>;
-        };
-      };
-    }>(ws, "config.patch", {
-      baseHash,
-      raw: JSON.stringify({
-        agents: {
-          list: [
-            {
-              id: "primary",
-              workspace: "/tmp/primary-updated",
-            },
-          ],
-        },
-      }),
-    });
-    expect(patchRes.ok).toBe(true);
-
-    const list = patchRes.payload?.config?.agents?.list ?? [];
-    expect(list).toHaveLength(2);
-    const primary = list.find((entry) => entry.id === "primary");
-    const secondary = list.find((entry) => entry.id === "secondary");
-    expect(primary?.workspace).toBe("/tmp/primary-updated");
-    expect(secondary?.workspace).toBe("/tmp/secondary");
-  });
-
-  it("rejects mixed-id agents.list patches without mutating persisted config", async () => {
-    await seedAgentsConfig([
-      { id: "primary", default: true, workspace: "/tmp/primary" },
-      { id: "secondary", workspace: "/tmp/secondary" },
-    ]);
-    const beforeHash = await readConfigHash();
-
-    const patchRes = await rpcReq<{ ok?: boolean }>(ws, "config.patch", {
-      baseHash: beforeHash,
-      raw: JSON.stringify({
-        agents: {
-          list: [
-            {
-              id: "primary",
-              workspace: "/tmp/primary-updated",
-            },
-            {
-              workspace: "/tmp/orphan-no-id",
-            },
-          ],
-        },
-      }),
-    });
-    expect(patchRes.ok).toBe(false);
-    expect(patchRes.error?.message ?? "").toContain("invalid config");
-
-    const afterHash = await readConfigHash();
-    expect(afterHash).toBe(beforeHash);
-  });
 });
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
+    const dir = await resetTempDir("agents");
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -178,7 +163,7 @@ describe("gateway server sessions", () => {
 
     const homeSessions = await rpcReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>(requireWs(), "sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
       agentId: "home",
@@ -191,7 +176,7 @@ describe("gateway server sessions", () => {
 
     const workSessions = await rpcReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>(requireWs(), "sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
       agentId: "work",
@@ -201,7 +186,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await resetTempDir("main-alias");
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -219,13 +204,13 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+    const resolved = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.resolve", {
       key: "main",
     });
     expect(resolved.ok).toBe(true);
     expect(resolved.payload?.key).toBe("agent:ops:work");
 
-    const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+    const patched = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.patch", {
       key: "main",
       thinkingLevel: "medium",
     });

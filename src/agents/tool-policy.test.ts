@@ -55,7 +55,9 @@ describe("tool-policy", () => {
 
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
-    expect(coding?.allow).toContain("group:fs");
+    expect(coding?.allow).toContain("read");
+    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
@@ -65,6 +67,7 @@ describe("tool-policy", () => {
     expect(group).toContain("message");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
+    expect(group).toContain("tts");
   });
 
   it("normalizes tool names and aliases", () => {

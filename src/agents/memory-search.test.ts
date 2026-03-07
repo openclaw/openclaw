@@ -5,7 +5,9 @@ import { resolveMemorySearchConfig } from "./memory-search.js";
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
 describe("memory search config", () => {
-  function configWithDefaultProvider(provider: "openai" | "local" | "gemini"): OpenClawConfig {
+  function configWithDefaultProvider(
+    provider: "openai" | "local" | "gemini" | "mistral" | "ollama",
+  ): OpenClawConfig {
     return asConfig({
       agents: {
         defaults: {
@@ -147,6 +149,20 @@ describe("memory search config", () => {
     expectDefaultRemoteBatch(resolved);
   });
 
+  it("includes remote defaults and model default for mistral without overrides", () => {
+    const cfg = configWithDefaultProvider("mistral");
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectDefaultRemoteBatch(resolved);
+    expect(resolved?.model).toBe("mistral-embed");
+  });
+
+  it("includes remote defaults and model default for ollama without overrides", () => {
+    const cfg = configWithDefaultProvider("ollama");
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectDefaultRemoteBatch(resolved);
+    expect(resolved?.model).toBe("nomic-embed-text");
+  });
+
   it("defaults session delta thresholds", () => {
     const cfg = asConfig({
       agents: {
@@ -194,6 +210,48 @@ describe("memory search config", () => {
     expect(resolved?.remote).toEqual({
       baseUrl: "https://agent.example/v1",
       apiKey: "default-key",
+      headers: { "X-Default": "on" },
+      batch: {
+        enabled: false,
+        wait: true,
+        concurrency: 2,
+        pollIntervalMs: 2000,
+        timeoutMinutes: 60,
+      },
+    });
+  });
+
+  it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              headers: { "X-Default": "on" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              remote: {
+                baseUrl: "https://agent.example/v1",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote).toEqual({
+      baseUrl: "https://agent.example/v1",
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       headers: { "X-Default": "on" },
       batch: {
         enabled: false,

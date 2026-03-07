@@ -5,6 +5,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -39,16 +40,9 @@ function resolveChunkLimitForProvider(
   const normalizedAccountId = normalizeAccountId(accountId);
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
-    const direct = accounts[normalizedAccountId];
+    const direct = resolveAccountEntry(accounts, normalizedAccountId);
     if (typeof direct?.textChunkLimit === "number") {
       return direct.textChunkLimit;
-    }
-    const matchKey = Object.keys(accounts).find(
-      (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
-    );
-    const match = matchKey ? accounts[matchKey] : undefined;
-    if (typeof match?.textChunkLimit === "number") {
-      return match.textChunkLimit;
     }
   }
   return cfgSection.textChunkLimit;
@@ -89,16 +83,9 @@ function resolveChunkModeForProvider(
   const normalizedAccountId = normalizeAccountId(accountId);
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
-    const direct = accounts[normalizedAccountId];
+    const direct = resolveAccountEntry(accounts, normalizedAccountId);
     if (direct?.chunkMode) {
       return direct.chunkMode;
-    }
-    const matchKey = Object.keys(accounts).find(
-      (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
-    );
-    const match = matchKey ? accounts[matchKey] : undefined;
-    if (match?.chunkMode) {
-      return match.chunkMode;
     }
   }
   return cfgSection.chunkMode;

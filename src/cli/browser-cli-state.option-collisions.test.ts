@@ -1,7 +1,6 @@
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { createBrowserProgram as createBrowserProgramShared } from "./browser-cli-test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
@@ -26,13 +25,8 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("browser state option collisions", () => {
-  const createBrowserProgram = () => {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false);
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const createStateProgram = ({ withGatewayUrl = false } = {}) => {
+    const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
     registerBrowserStateCommands(browser, parentOpts);
     return program;
   };
@@ -47,7 +41,7 @@ describe("browser state option collisions", () => {
   };
 
   const runBrowserCommand = async (argv: string[]) => {
-    const program = createBrowserProgram();
+    const program = createStateProgram();
     await program.parseAsync(["browser", ...argv], { from: "user" });
   };
 
@@ -77,6 +71,40 @@ describe("browser state option collisions", () => {
     ]);
 
     expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
+  });
+
+  it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
+    const program = createStateProgram({ withGatewayUrl: true });
+    await program.parseAsync(
+      [
+        "browser",
+        "--url",
+        "ws://gw",
+        "cookies",
+        "set",
+        "session",
+        "abc",
+        "--url",
+        "https://example.com",
+      ],
+      { from: "user" },
+    );
+    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    expect(request.body?.cookie?.url).toBe("https://example.com");
+  });
+
+  it("inherits --url from parent when subcommand does not provide it", async () => {
+    const program = createStateProgram({ withGatewayUrl: true });
+    await program.parseAsync(
+      ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
+      { from: "user" },
+    );
+    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    expect(request.body?.cookie?.url).toBe("https://inherited.example.com");
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {

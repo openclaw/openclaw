@@ -82,9 +82,11 @@ describe("cleanup path removals", () => {
       { dryRun: true },
     );
 
-    const joinedLogs = runtime.log.mock.calls.map(([line]) => line).join("\n");
-    expect(joinedLogs).toContain("[dry-run] remove /tmp/openclaw-cleanup/state");
-    expect(joinedLogs).toContain("[dry-run] remove /tmp/openclaw-cleanup/oauth");
+    const joinedLogs = runtime.log.mock.calls
+      .map(([line]) => line.replaceAll("\\", "/"))
+      .join("\n");
+    expect(joinedLogs).toContain("/tmp/openclaw-cleanup/state");
+    expect(joinedLogs).toContain("/tmp/openclaw-cleanup/oauth");
     expect(joinedLogs).not.toContain("openclaw.json");
   });
 

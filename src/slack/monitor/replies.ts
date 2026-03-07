@@ -6,7 +6,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { sendMessageSlack } from "../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -17,6 +17,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
+  identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
@@ -38,6 +39,7 @@ export async function deliverReplies(params: {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        ...(params.identity ? { identity: params.identity } : {}),
       });
     } else {
       let first = true;
@@ -49,6 +51,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           threadTs,
           accountId: params.accountId,
+          ...(params.identity ? { identity: params.identity } : {}),
         });
       }
     }
@@ -74,17 +77,12 @@ export function resolveSlackThreadTs(params: {
   hasReplied: boolean;
   isThreadReply?: boolean;
 }): string | undefined {
-  const isThreadReply =
-    params.isThreadReply ??
-    (typeof params.incomingThreadTs === "string" &&
-      params.incomingThreadTs.length > 0 &&
-      params.incomingThreadTs !== params.messageTs);
   const planner = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasReplied,
-    isThreadReply,
+    isThreadReply: params.isThreadReply,
   });
   return planner.use();
 }
@@ -101,9 +99,12 @@ function createSlackReplyReferencePlanner(params: {
   hasReplied?: boolean;
   isThreadReply?: boolean;
 }) {
-  // Only force threading for real user thread replies. If Slack auto-populates
-  // thread_ts on top-level messages, preserve the configured reply mode.
-  const effectiveMode = params.isThreadReply ? "all" : params.replyToMode;
+  // Keep backward-compatible behavior: when a thread id is present and caller
+  // does not provide explicit classification, stay in thread. Callers that can
+  // distinguish Slack's auto-populated top-level thread_ts should pass
+  // `isThreadReply: false` to preserve replyToMode behavior.
+  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
+  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
