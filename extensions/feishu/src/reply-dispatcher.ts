@@ -225,8 +225,67 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let finalTextEmitted = false;
+  /** Tracks whether any visible text was delivered during this reply cycle
+   *  (via streaming partial, block, or final text). Used to avoid emitting
+   *  a synthetic media filename as "final text" when real text was already
+   *  delivered through the streaming card. */
+  let hasVisibleTextInReply = false;
   let replaceNextPartialAfterTool = false;
   const deliveredFinalTexts = new Set<string>();
+
+  /**
+   * Deliver media files and emit persistence signals for media-only final payloads.
+   * Extracted to avoid duplicating this logic across streaming/non-streaming paths.
+   */
+  const deliverMediaAndEmitIfNeeded = async (
+    mediaList: string[],
+    text: string,
+    info: { kind?: string } | undefined,
+    hasText: boolean,
+  ): Promise<void> => {
+    const deliveredMediaMessageIds: string[] = [];
+    for (const mediaUrl of mediaList) {
+      const sent = await sendMediaFeishu({
+        cfg,
+        to: chatId,
+        mediaUrl,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        accountId,
+      });
+      if (typeof sent?.messageId === "string" && sent.messageId.trim()) {
+        deliveredMediaMessageIds.push(sent.messageId);
+      }
+    }
+    // For media-only finals, wait for any pending streaming renders to settle
+    // before checking visibility. This avoids guessing whether queued text will
+    // actually be displayed — after the queue flushes, hasVisibleTextInReply
+    // definitively reflects whether text was delivered or the render failed.
+    if (info?.kind === "final" && !hasText) {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      await partialUpdateQueue.catch(() => undefined);
+    }
+    if (
+      info?.kind === "final" &&
+      !hasText &&
+      !hasVisibleTextInReply &&
+      deliveredMediaMessageIds.length > 0
+    ) {
+      const finalContent = resolveFinalDeliveryContent(text, mediaList);
+      emitMessageSent({
+        content: finalContent,
+        success: true,
+        messageId: deliveredMediaMessageIds.at(-1),
+        metadata: { chatId, messageIds: deliveredMediaMessageIds },
+      });
+      await emitFinalTextIfNeeded(finalContent, {
+        messageId: deliveredMediaMessageIds.at(-1),
+        messageIds: deliveredMediaMessageIds,
+      });
+    }
+  };
 
   const emitFinalTextIfNeeded = async (
     text: string,
@@ -344,6 +403,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       lastRenderedStreamContent = renderedForCard;
       await streaming.update(renderedForCard, { mode: "replace" });
+      // Only mark visible when real assistant text exists — status-only renders
+      // (e.g. "💭 思考中...") are discarded by closeStreaming() and should not
+      // suppress media-only final persistence.
+      if (streamText.trim()) {
+        hasVisibleTextInReply = true;
+      }
     });
   };
 
@@ -453,6 +518,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           text = buildMentionedCardContent(mentionTargets, text);
         }
         await streaming.close(normalizeMentionTagsForCard(text));
+        hasVisibleTextInReply = true;
       }
       if (options?.emitFinalText !== false) {
         emitMessageSent({ content: finalText, success: true, messageId: streamMessageId });
@@ -482,6 +548,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        hasVisibleTextInReply = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -533,43 +600,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
+              // hasVisibleTextInReply is set by queueStreamingRender on successful update.
               queueThinkingPrelude();
               queueStreamingUpdate(text);
             }
             if (info?.kind === "final") {
               streamText = text;
               await closeStreaming({ emitFinalText: true });
+              // Mark visible only after closeStreaming succeeds — text is now delivered.
+              hasVisibleTextInReply = true;
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
-            const deliveredMediaMessageIds: string[] = [];
             if (hasMedia) {
-              for (const mediaUrl of mediaList) {
-                const sent = await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  accountId,
-                });
-                if (typeof sent?.messageId === "string" && sent.messageId.trim()) {
-                  deliveredMediaMessageIds.push(sent.messageId);
-                }
-              }
-            }
-            if (info?.kind === "final" && !hasText && deliveredMediaMessageIds.length > 0) {
-              const finalContent = resolveFinalDeliveryContent(text, mediaList);
-              emitMessageSent({
-                content: finalContent,
-                success: true,
-                messageId: deliveredMediaMessageIds.at(-1),
-                metadata: { chatId, messageIds: deliveredMediaMessageIds },
-              });
-              await emitFinalTextIfNeeded(finalContent, {
-                messageId: deliveredMediaMessageIds.at(-1),
-                messageIds: deliveredMediaMessageIds,
-              });
+              await deliverMediaAndEmitIfNeeded(mediaList, text, info, hasText);
             }
             return;
           }
@@ -623,6 +667,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               first = false;
             }
           }
+          if (deliveredMessageIds.length > 0) {
+            hasVisibleTextInReply = true;
+          }
           if (info?.kind === "final") {
             deliveredFinalTexts.add(text);
             emitMessageSent({ content: text, success: true, messageId: lastMessageId });
@@ -633,34 +680,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         }
 
-        const deliveredMediaMessageIds: string[] = [];
         if (hasMedia) {
-          for (const mediaUrl of mediaList) {
-            const sent = await sendMediaFeishu({
-              cfg,
-              to: chatId,
-              mediaUrl,
-              replyToMessageId: sendReplyToMessageId,
-              replyInThread: effectiveReplyInThread,
-              accountId,
-            });
-            if (typeof sent?.messageId === "string" && sent.messageId.trim()) {
-              deliveredMediaMessageIds.push(sent.messageId);
-            }
-          }
-        }
-        if (info?.kind === "final" && !hasText && deliveredMediaMessageIds.length > 0) {
-          const finalContent = resolveFinalDeliveryContent(text, mediaList);
-          emitMessageSent({
-            content: finalContent,
-            success: true,
-            messageId: deliveredMediaMessageIds.at(-1),
-            metadata: { chatId, messageIds: deliveredMediaMessageIds },
-          });
-          await emitFinalTextIfNeeded(finalContent, {
-            messageId: deliveredMediaMessageIds.at(-1),
-            messageIds: deliveredMediaMessageIds,
-          });
+          await deliverMediaAndEmitIfNeeded(mediaList, text, info, hasText);
         }
       },
       onError: async (error, info) => {
