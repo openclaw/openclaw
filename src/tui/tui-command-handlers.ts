@@ -427,7 +427,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           // Generate unique session key to isolate this TUI client (#39217)
           // This ensures /new creates a fresh session that doesn't broadcast
           // to other connected TUI clients sharing the original session key.
-          const uniqueKey = `tui-${randomUUID().slice(0, 8)}`;
+          const uniqueKey = `tui-${randomUUID()}`;
           await setSession(uniqueKey);
           chatLog.addSystem(`new session: ${state.currentSessionKey}`);
         } catch (err) {

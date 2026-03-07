@@ -120,11 +120,13 @@ describe("tui command handlers", () => {
 
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(setSessionMock).toHaveBeenCalledTimes(1);
-    expect(setSessionMock).toHaveBeenCalledWith(expect.stringMatching(/^tui-[a-f0-9]{8}$/));
+    expect(setSessionMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^tui-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
+    );
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
     expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
-    expect(loadHistory).toHaveBeenCalledTimes(1); // Only /reset loads history
+    expect(loadHistory).toHaveBeenCalledTimes(1); // /reset calls loadHistory directly; /new does so indirectly via setSession
   });
 
   it("reports send failures and marks activity status as error", async () => {
