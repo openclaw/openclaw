@@ -51,7 +51,10 @@ import {
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
-import { parseIMessageNotification } from "./parse-notification.js";
+import {
+  parseIMessageNotification,
+  parseIMessageReactionNotification,
+} from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -82,6 +85,19 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   } catch {
     return undefined;
   }
+}
+
+const TAPBACK_EMOJI: Record<string, string> = {
+  love: "❤️",
+  like: "👍",
+  dislike: "👎",
+  laugh: "😂",
+  emphasize: "‼️",
+  question: "❓",
+};
+
+function tapbackEmoji(type: string | null | undefined): string {
+  return TAPBACK_EMOJI[(type ?? "").toLowerCase()] ?? type ?? "reaction";
 }
 
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
@@ -123,6 +139,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
+  const includeReactions = opts.includeReactions ?? imessageCfg.includeReactions ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
@@ -467,6 +484,52 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await inboundDebouncer.enqueue({ message });
   };
 
+  const handleReaction = async (raw: unknown) => {
+    const reaction = parseIMessageReactionNotification(raw);
+    if (!reaction) {
+      logVerbose("imessage: dropping malformed RPC reaction payload");
+      return;
+    }
+    if (reaction.is_from_me) {
+      logVerbose("imessage: dropping own reaction");
+      return;
+    }
+    if (reaction.added === false) {
+      logVerbose("imessage: dropping removed reaction");
+      return;
+    }
+    const sender = (reaction.sender ?? "").trim();
+    if (!sender) {
+      logVerbose("imessage: dropping reaction with no sender");
+      return;
+    }
+    const emoji = tapbackEmoji(reaction.reaction_type);
+    const targetPreview = reaction.target_text
+      ? truncateUtf16Safe(reaction.target_text, 100)
+      : undefined;
+    const bodyText = targetPreview
+      ? `[${emoji} reaction to: "${targetPreview}"]`
+      : `[${emoji} reaction]`;
+
+    // Synthesize an IMessagePayload so the standard message pipeline handles it.
+    const syntheticMessage: IMessagePayload = {
+      id: reaction.target_id,
+      chat_id: reaction.chat_id,
+      sender: reaction.sender,
+      is_from_me: false,
+      text: bodyText,
+      created_at: reaction.created_at,
+      chat_identifier: reaction.chat_identifier,
+      chat_guid: reaction.chat_guid,
+      chat_name: reaction.chat_name,
+      participants: reaction.participants,
+      is_group: reaction.is_group,
+      attachments: null,
+    };
+
+    await handleMessageNow(syntheticMessage);
+  };
+
   await waitForTransportReady({
     label: "imsg rpc",
     timeoutMs: 30_000,
@@ -500,6 +563,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         void handleMessage(msg.params).catch((err) => {
           runtime.error?.(`imessage: handler failed: ${String(err)}`);
         });
+      } else if (msg.method === "reaction" && includeReactions) {
+        void handleReaction(msg.params).catch((err) => {
+          runtime.error?.(`imessage: reaction handler failed: ${String(err)}`);
+        });
       } else if (msg.method === "error") {
         runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
       }
@@ -517,6 +584,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   try {
     const result = await client.request<{ subscription?: number }>("watch.subscribe", {
       attachments: includeAttachments,
+      ...(includeReactions ? { reactions: true } : {}),
     });
     subscriptionId = result?.subscription ?? null;
     await client.waitForClose();

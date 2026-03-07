@@ -55,6 +55,8 @@ export type IMessageAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
+  /** Forward tapback reactions to the agent as inbound events. */
+  includeReactions?: boolean;
   /** Allowed local iMessage attachment roots (supports single-segment `*` wildcards). */
   attachmentRoots?: string[];
   /** Allowed remote iMessage attachment roots for SCP fetches (supports `*`). */

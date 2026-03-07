@@ -1,4 +1,4 @@
-import type { IMessagePayload } from "./types.js";
+import type { IMessagePayload, IMessageReactionPayload } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -80,4 +80,35 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
   }
 
   return message;
+}
+
+export function parseIMessageReactionNotification(raw: unknown): IMessageReactionPayload | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const maybeReaction = raw.reaction;
+  if (!isRecord(maybeReaction)) {
+    return null;
+  }
+
+  const reaction: IMessageReactionPayload = maybeReaction;
+  if (
+    !isOptionalNumber(reaction.target_id) ||
+    !isOptionalNumber(reaction.chat_id) ||
+    !isOptionalString(reaction.sender) ||
+    !isOptionalBoolean(reaction.is_from_me) ||
+    !isOptionalString(reaction.reaction_type) ||
+    !isOptionalBoolean(reaction.added) ||
+    !isOptionalString(reaction.target_text) ||
+    !isOptionalString(reaction.created_at) ||
+    !isOptionalString(reaction.chat_identifier) ||
+    !isOptionalString(reaction.chat_guid) ||
+    !isOptionalString(reaction.chat_name) ||
+    !isOptionalStringArray(reaction.participants) ||
+    !isOptionalBoolean(reaction.is_group)
+  ) {
+    return null;
+  }
+
+  return reaction;
 }
