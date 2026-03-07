@@ -145,6 +145,10 @@ seed:
 # Deployment model: each node has its own git clone at ~/openclaw.
 # GitHub is the distribution layer. rsync is only for non-repo assets.
 # ~/cluster (SMB) is for jobs/logs/results ONLY — never repo or secrets.
+# NOTE: Remote script paths ($(REMOTE_APP_DIR)/scripts/...) reference the
+# deployment structure on cluster nodes, which may differ from the monorepo
+# layout. On remote nodes, scripts may need to be at scripts/ or scripts/fd/
+# depending on the deployment clone structure.
 
 cluster-check:
 	@echo "Checking SSH connectivity..."
@@ -290,17 +294,20 @@ gateway-stop:
 		fi' 2>/dev/null || echo "SSH FAILED"
 
 healthcheck:
-	@bash scripts/healthcheck.sh
+	@bash ../scripts/fd/healthcheck.sh
 
 warm-models:
-	@bash scripts/warm-models.sh
+	@bash ../scripts/fd/warm-models.sh
 
 failover:
-	@bash scripts/failover.sh
+	@bash ../scripts/fd/failover.sh
 
 # ---- DOCKER ----
+# Docker context is the repo root (parent of fd/) so config/fd/ is accessible.
+# Build: docker build -f fd/Dockerfile ..   (from fd/)
+# Or:    docker build -f fd/Dockerfile .    (from repo root)
 docker-build:
-	docker build -t openclaw:dev .
+	docker build -t openclaw-fd:dev -f Dockerfile ..
 
 docker-up:
 	docker compose up --build

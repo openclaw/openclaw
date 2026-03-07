@@ -6,11 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlite3 \
   && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
-COPY packages/ ./packages/
-COPY services/ ./services/
-COPY db/ ./db/
-COPY config/ ./config/
+# Docker context must be the repo root (parent of fd/).
+# Build: docker build -f fd/Dockerfile .   (from repo root)
+# Or:    docker build -f Dockerfile ..     (from fd/)
+COPY fd/pyproject.toml ./
+COPY fd/packages/ ./packages/
+COPY fd/services/ ./services/
+COPY fd/db/ ./db/
+COPY config/fd/ ./config/
 
 RUN pip install --no-cache-dir -e "."
 

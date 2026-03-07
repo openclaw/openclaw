@@ -1,6 +1,8 @@
 services:
   openclaw:
-    build: .
+    build:
+      context: ..
+      dockerfile: fd/Dockerfile
     ports:
       - "8080:8080"
     environment:
