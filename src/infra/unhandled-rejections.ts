@@ -55,7 +55,6 @@ const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
 const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "getaddrinfo",
   "socket hang up",
-  "fetch failed",
   "client network socket disconnected before secure tls connection was established",
   "tlsv1 alert protocol version",
   "packet length too long",
@@ -63,6 +62,9 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network is unreachable",
   "temporary failure in name resolution",
 ];
+
+const DISCORD_GATEWAY_FETCH_FAILED_RE =
+  /^failed to get gateway information from discord:\s*fetch failed$/i;
 
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
@@ -173,7 +175,7 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
       return true;
     }
-    if (message === "fetch failed") {
+    if (message === "fetch failed" || DISCORD_GATEWAY_FETCH_FAILED_RE.test(message)) {
       return true;
     }
     if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {

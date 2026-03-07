@@ -91,6 +91,11 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns false for unrelated wrapped fetch failed messages", () => {
+    const error = new Error("Database record fetch failed");
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
   it("returns true for wrapped TLS protocol message snippets", () => {
     const error = new Error("tlsv1 alert protocol version");
     expect(isTransientNetworkError(error)).toBe(true);
