@@ -273,7 +273,7 @@ async function resolveFeishuDirectNameFromChatMember(params: {
 
   try {
     const client = createFeishuClient(account) as any;
-    const getChatMembers = client?.im?.chat?.members?.get;
+    const getChatMembers = client?.im?.chatMembers?.get ?? client?.im?.chat?.members?.get;
     if (typeof getChatMembers !== "function") {
       return undefined;
     }

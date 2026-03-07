@@ -359,7 +359,7 @@ describe("handleFeishuMessage command authorization", () => {
     });
     mockCreateFeishuClient.mockReturnValue({
       contact: { user: { get: getUser } },
-      im: { chat: { members: { get: getMembers } } },
+      im: { chatMembers: { get: getMembers } },
     });
 
     const cfg: ClawdbotConfig = {
@@ -418,7 +418,7 @@ describe("handleFeishuMessage command authorization", () => {
     });
     mockCreateFeishuClient.mockReturnValue({
       contact: { user: { get: vi.fn() } },
-      im: { chat: { members: { get: getMembers } } },
+      im: { chatMembers: { get: getMembers } },
     });
 
     const cfg: ClawdbotConfig = {
