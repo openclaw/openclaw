@@ -494,7 +494,7 @@ interface VeniceModelSpec {
 
 interface VeniceModel {
   id: string;
-  model_spec: VeniceModelSpec;
+  model_spec?: VeniceModelSpec;
 }
 
 interface VeniceModelsResponse {
@@ -573,11 +573,11 @@ function resolveApiMaxCompletionTokens(params: {
   apiModel: VeniceModel;
   knownMaxTokens?: number;
 }): number | undefined {
-  const raw = normalizePositiveInt(params.apiModel.model_spec.maxCompletionTokens);
+  const raw = normalizePositiveInt(params.apiModel.model_spec?.maxCompletionTokens);
   if (!raw) {
     return undefined;
   }
-  const contextWindow = normalizePositiveInt(params.apiModel.model_spec.availableContextTokens);
+  const contextWindow = normalizePositiveInt(params.apiModel.model_spec?.availableContextTokens);
   const knownMaxTokens =
     typeof params.knownMaxTokens === "number" && Number.isFinite(params.knownMaxTokens)
       ? Math.floor(params.knownMaxTokens)
@@ -588,7 +588,7 @@ function resolveApiMaxCompletionTokens(params: {
 }
 
 function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
-  const supportsFunctionCalling = apiModel.model_spec.capabilities?.supportsFunctionCalling;
+  const supportsFunctionCalling = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
   return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
@@ -670,23 +670,23 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
         models.push(definition);
       } else {
         // Create definition for newly discovered models not in catalog
+        const apiSpec = apiModel.model_spec;
         const isReasoning =
-          apiModel.model_spec.capabilities?.supportsReasoning ||
+          apiSpec?.capabilities?.supportsReasoning ||
           apiModel.id.toLowerCase().includes("thinking") ||
           apiModel.id.toLowerCase().includes("reason") ||
           apiModel.id.toLowerCase().includes("r1");
 
-        const hasVision = apiModel.model_spec.capabilities?.supportsVision === true;
+        const hasVision = apiSpec?.capabilities?.supportsVision === true;
 
         models.push({
           id: apiModel.id,
-          name: apiModel.model_spec.name || apiModel.id,
+          name: apiSpec?.name || apiModel.id,
           reasoning: isReasoning,
           input: hasVision ? ["text", "image"] : ["text"],
           cost: VENICE_DEFAULT_COST,
           contextWindow:
-            normalizePositiveInt(apiModel.model_spec.availableContextTokens) ??
-            VENICE_DEFAULT_CONTEXT_WINDOW,
+            normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
           maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
           // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
           compat: {

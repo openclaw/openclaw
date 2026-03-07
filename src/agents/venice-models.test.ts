@@ -286,6 +286,48 @@ describe("venice-models", () => {
     expect(partialModel?.compat?.supportsTools).toBeUndefined();
   });
 
+  it("keeps known models discoverable when a row omits model_spec", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "llama-3.3-70b",
+              },
+              {
+                id: "new-model-valid",
+                model_spec: {
+                  name: "new-model-valid",
+                  privacy: "private",
+                  availableContextTokens: 32_000,
+                  maxCompletionTokens: 2_048,
+                  capabilities: {
+                    supportsReasoning: false,
+                    supportsVision: false,
+                    supportsFunctionCalling: true,
+                  },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const knownModel = models.find((m) => m.id === "llama-3.3-70b");
+    const newModel = models.find((m) => m.id === "new-model-valid");
+    expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
+    expect(knownModel?.maxTokens).toBe(4096);
+    expect(newModel?.contextWindow).toBe(32000);
+    expect(newModel?.maxTokens).toBe(2048);
+  });
+
   it("falls back to static catalog after retry budget is exhausted", async () => {
     const fetchMock = vi.fn(async () => {
       throw Object.assign(new TypeError("fetch failed"), {
