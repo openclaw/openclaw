@@ -10,6 +10,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   enqueueFollowupRun,
+  getFollowupQueueDepth,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
@@ -78,6 +79,7 @@ vi.mock("../../agents/cli-runner.js", () => ({
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
+  getFollowupQueueDepth: vi.fn(() => 1),
   scheduleFollowupDrain: vi.fn(),
 }));
 
@@ -91,7 +93,8 @@ beforeAll(async () => {
 beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
-  vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(enqueueFollowupRun).mockClear().mockReturnValue(true);
+  vi.mocked(getFollowupQueueDepth).mockClear().mockReturnValue(1);
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -313,9 +316,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     const result = await run();
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({
+      text: "⏳ Still finishing the previous run — this message is queued and I'll follow up shortly.",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getFollowupQueueDepth)).toHaveBeenCalledWith("main");
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("includes queued-ahead depth in the busy receipt when backlog already exists", async () => {
+    vi.mocked(getFollowupQueueDepth).mockReturnValueOnce(3);
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toEqual({
+      text: "⏳ Still finishing the previous run — this message is queued (2 ahead) and I'll follow up shortly.",
+    });
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {

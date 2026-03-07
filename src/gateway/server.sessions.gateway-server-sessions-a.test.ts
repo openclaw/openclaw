@@ -1134,6 +1134,83 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset stores and returns audit metadata", async () => {
+    const { storePath } = await seedActiveMainSession();
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        lastResetMode?: string;
+        lastResetSource?: string;
+        lastResetBy?: string;
+        lastResetReason?: string;
+        lastResetRunId?: string;
+      };
+      reset?: {
+        lastResetMode?: string;
+        lastResetSource?: string;
+        lastResetBy?: string;
+        lastResetReason?: string;
+        lastResetRunId?: string;
+      };
+    }>(ws, "sessions.reset", {
+      key: "main",
+      triggerSource: "gateway:watchdog",
+      triggeredBy: "ou_test_user",
+      triggerReason: "watchdog-timeout",
+      triggerRunId: "run_123",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.reset).toMatchObject({
+      lastResetMode: "reset",
+      lastResetSource: "gateway:watchdog",
+      lastResetBy: "ou_test_user",
+      lastResetReason: "watchdog-timeout",
+      lastResetRunId: "run_123",
+    });
+    expect(reset.payload?.entry).toMatchObject({
+      lastResetMode: "reset",
+      lastResetSource: "gateway:watchdog",
+      lastResetBy: "ou_test_user",
+      lastResetReason: "watchdog-timeout",
+      lastResetRunId: "run_123",
+    });
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        lastResetMode?: string;
+        lastResetSource?: string;
+        lastResetBy?: string;
+        lastResetReason?: string;
+        lastResetRunId?: string;
+      }
+    >;
+    expect(store["agent:main:main"]).toMatchObject({
+      lastResetMode: "reset",
+      lastResetSource: "gateway:watchdog",
+      lastResetBy: "ou_test_user",
+      lastResetReason: "watchdog-timeout",
+      lastResetRunId: "run_123",
+    });
+
+    const event = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { context?: { resetAudit?: unknown } } | undefined;
+    expect(event?.context?.resetAudit).toMatchObject({
+      lastResetMode: "reset",
+      lastResetSource: "gateway:watchdog",
+      lastResetBy: "ou_test_user",
+      lastResetReason: "watchdog-timeout",
+      lastResetRunId: "run_123",
+    });
+
+    ws.close();
+  });
+
   test("sessions.reset returns unavailable when active run does not stop", async () => {
     const { dir, storePath } = await seedActiveMainSession();
 

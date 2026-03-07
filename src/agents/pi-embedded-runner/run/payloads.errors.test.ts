@@ -40,6 +40,34 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  it("does not mirror stale assistant text after an aborted run", () => {
+    const payloads = buildPayloads({
+      aborted: true,
+      assistantTexts: ["partial output"],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "old final reply" }],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("still falls back to the last assistant text when the run was not aborted", () => {
+    const payloads = buildPayloads({
+      aborted: false,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "old final reply" }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "old final reply");
+  });
+
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],

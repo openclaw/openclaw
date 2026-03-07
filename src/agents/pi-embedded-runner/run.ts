@@ -1225,6 +1225,7 @@ export async function runEmbeddedPiAgent(
           };
 
           const payloads = buildEmbeddedRunPayloads({
+            aborted: attempt.aborted,
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,

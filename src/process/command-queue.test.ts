@@ -26,6 +26,7 @@ import {
   getQueueSize,
   markGatewayDraining,
   resetAllLanes,
+  resetCommandLane,
   setCommandLaneConcurrency,
   waitForActiveTasks,
 } from "./command-queue.js";
@@ -290,6 +291,44 @@ describe("command queue", () => {
     // Let the active task finish normally.
     release();
     await expect(first).resolves.toBe("first");
+  });
+
+  it("resetCommandLane releases stuck active bookkeeping and drains queued work", async () => {
+    const lane = `reset-single-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    let resolve1!: () => void;
+    const blocker = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker;
+      return "first";
+    });
+
+    await vi.waitFor(() => {
+      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    let secondRan = false;
+    const second = enqueueCommandInLane(lane, async () => {
+      secondRan = true;
+      return "second";
+    });
+
+    await vi.waitFor(() => {
+      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+    });
+    expect(secondRan).toBe(false);
+
+    const released = resetCommandLane(lane);
+    expect(released).toBe(1);
+
+    resolve1();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+    expect(secondRan).toBe(true);
   });
 
   it("keeps draining functional after synchronous onWait failure", async () => {

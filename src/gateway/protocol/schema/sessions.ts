@@ -86,6 +86,10 @@ export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+    triggerSource: Type.Optional(NonEmptyString),
+    triggeredBy: Type.Optional(NonEmptyString),
+    triggerReason: Type.Optional(NonEmptyString),
+    triggerRunId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

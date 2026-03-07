@@ -228,6 +228,27 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 }
 
 /**
+ * Force-reset a single lane's active runtime bookkeeping while preserving
+ * queued work. Used by embedded-run watchdogs when a timed-out run never
+ * reaches its finally block and leaves the per-session lane permanently busy.
+ */
+export function resetCommandLane(lane: string = CommandLane.Main) {
+  const cleaned = lane.trim() || CommandLane.Main;
+  const state = lanes.get(cleaned);
+  if (!state) {
+    return 0;
+  }
+  const released = state.activeTaskIds.size;
+  state.generation += 1;
+  state.activeTaskIds.clear();
+  state.draining = false;
+  if (state.queue.length > 0) {
+    drainLane(cleaned);
+  }
+  return released;
+}
+
+/**
  * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
  * stale active task IDs that permanently block new work from draining.

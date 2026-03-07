@@ -284,6 +284,36 @@ async function closeAcpRuntimeForSession(params: {
   return undefined;
 }
 
+export function buildSessionResetAuditMetadata(params: {
+  reason?: "new" | "reset";
+  triggerSource?: string;
+  triggeredBy?: string;
+  triggerReason?: string;
+  triggerRunId?: string;
+}) {
+  const clean = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  };
+  const mode = params.reason === "new" ? "new" : "reset";
+  const source = clean(params.triggerSource) ?? "gateway:sessions.reset";
+  const triggeredBy = clean(params.triggeredBy) ?? source;
+  const triggerReason =
+    clean(params.triggerReason) ?? (mode === "new" ? "new-session" : "manual-reset");
+  const triggerRunId = clean(params.triggerRunId);
+  return {
+    lastResetAt: Date.now(),
+    lastResetMode: mode,
+    lastResetSource: source,
+    lastResetBy: triggeredBy,
+    lastResetReason: triggerReason,
+    ...(triggerRunId ? { lastResetRunId: triggerRunId } : {}),
+  } as const;
+}
+
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
@@ -433,6 +463,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const hadExistingEntry = Boolean(entry);
     const commandReason = p.reason === "new" ? "new" : "reset";
+    const resetAudit = buildSessionResetAuditMetadata(p);
     const hookEvent = createInternalHookEvent(
       "command",
       commandReason,
@@ -441,6 +472,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionEntry: entry,
         previousSessionEntry: entry,
         commandSource: "gateway:sessions.reset",
+        resetAudit,
         cfg,
       },
     );
@@ -477,6 +509,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         updatedAt: now,
         systemSent: false,
         abortedLastRun: false,
+        ...resetAudit,
+        lastResetAt: now,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
@@ -513,7 +547,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reason: "session-reset",
       });
     }
-    respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
+    respond(
+      true,
+      { ok: true, key: target.canonicalKey, entry: next, reset: resetAudit },
+      undefined,
+    );
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {

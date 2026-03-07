@@ -18,6 +18,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import { resetCommandLane } from "../../../process/command-queue.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -89,10 +90,13 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { resolveSessionLane } from "../lanes.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
+  EMBEDDED_RUN_ABORT_RELEASE_GRACE_MS,
+  isActiveEmbeddedRunHandle,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
 } from "../runs.js";
@@ -1211,9 +1215,12 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
+      const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
+      let abortReleaseTimer: NodeJS.Timeout | undefined;
+      let watchdogReleased = false;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const abortTimer = setTimeout(
         () => {
@@ -1241,6 +1248,26 @@ export async function runEmbeddedAttempt(
                 log.warn(
                   `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
                 );
+              }
+              if (!abortReleaseTimer) {
+                abortReleaseTimer = setTimeout(() => {
+                  if (!isActiveEmbeddedRunHandle(params.sessionId, queueHandle)) {
+                    return;
+                  }
+                  watchdogReleased = true;
+                  const releasedActive = resetCommandLane(sessionLane);
+                  clearActiveEmbeddedRun(
+                    params.sessionId,
+                    queueHandle,
+                    params.sessionKey,
+                    "run_watchdog_timeout",
+                  );
+                  if (!isProbeSession) {
+                    log.error(
+                      `embedded run watchdog forced lane release: runId=${params.runId} sessionId=${params.sessionId} lane=${sessionLane} releasedActive=${releasedActive}`,
+                    );
+                  }
+                }, EMBEDDED_RUN_ABORT_RELEASE_GRACE_MS);
               }
             }, 10_000);
           }
@@ -1551,9 +1578,12 @@ export async function runEmbeddedAttempt(
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
         }
+        if (abortReleaseTimer) {
+          clearTimeout(abortReleaseTimer);
+        }
         if (!isProbeSession && (aborted || timedOut) && !timedOutDuringCompaction) {
           log.debug(
-            `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
+            `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut} watchdogReleased=${watchdogReleased}`,
           );
         }
         try {
@@ -1566,7 +1596,12 @@ export async function runEmbeddedAttempt(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
         }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        clearActiveEmbeddedRun(
+          params.sessionId,
+          queueHandle,
+          params.sessionKey,
+          watchdogReleased ? "run_watchdog_timeout" : "run_completed",
+        );
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 

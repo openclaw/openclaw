@@ -63,6 +63,7 @@ vi.mock("./queue.js", async () => {
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
+    getFollowupQueueDepth: vi.fn(() => 1),
     scheduleFollowupDrain: vi.fn(),
   };
 });

@@ -19,3 +19,11 @@ export function resolveActiveRunQueueAction(params: {
   }
   return "run-now";
 }
+
+export function buildQueuedBusyReceipt(params: { depth?: number }) {
+  const queuedAhead = Math.max(0, Math.floor((params.depth ?? 1) - 1));
+  const queueHint = queuedAhead > 0 ? ` (${queuedAhead} ahead)` : "";
+  return {
+    text: `⏳ Still finishing the previous run — this message is queued${queueHint} and I'll follow up shortly.`,
+  };
+}

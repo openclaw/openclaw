@@ -33,6 +33,22 @@ type ToolErrorWarningPolicy = {
   includeDetails: boolean;
 };
 
+export function selectAssistantAnswerTexts(params: {
+  aborted?: boolean;
+  assistantTexts: string[];
+  lastAssistant: AssistantMessage | undefined;
+}): string[] {
+  if (params.aborted) {
+    return [];
+  }
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  return params.assistantTexts.length
+    ? params.assistantTexts
+    : fallbackAnswerText
+      ? [fallbackAnswerText]
+      : [];
+}
+
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
   "missing",
@@ -88,6 +104,7 @@ function resolveToolErrorWarningPolicy(params: {
 }
 
 export function buildEmbeddedRunPayloads(params: {
+  aborted?: boolean;
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
@@ -192,7 +209,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -243,13 +259,9 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
-  ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts = selectAssistantAnswerTexts(params).filter(
+    (text) => !shouldSuppressRawErrorText(text),
+  );
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

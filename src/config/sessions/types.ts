@@ -84,6 +84,12 @@ export type SessionEntry = {
   spawnDepth?: number;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  lastResetAt?: number;
+  lastResetMode?: "new" | "reset";
+  lastResetSource?: string;
+  lastResetBy?: string;
+  lastResetReason?: string;
+  lastResetRunId?: string;
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying

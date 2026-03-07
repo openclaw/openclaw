@@ -12,6 +12,7 @@ type EmbeddedPiQueueHandle = {
 };
 
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
+export const EMBEDDED_RUN_ABORT_RELEASE_GRACE_MS = 15_000;
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   timer: NodeJS.Timeout;
@@ -66,6 +67,13 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
 
 export function getActiveEmbeddedRunCount(): number {
   return ACTIVE_EMBEDDED_RUNS.size;
+}
+
+export function isActiveEmbeddedRunHandle(
+  sessionId: string,
+  handle: EmbeddedPiQueueHandle,
+): boolean {
+  return ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle;
 }
 
 export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
@@ -137,12 +145,15 @@ export function clearActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
+  reason = "run_completed",
 ) {
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
+    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
     if (!sessionId.startsWith("probe-")) {
-      diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+      diag.debug(
+        `run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size} reason=${reason}`,
+      );
     }
     notifyEmbeddedRunEnded(sessionId);
   } else {
