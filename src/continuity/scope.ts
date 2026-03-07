@@ -1,5 +1,8 @@
 import type { SessionSendPolicyConfig } from "../config/types.base.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  resolveThreadParentSessionKey,
+} from "../sessions/session-key-utils.js";
 import type { ContinuitySourceClass } from "./types.js";
 
 type ParsedContinuityScope = {
@@ -98,6 +101,9 @@ function parseContinuitySessionScope(key?: string): ParsedContinuityScope {
       chatType,
     };
   }
+  if (normalized === "main") {
+    return { normalizedKey: normalized, channel, chatType: "direct" };
+  }
   return { normalizedKey: normalized, channel };
 }
 
@@ -118,7 +124,9 @@ function normalizeSessionRest(key?: string): string | undefined {
     return undefined;
   }
   const parsed = parseAgentSessionKey(trimmed);
-  const normalized = (parsed?.rest ?? trimmed).toLowerCase();
+  const scoped = parsed?.rest ?? trimmed;
+  const threadParent = resolveThreadParentSessionKey(scoped) ?? scoped;
+  const normalized = threadParent.toLowerCase();
   if (!normalized) {
     return undefined;
   }
