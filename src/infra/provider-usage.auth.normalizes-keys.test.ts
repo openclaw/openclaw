@@ -108,6 +108,44 @@ describe("resolveProviderAuths key normalization", () => {
     await fs.writeFile(path.join(legacyDir, "auth.json"), raw, "utf8");
   }
 
+  function createTestModelDefinition() {
+    return {
+      id: "test-model",
+      name: "Test Model",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1024,
+      maxTokens: 256,
+    };
+  }
+
+  async function resolveMinimaxAuthFromConfiguredKey(apiKey: string) {
+    return await withSuiteHome(
+      async (home) => {
+        await writeConfig(home, {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com",
+                models: [createTestModelDefinition()],
+                apiKey,
+              },
+            },
+          },
+        });
+
+        return await resolveProviderAuths({
+          providers: ["minimax"],
+        });
+      },
+      {
+        MINIMAX_API_KEY: undefined,
+        MINIMAX_CODE_PLAN_KEY: undefined,
+      },
+    );
+  }
+
   it("strips embedded CR/LF from env keys", async () => {
     await withSuiteHome(
       async () => {
@@ -406,74 +444,12 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   it("ignores marker-backed config keys for provider usage auth resolution", async () => {
-    await withSuiteHome(
-      async (home) => {
-        const modelDef = {
-          id: "test-model",
-          name: "Test Model",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1024,
-          maxTokens: 256,
-        };
-        await writeConfig(home, {
-          models: {
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimaxi.com",
-                models: [modelDef],
-                apiKey: NON_ENV_SECRETREF_MARKER,
-              },
-            },
-          },
-        });
-
-        const auths = await resolveProviderAuths({
-          providers: ["minimax"],
-        });
-        expect(auths).toEqual([]);
-      },
-      {
-        MINIMAX_API_KEY: undefined,
-        MINIMAX_CODE_PLAN_KEY: undefined,
-      },
-    );
+    const auths = await resolveMinimaxAuthFromConfiguredKey(NON_ENV_SECRETREF_MARKER);
+    expect(auths).toEqual([]);
   });
 
   it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {
-    await withSuiteHome(
-      async (home) => {
-        const modelDef = {
-          id: "test-model",
-          name: "Test Model",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1024,
-          maxTokens: 256,
-        };
-        await writeConfig(home, {
-          models: {
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimaxi.com",
-                models: [modelDef],
-                apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
-              },
-            },
-          },
-        });
-
-        const auths = await resolveProviderAuths({
-          providers: ["minimax"],
-        });
-        expect(auths).toEqual([{ provider: "minimax", token: "ALLCAPS_SAMPLE" }]);
-      },
-      {
-        MINIMAX_API_KEY: undefined,
-        MINIMAX_CODE_PLAN_KEY: undefined,
-      },
-    );
+    const auths = await resolveMinimaxAuthFromConfiguredKey("ALLCAPS_SAMPLE");
+    expect(auths).toEqual([{ provider: "minimax", token: "ALLCAPS_SAMPLE" }]);
   });
 });
