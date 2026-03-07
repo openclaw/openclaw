@@ -226,13 +226,16 @@ export function renderApp(state: AppViewState) {
         <div class="topbar-left">
           <button
             class="nav-collapse-toggle"
-            @click=${() =>
+            @click=${() => {
+              // If user-initiated focus mode is active (not onboarding), exit it and reveal the nav.
+              // During onboarding, focus mode is controlled by the onboarding flow, so just toggle nav normally.
+              const userFocusMode = state.settings.chatFocusMode && !state.onboarding;
               state.applySettings({
                 ...state.settings,
-                // If focus mode is active, exit it and reveal the nav instead of toggling collapse
-                chatFocusMode: chatFocus ? false : state.settings.chatFocusMode,
-                navCollapsed: chatFocus ? false : !state.settings.navCollapsed,
-              })}
+                chatFocusMode: userFocusMode ? false : state.settings.chatFocusMode,
+                navCollapsed: userFocusMode ? false : !state.settings.navCollapsed,
+              });
+            }}
             title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
             aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
           >
