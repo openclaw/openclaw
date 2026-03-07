@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Infoflow** — Connect OpenClaw to Infoflow (如流) messaging platform. Supports private and group chat with @mention detection.
+  npm: `@chbo297/infoflow`
+  repo: `https://github.com/chbo297/openclaw-infoflow`
+  install: `openclaw plugins install @chbo297/infoflow`
