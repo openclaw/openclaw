@@ -1,3 +1,4 @@
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import {
   OPENAI_TTS_MODELS,
@@ -18,12 +19,26 @@ import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function resolveGatewayTtsAgentId(
+  cfg: ReturnType<typeof loadConfig>,
+  params: Record<string, unknown>,
+) {
+  const sessionKey =
+    typeof params.sessionKey === "string" && params.sessionKey.trim()
+      ? params.sessionKey.trim().toLowerCase()
+      : undefined;
+  const agentId =
+    typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : undefined;
+  return resolveSessionAgentIds({ config: cfg, sessionKey, agentId }).sessionAgentId;
+}
+
 export const ttsHandlers: GatewayRequestHandlers = {
-  "tts.status": async ({ respond }) => {
+  "tts.status": async ({ params, respond }) => {
     try {
       const cfg = loadConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
+      const agentId = resolveGatewayTtsAgentId(cfg, params);
+      const config = resolveTtsConfig(cfg, agentId);
+      const prefsPath = resolveTtsPrefsPath(config, agentId);
       const provider = getTtsProvider(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
       const fallbackProviders = resolveTtsProviderOrder(provider)
@@ -44,22 +59,24 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.enable": async ({ respond }) => {
+  "tts.enable": async ({ params, respond }) => {
     try {
       const cfg = loadConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
+      const agentId = resolveGatewayTtsAgentId(cfg, params);
+      const config = resolveTtsConfig(cfg, agentId);
+      const prefsPath = resolveTtsPrefsPath(config, agentId);
       setTtsEnabled(prefsPath, true);
       respond(true, { enabled: true });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.disable": async ({ respond }) => {
+  "tts.disable": async ({ params, respond }) => {
     try {
       const cfg = loadConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
+      const agentId = resolveGatewayTtsAgentId(cfg, params);
+      const config = resolveTtsConfig(cfg, agentId);
+      const prefsPath = resolveTtsPrefsPath(config, agentId);
       setTtsEnabled(prefsPath, false);
       respond(true, { enabled: false });
     } catch (err) {
@@ -78,8 +95,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
+      const agentId = resolveGatewayTtsAgentId(cfg, params);
+      const config = resolveTtsConfig(cfg, agentId);
+      const prefsPath = resolveTtsPrefsPath(config, agentId);
       const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const result = await textToSpeech({ text, cfg, channel, agentId, config, prefsPath });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,
@@ -113,19 +133,21 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
+      const agentId = resolveGatewayTtsAgentId(cfg, params);
+      const config = resolveTtsConfig(cfg, agentId);
+      const prefsPath = resolveTtsPrefsPath(config, agentId);
       setTtsProvider(prefsPath, provider);
       respond(true, { provider });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.providers": async ({ respond }) => {
+  "tts.providers": async ({ params, respond }) => {
     try {
       const cfg = loadConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
+      const agentId = resolveGatewayTtsAgentId(cfg, params);
+      const config = resolveTtsConfig(cfg, agentId);
+      const prefsPath = resolveTtsPrefsPath(config, agentId);
       respond(true, {
         providers: [
           {
