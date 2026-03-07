@@ -262,8 +262,21 @@ export const registerTelegramHandlers = ({
         replyMedia,
       );
     },
-    onError: (err) => {
+    onError: (err, items) => {
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+      const chatId = items[0]?.msg.chat.id;
+      if (chatId != null) {
+        const threadId = items[0]?.msg.message_thread_id;
+        void bot.api
+          .sendMessage(
+            chatId,
+            "Something went wrong while processing your message. Please try again.",
+            threadId != null ? { message_thread_id: threadId } : undefined,
+          )
+          .catch((sendErr) => {
+            logVerbose(`telegram: error fallback send failed: ${String(sendErr)}`);
+          });
+      }
     },
   });
 
