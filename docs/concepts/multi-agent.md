@@ -499,6 +499,67 @@ Notes:
 - For stricter gating, set `agents.list[].groupChat.mentionPatterns` and keep
   group allowlists enabled for the channel.
 
+## Multiple Telegram agents in one group
+
+Put two or more Telegram bot accounts into a single group so users can
+@-mention the right agent for the job. Each bot needs its own BotFather token
+and a separate channel account.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        name: "Assistant",
+        workspace: "~/.openclaw/workspace",
+        identity: { name: "Assistant", emoji: "🤖" },
+      },
+      {
+        id: "marketing",
+        name: "MarketingBot",
+        workspace: "~/.openclaw/workspace-marketing",
+        identity: { name: "MarketingBot", emoji: "📢" },
+      },
+    ],
+  },
+  channels: {
+    telegram: {
+      enabled: true,
+      groupPolicy: "open",
+      accounts: {
+        default: {
+          botToken: "TOKEN_FOR_ASSISTANT",
+          groupPolicy: "open",
+          allowFrom: [YOUR_USER_ID],
+        },
+        marketing: {
+          botToken: "TOKEN_FOR_MARKETING_BOT",
+          groupPolicy: "open",
+          allowFrom: [YOUR_USER_ID],
+        },
+      },
+    },
+  },
+  bindings: [
+    { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+    { agentId: "marketing", match: { channel: "telegram", accountId: "marketing" } },
+  ],
+}
+```
+
+Important setup steps:
+
+1. **Disable Privacy Mode** for each bot in @BotFather (`/setprivacy` → Disable),
+   otherwise bots only see `/commands` and direct replies in groups.
+2. **Re-add bots** to the group after changing privacy mode — Telegram caches
+   the setting per-group and only applies changes on re-join.
+3. `groupPolicy` must be `"open"` (or `"allowlist"` with your user ID in
+   `groupAllowFrom`). Note that `groupAllowFrom` filters by **sender user ID**,
+   not by group chat ID.
+4. Both top-level `channels.telegram.groupPolicy` and per-account `groupPolicy`
+   must allow group messages — the top-level setting is checked first.
+
 ## Per-Agent Sandbox and Tool Configuration
 
 Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
