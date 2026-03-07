@@ -168,7 +168,10 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
-function createAcpRuntime(events: Array<Record<string, unknown>>) {
+function createAcpRuntime(
+  events: Array<Record<string, unknown>>,
+  opts?: { supportsImages?: boolean },
+) {
   return {
     ensureSession: vi.fn(
       async (input: { sessionKey: string; mode: string; agent: string }) =>
@@ -185,6 +188,14 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
     }),
     cancel: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
+    ...(opts?.supportsImages != null
+      ? {
+          getCapabilities: vi.fn(async () => ({
+            controls: [],
+            supportsImages: opts.supportsImages,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -1703,10 +1714,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("threads image-only messages through ACP dispatch instead of short-circuiting", async () => {
     setNoAbort();
-    const runtime = createAcpRuntime([
-      { type: "text_delta", text: "I see an image" },
-      { type: "done" },
-    ]);
+    const runtime = createAcpRuntime(
+      [{ type: "text_delta", text: "I see an image" }, { type: "done" }],
+      { supportsImages: true },
+    );
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
       storeSessionKey: "agent:codex-acp:session-1",
