@@ -62,6 +62,7 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  execApprovalHandler?: import("./exec-approvals.js").TelegramExecApprovalHandler | null;
 };
 
 export { getTelegramSequentialKey };
@@ -404,6 +405,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     shouldSkipUpdate,
     processMessage,
     logger,
+    execApprovalHandler: opts.execApprovalHandler ?? null,
   });
 
   const originalStop = bot.stop.bind(bot);

@@ -247,6 +247,17 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        cleanupAfterResolve: z.boolean().optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

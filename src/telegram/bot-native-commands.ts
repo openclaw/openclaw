@@ -35,6 +35,7 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { getChildLogger } from "../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import {
@@ -116,6 +117,10 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
+  execApprovalHandler?: {
+    resolveApproval: (approvalId: string, decision: ExecApprovalDecision) => Promise<boolean>;
+    getApprovers: () => Array<string | number>;
+  } | null;
 };
 
 type RegisterTelegramNativeCommandsParams = {

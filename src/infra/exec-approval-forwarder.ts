@@ -120,6 +120,33 @@ function resolveChannelAccountConfig<T>(
   return fallbackKey ? accounts[fallbackKey] : undefined;
 }
 
+// Telegram has inline-button-based exec approvals; skip text fallback only when
+// the Telegram-specific handler is enabled for the same target account.
+function shouldSkipTelegramForwarding(
+  target: ExecApprovalForwardTarget,
+  cfg: OpenClawConfig,
+): boolean {
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  if (channel !== "telegram") {
+    return false;
+  }
+  const telegram = cfg.channels?.telegram as
+    | {
+        execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+        accounts?: Record<
+          string,
+          { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+        >;
+      }
+    | undefined;
+  if (!telegram) {
+    return false;
+  }
+  const account = resolveChannelAccountConfig(telegram.accounts, target.accountId);
+  const execApprovals = account?.execApprovals ?? telegram.execApprovals;
+  return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
+}
+
 // Discord has component-based exec approvals; skip text fallback only when the
 // Discord-specific handler is enabled for the same target account.
 function shouldSkipDiscordForwarding(
@@ -351,7 +378,10 @@ export function createExecApprovalForwarder(
       config,
       request,
       resolveSessionTarget,
-    }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
+    }).filter(
+      (target) =>
+        !shouldSkipDiscordForwarding(target, cfg) && !shouldSkipTelegramForwarding(target, cfg),
+    );
 
     if (filteredTargets.length === 0) {
       return false;
@@ -416,7 +446,10 @@ export function createExecApprovalForwarder(
           config,
           request,
           resolveSessionTarget,
-        }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
+        }).filter(
+          (target) =>
+            !shouldSkipDiscordForwarding(target, cfg) && !shouldSkipTelegramForwarding(target, cfg),
+        );
       }
     }
     if (!targets || targets.length === 0) {
