@@ -1,9 +1,7 @@
 import type { MessageEvent, WebhookRequestBody } from "@line/bot-sdk";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupRequireMention } from "../config/group-policy.js";
@@ -186,36 +184,27 @@ export async function monitorLineProvider(
 
           // Also check LINE-native mention objects (message.mention.mentionees)
           const event = ctx.event as MessageEvent;
-          const lineMention =
-            event?.message?.type === "text" ? event.message.mention : undefined;
+          const lineMention = event?.message?.type === "text" ? event.message.mention : undefined;
           const hasLineMention = Boolean(
-            lineMention && lineMention.mentionees && lineMention.mentionees.length > 0,
+            lineMention?.mentionees?.some(
+              (mentionee) =>
+                "isSelf" in mentionee && typeof mentionee.isSelf === "boolean" && mentionee.isSelf,
+            ),
           );
 
           const effectiveWasMentioned = wasMentioned || hasLineMention;
-          const hasCmd = hasControlCommand(messageText, config);
-          const canDetectMention = mentionRegexes.length > 0 || true; // LINE always supports native mentions
+          const canDetectMention = true; // LINE always supports native mentions via message.mention.mentionees
 
-          const mentionGate = resolveMentionGatingWithBypass({
-            isGroup: true,
-            requireMention: true,
-            canDetectMention,
-            wasMentioned: effectiveWasMentioned,
-            implicitMention: false,
-            hasAnyMention: hasLineMention,
-            allowTextCommands: true,
-            hasControlCommand: hasCmd,
-            commandAuthorized: false,
-          });
+          const shouldSkip = requireMention && canDetectMention && !effectiveWasMentioned;
 
-          if (mentionGate.shouldSkip) {
+          if (shouldSkip) {
             logVerbose(
               `line: skipping group message (requireMention, not mentioned) group=${ctx.groupId ?? "unknown"} account=${ctx.accountId}`,
             );
             return;
           }
 
-          ctxPayload.WasMentioned = mentionGate.effectiveWasMentioned;
+          ctxPayload.WasMentioned = effectiveWasMentioned;
         }
       }
       // ── end LINE mention gating ──
