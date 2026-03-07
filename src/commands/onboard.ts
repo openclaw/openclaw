@@ -39,8 +39,8 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
       : { ...opts, authChoice: normalizedAuthChoice, flow };
   if (
     normalizedOpts.secretInputMode &&
-    normalizedOpts.secretInputMode !== "plaintext" &&
-    normalizedOpts.secretInputMode !== "ref"
+    normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
+    normalizedOpts.secretInputMode !== "ref" // pragma: allowlist secret
   ) {
     runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
     runtime.exit(1);

@@ -236,9 +236,9 @@ function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
         botToken: "xoxb-http",
         signingSecret: "",
         botTokenSource: "config",
-        signingSecretSource: "config",
+        signingSecretSource: "config", // pragma: allowlist secret
         botTokenStatus: "available",
-        signingSecretStatus: "configured_unavailable",
+        signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
       }),
       resolveAccount: () => ({
         name: "Primary",
@@ -248,9 +248,9 @@ function makeHttpSlackUnavailablePlugin(): ChannelPlugin {
         botToken: "xoxb-http",
         signingSecret: "",
         botTokenSource: "config",
-        signingSecretSource: "config",
+        signingSecretSource: "config", // pragma: allowlist secret
         botTokenStatus: "available",
-        signingSecretStatus: "configured_unavailable",
+        signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
       }),
       isConfigured: () => true,
       isEnabled: () => true,

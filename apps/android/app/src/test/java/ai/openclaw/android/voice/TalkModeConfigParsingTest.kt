@@ -1,8 +1,10 @@
 package ai.openclaw.android.voice
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -38,16 +40,12 @@ class TalkModeConfigParsingTest {
 
   @Test
   fun fallsBackToLegacyTalkFieldsWhenNormalizedPayloadMissing() {
+    val legacyApiKey = "legacy-key" // pragma: allowlist secret
     val talk =
-      json.parseToJsonElement(
-          """
-          {
-            "voiceId": "voice-legacy",
-            "apiKey": "legacy-key"
-          }
-          """.trimIndent(),
-        )
-        .jsonObject
+      buildJsonObject {
+        put("voiceId", "voice-legacy")
+        put("apiKey", legacyApiKey) // pragma: allowlist secret
+      }
 
     val selection = TalkModeManager.selectTalkProviderConfig(talk)
     assertNotNull(selection)

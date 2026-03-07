@@ -31,7 +31,7 @@ describe("compaction identifier-preservation instructions", () => {
   } as unknown as NonNullable<ExtensionContext["model"]>;
   const summarizeBase: Omit<SummarizeInStagesInput, "messages"> = {
     model: testModel,
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     reserveTokens: 4000,
     maxChunkTokens: 8000,
     contextWindow: 200_000,

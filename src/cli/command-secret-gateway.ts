@@ -25,7 +25,7 @@ type ResolveCommandSecretsResult = {
   hadUnresolvedTargets: boolean;
 };
 
-export type CommandSecretResolutionMode = "strict" | "summary" | "operational_readonly";
+export type CommandSecretResolutionMode = "strict" | "summary" | "operational_readonly"; // pragma: allowlist secret
 
 export type CommandSecretTargetState =
   | "resolved_gateway"

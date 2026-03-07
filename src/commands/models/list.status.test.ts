@@ -9,14 +9,14 @@ const mocks = vi.hoisted(() => {
         type: "oauth",
         provider: "anthropic",
         access: "sk-ant-oat01-ACCESS-TOKEN-1234567890",
-        refresh: "sk-ant-ort01-REFRESH-TOKEN-1234567890",
+        refresh: "sk-ant-ort01-REFRESH-TOKEN-1234567890", // pragma: allowlist secret
         expires: Date.now() + 60_000,
         email: "peter@example.com",
       },
       "anthropic:work": {
         type: "api_key",
         provider: "anthropic",
-        key: "sk-ant-api-0123456789abcdefghijklmnopqrstuvwxyz",
+        key: "sk-ant-api-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
       },
       "openai-codex:default": {
         type: "oauth",
@@ -49,13 +49,13 @@ const mocks = vi.hoisted(() => {
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider === "openai") {
         return {
-          apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz",
+          apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
           source: "shell env: OPENAI_API_KEY",
         };
       }
       if (provider === "anthropic") {
         return {
-          apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890",
+          apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890", // pragma: allowlist secret
           source: "env: ANTHROPIC_OAUTH_TOKEN",
         };
       }
@@ -231,7 +231,7 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("does not emit raw short api-key values in JSON labels", async () => {
     const localRuntime = createRuntime();
-    const shortSecret = "abc123";
+    const shortSecret = "abc123"; // pragma: allowlist secret
     const originalProfiles = { ...mocks.store.profiles };
     mocks.store.profiles = {
       ...mocks.store.profiles,

@@ -25,7 +25,7 @@ async function runAudioCapabilityWithFetchCapture(params: {
       models: {
         providers: {
           openai: {
-            apiKey: "test-key",
+            apiKey: "test-key", // pragma: allowlist secret
             models: [],
           },
         },
@@ -80,7 +80,7 @@ describe("runCapability proxy fetch passthrough", () => {
           models: {
             providers: {
               moonshot: {
-                apiKey: "test-key",
+                apiKey: "test-key", // pragma: allowlist secret
                 models: [],
               },
             },

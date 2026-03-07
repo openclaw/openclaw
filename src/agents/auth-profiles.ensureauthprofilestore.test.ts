@@ -130,7 +130,7 @@ describe("ensureAuthProfileStore", () => {
         profile: {
           provider: "anthropic",
           mode: "api_key",
-          apiKey: "sk-ant-alias",
+          apiKey: "sk-ant-alias", // pragma: allowlist secret
         },
         expected: {
           type: "api_key",
@@ -156,7 +156,7 @@ describe("ensureAuthProfileStore", () => {
           provider: "anthropic",
           type: "api_key",
           key: "sk-ant-canonical",
-          apiKey: "sk-ant-alias",
+          apiKey: "sk-ant-alias", // pragma: allowlist secret
         },
         expected: {
           type: "api_key",
@@ -210,7 +210,7 @@ describe("ensureAuthProfileStore", () => {
             anthropic: {
               provider: "anthropic",
               mode: "api_key",
-              apiKey: "sk-ant-legacy",
+              apiKey: "sk-ant-legacy", // pragma: allowlist secret
             },
           },
           null,

@@ -113,7 +113,7 @@ describe("finalizeOnboardingWizard", () => {
 
   it("resolves gateway password SecretRef for probe and TUI", async () => {
     const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
     const select = vi.fn(async (params: { message: string }) => {
       if (params.message === "How do you want to hatch your bot?") {
         return "tui";
@@ -179,13 +179,13 @@ describe("finalizeOnboardingWizard", () => {
     expect(probeGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
-        password: "resolved-gateway-password",
+        password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
     expect(runTui).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
-        password: "resolved-gateway-password",
+        password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
   });

@@ -41,7 +41,7 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
             {
               enabled: true,
               appId: `cli_${accountId}`,
-              appSecret: `secret_${accountId}`,
+              appSecret: `secret_${accountId}`, // pragma: allowlist secret
               connectionMode: "websocket",
             },
           ]),

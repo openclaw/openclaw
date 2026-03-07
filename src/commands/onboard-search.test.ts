@@ -121,7 +121,7 @@ describe("setupSearch", () => {
         web: {
           search: {
             provider: "perplexity",
-            perplexity: { apiKey: "existing-key" },
+            perplexity: { apiKey: "existing-key" }, // pragma: allowlist secret
           },
         },
       },
@@ -142,7 +142,7 @@ describe("setupSearch", () => {
           search: {
             provider: "perplexity",
             enabled: false,
-            perplexity: { apiKey: "existing-key" },
+            perplexity: { apiKey: "existing-key" }, // pragma: allowlist secret
           },
         },
       },
@@ -162,7 +162,7 @@ describe("setupSearch", () => {
         web: {
           search: {
             provider: "perplexity",
-            perplexity: { apiKey: "stored-pplx-key" },
+            perplexity: { apiKey: "stored-pplx-key" }, // pragma: allowlist secret
           },
         },
       },
@@ -184,7 +184,7 @@ describe("setupSearch", () => {
           search: {
             provider: "perplexity",
             enabled: false,
-            perplexity: { apiKey: "stored-pplx-key" },
+            perplexity: { apiKey: "stored-pplx-key" }, // pragma: allowlist secret
           },
         },
       },
@@ -212,7 +212,7 @@ describe("setupSearch", () => {
 
   it("quickstart skips key prompt when env var is available", async () => {
     const orig = process.env.BRAVE_API_KEY;
-    process.env.BRAVE_API_KEY = "env-brave-key";
+    process.env.BRAVE_API_KEY = "env-brave-key"; // pragma: allowlist secret
     try {
       const cfg: OpenClawConfig = {};
       const { prompter } = createPrompter({ selectValue: "brave" });
@@ -235,13 +235,13 @@ describe("setupSearch", () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "perplexity" });
     const result = await setupSearch(cfg, runtime, prompter, {
-      secretInputMode: "ref",
+      secretInputMode: "ref", // pragma: allowlist secret
     });
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
     expect(result.tools?.web?.search?.perplexity?.apiKey).toEqual({
       source: "env",
       provider: "default",
-      id: "PERPLEXITY_API_KEY",
+      id: "PERPLEXITY_API_KEY", // pragma: allowlist secret
     });
     expect(prompter.text).not.toHaveBeenCalled();
   });
@@ -250,7 +250,7 @@ describe("setupSearch", () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "brave" });
     const result = await setupSearch(cfg, runtime, prompter, {
-      secretInputMode: "ref",
+      secretInputMode: "ref", // pragma: allowlist secret
     });
     expect(result.tools?.web?.search?.provider).toBe("brave");
     expect(result.tools?.web?.search?.apiKey).toEqual({

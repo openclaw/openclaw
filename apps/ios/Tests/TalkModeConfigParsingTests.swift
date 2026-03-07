@@ -23,7 +23,7 @@ import Testing
     @Test func ignoresLegacyTalkFieldsWhenNormalizedPayloadMissing() {
         let talk: [String: Any] = [
             "voiceId": "voice-legacy",
-            "apiKey": "legacy-key",
+            "apiKey": "legacy-key", // pragma: allowlist secret
         ]
 
         let selection = TalkModeManager.selectTalkProviderConfig(talk)

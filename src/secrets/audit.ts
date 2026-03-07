@@ -36,7 +36,7 @@ export type SecretsAuditCode =
   | "REF_SHADOWED"
   | "LEGACY_RESIDUE";
 
-export type SecretsAuditSeverity = "info" | "warn" | "error";
+export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
 export type SecretsAuditFinding = {
   code: SecretsAuditCode;
@@ -48,7 +48,7 @@ export type SecretsAuditFinding = {
   profileId?: string;
 };
 
-export type SecretsAuditStatus = "clean" | "findings" | "unresolved";
+export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 export type SecretsAuditReport = {
   version: 1;

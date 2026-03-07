@@ -120,7 +120,7 @@ describe("runCapability auto audio entries", () => {
     delete process.env.GROQ_API_KEY;
     delete process.env.DEEPGRAM_API_KEY;
     delete process.env.GEMINI_API_KEY;
-    process.env.MISTRAL_API_KEY = "mistral-test-key";
+    process.env.MISTRAL_API_KEY = "mistral-test-key"; // pragma: allowlist secret
     let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
     try {
       await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {
@@ -140,7 +140,7 @@ describe("runCapability auto audio entries", () => {
           models: {
             providers: {
               mistral: {
-                apiKey: "mistral-test-key",
+                apiKey: "mistral-test-key", // pragma: allowlist secret
                 models: [],
               },
             },
