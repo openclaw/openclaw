@@ -1,8 +1,9 @@
-import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 export type SystemRunParams = {
   command: string[];
   rawCommand?: string | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
   cwd?: string | null;
   env?: Record<string, string>;
   timeoutMs?: number | null;

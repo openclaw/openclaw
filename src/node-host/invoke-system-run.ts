@@ -15,6 +15,7 @@ import {
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
+import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
@@ -27,6 +28,7 @@ import {
 import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
+  revalidateApprovedMutableFileOperand,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
 import type {
@@ -63,6 +65,7 @@ type SystemRunParsePhase = {
   argv: string[];
   shellCommand: string | null;
   cmdText: string;
+  approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
   agentId: string | undefined;
   sessionKey: string;
   runId: string;
@@ -92,6 +95,8 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
 const safeBinTrustedDirWarningCache = new Set<string>();
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
+const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -197,6 +202,17 @@ async function parseSystemRunPhase(
 
   const shellCommand = command.shellCommand;
   const cmdText = command.cmdText;
+  const approvalPlan =
+    opts.params.systemRunPlan === undefined
+      ? null
+      : normalizeSystemRunApprovalPlan(opts.params.systemRunPlan);
+  if (opts.params.systemRunPlan !== undefined && !approvalPlan) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "systemRunPlan invalid" },
+    });
+    return null;
+  }
   const agentId = opts.params.agentId?.trim() || undefined;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
@@ -208,6 +224,7 @@ async function parseSystemRunPhase(
     argv: command.argv,
     shellCommand,
     cmdText,
+    approvalPlan,
     agentId,
     sessionKey,
     runId,
@@ -358,6 +375,21 @@ async function executeSystemRunPhase(
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
+  if (
+    phase.approvalPlan?.mutableFileOperand &&
+    !revalidateApprovedMutableFileOperand({
+      snapshot: phase.approvalPlan.mutableFileOperand,
+      argv: phase.argv,
+      cwd: phase.cwd,
+    })
+  ) {
+    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
     });
     return;
   }

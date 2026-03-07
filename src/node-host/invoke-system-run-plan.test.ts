@@ -128,4 +128,28 @@ describe("hardenApprovedExecutionPaths", () => {
       }
     });
   }
+
+  it("captures mutable shell script operands in approval plans", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+    const script = path.join(tmp, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(script, 0o755);
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "./run.sh"],
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.mutableFileOperand).toEqual({
+        argvIndex: 1,
+        path: fs.realpathSync(script),
+        sha256: expect.any(String),
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

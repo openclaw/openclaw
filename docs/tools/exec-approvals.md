@@ -30,6 +30,9 @@ Trust model note:
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
 - Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+- Approved node-host runs also bind canonical execution context: canonical cwd, pinned executable
+  path when applicable, and interpreter-style script operands. If a bound script changes after
+  approval but before execution, the run is denied instead of executing drifted content.
 
 macOS split:
 
