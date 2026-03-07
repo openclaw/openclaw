@@ -7,9 +7,10 @@ import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
 
 const trackedTempDirs: string[] = [];
+const cleanupRunPrefix = `hooks-mapping-test-${Date.now()}-${process.pid}-`;
 
 function trackedMkdtempSync(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${cleanupRunPrefix}${prefix}`));
   trackedTempDirs.push(dir);
   return dir;
 }
@@ -20,6 +21,7 @@ afterEach(() => {
     if (!dir) {
       continue;
     }
+    expect(path.basename(dir)).toContain(cleanupRunPrefix);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
