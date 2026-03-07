@@ -40,7 +40,7 @@ export async function resolveOutboundAttachmentFromUrl(
   // see the original name as the file's basename rather than a UUID.
   if (media.fileName) {
     const cleanName = sanitizeBasename(media.fileName);
-    if (cleanName) {
+    if (cleanName && cleanName !== "." && cleanName !== "..") {
       const namedDir = path.join(path.dirname(saved.path), crypto.randomUUID());
       await fs.mkdir(namedDir, { recursive: true, mode: 0o700 });
       const namedPath = path.join(namedDir, cleanName);
