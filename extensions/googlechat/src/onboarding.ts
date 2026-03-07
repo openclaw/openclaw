@@ -4,6 +4,7 @@ import {
   formatDocsLink,
   mergeAllowFromEntries,
   resolveAccountIdForConfigure,
+  splitOnboardingEntries,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
@@ -42,13 +43,6 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
   };
 }
 
-function parseAllowFromInput(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 async function promptAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -60,7 +54,7 @@ async function promptAllowFrom(params: {
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  const parts = parseAllowFromInput(String(entry));
+  const parts = splitOnboardingEntries(String(entry));
   const unique = mergeAllowFromEntries(undefined, parts);
   return {
     ...params.cfg,
