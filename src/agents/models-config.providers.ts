@@ -187,6 +187,16 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const GROQ_DEFAULT_CONTEXT_WINDOW = 32768;
+const GROQ_DEFAULT_MAX_TOKENS = 8192;
+const GROQ_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
 const NVIDIA_DEFAULT_CONTEXT_WINDOW = 131072;
@@ -868,39 +878,211 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
-export function buildNvidiaProvider(): ProviderConfig {
+async function discoverNvidiaModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  const resolvedSecret =
+    apiKey?.trim() !== ""
+      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey!.trim())
+        ? (process.env[apiKey!.trim()] ?? "").trim()
+        : apiKey!.trim()
+      : "";
+  if (!resolvedSecret) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${NVIDIA_BASE_URL}/models`, {
+      headers: { Authorization: `Bearer ${resolvedSecret}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn(`Failed to discover NVIDIA models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as { data?: { id?: string }[] };
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      return [];
+    }
+
+    return models
+      .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "" }))
+      .filter((m) => Boolean(m.id))
+      .map((m) => {
+        const modelId = m.id;
+        const lower = modelId.toLowerCase();
+        const isReasoning =
+          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think") || lower.includes("qwq") || lower.includes("glm") || lower.includes("qwen3.5-397b-a17b") || lower.includes("kimi");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: NVIDIA_DEFAULT_COST,
+          contextWindow: NVIDIA_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    log.warn(`Failed to discover NVIDIA models: ${String(error)}`);
+    return [];
+  }
+}
+
+export async function buildNvidiaProvider(apiKey?: string): Promise<ProviderConfig> {
+  const defaults: ModelDefinitionConfig[] = [
+    {
+      id: NVIDIA_DEFAULT_MODEL_ID,
+      name: "NVIDIA Llama 3.1 Nemotron 70B Instruct",
+      reasoning: false,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: NVIDIA_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+    },
+    {
+      id: "meta/llama-3.3-70b-instruct",
+      name: "Meta Llama 3.3 70B Instruct",
+      reasoning: false,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: 4096,
+    },
+    {
+      id: "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+      name: "NVIDIA Mistral NeMo Minitron 8B Instruct",
+      reasoning: false,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: 8192,
+      maxTokens: 2048,
+    },
+    {
+      id: "qwen/qwen3.5-397b-a17b",
+      name: "Qwen 3.5 397B",
+      reasoning: true,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: 16384,
+    },
+    {
+      id: "z-ai/glm5",
+      name: "Z-AI GLM5",
+      reasoning: true,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: 16384,
+    },
+    {
+      id: "minimaxai/minimax-m2.5",
+      name: "MiniMax M2.5",
+      reasoning: false,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: 8192,
+    },
+    {
+      id: "moonshotai/kimi-k2-instruct-0905",
+      name: "Moonshot Kimi K2 Instruct 0905",
+      reasoning: true,
+      input: ["text"],
+      cost: NVIDIA_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: 4096,
+    },
+  ];
+
+  const discovered = await discoverNvidiaModels(apiKey);
+
   return {
     baseUrl: NVIDIA_BASE_URL,
     api: "openai-completions",
-    models: [
-      {
-        id: NVIDIA_DEFAULT_MODEL_ID,
-        name: "NVIDIA Llama 3.1 Nemotron 70B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: NVIDIA_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "meta/llama-3.3-70b-instruct",
-        name: "Meta Llama 3.3 70B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 131072,
-        maxTokens: 4096,
-      },
-      {
-        id: "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-        name: "NVIDIA Mistral NeMo Minitron 8B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 8192,
-        maxTokens: 2048,
-      },
-    ],
+    models: discovered.length > 0 ? discovered : defaults,
+  };
+}
+
+async function discoverGroqModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  const resolvedSecret =
+    apiKey?.trim() !== ""
+      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey!.trim())
+        ? (process.env[apiKey!.trim()] ?? "").trim()
+        : apiKey!.trim()
+      : "";
+  if (!resolvedSecret) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${GROQ_BASE_URL}/models`, {
+      headers: { Authorization: `Bearer ${resolvedSecret}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn(`Failed to discover Groq models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as {
+      data?: { id?: string; context_window?: number; max_completion_tokens?: number }[];
+    };
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      return [];
+    }
+
+    return models
+      .map((m) => ({
+        id: typeof m.id === "string" ? m.id.trim() : "",
+        context_window: m.context_window,
+        max_completion_tokens: m.max_completion_tokens,
+      }))
+      .filter((m) => Boolean(m.id) && !m.id.toLowerCase().includes("whisper"))
+      .map((m) => {
+        const lower = m.id.toLowerCase();
+        const isReasoning = lower.includes("r1") || lower.includes("reason") || lower.includes("think");
+        return {
+          id: m.id,
+          name: m.id,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: GROQ_DEFAULT_COST,
+          contextWindow: m.context_window ?? GROQ_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: m.max_completion_tokens ?? GROQ_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    log.warn(`Failed to discover Groq models: ${String(error)}`);
+    return [];
+  }
+}
+
+export async function buildGroqProvider(apiKey?: string): Promise<ProviderConfig> {
+  const defaults: ModelDefinitionConfig[] = [
+    {
+      id: "llama-3.3-70b-versatile",
+      name: "Llama 3.3 70B Versatile",
+      reasoning: false,
+      input: ["text"],
+      cost: GROQ_DEFAULT_COST,
+      contextWindow: 131072,
+      maxTokens: 32768,
+    },
+  ];
+
+  const discovered = await discoverGroqModels(apiKey);
+
+  return {
+    baseUrl: GROQ_BASE_URL,
+    api: "openai-completions",
+    models: discovered.length > 0 ? discovered : defaults,
   };
 }
 
@@ -1124,9 +1306,20 @@ export async function resolveImplicitProviders(params: {
 
   const nvidiaKey =
     resolveEnvApiKeyVarName("nvidia") ??
-    resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
+    resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore }) ??
+    process.env.NVIDIA_API_KEY;
   if (nvidiaKey) {
-    providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+    const provider = await buildNvidiaProvider(nvidiaKey);
+    providers.nvidia = { ...provider, apiKey: nvidiaKey };
+  }
+
+  const groqKey =
+    resolveEnvApiKeyVarName("groq") ??
+    resolveApiKeyFromProfiles({ provider: "groq", store: authStore }) ??
+    process.env.GROQ_API_KEY;
+  if (groqKey) {
+    const provider = await buildGroqProvider(groqKey);
+    providers.groq = { ...provider, apiKey: groqKey };
   }
 
   const kilocodeKey =
