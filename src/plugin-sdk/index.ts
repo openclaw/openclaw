@@ -278,9 +278,12 @@ export {
   isNormalizedSenderAllowed,
 } from "./allow-from.js";
 export {
+  evaluateGroupRouteAccessForPolicy,
   evaluateSenderGroupAccess,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
+  type GroupRouteAccessDecision,
+  type GroupRouteAccessReason,
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
