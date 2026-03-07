@@ -256,4 +256,5 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)
+- [Windows hardening without Docker/WSL](/gateway/windows-no-docker-hardening)
 - [Security](/gateway/security)
