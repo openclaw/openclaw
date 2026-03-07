@@ -226,6 +226,71 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        prometheus: z
+          .object({
+            enabled: z.boolean().optional(),
+            metric_prefix: z.string().optional(),
+            pull: z.boolean().optional(),
+            default_metrics: z.boolean().optional(),
+            external_labels: z.record(z.string(), z.string()).optional(),
+            push_interval_ms: z.number().int().positive().optional(),
+            remote_write: z
+              .array(
+                z
+                  .object({
+                    url: z.string(),
+                    remote_timeout_ms: z.number().int().positive().optional(),
+                    headers: z.record(z.string(), z.string()).optional(),
+                    basic_auth: z
+                      .object({
+                        username: z.string().optional(),
+                        password: z.string().optional(),
+                        password_file: z.string().optional(),
+                      })
+                      .strict()
+                      .optional(),
+                    bearer_token: z.string().optional(),
+                    bearer_token_file: z.string().optional(),
+                    tls_config: z
+                      .object({
+                        ca_file: z.string().optional(),
+                        cert_file: z.string().optional(),
+                        key_file: z.string().optional(),
+                        server_name: z.string().optional(),
+                        insecure_skip_verify: z.boolean().optional(),
+                      })
+                      .strict()
+                      .optional(),
+                    queue_config: z
+                      .object({
+                        capacity: z.number().int().positive().optional(),
+                        max_samples_per_send: z.number().int().positive().optional(),
+                        batch_send_deadline_ms: z.number().int().positive().optional(),
+                        max_retries: z.number().int().nonnegative().optional(),
+                        min_backoff_ms: z.number().int().nonnegative().optional(),
+                        max_backoff_ms: z.number().int().positive().optional(),
+                      })
+                      .strict()
+                      .optional(),
+                    write_relabel_configs: z
+                      .array(
+                        z
+                          .object({
+                            source_labels: z.array(z.string()).optional(),
+                            regex: z.string().optional(),
+                            action: z.union([z.literal("keep"), z.literal("drop")]).optional(),
+                          })
+                          .strict(),
+                      )
+                      .optional(),
+                    metric_prefix: z.string().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+          })
+          .strict()
+          .optional(),
         cacheTrace: z
           .object({
             enabled: z.boolean().optional(),
