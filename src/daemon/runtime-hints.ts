@@ -1,4 +1,5 @@
 import { resolveGatewayLogPaths } from "./launchd.js";
+import { toPosixPath } from "./output.js";
 
 export function buildPlatformRuntimeLogHints(params: {
   platform?: NodeJS.Platform;
@@ -11,8 +12,8 @@ export function buildPlatformRuntimeLogHints(params: {
   if (platform === "darwin") {
     const logs = resolveGatewayLogPaths(env);
     return [
-      `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      `Launchd stderr (if installed): ${logs.stderrPath}`,
+      `Launchd stdout (if installed): ${toPosixPath(logs.stdoutPath)}`,
+      `Launchd stderr (if installed): ${toPosixPath(logs.stderrPath)}`,
     ];
   }
   if (platform === "linux") {
