@@ -533,10 +533,10 @@ export function registerExecApprovalsCli(program: Command) {
           minutes,
           grantedBy: "cli",
           force: opts.force,
-        })) as { ok: boolean; agentId?: string; expiresAt?: number; message?: string };
+        })) as { ok: boolean; agentId?: string; expiresAt?: number };
 
-        if (!result?.ok || typeof result.expiresAt !== "number") {
-          exitWithError(result?.message ?? "Failed to grant trust window.");
+        if (typeof result.expiresAt !== "number") {
+          exitWithError("Failed to grant trust window.");
         }
 
         const expiresDate = new Date(result.expiresAt);
@@ -587,12 +587,7 @@ export function registerExecApprovalsCli(program: Command) {
           agentId: agentKey,
           revokedBy: "cli",
           keepAudit,
-        })) as { ok: boolean; agentId?: string; summary?: string; message?: string };
-
-        if (!result?.ok) {
-          defaultRuntime.log(result?.message ?? "No active trust window.");
-          return;
-        }
+        })) as { ok: boolean; agentId?: string; summary?: string };
 
         defaultRuntime.log(`🔒 Trust window revoked for agent "${agentKey}".`);
         defaultRuntime.log(`   Normal approval policy restored.`);
@@ -607,6 +602,11 @@ export function registerExecApprovalsCli(program: Command) {
           defaultRuntime.log(theme.muted("Audit log preserved."));
         }
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("No active trust window")) {
+          defaultRuntime.log(msg);
+          return;
+        }
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
       }

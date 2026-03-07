@@ -264,11 +264,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       keepAudit: p.keepAudit,
     });
     if (!result.ok) {
-      respond(
-        true,
-        { ok: false, agentId: p.agentId?.trim() || "main", message: result.error },
-        undefined,
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
       return;
     }
     if (!p.keepAudit) {

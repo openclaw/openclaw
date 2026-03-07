@@ -179,10 +179,7 @@ describe("exec approvals CLI", () => {
     it("rejects minutes above absolute max", async () => {
       Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 
-      callGatewayFromCli.mockResolvedValueOnce({
-        ok: false,
-        message: `minutes must be between 1 and 480`,
-      } as Record<string, unknown>);
+      callGatewayFromCli.mockRejectedValueOnce(new Error("minutes must be between 1 and 480"));
 
       try {
         await runApprovalsCommand(["approvals", "trust", "--minutes", "600", "--yes"]);
@@ -196,10 +193,9 @@ describe("exec approvals CLI", () => {
     it("rejects minutes above default max without --force", async () => {
       Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 
-      callGatewayFromCli.mockResolvedValueOnce({
-        ok: false,
-        message: "Duration exceeds default cap (60m). Use force to allow up to 480m.",
-      } as Record<string, unknown>);
+      callGatewayFromCli.mockRejectedValueOnce(
+        new Error("Duration exceeds default cap (60m). Use force to allow up to 480m."),
+      );
 
       try {
         await runApprovalsCommand(["approvals", "trust", "--minutes", "120", "--yes"]);
@@ -246,11 +242,9 @@ describe("exec approvals CLI", () => {
 
       const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
       saveExecApprovals.mockClear();
-      callGatewayFromCli.mockResolvedValueOnce({
-        ok: false,
-        agentId: "main",
-        message: 'No active trust window for agent "main"',
-      });
+      callGatewayFromCli.mockRejectedValueOnce(
+        new Error('No active trust window for agent "main"'),
+      );
 
       await runApprovalsCommand(["approvals", "untrust"]);
 

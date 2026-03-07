@@ -108,7 +108,7 @@ class DiscordTrustCommand extends Command {
   options: CommandOptions = [
     {
       name: "minutes",
-      description: "Duration in minutes (default: 60, max: 480)",
+      description: `Duration in minutes (default: ${DEFAULT_MAX_TRUST_MINUTES}, max: ${DEFAULT_MAX_TRUST_MINUTES} via Discord)`,
       type: ApplicationCommandOptionType.Number,
       required: false,
     },
@@ -224,18 +224,7 @@ class DiscordUntrustCommand extends Command {
         agentId,
         keepAudit,
         revokedBy: `discord:${interaction.user?.id ?? "unknown"}`,
-      })) as { ok: boolean; agentId: string; summary?: string; message?: string };
-
-      if (!result?.ok) {
-        await interaction.reply({
-          content:
-            result?.message === "No active trust window"
-              ? `ℹ️ No active trust window for agent "${agentId}".`
-              : `❌ Failed to revoke trust: ${result?.message ?? "unknown error"}`,
-          ephemeral: true,
-        });
-        return;
-      }
+      })) as { ok: boolean; agentId: string; summary?: string };
 
       const summaryBlock = result.summary ? `\n\`\`\`\n${result.summary}\n\`\`\`` : "";
       const auditNote = keepAudit ? "\n📁 Audit log preserved." : "";
@@ -245,9 +234,13 @@ class DiscordUntrustCommand extends Command {
         ephemeral: true,
       });
     } catch (err) {
-      logError(`discord untrust command: ${String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      const isNoWindow = msg.includes("No active trust window");
+      logError(`discord untrust command: ${msg}`);
       await interaction.reply({
-        content: `❌ Failed to revoke trust: ${err instanceof Error ? err.message : String(err)}`,
+        content: isNoWindow
+          ? `ℹ️ No active trust window for agent "${agentId}".`
+          : `❌ Failed to revoke trust: ${msg}`,
         ephemeral: true,
       });
     }

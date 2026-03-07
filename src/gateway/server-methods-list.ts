@@ -27,6 +27,7 @@ const BASE_METHODS = [
   "exec.approvals.node.get",
   "exec.approvals.node.set",
   "exec.approvals.trust",
+  "exec.approvals.trust.status",
   "exec.approvals.untrust",
   "exec.approval.request",
   "exec.approval.waitDecision",
