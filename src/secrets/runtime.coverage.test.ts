@@ -78,6 +78,12 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       "webhook",
     );
   }
+  if (
+    entry.id === "agents.defaults.sandbox.docker.env.*" ||
+    entry.id === "agents.list[].sandbox.docker.env.*"
+  ) {
+    setPathCreateStrict(config, ["agents", "defaults", "sandbox", "mode"], "non-main");
+  }
   if (entry.id === "tools.web.search.gemini.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
   }

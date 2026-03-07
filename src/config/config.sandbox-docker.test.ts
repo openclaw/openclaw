@@ -163,6 +163,75 @@ describe("sandbox docker config", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts SecretRef object as env value", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                API_KEY: { source: "env", provider: "default", id: "MY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.env?.API_KEY).toEqual({
+        source: "env",
+        provider: "default",
+        id: "MY_API_KEY",
+      });
+    }
+  });
+
+  it("accepts mixed string and SecretRef env values", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                PLAIN: "plain-value",
+                SECRET: { source: "env", provider: "default", id: "SECRET_ENV_VAR" },
+                TEMPLATE: "${MY_SECRET}",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const env = res.config.agents?.defaults?.sandbox?.docker?.env;
+      expect(env?.PLAIN).toBe("plain-value");
+      expect(env?.SECRET).toEqual({
+        source: "env",
+        provider: "default",
+        id: "SECRET_ENV_VAR",
+      });
+      expect(env?.TEMPLATE).toBe("${MY_SECRET}");
+    }
+  });
+
+  it("filters out unresolved SecretRef objects in sandbox env at resolve time", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        env: {
+          PLAIN: "plain-value",
+          API_KEY: { source: "env", provider: "default", id: "MY_KEY" },
+        },
+      },
+    });
+    // Non-string values are filtered (not thrown) because this function is also
+    // called from read-only audit/status paths on unresolved config.
+    expect(resolved.env).toEqual({ PLAIN: "plain-value" });
+    expect(resolved.env!.API_KEY).toBeUndefined();
+  });
+
   it("rejects non-string values in binds array", () => {
     const res = validateConfigObject({
       agents: {

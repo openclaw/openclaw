@@ -1912,6 +1912,435 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("resolves SecretRef in agents.defaults.sandbox.docker.env", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                API_KEY: { source: "env", provider: "default", id: "SANDBOX_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SANDBOX_API_KEY: "sk-sandbox-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env?.API_KEY).toBe(
+      "sk-sandbox-resolved",
+    );
+  });
+
+  it("resolves SecretRef in agents.list[].sandbox.docker.env", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            sandbox: {
+              docker: {
+                env: {
+                  DB_PASSWORD: { source: "env", provider: "default", id: "WORKER_DB_PASSWORD" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { WORKER_DB_PASSWORD: "db-secret-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      (snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env as Record<string, unknown>)
+        ?.DB_PASSWORD,
+    ).toBe("db-secret-resolved");
+  });
+
+  it("treats sandbox.docker.env refs as inactive on disabled agents", async () => {
+    const config = asConfig({
+      agents: {
+        list: [
+          {
+            id: "disabled-agent",
+            enabled: false,
+            sandbox: {
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_DISABLED_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    // Should not throw for the missing env var — agent is disabled
+    expect(
+      (snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env as Record<string, unknown>)?.SECRET,
+    ).toEqual({ source: "env", provider: "default", id: "MISSING_DISABLED_SECRET" });
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats sandbox.docker.env refs as inactive on shared-scope agents", async () => {
+    const config = asConfig({
+      agents: {
+        list: [
+          {
+            id: "shared-agent",
+            sandbox: {
+              scope: "shared",
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_SHARED_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    // Should not throw — scope is shared, agent-level docker env is ignored
+    expect(
+      (snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env as Record<string, unknown>)?.SECRET,
+    ).toEqual({ source: "env", provider: "default", id: "MISSING_SHARED_SECRET" });
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats sandbox.docker.env refs as inactive when defaults scope is shared", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            scope: "shared",
+          },
+        },
+        list: [
+          {
+            id: "inherits-shared",
+            sandbox: {
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_INHERITED_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats sandbox.docker.env refs as inactive when sandbox mode is off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: {
+              env: {
+                SECRET: { source: "env", provider: "default", id: "MISSING_MODE_OFF_SECRET" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.defaults.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats per-agent sandbox.docker.env refs as inactive when agent mode is off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+          },
+        },
+        list: [
+          {
+            id: "off-agent",
+            sandbox: {
+              mode: "off",
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_AGENT_OFF_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats defaults env refs as inactive when all agents override mode to off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                SECRET: { source: "env", provider: "default", id: "MISSING_ALL_OFF_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          { id: "agent-a", sandbox: { mode: "off" } },
+          { id: "agent-b", sandbox: { mode: "off" } },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.defaults.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("keeps defaults env refs active when agent overrides mode to non-off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: {
+              env: {
+                SHARED_KEY: { source: "env", provider: "default", id: "SHARED_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "sandboxed-agent",
+            sandbox: {
+              mode: "non-main",
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SHARED_SECRET: "resolved-value" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    expect(env?.SHARED_KEY).toBe("resolved-value");
+  });
+
+  it("resolves defaults sandbox.docker.env refs even when agents define their own env", async () => {
+    // Sandbox env is merged key-by-key (global + agent), not replaced wholesale.
+    // Defaults refs must stay active even when agents have their own env maps,
+    // because agents may not override every key from defaults.
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                SHARED_KEY: { source: "env", provider: "default", id: "SHARED_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "agent-with-own-env",
+            sandbox: {
+              docker: {
+                env: {
+                  AGENT_ONLY: "agent-value",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SHARED_SECRET: "shared-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    expect(env?.SHARED_KEY).toBe("shared-resolved");
+  });
+
+  it("treats defaults env key as inactive when all active agents override it", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                OVERRIDDEN: { source: "env", provider: "default", id: "MISSING_OVERRIDDEN" },
+                NOT_OVERRIDDEN: { source: "env", provider: "default", id: "NOT_OVERRIDDEN_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "agent-a",
+            sandbox: {
+              docker: {
+                env: { OVERRIDDEN: "agent-a-value" },
+              },
+            },
+          },
+          {
+            id: "agent-b",
+            sandbox: {
+              docker: {
+                env: { OVERRIDDEN: "agent-b-value" },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { NOT_OVERRIDDEN_SECRET: "resolved-not-overridden" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    // OVERRIDDEN is shadowed by all agents — should be inactive (unresolved ref stays).
+    expect(env?.OVERRIDDEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_OVERRIDDEN",
+    });
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.defaults.sandbox.docker.env.OVERRIDDEN",
+    );
+    // NOT_OVERRIDDEN is consumed by both agents — should resolve.
+    expect(env?.NOT_OVERRIDDEN).toBe("resolved-not-overridden");
+  });
+
+  it("resolves mixed plain string and SecretRef values in sandbox.docker.env", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                PLAIN_VAR: "hello-world",
+                SECRET_VAR: { source: "env", provider: "default", id: "SANDBOX_SECRET_VAR" },
+                LANG: "C.UTF-8",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SANDBOX_SECRET_VAR: "secret-resolved" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    expect(env?.PLAIN_VAR).toBe("hello-world");
+    expect(env?.SECRET_VAR).toBe("secret-resolved");
+    expect(env?.LANG).toBe("C.UTF-8");
+  });
+
   it("does not write inherited auth stores during runtime secret activation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-runtime-"));
     const stateDir = path.join(root, ".openclaw");
