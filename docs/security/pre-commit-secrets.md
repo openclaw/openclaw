@@ -34,8 +34,11 @@ set -euo pipefail
 
 echo "[pre-commit] Scanning staged files for secrets..."
 
-# List staged files (added, copied, modified)
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+# List staged files (added, copied, modified, renamed)
+# -z uses NUL delimiters to handle filenames with spaces or newlines safely.
+# ACMR includes Renames — without R, renamed files that gained new secrets
+# would be silently skipped and the commit would pass.
+STAGED_FILES=$(git diff --cached --name-only -z --diff-filter=ACMR)
 
 if [ -z "$STAGED_FILES" ]; then
   echo "[pre-commit] ✅ No staged files to scan."
@@ -46,14 +49,19 @@ fi
 TH_TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TH_TMPDIR"' EXIT
 
-# Extract staged versions of each file into the temp directory
-while IFS= read -r file; do
+# Extract staged versions of each file into the temp directory.
+# read -d '' consumes NUL-delimited output from git diff -z, so filenames
+# with spaces, tabs, or newlines are handled correctly.
+while IFS= read -r -d '' file; do
   mkdir -p "$TH_TMPDIR/$(dirname "$file")"
   git show ":$file" > "$TH_TMPDIR/$file" 2>/dev/null || true
 done <<< "$STAGED_FILES"
 
-# Scan staged content — output is shown so users can see what triggered the block
-if ! trufflehog filesystem "$TH_TMPDIR" --only-verified --fail; then
+# Scan staged content — output is shown so users can see what triggered the block.
+# NOTE: --only-verified is intentionally omitted. With that flag, TruffleHog
+# silently skips secrets it cannot verify via outbound API (SSH keys, DB passwords,
+# internal tokens). Omitting it reports all detected secrets so nothing slips through.
+if ! trufflehog filesystem "$TH_TMPDIR" --fail; then
   echo ""
   echo "🚨 SECRETS DETECTED in staged files! Commit blocked."
   echo "Remove the secrets shown above before committing."
@@ -73,11 +81,11 @@ chmod +x .git/hooks/pre-commit
 
 ## How It Works
 
-1. Lists all staged files (`git diff --cached --name-only`)
+1. Lists all staged files (`git diff --cached --name-only -z --diff-filter=ACMR`) — NUL-delimited to handle special characters in filenames; includes renamed files (`R`) so secrets in renames are not missed
 2. Extracts staged file content (`git show :filename`) into a temp directory
-3. Runs TruffleHog `filesystem` scan on the staged snapshot
+3. Runs TruffleHog `filesystem` scan on the staged snapshot — without `--only-verified` so SSH keys, database passwords, and internal tokens are not silently skipped
 4. Prints findings so you can identify and remove the secret
-5. Blocks the commit if verified secrets are found
+5. Blocks the commit if any secrets are found
 6. Temp directory is cleaned up automatically
 
 This approach correctly scans **staged (uncommitted) content** — not just git history.
