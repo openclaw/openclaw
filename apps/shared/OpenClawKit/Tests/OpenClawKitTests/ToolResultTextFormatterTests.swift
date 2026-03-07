@@ -65,4 +65,17 @@ struct ToolResultTextFormatterTests {
         let result = ToolResultTextFormatter.format(text: json, toolName: "bash")
         #expect(result == "test output\nsecond line")
     }
+
+    @Test func prefersStdoutWhenStdoutAndStderrAreBothPresent() {
+        let json = """
+        {
+          "stdout": "primary output",
+          "stderr": "warning output",
+          "exitCode": 0
+        }
+        """
+
+        let result = ToolResultTextFormatter.format(text: json, toolName: "bash")
+        #expect(result == "primary output")
+    }
 }
