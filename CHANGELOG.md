@@ -267,6 +267,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction counter accuracy: count successful overflow-triggered auto-compactions (`willRetry=true`) in the compaction counter while still excluding aborted/no-result events, so `/status` reflects actual safeguard compaction activity. (#39123) Thanks @MumuTW.
 - Gateway/chat delta ordering: flush buffered assistant deltas before emitting tool `start` events so pre-tool text is delivered to Control UI before tool cards, avoiding transient text/tool ordering artifacts in streaming. (#39128) Thanks @0xtangping.
 - Voice-call plugin schema parity: add missing manifest `configSchema` fields (`webhookSecurity`, `streaming.preStartTimeoutMs|maxPendingConnections|maxPendingConnectionsPerIp|maxConnections`, `staleCallReaperSeconds`) so gateway AJV validation accepts already-supported runtime config instead of failing with `additionalProperties` errors. (#38892) Thanks @giumex.
+- Agents/OpenAI WS reconnect retry accounting: avoid double retry scheduling when reconnect failures emit both `error` and `close`, so retry budgets track actual reconnect attempts instead of exhausting early. (#39133) Thanks @scoootscooob.
 
 ## 2026.3.2
 
