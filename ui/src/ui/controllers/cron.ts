@@ -449,6 +449,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
+    // falls back to agentTurn for legacy/incomplete jobs with undefined payload
     payloadKind: job.payload?.kind ?? "agentTurn",
     payloadText:
       job.payload?.kind === "systemEvent"
