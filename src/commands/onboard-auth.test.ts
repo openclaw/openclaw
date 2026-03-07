@@ -476,7 +476,7 @@ describe("applyMinimaxApiConfig", () => {
         providers: {
           anthropic: {
             baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key",
+            apiKey: "anthropic-key", // pragma: allowlist secret
             api: "anthropic-messages",
             models: [
               {

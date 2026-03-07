@@ -190,7 +190,7 @@ function createTelegramSecretRawConfig() {
   return {
     channels: {
       telegram: {
-        token: { $secret: "vault://telegram/token" },
+        token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
       },
     },
   };
