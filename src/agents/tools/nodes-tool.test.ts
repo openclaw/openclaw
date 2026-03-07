@@ -1,18 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(),
-  readGatewayCallOptions: vi.fn(() => ({})),
+  callGatewayTool:
+    vi.fn<
+      (
+        method: string,
+        opts: unknown,
+        params?: unknown,
+        extra?: unknown,
+      ) => Promise<{ payload?: unknown }>
+    >(),
+  readGatewayCallOptions: vi.fn<(params: Record<string, unknown>) => Record<string, unknown>>(
+    () => ({}),
+  ),
 }));
 
 const nodeUtilsMocks = vi.hoisted(() => ({
-  resolveNodeId: vi.fn(async () => "node-1"),
-  listNodes: vi.fn(async () => []),
-  resolveNodeIdFromList: vi.fn(() => "node-1"),
+  resolveNodeId: vi.fn<(opts: unknown, query?: string, allowDefault?: boolean) => Promise<string>>(
+    async () => "node-1",
+  ),
+  listNodes: vi.fn<(opts: unknown) => Promise<unknown[]>>(async () => []),
+  resolveNodeIdFromList: vi.fn<(nodes: unknown, query?: string, allowDefault?: boolean) => string>(
+    () => "node-1",
+  ),
 }));
 
 const screenMocks = vi.hoisted(() => ({
-  parseScreenRecordPayload: vi.fn(() => ({
+  parseScreenRecordPayload: vi.fn<(value: unknown) => Record<string, unknown>>(() => ({
     base64: "ZmFrZQ==",
     format: "mp4",
     durationMs: 300_000,
@@ -20,8 +34,10 @@ const screenMocks = vi.hoisted(() => ({
     screenIndex: 0,
     hasAudio: true,
   })),
-  screenRecordTempPath: vi.fn(() => "/tmp/screen-record.mp4"),
-  writeScreenRecordToFile: vi.fn(async () => ({ path: "/tmp/screen-record.mp4" })),
+  screenRecordTempPath: vi.fn<(opts: unknown) => string>(() => "/tmp/screen-record.mp4"),
+  writeScreenRecordToFile: vi.fn<(filePath: string, base64: string) => Promise<{ path: string }>>(
+    async () => ({ path: "/tmp/screen-record.mp4" }),
+  ),
 }));
 
 vi.mock("./gateway.js", () => ({

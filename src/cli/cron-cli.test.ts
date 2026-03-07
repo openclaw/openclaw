@@ -3,25 +3,31 @@ import { describe, expect, it, vi } from "vitest";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
 
+type CallGatewayFromCliMock = (
+  method: string,
+  _opts: unknown,
+  params?: unknown,
+  extra?: unknown,
+) => Promise<unknown>;
+
 const defaultGatewayMock = async (
   method: string,
   _opts: unknown,
   params?: unknown,
-  _timeoutMs?: number,
-) => {
+): Promise<unknown> => {
   if (method === "cron.status") {
     return { enabled: true };
   }
   return { ok: true, params };
 };
-const callGatewayFromCli = vi.fn(defaultGatewayMock);
+const callGatewayFromCli = vi.fn<CallGatewayFromCliMock>(defaultGatewayMock);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra as number | undefined),
+      callGatewayFromCli(method, opts, params, extra),
   };
 });
 
