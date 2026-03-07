@@ -7,16 +7,39 @@
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { spawn } from "child_process";
-import {
-  connect,
-  disconnect,
-  pollInbox,
-  resetPollingState,
-  moveToTrash,
-  deleteEmails,
-  getProcessedEmailUids,
-} from "./poll_inbox.js";
 import { pollAgentMailInbox, healthCheckAgentMail } from "./agentmail-polling.js";
+
+// IMAP modules are optional - lazy loaded only when needed
+let imapModules: any = null;
+
+async function ensureImapModules() {
+  if (imapModules) return imapModules;
+
+  try {
+    imapModules = await import("./poll_inbox.js");
+    return imapModules;
+  } catch (error) {
+    logger.error(
+      "Could not load IMAP modules (imap-simple not installed). Use AgentMail by setting AGENTMAIL_API_KEY instead.",
+      { error: String(error) }
+    );
+    throw new Error(
+      "IMAP unavailable and AgentMail not configured. Set AGENTMAIL_API_KEY or install imap-simple."
+    );
+  }
+}
+
+// Wrapper functions for lazy IMAP loading
+const connect = async (cfg: any) => (await ensureImapModules()).connect(cfg);
+const disconnect = async () => {
+  if (!imapModules) return;
+  return (await ensureImapModules()).disconnect();
+};
+const pollInbox = async (cfg: any) => (await ensureImapModules()).pollInbox(cfg);
+const resetPollingState = async () => (await ensureImapModules()).resetPollingState();
+const moveToTrash = async (u: any) => (await ensureImapModules()).moveToTrash(u);
+const deleteEmails = async (u: any) => (await ensureImapModules()).deleteEmails(u);
+const getProcessedEmailUids = async () => (await ensureImapModules()).getProcessedEmailUids();
 import { classifyMessage, classifyForInbox, getInboxCategoryName, type InboxCategory, type InboxClassification, type InboxAction } from "./classify_message.js";
 import {
   initializeCommands,
