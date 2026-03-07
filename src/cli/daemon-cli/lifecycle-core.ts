@@ -111,7 +111,11 @@ async function resolveServiceLoadedOrFail(params: {
 /**
  * Best-effort config validation. Returns a string describing the issues if
  * config exists and is invalid, or null if config is valid/missing/unreadable.
- * (#35862)
+ *
+ * Note: This reads the config file snapshot in the current CLI environment.
+ * Configs using env vars only available in the service context (launchd/systemd)
+ * may produce false positives, but the check is intentionally best-effort —
+ * a false positive here is safer than a crash on startup. (#35862)
  */
 async function getConfigValidationError(): Promise<string | null> {
   try {
@@ -214,7 +218,7 @@ export async function runServiceStart(params: {
       fail(
         `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
       );
-      return false;
+      return;
     }
   }
 
