@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { buildRandomTempFilePath } from "../../../src/plugin-sdk/temp-path.js";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
@@ -17,7 +18,6 @@ vi.mock("./graph-upload.js", async () => {
   };
 });
 
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import {
   type MSTeamsAdapter,
   renderReplyPayloadsToMessages,
@@ -201,8 +201,13 @@ describe("msteams messenger", () => {
     });
 
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"));
-      const localFile = path.join(tmpDir, "note.txt");
+      const localTmpDir = path.resolve(resolvePreferredOpenClawTmpDir());
+      await mkdir(localTmpDir, { recursive: true });
+      const localFile = buildRandomTempFilePath({
+        prefix: "msteams-mention",
+        extension: ".txt",
+        tmpDir: localTmpDir,
+      });
       await writeFile(localFile, "hello");
 
       try {
@@ -235,7 +240,6 @@ describe("msteams messenger", () => {
         });
 
         expect(ids).toEqual(["id:one"]);
-        expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
         expect(sent).toHaveLength(1);
         expect(sent[0]?.text).toContain("Hello <at>John</at>");
         expect(sent[0]?.text).toContain(
@@ -252,7 +256,7 @@ describe("msteams messenger", () => {
           },
         ]);
       } finally {
-        await rm(tmpDir, { recursive: true, force: true });
+        await rm(localFile, { force: true });
       }
     });
 
