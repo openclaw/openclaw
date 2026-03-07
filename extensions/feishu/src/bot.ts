@@ -1516,15 +1516,22 @@ export async function handleFeishuMessage(params: {
       // Keep DM sessions pinned to Feishu so later replies do not reuse a stale
       // route from another channel that last touched the shared session.
       if (!isGroup && route.sessionKey === route.mainSessionKey) {
-        core.channel.session.updateLastRoute({
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
-          sessionKey: route.mainSessionKey,
-          channel: "feishu",
-          to: feishuTo,
-          accountId: route.accountId,
-        }).catch((err: unknown) => {
-          log(`feishu[${account.accountId}]: updateLastRoute failed: ${String(err)}`);
         });
+        core.channel.session
+          .updateLastRoute({
+            storePath,
+            sessionKey: route.mainSessionKey,
+            deliveryContext: {
+              channel: "feishu",
+              to: feishuTo,
+              accountId: route.accountId,
+            },
+          })
+          .catch((err: unknown) => {
+            log(`feishu[${account.accountId}]: updateLastRoute failed: ${String(err)}`);
+          });
       }
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);

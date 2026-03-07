@@ -18,6 +18,8 @@ const {
   mockDownloadMessageResourceFeishu,
   mockCreateFeishuClient,
   mockResolveAgentRoute,
+  mockResolveStorePath,
+  mockUpdateLastRoute,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -40,6 +42,8 @@ const {
     mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
+  mockResolveStorePath: vi.fn(() => "/tmp/openclaw-feishu-session-store.json"),
+  mockUpdateLastRoute: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -139,6 +143,8 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveStorePath.mockReturnValue("/tmp/openclaw-feishu-session-store.json");
+    mockUpdateLastRoute.mockResolvedValue(undefined);
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
@@ -189,6 +195,10 @@ describe("handleFeishuMessage command authorization", () => {
             readAllowFromStore: mockReadAllowFromStore,
             upsertPairingRequest: mockUpsertPairingRequest,
             buildPairingReply: mockBuildPairingReply,
+          },
+          session: {
+            resolveStorePath: mockResolveStorePath,
+            updateLastRoute: mockUpdateLastRoute,
           },
         },
         media: {
@@ -1704,6 +1714,53 @@ describe("handleFeishuMessage command authorization", () => {
         threadReply: true,
       }),
     );
+  });
+
+  it("pins main-session lastRoute to Feishu for direct messages", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-last-route" } },
+      message: {
+        message_id: "msg-dm-last-route",
+        chat_id: "oc-dm-last-route",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveStorePath).toHaveBeenCalledWith(cfg.session?.store, {
+      agentId: "main",
+    });
+    expect(mockUpdateLastRoute).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "feishu",
+        to: "user:ou-dm-last-route",
+        accountId: "default",
+      },
+    });
   });
 
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
