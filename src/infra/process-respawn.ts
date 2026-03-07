@@ -47,6 +47,14 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     return { mode: "supervised" };
   }
 
+  // Windows has no native process supervisor equivalent to launchd/systemd.
+  // Spawning a detached child leaves it orphaned and unmanaged — if the child
+  // dies (e.g. under a Scheduled Task), the gateway stays down permanently.
+  // Fall back to in-process restart so the original process stays alive.
+  if (process.platform === "win32") {
+    return { mode: "disabled", detail: "win32: no process supervisor" };
+  }
+
   try {
     const args = [...process.execArgv, ...process.argv.slice(1)];
     const child = spawn(process.execPath, args, {

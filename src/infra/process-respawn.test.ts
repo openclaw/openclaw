@@ -148,6 +148,18 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("returns disabled on Windows to avoid orphaned detached spawn", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("win32");
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("disabled");
+    expect(result.detail).toContain("win32");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("returns failed when spawn throws", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
