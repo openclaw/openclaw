@@ -440,4 +440,40 @@ describe("resolveProviderAuths key normalization", () => {
       },
     );
   });
+
+  it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {
+    await withSuiteHome(
+      async (home) => {
+        const modelDef = {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1024,
+          maxTokens: 256,
+        };
+        await writeConfig(home, {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com",
+                models: [modelDef],
+                apiKey: "AKIAIOSFODNN7EXAMPLE",
+              },
+            },
+          },
+        });
+
+        const auths = await resolveProviderAuths({
+          providers: ["minimax"],
+        });
+        expect(auths).toEqual([{ provider: "minimax", token: "AKIAIOSFODNN7EXAMPLE" }]);
+      },
+      {
+        MINIMAX_API_KEY: undefined,
+        MINIMAX_CODE_PLAN_KEY: undefined,
+      },
+    );
+  });
 });

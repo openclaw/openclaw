@@ -12,6 +12,44 @@ const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_PROFILE",
 ]);
 
+const KNOWN_ENV_API_KEY_MARKERS = new Set([
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GROQ_API_KEY",
+  "MISTRAL_API_KEY",
+  "OPENROUTER_API_KEY",
+  "XAI_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "TOGETHER_API_KEY",
+  "FIREWORKS_API_KEY",
+  "NOVITA_API_KEY",
+  "CEREBRAS_API_KEY",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_API_KEY",
+  "CHUTES_API_KEY",
+  "CHUTES_OAUTH_TOKEN",
+  "MINIMAX_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "QWEN_PORTAL_API_KEY",
+  "QWEN_OAUTH_TOKEN",
+  "VOLCANO_ENGINE_API_KEY",
+  "OPENCODE_API_KEY",
+  "OPENCODE_ZEN_API_KEY",
+  "ZAI_API_KEY",
+  "Z_AI_API_KEY",
+  "AI_GATEWAY_API_KEY",
+  "SYNTHETIC_API_KEY",
+  "KILOCODE_API_KEY",
+  "COPILOT_GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  ...AWS_SDK_ENV_MARKERS,
+]);
+
 export function isEnvVarNameMarker(value: string): boolean {
   return /^[A-Z][A-Z0-9_]*$/.test(value.trim());
 }
@@ -56,5 +94,10 @@ export function isNonSecretApiKeyMarker(
   if (isKnownMarker) {
     return true;
   }
-  return opts?.includeEnvVarName === false ? false : isEnvVarNameMarker(trimmed);
+  if (opts?.includeEnvVarName === false) {
+    return false;
+  }
+  // Do not treat arbitrary ALL_CAPS values as markers; only recognize the
+  // known env-var markers we intentionally persist for compatibility.
+  return KNOWN_ENV_API_KEY_MARKERS.has(trimmed);
 }

@@ -373,6 +373,30 @@ describe("secrets audit", () => {
     ).toBe(false);
   });
 
+  it("flags arbitrary all-caps models.json apiKey values as plaintext", async () => {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "AKIAIOSFODNN7EXAMPLE",
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.modelsPath &&
+          entry.jsonPath === "providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeJsonFile(fixture.modelsPath, {
       providers: {

@@ -188,4 +188,60 @@ describe("buildProbeTargets reason codes", () => {
       }
     }
   });
+
+  it("does not treat arbitrary all-caps models.json apiKey values as markers", async () => {
+    const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+    const previousAnthropicOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_OAUTH_TOKEN;
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    try {
+      const plan = await buildProbeTargets({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com/v1",
+                api: "anthropic-messages",
+                apiKey: "AKIAIOSFODNN7EXAMPLE",
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        providers: ["anthropic"],
+        modelCandidates: ["anthropic/claude-sonnet-4-6"],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      });
+
+      expect(plan.results).toEqual([]);
+      expect(plan.targets).toHaveLength(1);
+      expect(plan.targets[0]).toEqual(
+        expect.objectContaining({
+          provider: "anthropic",
+          source: "models.json",
+          label: "models.json",
+        }),
+      );
+    } finally {
+      if (previousAnthropic === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = previousAnthropic;
+      }
+      if (previousAnthropicOauth === undefined) {
+        delete process.env.ANTHROPIC_OAUTH_TOKEN;
+      } else {
+        process.env.ANTHROPIC_OAUTH_TOKEN = previousAnthropicOauth;
+      }
+    }
+  });
 });

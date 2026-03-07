@@ -242,8 +242,8 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
   });
   const pending = prior.then(() => gate);
   MODELS_JSON_WRITE_LOCKS.set(targetPath, pending);
-  await prior;
   try {
+    await prior;
     return await run();
   } finally {
     release();
