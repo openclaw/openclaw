@@ -42,6 +42,16 @@ export type GroupHistoryMessage = {
   sender: string;
   body: string;
   timestamp?: number;
+  /** Local file paths of images attached to this message. */
+  imagePaths?: string[];
+  /** Unique message ID within the group. */
+  messageId?: string;
+  /** ID of the message this is replying to. */
+  replyToId?: string;
+  /** Body of the replied-to message (for context when the original is not in recent history). */
+  replyToBody?: string;
+  /** Sender of the replied-to message. */
+  replyToSender?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -169,15 +179,17 @@ const DEFAULT_ENGAGED_TIMEOUT_S = 300;
 
 const DEFAULT_PEEKING_PROMPT = `You are a group chat participation advisor for an AI assistant named {botName}.
 
-You are monitoring a group chat. The assistant is currently SILENT (just observing). Your job is to decide whether the assistant should JOIN the conversation.
+You are monitoring a group chat. The assistant is currently SILENT (just observing). Your job is to decide whether the assistant should JOIN the conversation. Think like a real person lurking in a group chat — sometimes you just can't resist chiming in.
 
 **Decision Guidelines:**
-1. If the group is having an open, divergent discussion on an interesting topic (not directed at any specific person), consider joining
-2. If a few people are having a focused private-ish discussion, do NOT interrupt — UNLESS they hit a disagreement or a question where you could genuinely help, and the topic is interesting enough to warrant it
-3. If you lack sufficient context to fully understand what they are talking about, do NOT join. Only join when you are confident you understand the full picture from the available messages
+1. If the group is having an open, divergent discussion on a fun or interesting topic, consider joining — you don't need to be an expert, a lighthearted comment, reaction, or even a sticker is fine
+2. If a few people are having a focused private-ish discussion, do NOT interrupt — UNLESS they hit a disagreement or a question where you could genuinely help
+3. If the conversation topic is something you truly know nothing about (e.g. references to private events you have zero context for), skip it. But if you can understand the gist from the messages, that's enough to join
 4. If someone seems annoyed by the assistant, lean towards NO
-5. Casual greetings, memes, stickers, and brief acknowledgments are usually NOT worth joining for
-6. If someone is asking a follow-up or the topic is unresolved and relevant to you, lean towards YES
+5. Pure noise (single-word reactions, "ok", "lol") is NOT worth joining for — but a fun or casual topic that people are actually discussing IS worth it
+6. Be a natural group member: occasionally drop a comment on interesting topics like news, animals, tech, culture, food, etc. Don't be a wallflower that only speaks when spoken to
+7. If someone is asking a question or the topic is unresolved, lean towards YES
+8. When someone shares an image: ignore random/unrelated images (e.g. anime pics with no context), but if it's a funny meme or a picture that sparks discussion, consider joining even without prior context
 
 **Output format:**
 Respond with a JSON object (no markdown fencing):
@@ -207,6 +219,8 @@ export type ContextualActivationResult = {
   shouldProcess: boolean;
   engagementChanged?: boolean;
   error?: string;
+  /** The decision model's reason — can be forwarded to the main agent as a hint. */
+  reason?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -253,17 +267,104 @@ function resolveBaseUrl(cfg: OpenClawConfig, provider: string): string | undefin
 // Message formatting — with message IDs like MaiBot (m001, m002...)
 // ---------------------------------------------------------------------------
 
-function formatMessagesForDecision(messages: GroupHistoryMessage[], limit: number): string {
+/** Maximum depth for recursive reply chain resolution. */
+const MAX_REPLY_CHAIN_DEPTH = 5;
+
+function formatMessagesForDecision(
+  messages: GroupHistoryMessage[],
+  limit: number,
+  allMessages?: GroupHistoryMessage[],
+): string {
   const recent = messages.slice(-limit);
   if (recent.length === 0) {
     return "(no recent messages)";
   }
+
+  // Build a lookup from messageId → display ID for messages in the visible window
+  const msgIdToDisplayId = new Map<string, string>();
+  recent.forEach((m, i) => {
+    const displayId = `m${String(i + 1).padStart(3, "0")}`;
+    if (m.messageId) {
+      msgIdToDisplayId.set(m.messageId, displayId);
+    }
+  });
+
+  // Build a lookup from messageId → message for the full history (for chain resolution)
+  const allById = new Map<string, GroupHistoryMessage>();
+  if (allMessages) {
+    for (const m of allMessages) {
+      if (m.messageId) {
+        allById.set(m.messageId, m);
+      }
+    }
+  }
+
+  /**
+   * Resolve the reply chain for a message whose replyToId is NOT in the visible window.
+   * Returns a string like: `sender: "body" → sender2: "body2" → m003`
+   * Stops when hitting a message in the visible window, running out of data, or reaching max depth.
+   */
+  function resolveOutOfRangeChain(
+    replyToId: string,
+    replyToSender?: string,
+    replyToBody?: string,
+  ): string {
+    const parts: string[] = [];
+    let currentId: string | undefined = replyToId;
+    let currentSender = replyToSender;
+    let currentBody = replyToBody;
+
+    for (let depth = 0; depth < MAX_REPLY_CHAIN_DEPTH; depth++) {
+      // If the current target is in the visible window, end the chain with its display ID
+      if (currentId) {
+        const displayId = msgIdToDisplayId.get(currentId);
+        if (displayId) {
+          parts.push(displayId);
+          break;
+        }
+      }
+
+      // Inline the content
+      const sender = currentSender ?? "someone";
+      const body = currentBody ?? "…";
+      parts.push(`${sender}: "${body}"`);
+
+      // Try to follow the chain deeper via the full history
+      if (!currentId) {
+        break;
+      }
+      const parent = allById.get(currentId);
+      if (!parent?.replyToId) {
+        break;
+      }
+
+      currentId = parent.replyToId;
+      currentSender = parent.replyToSender;
+      currentBody = parent.replyToBody;
+    }
+
+    return parts.join(" → ");
+  }
+
   return recent
     .map((m, i) => {
       const id = `m${String(i + 1).padStart(3, "0")}`;
       const time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : "";
       const prefix = time ? `[${id}] [${time}]` : `[${id}]`;
-      return `${prefix} ${m.sender}: ${m.body}`;
+
+      let replyHint = "";
+      if (m.replyToId) {
+        const refId = msgIdToDisplayId.get(m.replyToId);
+        if (refId) {
+          replyHint = ` (replying to ${refId})`;
+        } else if (m.replyToSender || m.replyToBody || allById.has(m.replyToId)) {
+          // Referenced message is not in the visible window — resolve the chain
+          const chain = resolveOutOfRangeChain(m.replyToId, m.replyToSender, m.replyToBody);
+          replyHint = ` (replying to ${chain})`;
+        }
+      }
+
+      return `${prefix}${replyHint} ${m.sender}: ${m.body}`;
     })
     .join("\n");
 }
@@ -279,11 +380,50 @@ type ModelCallResult = {
   error?: string;
 };
 
+function buildUserContent(
+  text: string,
+  imagePaths?: string[],
+): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
+  const validImages = (imagePaths ?? []).filter((p) => {
+    try {
+      return fs.existsSync(p) && fs.statSync(p).size < 5 * 1024 * 1024; // skip files > 5MB
+    } catch {
+      return false;
+    }
+  });
+  if (validImages.length === 0) {
+    return text;
+  }
+  const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+    { type: "text", text },
+  ];
+  for (const imgPath of validImages.slice(0, 3)) {
+    try {
+      const buf = fs.readFileSync(imgPath);
+      const ext = path.extname(imgPath).toLowerCase().replace(".", "");
+      const mime =
+        ext === "png"
+          ? "image/png"
+          : ext === "webp"
+            ? "image/webp"
+            : ext === "gif"
+              ? "image/gif"
+              : "image/jpeg";
+      const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
+      parts.push({ type: "image_url", image_url: { url: dataUrl } });
+    } catch {
+      // Skip unreadable images
+    }
+  }
+  return parts;
+}
+
 async function callSingleModel(params: {
   cfg: OpenClawConfig;
   modelRaw: string;
   systemPrompt: string;
   userPrompt: string;
+  imagePaths?: string[];
 }): Promise<ModelCallResult> {
   const start = Date.now();
   const resolved = resolveModelRefFromString({
@@ -332,7 +472,7 @@ async function callSingleModel(params: {
         model: ref.model,
         messages: [
           { role: "system", content: params.systemPrompt },
-          { role: "user", content: params.userPrompt },
+          { role: "user", content: buildUserContent(params.userPrompt, params.imagePaths) },
         ],
         max_tokens: 100,
         temperature: 0.1,
@@ -374,6 +514,7 @@ async function callDecisionModel(params: {
   config: ContextualActivationConfig;
   systemPrompt: string;
   userPrompt: string;
+  imagePaths?: string[];
 }): Promise<ModelCallResult> {
   const models = [params.config.model, ...(params.config.fallbacks ?? [])];
   const errors: string[] = [];
@@ -384,6 +525,7 @@ async function callDecisionModel(params: {
       modelRaw,
       systemPrompt: params.systemPrompt,
       userPrompt: params.userPrompt,
+      imagePaths: params.imagePaths,
     });
     if (!result.error) {
       return result;
@@ -586,7 +728,7 @@ export async function shouldParticipateInGroup(params: {
   }
 
   const allMessages = [...recentMessages, currentMessage];
-  const chatContent = formatMessagesForDecision(allMessages, contextLimit);
+  const chatContent = formatMessagesForDecision(allMessages, contextLimit, allMessages);
   const botLabel = botName ?? "AI Assistant";
   const historyBlock = formatDecisionHistory(groupKey);
 
@@ -608,7 +750,13 @@ export async function shouldParticipateInGroup(params: {
       "Should the assistant continue participating or disengage?",
     ].join("\n");
 
-    const result = await callDecisionModel({ cfg, config, systemPrompt, userPrompt });
+    const result = await callDecisionModel({
+      cfg,
+      config,
+      systemPrompt,
+      userPrompt,
+      imagePaths: currentMessage.imagePaths,
+    });
     if (result.error) {
       logVerbose(
         `[contextual-activation] ${groupKey}: disengage check error: ${result.error} (${result.durationMs}ms)`,
@@ -655,7 +803,7 @@ export async function shouldParticipateInGroup(params: {
       body: currentMessage.body,
     });
     state.lastActivityAt = Date.now();
-    return { shouldProcess: true };
+    return { shouldProcess: true, reason };
   }
 
   // --- PEEKING MODE ---
@@ -715,7 +863,7 @@ export async function shouldParticipateInGroup(params: {
     state.mode = "engaged";
     state.lastActivityAt = Date.now();
     state.consecutiveSkips = 0;
-    return { shouldProcess: true, engagementChanged: true };
+    return { shouldProcess: true, engagementChanged: true, reason };
   }
 
   const reason = parsed.reason || "not relevant";
