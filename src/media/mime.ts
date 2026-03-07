@@ -1,5 +1,5 @@
-import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
+import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 // Map common mimes to preferred file extensions.
@@ -11,6 +11,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/webp": ".webp",
   "image/gif": ".gif",
   "audio/ogg": ".ogg",
+  "audio/opus": ".opus",
   "audio/mpeg": ".mp3",
   "audio/x-m4a": ".m4a",
   "audio/mp4": ".m4a",
