@@ -204,4 +204,25 @@ describe("config schema regressions", () => {
       expect(res.config.auth?.profiles?.["qwen-portal:default"]?.provider).toBe("qwen-portal");
     }
   });
+
+  it("preserves explicit auth profile providers over the profile id prefix", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {},
+      },
+      auth: {
+        profiles: {
+          "google:custom": {
+            provider: "anthropic",
+            mode: "api_key",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.auth?.profiles?.["google:custom"]?.provider).toBe("anthropic");
+    }
+  });
 });
