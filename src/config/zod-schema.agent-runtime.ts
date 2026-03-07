@@ -788,6 +788,16 @@ export const ToolsSchema = z
       .object({
         enabled: z.boolean().optional(),
         allow: z.array(z.string()).optional(),
+        knowledgeTransfer: z
+          .object({
+            enabled: z.boolean().optional(),
+            defaultMode: z.enum(["ask", "auto"]).optional(),
+            defaultExportMode: z.enum(["ask", "auto"]).optional(),
+            defaultImportMode: z.enum(["ask", "auto"]).optional(),
+            approvalTimeoutSeconds: z.number().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

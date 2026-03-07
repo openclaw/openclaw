@@ -75,6 +75,13 @@ Text + native (when enabled):
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
+- `/learn approve <id>` (approve pending knowledge transfer)
+- `/learn deny <id>` (deny pending knowledge transfer)
+- `/learn mode ask|auto [--pair requester,target]` (set catch-all export+import mode for `path=*`; default pair is `*,*`)
+- `/learn rule add <hide|ask|auto> --side export|import --path <glob> [--pair requester,target]` (path-level policy)
+- `/learn rule remove <id> [--pair requester,target]`
+- `/learn rule list [--pair requester,target]`
+- `/learn status [--pair requester,target]` (show effective knowledge transfer mode/defaults)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
@@ -123,6 +130,7 @@ Notes:
 - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
+- `/learn approve|deny|mode|rule add|rule remove` requires an authorized **owner** sender. For gateway clients, `operator.approvals` (or `operator.admin`) is also required.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).

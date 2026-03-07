@@ -14,6 +14,7 @@ Goal: small, hard-to-misuse tool set so agents can list sessions, fetch history,
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
+- `sessions_transfer_knowledge`
 - `sessions_spawn`
 
 ## Key Model
@@ -103,6 +104,79 @@ Behavior:
   - Reply exactly `ANNOUNCE_SKIP` to stay silent.
   - Any other reply is sent to the target channel.
   - Announce step includes the original request + round‑1 reply + latest ping‑pong reply.
+
+## sessions_transfer_knowledge
+
+Request memory transfer from another session/agent with two-sided policy checks.
+
+Parameters:
+
+- `sessionKey` (or `label` + optional `agentId`)
+- `timeoutSeconds?` (optional override for approval wait timeout)
+- `question?` (reserved; accepted for compatibility)
+
+Behavior:
+
+- Resolves the target session using existing session visibility + agent-to-agent policy gates.
+- Scans the target agent workspace memory files (`MEMORY.md`, `memory/**/*.md`).
+- Evaluates each candidate item through both sides:
+  - **export** policy (what source agent allows to expose)
+  - **import** policy (what requester agent allows to accept)
+- Runs approvals per side when the matched policy decision is `ask`.
+- Computes a per-item fingerprint and imports into `memory/transfers/*.md`.
+- Deduplicates using fingerprint markers from existing transfer files:
+  - New items are imported.
+  - Existing fingerprints are counted as `skippedDuplicate`.
+- Returns transfer summary fields including policy/approval counts, `imported`, `skippedDuplicate`, and `transferFile` (when created).
+
+Rule decisions:
+
+- `hide`: blocked (never transferred)
+- `ask`: requires owner approval
+- `auto`: proceeds without prompt
+
+Policy:
+
+- `tools.agentToAgent.knowledgeTransfer.enabled` (default false)
+- `tools.agentToAgent.knowledgeTransfer.defaultMode` (legacy fallback)
+- `tools.agentToAgent.knowledgeTransfer.defaultExportMode`
+- `tools.agentToAgent.knowledgeTransfer.defaultImportMode`
+- `tools.agentToAgent.knowledgeTransfer.approvalTimeoutSeconds`
+- `/learn mode ask|auto [--pair requester,target]` applies catch-all allow mode (`path=*`) for both export+import.
+- `/learn rule add <hide|ask|auto> --side export|import --path <glob> [--pair requester,target]`
+- `/learn rule remove <id> [--pair requester,target]`
+- `/learn rule list [--pair requester,target]`
+- `/learn status [--pair requester,target]`
+
+Manual proof demo:
+
+1. Configure pair rules:
+   - `/learn rule add ask --side export --path MEMORY.md --pair requester,target`
+   - `/learn rule add ask --side import --path MEMORY.md --pair requester,target`
+   - `/learn rule add auto --side export --path memory/public/** --pair requester,target`
+   - `/learn rule add auto --side import --path memory/public/** --pair requester,target`
+   - `/learn rule add hide --side export --path memory/private/** --pair requester,target`
+2. Run transfer:
+   - `sessions_transfer_knowledge(sessionKey="agent:target:main")`
+   - capture export approval id and import approval id from result flow.
+3. Approve both:
+   - `/learn approve <export-id>`
+   - `/learn approve <import-id>`
+   - verify `status=ok`, `imported>0`, `blockedExport/blockedImport` counts.
+4. Verify file evidence:
+   - inspect `memory/transfers/*.md`
+   - confirm facts, modes, and `openclaw-transfer-fingerprint` markers.
+5. Run same transfer again and approve both:
+   - verify dedupe (`imported=0`, `skippedDuplicate>0`).
+6. Deny path:
+   - deny import approval with `/learn deny <import-id>`
+   - verify `status=declined` when no items remain importable.
+7. Auto path:
+   - `/learn mode auto --pair requester,target`
+   - run transfer and verify import succeeds with no approval creation.
+8. Retrieval proof:
+   - run `memory_search` for a transferred fact
+   - verify a hit path under `memory/transfers/...`.
 
 ## Channel Field
 

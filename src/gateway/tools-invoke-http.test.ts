@@ -93,6 +93,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true }),
     },
     {
+      name: "sessions_transfer_knowledge",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true }),
+    },
+    {
       name: "gateway",
       parameters: { type: "object", properties: {} },
       execute: async () => {
@@ -463,6 +468,17 @@ describe("POST /tools/invoke", () => {
 
     const res = await invokeToolAuthed({
       tool: "sessions_send",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("denies sessions_transfer_knowledge via HTTP gateway", async () => {
+    setMainAllowedTools({ allow: ["sessions_transfer_knowledge"] });
+
+    const res = await invokeToolAuthed({
+      tool: "sessions_transfer_knowledge",
       sessionKey: "main",
     });
 

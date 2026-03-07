@@ -189,6 +189,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "learn",
+      nativeName: "learn",
+      description: "Manage knowledge transfer approvals and modes.",
+      textAlias: "/learn",
+      acceptsArgs: true,
+      category: "management",
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",

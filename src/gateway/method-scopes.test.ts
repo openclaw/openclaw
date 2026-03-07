@@ -48,6 +48,12 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.approvals",
     });
+    expect(
+      authorizeOperatorScopesForMethod("knowledge.transfer.approval.resolve", ["operator.write"]),
+    ).toEqual({
+      allowed: false,
+      missingScope: "operator.approvals",
+    });
   });
 
   it("requires admin for unknown methods", () => {
