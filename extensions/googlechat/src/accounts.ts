@@ -76,7 +76,13 @@ function mergeGoogleChatAccountConfig(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return { ...base, ...defaultAccountConfig } as GoogleChatAccountConfig;
   }
-  const { enabled: _ignoredEnabled, ...defaultAccountShared } = defaultAccountConfig;
+  const {
+    enabled: _ignoredEnabled,
+    serviceAccount: _ignoredServiceAccount,
+    serviceAccountRef: _ignoredServiceAccountRef,
+    serviceAccountFile: _ignoredServiceAccountFile,
+    ...defaultAccountShared
+  } = defaultAccountConfig;
   // In multi-account setups, allow accounts.default to provide shared defaults
   // (for example webhook/audience fields) while preserving top-level and account overrides.
   return { ...defaultAccountShared, ...base, ...account } as GoogleChatAccountConfig;

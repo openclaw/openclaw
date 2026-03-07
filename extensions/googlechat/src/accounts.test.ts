@@ -77,4 +77,32 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.config.enabled).toBeUndefined();
     expect(resolved.config.audienceType).toBe("app-url");
   });
+
+  it("does not inherit default-account credentials into named accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            default: {
+              serviceAccountRef: {
+                source: "env",
+                provider: "test",
+                id: "default-sa",
+              },
+              audienceType: "app-url",
+              audience: "https://example.com/googlechat",
+            },
+            andy: {
+              serviceAccountFile: "/tmp/andy-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/andy-sa.json");
+    expect(resolved.config.audienceType).toBe("app-url");
+  });
 });
