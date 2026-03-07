@@ -283,7 +283,8 @@ export async function agentCommand(
       sessionKey: sessionKey ?? opts.sessionKey?.trim(),
       config: cfg,
     });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Allow explicit workspace directory override (for subagents to inherit parent workspace).
+  const workspaceDirRaw = opts.workspaceDir?.trim() ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,

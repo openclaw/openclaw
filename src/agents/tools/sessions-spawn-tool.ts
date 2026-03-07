@@ -17,6 +17,7 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  workspaceDir: Type.Optional(Type.String()),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -36,7 +37,7 @@ export function createSessionsSpawnTool(opts?: {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn a sub-agent in an isolated session (mode="run" one-shot or mode="session" persistent) and route results back to the requester chat/thread.',
+      'Spawn a sub-agent in an isolated session (mode="run" one-shot or mode="session" persistent) and route results back to the requester chat/thread. Subagents automatically inherit the parent workspace directory (AGENTS.md, SOUL.md, etc.) unless workspaceDir is explicitly overridden.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -60,6 +61,7 @@ export function createSessionsSpawnTool(opts?: {
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const workspaceDir = readStringParam(params, "workspaceDir");
 
       const result = await spawnSubagentDirect(
         {
@@ -84,6 +86,7 @@ export function createSessionsSpawnTool(opts?: {
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          workspaceDir,
         },
       );
 

@@ -6,7 +6,7 @@ import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
@@ -45,6 +45,8 @@ export type SpawnSubagentContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   requesterAgentIdOverride?: string;
+  /** Explicit workspace directory for subagent to inherit (optional). */
+  workspaceDir?: string;
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -390,6 +392,11 @@ export async function spawnSubagentDirect(
     .filter((line): line is string => Boolean(line))
     .join("\n\n");
 
+  // Resolve workspace directory for subagent to inherit from requester.
+  const workspaceDir =
+    ctx.workspaceDir?.trim() ??
+    (requesterInternalKey ? resolveAgentWorkspaceDir(cfg, resolveAgentIdFromSessionKey(requesterInternalKey)) : undefined);
+
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
@@ -413,6 +420,7 @@ export async function spawnSubagentDirect(
         groupId: ctx.agentGroupId ?? undefined,
         groupChannel: ctx.agentGroupChannel ?? undefined,
         groupSpace: ctx.agentGroupSpace ?? undefined,
+        workspaceDir,
       },
       timeoutMs: 10_000,
     });

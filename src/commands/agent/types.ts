@@ -76,4 +76,6 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Explicit workspace directory override (for subagents to inherit parent workspace). */
+  workspaceDir?: string;
 };

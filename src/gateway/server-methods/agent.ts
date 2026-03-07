@@ -196,6 +196,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
+      workspaceDir?: string;
     };
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
@@ -594,6 +595,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
         inputProvenance,
+        workspaceDir: request.workspaceDir,
       },
       defaultRuntime,
       context.deps,
