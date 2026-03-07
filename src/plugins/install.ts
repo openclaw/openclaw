@@ -43,6 +43,7 @@ type PluginInstallLogger = {
 
 type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 };
 
 const MISSING_EXTENSIONS_ERROR =
@@ -339,7 +340,8 @@ async function installPluginFromPackageDir(
   }
 
   const deps = manifest.dependencies ?? {};
-  const hasDeps = Object.keys(deps).length > 0;
+  const peerDeps = manifest.peerDependencies ?? {};
+  const hasDeps = Object.keys(deps).length > 0 || Object.keys(peerDeps).length > 0;
   const installRes = await installPackageDir({
     sourceDir: params.packageDir,
     targetDir,
