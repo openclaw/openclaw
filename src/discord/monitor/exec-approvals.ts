@@ -408,6 +408,7 @@ export class DiscordExecApprovalHandler {
     const auth = await resolveGatewayConnectionAuth({
       config: this.opts.cfg,
       env: process.env,
+      urlOverride: gatewayUrl,
     });
 
     this.gatewayClient = new GatewayClient({

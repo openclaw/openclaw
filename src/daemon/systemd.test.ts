@@ -376,6 +376,24 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environment).toBeUndefined();
   });
 
+  it("keeps parsing when non-optional EnvironmentFile entries are missing", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/missing.env",
+        ].join("\n");
+      }
+      throw new Error(`missing: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.programArguments).toEqual(["/usr/bin/openclaw", "gateway", "run"]);
+    expect(command?.environment).toBeUndefined();
+  });
+
   it("supports multiple EnvironmentFile entries and quoted paths", async () => {
     vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
       const pathValue = pathLikeToString(pathname);

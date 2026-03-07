@@ -26,6 +26,25 @@ const writeStore = (store: Record<string, unknown>) => {
 
 beforeEach(() => {
   writeStore({});
+  mockGatewayClientCtor.mockClear();
+  mockResolveGatewayConnectionAuth.mockReset().mockImplementation(async (params: {
+    config?: {
+      gateway?: {
+        auth?: {
+          token?: string;
+          password?: string;
+        };
+      };
+    };
+    env: NodeJS.ProcessEnv;
+  }) => {
+    const configToken = params.config?.gateway?.auth?.token;
+    const configPassword = params.config?.gateway?.auth?.password;
+    const envToken = params.env.OPENCLAW_GATEWAY_TOKEN ?? params.env.CLAWDBOT_GATEWAY_TOKEN;
+    const envPassword =
+      params.env.OPENCLAW_GATEWAY_PASSWORD ?? params.env.CLAWDBOT_GATEWAY_PASSWORD;
+    return { token: envToken ?? configToken, password: envPassword ?? configPassword };
+  });
 });
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -37,6 +56,8 @@ const gatewayClientStarts = vi.hoisted(() => vi.fn());
 const gatewayClientStops = vi.hoisted(() => vi.fn());
 const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
+const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.shared.js")>();
@@ -59,6 +80,7 @@ vi.mock("../../gateway/client.js", () => ({
     constructor(params: Record<string, unknown>) {
       this.params = params;
       gatewayClientParams.push(params);
+      mockGatewayClientCtor(params);
     }
     start() {
       gatewayClientStarts();
@@ -70,6 +92,10 @@ vi.mock("../../gateway/client.js", () => ({
       return gatewayClientRequests();
     }
   },
+}));
+
+vi.mock("../../gateway/connection-auth.js", () => ({
+  resolveGatewayConnectionAuth: mockResolveGatewayConnectionAuth,
 }));
 
 vi.mock("../../logger.js", () => ({
@@ -774,5 +800,38 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     );
 
     clearPendingTimeouts(handler);
+  });
+});
+
+describe("DiscordExecApprovalHandler gateway auth resolution", () => {
+  it("passes URL override to shared gateway auth resolver", async () => {
+    mockResolveGatewayConnectionAuth.mockResolvedValue({
+      token: "resolved-token",
+      password: "resolved-password", // pragma: allowlist secret
+    });
+    const handler = new DiscordExecApprovalHandler({
+      token: "test-token",
+      accountId: "default",
+      gatewayUrl: "wss://override.example/ws",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: { session: { store: STORE_PATH } },
+    });
+
+    await handler.start();
+
+    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith({
+      config: { session: { store: STORE_PATH } },
+      env: process.env,
+      urlOverride: "wss://override.example/ws",
+    });
+    expect(mockGatewayClientCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://override.example/ws",
+        token: "resolved-token",
+        password: "resolved-password", // pragma: allowlist secret
+      }),
+    );
+
+    await handler.stop();
   });
 });

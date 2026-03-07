@@ -186,11 +186,10 @@ async function resolveSystemdEnvironmentFiles(params: {
         const fromFile = await readSystemdEnvironmentFile(pathname);
         Object.assign(resolved, fromFile);
       } catch {
-        if (!optional) {
-          // Keep service auditing resilient even when env files are unavailable
-          // in the current runtime context.
-          continue;
-        }
+        // Keep service auditing resilient even when env files are unavailable
+        // in the current runtime context. Both optional and non-optional
+        // EnvironmentFile entries are skipped gracefully for diagnostics.
+        continue;
       }
     }
   }

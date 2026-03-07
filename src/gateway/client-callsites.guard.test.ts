@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
+
 const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "src/acp/server.ts",
   "src/discord/monitor/exec-approvals.ts",
@@ -47,7 +49,7 @@ describe("GatewayClient production callsites", () => {
     for (const fullPath of sourceFiles) {
       const relativePath = path.relative(root, fullPath).replaceAll(path.sep, "/");
       const content = await fs.readFile(fullPath, "utf8");
-      if (content.includes("new GatewayClient(")) {
+      if (GATEWAY_CLIENT_CONSTRUCTOR_PATTERN.test(content)) {
         callsites.push(relativePath);
       }
     }

@@ -250,4 +250,97 @@ describe("resolveGatewayConnectionAuth", () => {
       password: undefined,
     });
   });
+
+  it("resolves local SecretRef token when legacy env is disabled", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          token: { source: "env", provider: "default", id: "LOCAL_SECRET_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+    const env = {
+      CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
+      LOCAL_SECRET_TOKEN: "resolved-from-secretref",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = await resolveGatewayConnectionAuth({
+      config,
+      env,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: "resolved-from-secretref",
+      password: undefined,
+    });
+  });
+
+  it("resolves config-first token SecretRef even when OPENCLAW env token exists", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          token: { source: "env", provider: "default", id: "CONFIG_FIRST_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+    const env = {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+      CONFIG_FIRST_TOKEN: "config-first-token",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = await resolveGatewayConnectionAuth({
+      config,
+      env,
+      includeLegacyEnv: false,
+      localTokenPrecedence: "config-first",
+    });
+    expect(resolved).toEqual({
+      token: "config-first-token",
+      password: undefined,
+    });
+  });
+
+  it("resolves config-first password SecretRef even when OPENCLAW env password exists", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "CONFIG_FIRST_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+    const env = {
+      OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      CONFIG_FIRST_PASSWORD: "config-first-password", // pragma: allowlist secret
+    } as NodeJS.ProcessEnv;
+
+    const resolved = await resolveGatewayConnectionAuth({
+      config,
+      env,
+      includeLegacyEnv: false,
+      localPasswordPrecedence: "config-first",
+    });
+    expect(resolved).toEqual({
+      token: undefined,
+      password: "config-first-password", // pragma: allowlist secret
+    });
+  });
 });
