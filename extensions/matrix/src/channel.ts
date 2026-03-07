@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyWarning,
+  mapAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -156,7 +157,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
       const matrixConfig = resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId });
-      return (matrixConfig.dm?.allowFrom ?? []).map((entry: string | number) => String(entry));
+      return mapAllowFromEntries(matrixConfig.dm?.allowFrom);
     },
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },

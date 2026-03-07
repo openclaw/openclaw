@@ -2,6 +2,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
   formatNormalizedAllowFromEntries,
+  mapAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -276,9 +277,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       baseUrl: account.baseUrl,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveMattermostAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
+      mapAllowFromEntries(resolveMattermostAccount({ cfg, accountId }).config.allowFrom),
     formatAllowFrom: ({ allowFrom }) =>
       formatNormalizedAllowFromEntries({
         allowFrom,
