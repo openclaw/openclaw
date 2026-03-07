@@ -117,7 +117,13 @@ export async function applyBeforeResponseEmitHook(
 
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
-    if (runMessages.length === 0 && activeSession.messages.length > 0) {
+    // For blocking, use broader scope that includes tool-call-only assistant
+    // messages (which contain tool call arguments that may hold sensitive data).
+    const blockMessages = getRunScopedMessagesForBlock(
+      activeSession.messages,
+      assistantTexts.length,
+    );
+    if (blockMessages.length === 0 && activeSession.messages.length > 0) {
       // Compaction edge case: couldn't identify run-scoped messages.
       // Fail closed: clear ALL assistant content in the session to prevent
       // blocked/sensitive text from leaking into future turns or persistence.
@@ -129,7 +135,7 @@ export async function applyBeforeResponseEmitHook(
     } else {
       // Clear blocked content from current-run session history only so it
       // doesn't leak to subsequent turns or session persistence.
-      clearAllAssistantContent(runMessages);
+      clearAllAssistantContent(blockMessages);
     }
     return { blocked: true };
   }
@@ -192,17 +198,72 @@ export function getRunScopedMessages(
 }
 
 /**
+ * Get ALL messages from the current run for block/scrub operations.
+ * Unlike getRunScopedMessages (which only counts text-bearing assistant messages),
+ * this includes tool-call-only assistant messages, tool results, and user messages
+ * that are part of the run. Uses the same tail-based approach but counts ALL
+ * assistant messages (text or tool-call-only) to find the run boundary.
+ *
+ * This broader scope is needed for blocking because tool-call-only assistant
+ * messages contain tool call arguments that may include sensitive data.
+ */
+export function getRunScopedMessagesForBlock(
+  messages: AgentMessage[],
+  assistantTextCount: number,
+): AgentMessage[] {
+  if (assistantTextCount <= 0) {
+    return [];
+  }
+  // Find the first text-bearing assistant message (same boundary as getRunScopedMessages)
+  // then extend backward to include any preceding assistant messages that are part
+  // of the same run (tool-call-only turns in the same tool loop).
+  let assistantsSeen = 0;
+  let textBoundaryIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && extractAssistantText(messages[i]).length > 0) {
+      assistantsSeen++;
+      if (assistantsSeen >= assistantTextCount) {
+        textBoundaryIdx = i;
+        break;
+      }
+    }
+  }
+  if (textBoundaryIdx < 0) {
+    return [];
+  }
+  // Extend backward from textBoundaryIdx to include tool-call-only assistant
+  // messages and tool results that precede the first text-bearing message.
+  // Stop at the first non-assistant, non-tool message (user prompt = run start).
+  let startIdx = textBoundaryIdx;
+  for (let i = textBoundaryIdx - 1; i >= 0; i--) {
+    const role = messages[i].role;
+    if (role === "assistant" || role === "toolResult") {
+      startIdx = i;
+    } else {
+      break;
+    }
+  }
+  return messages.slice(startIdx);
+}
+
+/**
  * Rewrite text content in the last assistant message.
  * Handles both string content and multi-part content arrays.
  * For multi-part arrays, replaces the first text part with the new content
  * and clears all subsequent text parts to prevent stale/unredacted fragments.
  */
 export function rewriteLastAssistantContent(messages: AgentMessage[], newContent: string): void {
+  // Must find the last text-bearing assistant message, not just any assistant
+  // message with a content field. Tool-use-only messages (e.g. content: [{type: "tool_use", ...}])
+  // have "content" but no text parts, so rewriteSingleAssistantMessage would
+  // silently no-op — leaving redacted content unpersisted in session history.
   const sessionMsg = [...messages]
     .toReversed()
-    .find((m) => m.role === "assistant" && "content" in m);
+    .find((m) => m.role === "assistant" && "content" in m && extractAssistantText(m).length > 0);
   if (!sessionMsg) {
-    log.warn("rewriteLastAssistantContent: no assistant message found in session history");
+    log.warn(
+      "rewriteLastAssistantContent: no text-bearing assistant message found in session history",
+    );
     return;
   }
   rewriteSingleAssistantMessage(sessionMsg, newContent);

@@ -17,7 +17,9 @@ import {
   applyBeforeResponseEmitHook,
   extractAssistantText,
   getRunScopedMessages,
+  getRunScopedMessagesForBlock,
   rewriteAllAssistantContent,
+  rewriteLastAssistantContent,
 } from "./hook-response-emit.js";
 
 // ---------------------------------------------------------------------------
@@ -499,5 +501,82 @@ describe("getRunScopedMessages", () => {
     const messages = [makeMsg("assistant", "a")];
     const result = getRunScopedMessages(messages, 0);
     expect(result).toHaveLength(0);
+  });
+});
+
+describe("rewriteLastAssistantContent", () => {
+  it("skips tool-use-only messages and rewrites the last text-bearing one", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I'll look that up" }],
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tc1", name: "search", input: {} }],
+      } as unknown as AgentMessage,
+    ];
+    rewriteLastAssistantContent(messages, "REDACTED");
+    // The first message (text-bearing) should be rewritten
+    expect(
+      (messages[0] as unknown as { content: { type?: string; text?: string }[] }).content[0].text,
+    ).toBe("REDACTED");
+    // The second message (tool-use-only) should be untouched
+    expect(
+      (messages[1] as unknown as { content: { type?: string; text?: string }[] }).content[0].type,
+    ).toBe("tool_use");
+  });
+
+  it("does not silently no-op on tool-use-only last message", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tc1", name: "exec", input: {} }],
+      } as unknown as AgentMessage,
+    ];
+    // No text-bearing message exists — should warn but not crash
+    rewriteLastAssistantContent(messages, "REDACTED");
+    // Tool-use message should be untouched
+    expect(
+      (messages[0] as unknown as { content: { type?: string; text?: string }[] }).content[0].type,
+    ).toBe("tool_use");
+  });
+});
+
+describe("getRunScopedMessagesForBlock", () => {
+  const makeMsg = (role: string, content: string): AgentMessage =>
+    ({ role, content: [{ type: "text", text: content }] }) as unknown as AgentMessage;
+  const makeToolCallMsg = (): AgentMessage =>
+    ({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "tc1", name: "exec", input: {} }],
+    }) as unknown as AgentMessage;
+  const makeToolResult = (): AgentMessage =>
+    ({ role: "toolResult", content: "result" }) as unknown as AgentMessage;
+
+  it("includes tool-call-only assistant messages before text-bearing ones", () => {
+    const messages = [
+      makeMsg("user", "hello"), // run boundary
+      makeToolCallMsg(), // tool-call-only assistant
+      makeToolResult(), // tool result
+      makeMsg("assistant", "answer"), // text-bearing assistant
+    ];
+    const result = getRunScopedMessagesForBlock(messages, 1);
+    // Should include all 3 run messages (tool-call assistant, tool result, text assistant)
+    expect(result).toHaveLength(3);
+    expect(result[0].role).toBe("assistant"); // tool-call-only
+    expect(result[2].role).toBe("assistant"); // text-bearing
+  });
+
+  it("stops at user message boundary", () => {
+    const messages = [
+      makeMsg("assistant", "prior"), // prior history
+      makeMsg("user", "question"), // run boundary
+      makeToolCallMsg(), // current run
+      makeMsg("assistant", "answer"), // current run
+    ];
+    const result = getRunScopedMessagesForBlock(messages, 1);
+    expect(result).toHaveLength(2); // tool-call + text assistant
+    expect(result[0].role).toBe("assistant");
   });
 });
