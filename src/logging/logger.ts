@@ -41,7 +41,21 @@ export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
-const externalTransports = new Set<LogTransport>();
+const EXTERNAL_TRANSPORTS_KEY = Symbol.for("openclaw.logging.externalTransports");
+
+type GlobalWithExternalTransports = typeof globalThis & {
+  [EXTERNAL_TRANSPORTS_KEY]?: Set<LogTransport>;
+};
+
+function getExternalTransports(): Set<LogTransport> {
+  const target = globalThis as GlobalWithExternalTransports;
+  if (!target[EXTERNAL_TRANSPORTS_KEY]) {
+    target[EXTERNAL_TRANSPORTS_KEY] = new Set<LogTransport>();
+  }
+  return target[EXTERNAL_TRANSPORTS_KEY];
+}
+
+const externalTransports = getExternalTransports();
 
 function shouldSkipLoadConfigFallback(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
