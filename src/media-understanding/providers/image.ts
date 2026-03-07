@@ -40,7 +40,7 @@ export async function describeImageWithModel(
   authStorage.setRuntimeApiKey(model.provider, apiKey);
 
   const base64 = params.buffer.toString("base64");
-  if (model.provider === "minimax") {
+  if (model.provider === "minimax" || model.provider === "minimax-portal") {
     const text = await minimaxUnderstandImage({
       apiKey,
       prompt: params.prompt ?? "Describe the image.",
