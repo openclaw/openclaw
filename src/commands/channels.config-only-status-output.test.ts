@@ -123,8 +123,8 @@ function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
         botTokenSource: "config",
         botTokenStatus: "available",
         signingSecret: "",
-        signingSecretSource: "config",
-        signingSecretStatus: "configured_unavailable",
+        signingSecretSource: "config", // pragma: allowlist secret
+        signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
       }),
       resolveAccount: () => ({
         name: "Primary",
