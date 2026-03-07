@@ -506,6 +506,71 @@ describe("context-dedup", () => {
     expect(compactedFileBlock).not.toContain("Same as earlier chunk lines 2-21");
   });
 
+  it("does not treat real file chunks that start with Path: as metadata headers", () => {
+    const baseFirstBlock = [
+      "Path: /tmp/real-content.txt",
+      ...Array.from({ length: 19 }, (_, idx) => `line ${idx + 2} :: ${"m".repeat(48)}`),
+    ].join("\n");
+    const baseSecondBlock = Array.from(
+      { length: 20 },
+      (_, idx) => `line ${idx + 21} :: ${"m".repeat(48)}`,
+    ).join("\n");
+
+    const changedSecondBlock = baseSecondBlock
+      .split("\n")
+      .map((line, idx) => (idx === 9 ? "line 30 changed :: MMMMMMMM" : line))
+      .join("\n");
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_real_path_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/real-content.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_real_path_1",
+        content: [
+          { type: "text", text: baseFirstBlock },
+          { type: "text", text: baseSecondBlock },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_real_path_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/real-content.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_real_path_2",
+        content: [
+          { type: "text", text: baseFirstBlock },
+          { type: "text", text: changedSecondBlock },
+        ],
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const compactedSecondBlock = String((result.messages[3].content as any[])[1]?.text ?? "");
+
+    expect(compactedSecondBlock).toContain("lines 30 now read");
+    expect(compactedSecondBlock).not.toContain("lines 10 now read");
+  });
+
   it("supports toolUse/functionCall read blocks and toolUseId-linked results", () => {
     const baseLines = Array.from(
       { length: 30 },
@@ -1063,6 +1128,27 @@ describe("context-dedup", () => {
     expect(String(folded.messages[0].content)).toBe([indented, nonIndented].join("\n"));
     expect(folded.stats.collapsedRuns).toBe(0);
     expect(folded.stats.omittedCopies).toBe(0);
+  });
+
+  it("preserves indentation distinctions when folding repeated multiline patterns", () => {
+    const indented = "    setting = some_value_with_whitespace_significance()";
+    const nonIndented = "setting = some_value_with_whitespace_significance()";
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: [indented, nonIndented, indented, nonIndented].join("\n"),
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+    const text = String(folded.messages[0].content);
+
+    expect(text).toContain(indented);
+    expect(text).toContain(nonIndented);
+    expect(text).toContain("[repeats 1 more times]");
+    expect(folded.stats.collapsedRuns).toBe(1);
+    expect(folded.stats.omittedCopies).toBe(1);
   });
 
   it("folds repeated sentence runs in single-line tool output", () => {

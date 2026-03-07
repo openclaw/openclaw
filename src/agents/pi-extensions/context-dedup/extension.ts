@@ -278,6 +278,26 @@ function hasFollowingTextBlock(blocks: unknown[], fromIndex: number): boolean {
   return false;
 }
 
+function parseMetadataField(line: string): { key: string; value: string } | undefined {
+  const match = line.match(/^([^:]+):\s*(.*)$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const key = (match[1] ?? "").trim().toLowerCase();
+  const value = (match[2] ?? "").trim();
+  if (!key) {
+    return undefined;
+  }
+
+  return { key, value };
+}
+
+function normalizeMetadataPathValue(value: string): string {
+  const unquoted = value.replace(/^['"]|['"]$/g, "").trim();
+  return normalizeFilePath(unquoted);
+}
+
 function isReadMetadataTextBlock(params: {
   text: string;
   path: string;
@@ -292,26 +312,35 @@ function isReadMetadataTextBlock(params: {
     return true;
   }
 
+  if (trimmed.length > 240) {
+    return false;
+  }
+
   const lines = splitReadLines(trimmed);
-  const firstLine = (lines[0] ?? "").trim();
-  const lowerFirstLine = firstLine.toLowerCase();
-
-  if (
-    lowerFirstLine.startsWith("path:") ||
-    lowerFirstLine.startsWith("file:") ||
-    lowerFirstLine.startsWith("offset:") ||
-    lowerFirstLine.startsWith("lines:") ||
-    lowerFirstLine.startsWith("range:") ||
-    lowerFirstLine.startsWith("line range:")
-  ) {
-    return true;
+  if (lines.length === 0 || lines.length > 3) {
+    return false;
   }
 
-  if (lines.length <= 3 && trimmed.length <= 240 && trimmed.includes(params.path)) {
-    return true;
+  const allowedKeys = new Set(["path", "file", "offset", "lines", "range", "line range"]);
+  const fields = lines
+    .map((line) => parseMetadataField(line.trim()))
+    .filter((field): field is { key: string; value: string } => Boolean(field));
+
+  if (fields.length !== lines.length) {
+    return false;
   }
 
-  return false;
+  if (fields.some((field) => !allowedKeys.has(field.key))) {
+    return false;
+  }
+
+  const expectedPath = normalizeFilePath(params.path);
+  const pathField = fields.find((field) => field.key === "path" || field.key === "file");
+  if (!pathField) {
+    return false;
+  }
+
+  return normalizeMetadataPathValue(pathField.value) === expectedPath;
 }
 
 function formatRange(start: number, end: number): string {
