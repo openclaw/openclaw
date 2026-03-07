@@ -18,6 +18,30 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.images.first?.image != nil)
     }
 
+    @Test func flattensRemoteMarkdownImagesIntoText() {
+        let base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="
+        let markdown = """
+        ![Leak](https://example.com/collect?x=1)
+
+        ![Pixel](data:image/png;base64,\(base64))
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Leak")
+        #expect(result.images.count == 1)
+        #expect(result.images.first?.image != nil)
+    }
+
+    @Test func usesFallbackTextForUnlabeledRemoteMarkdownImages() {
+        let markdown = "![](https://example.com/image.png)"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "image")
+        #expect(result.images.isEmpty)
+    }
+
     @Test func stripsInboundUntrustedContextBlocks() {
         let markdown = """
         Conversation info (untrusted metadata):
