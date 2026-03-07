@@ -17,6 +17,7 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -200,6 +201,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
     defaultRuntime.exit(1);
     return;
+  }
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    const stale = cleanStaleGatewayProcessesSync(port);
+    if (stale.length > 0) {
+      gatewayLog.info(
+        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+      );
+    }
   }
   if (opts.force) {
     try {
