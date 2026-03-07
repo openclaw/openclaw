@@ -66,7 +66,11 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import { resolveConfiguredCronModelSuggestions, sortLocaleStrings } from "./views/agents-utils.ts";
+import {
+  findAgentConfigIndex,
+  resolveConfiguredCronModelSuggestions,
+  sortLocaleStrings,
+} from "./views/agents-utils.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -816,13 +820,7 @@ export function renderApp(state: AppViewState) {
                   if (!Array.isArray(list)) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
+                  const index = findAgentConfigIndex(list, agentId);
                   if (index < 0) {
                     return;
                   }
@@ -852,13 +850,7 @@ export function renderApp(state: AppViewState) {
                   if (!Array.isArray(list)) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
+                  const index = findAgentConfigIndex(list, agentId);
                   if (index < 0) {
                     return;
                   }

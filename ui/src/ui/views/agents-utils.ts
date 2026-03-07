@@ -47,6 +47,36 @@ type ConfigSnapshot = {
   };
 };
 
+const AGENT_ID_INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
+const AGENT_ID_LEADING_DASH_RE = /^-+/;
+const AGENT_ID_TRAILING_DASH_RE = /-+$/;
+
+export function normalizeAgentIdForUi(value: string | undefined | null): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return "main";
+  }
+  return (
+    trimmed
+      .toLowerCase()
+      .replace(AGENT_ID_INVALID_CHARS_RE, "-")
+      .replace(AGENT_ID_LEADING_DASH_RE, "")
+      .replace(AGENT_ID_TRAILING_DASH_RE, "")
+      .slice(0, 64) || "main"
+  );
+}
+
+export function findAgentConfigIndex(list: unknown[], agentId: string): number {
+  const targetId = normalizeAgentIdForUi(agentId);
+  return list.findIndex((entry) => {
+    if (!entry || typeof entry !== "object" || !("id" in entry)) {
+      return false;
+    }
+    const id = (entry as { id?: unknown }).id;
+    return normalizeAgentIdForUi(typeof id === "string" ? id : "") === targetId;
+  });
+}
+
 export function normalizeAgentLabel(agent: {
   id: string;
   name?: string;
@@ -126,7 +156,9 @@ export function formatBytes(bytes?: number) {
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {
   const cfg = config as ConfigSnapshot | null;
   const list = cfg?.agents?.list ?? [];
-  const entry = list.find((agent) => agent?.id === agentId);
+  const entry = list.find(
+    (agent) => normalizeAgentIdForUi(agent?.id) === normalizeAgentIdForUi(agentId),
+  );
   return {
     entry,
     defaults: cfg?.agents?.defaults,

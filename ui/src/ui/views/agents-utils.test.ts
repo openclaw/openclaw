@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  findAgentConfigIndex,
+  normalizeAgentIdForUi,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +98,24 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("agent id normalization", () => {
+  it("normalizes ids with casing and separators", () => {
+    expect(normalizeAgentIdForUi(" Main Agent ")).toBe("main-agent");
+    expect(normalizeAgentIdForUi("MAIN")).toBe("main");
+  });
+
+  it("matches config entries by normalized id", () => {
+    const list = [
+      { id: "Main Agent", model: "zai/glm-4.7" },
+      { id: "atlas", model: "openai-codex/gpt-5.3-codex" },
+    ];
+
+    expect(findAgentConfigIndex(list, "main-agent")).toBe(0);
+    expect(findAgentConfigIndex(list, "MAIN AGENT")).toBe(0);
+    expect(findAgentConfigIndex(list, "atlas")).toBe(1);
+    expect(findAgentConfigIndex(list, "unknown")).toBe(-1);
   });
 });
