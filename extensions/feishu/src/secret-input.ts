@@ -2,8 +2,8 @@ import * as feishuSdk from "openclaw/plugin-sdk/feishu";
 import { z } from "zod";
 
 const { hasConfiguredSecretInput } = feishuSdk;
-const _normalizeResolvedSecretInputString = feishuSdk.normalizeResolvedSecretInputString;
-const _normalizeSecretInputString = feishuSdk.normalizeSecretInputString;
+const hostNormalizeResolvedInputString = feishuSdk.normalizeResolvedSecretInputString;
+const hostNormalizeInputString = feishuSdk.normalizeSecretInputString;
 
 /**
  * Local fallback for normalizeSecretInputString when the host openclaw version
@@ -18,8 +18,8 @@ function normalizeSecretInputStringFallback(value: unknown): string | undefined 
 }
 
 export const normalizeSecretInputString: typeof normalizeSecretInputStringFallback =
-  typeof _normalizeSecretInputString === "function"
-    ? _normalizeSecretInputString
+  typeof hostNormalizeInputString === "function"
+    ? hostNormalizeInputString
     : normalizeSecretInputStringFallback;
 
 /**
@@ -46,8 +46,8 @@ function normalizeResolvedSecretInputStringFallback(params: {
 }
 
 export const normalizeResolvedSecretInputString: typeof normalizeResolvedSecretInputStringFallback =
-  typeof _normalizeResolvedSecretInputString === "function"
-    ? _normalizeResolvedSecretInputString
+  typeof hostNormalizeResolvedInputString === "function"
+    ? hostNormalizeResolvedInputString
     : normalizeResolvedSecretInputStringFallback;
 
 export { hasConfiguredSecretInput };

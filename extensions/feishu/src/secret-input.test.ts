@@ -58,9 +58,8 @@ describe("feishu secret input compatibility", () => {
     mockedFeishuSdk.normalizeSecretInputString = hostNormalizeSecretInputString;
     mockedFeishuSdk.normalizeResolvedSecretInputString = hostNormalizeResolvedSecretInputString;
 
-    const { normalizeResolvedSecretInputString, normalizeSecretInputString } = await import(
-      "./secret-input.js"
-    );
+    const { normalizeResolvedSecretInputString, normalizeSecretInputString } =
+      await import("./secret-input.js");
 
     expect(normalizeSecretInputString("  secret  ")).toBe("from-host");
     expect(hostNormalizeSecretInputString).toHaveBeenCalledWith("  secret  ");
