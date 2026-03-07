@@ -58,6 +58,15 @@ Options:
 - `--node-id <id>`: Override node id (clears pairing token)
 - `--display-name <name>`: Override the node display name
 
+## Gateway auth for node host
+
+`openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
+
+- `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` are checked first.
+- Then local config fallback: `gateway.auth.token` / `gateway.auth.password`.
+- In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are ignored for node host auth resolution.
+
 ## Service (background)
 
 Install a headless node host as a user service.
