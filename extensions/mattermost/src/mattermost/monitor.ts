@@ -1669,6 +1669,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               ) {
                 streamText = streamText.slice(prefixOptions.responsePrefix.length);
               }
+              // The BlockChunker strips whitespace at break points (paragraph \n\n,
+              // sentence space, newline \n). Re-insert \n\n when neither side already
+              // has a trailing/leading newline, so paragraphs and headings render correctly.
+              if (
+                blockStreamAccumulatedText.length > 0 &&
+                !blockStreamAccumulatedText.endsWith("\n") &&
+                !streamText.startsWith("\n")
+              ) {
+                blockStreamAccumulatedText += "\n\n";
+              }
               blockStreamAccumulatedText += streamText;
               try {
                 await patchMattermostPost(blockStreamingClient, {

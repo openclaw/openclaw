@@ -316,7 +316,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     blockStreaming: true,
   },
   streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 50, idleMs: 100 },
+    blockStreamingCoalesceDefaults: { minChars: 100, idleMs: 150 },
   },
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
