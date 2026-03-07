@@ -31,6 +31,20 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
+function shouldAppendLastErrorBit(account: Record<string, unknown>, lastError: string): boolean {
+  const normalized = lastError.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === "not configured" && account.configured === false) {
+    return false;
+  }
+  if (normalized === "disabled" && account.enabled === false) {
+    return false;
+  }
+  return true;
+}
+
 function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
   if (typeof account.enabled === "boolean") {
     bits.push(account.enabled ? "enabled" : "disabled");
@@ -168,7 +182,10 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (audit && typeof audit.ok === "boolean") {
         bits.push(audit.ok ? "audit ok" : "audit failed");
       }
-      if (typeof account.lastError === "string" && account.lastError) {
+      if (
+        typeof account.lastError === "string" &&
+        shouldAppendLastErrorBit(account, account.lastError)
+      ) {
         bits.push(`error:${account.lastError}`);
       }
       return buildChannelAccountLine(provider, account, bits);
