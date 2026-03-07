@@ -213,6 +213,51 @@ fin_macro(treasury_us) + fin_crypto(coin/global_stats)
 | Protocol count  | defi/protocols   | New protocols joining  | Protocols leaving   |
 | Fee revenue     | defi/fees        | MoM growth > 10%       | Revenue declining   |
 
+## Contract Risk Calculator (Pure Math — Zero Data Dependency)
+
+合约交易风险计算，纯数学公式，无需额外数据端点。
+
+### Liquidation Price
+
+```
+Long:  Liq = entry × (1 - 1/leverage × (1 - maintenance_margin_rate))
+Short: Liq = entry × (1 + 1/leverage × (1 - maintenance_margin_rate))
+```
+
+常见 maintenance_margin_rate: Binance 0.4%, OKX 0.5%, Bybit 0.5%。
+
+**示例:** BTC $60,000 做多 20x，维持保证金率 0.5%
+→ Liq = 60000 × (1 - 1/20 × (1 - 0.005)) = 60000 × 0.95025 = **$57,015**
+
+### Risk Dashboard (用户提供 entry + leverage + position size)
+
+| 指标     | 公式                                          | 阈值                  |
+| -------- | --------------------------------------------- | --------------------- |
+| 爆仓距离 | \|entry - liq\| / entry × 100%                | <3% = 极高风险        |
+| 最大亏损 | position_size / leverage × (1 + fee_rate × 2) | 即保证金 + 双向手续费 |
+| 保证金率 | margin / position_value × 100%                | <维持保证金率 = 强平  |
+| 盈亏平衡 | entry ± entry × fee_rate × 2 × leverage       | 需覆盖开平手续费      |
+
+### 仓位管理建议
+
+| 杠杆倍数 | 爆仓距离 | 适用场景 | 建议仓位占比 |
+| -------- | -------- | -------- | ------------ |
+| 2-3x     | 33-50%   | 趋势跟踪 | ≤30% 总资金  |
+| 5-10x    | 10-20%   | 波段交易 | ≤15% 总资金  |
+| 20-50x   | 2-5%     | 极短线   | ≤5% 总资金   |
+| >50x     | <2%      | 赌博     | ⚠️ 不建议    |
+
+**多仓位综合风险:** 当用户持有多个合约仓位时，计算总保证金占用 / 账户净值 = 账户风险度。>70% = 需减仓；>85% = 连环爆仓风险。
+
+### 与现有数据结合
+
+```
+1. fin_crypto(market/ticker, symbol="BTC/USDT")      → 当前价格 vs 用户入场价
+2. fin_crypto(market/funding_rate, symbol="BTC/USDT") → funding 正/负判断持仓成本方向
+3. fin_data_regime(symbol="BTC/USDT", market="crypto") → 市场体制决定杠杆上限建议
+→ Bull regime: 最高建议 10x | Volatile/Crisis: 最高 3x | Bear: 建议纯现货
+```
+
 ## Data Notes
 
 - **CoinGecko**: ~30 req/min rate limit; coin ID uses slug (bitcoin, ethereum); `coin/historical` 和 `coin/info` 需传 coin_id (如 "bitcoin")，非交易对格式; `coin/historical` 需传 `start_date`/`end_date`（不支持 `limit`）
