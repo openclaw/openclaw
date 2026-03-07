@@ -50,9 +50,30 @@ describe("agents_list", () => {
     };
   });
 
-  it("defaults to the requester agent only", async () => {
+  it("defaults to all configured agents when allowAgents is not set", async () => {
+    setConfigWithAgentList([
+      { id: "main", name: "Main" },
+      { id: "research", name: "Research" },
+    ]);
+
     const tool = requireAgentsListTool();
     const result = await tool.execute("call1", {});
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: true,
+    });
+    const agents = readAgentList(result);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+  });
+
+  it("restricts to requester only when allowAgents is explicitly empty", async () => {
+    setConfigWithAgentList([
+      { id: "main", name: "Main", subagents: { allowAgents: [] } },
+      { id: "research", name: "Research" },
+    ]);
+
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call1b", {});
     expect(result.details).toMatchObject({
       requester: "main",
       allowAny: false,
