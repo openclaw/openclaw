@@ -10,8 +10,8 @@ const baseParams = {
 };
 
 describe("buildReplyPayloads media filter integration", () => {
-  it("strips media URL from payload when in messagingToolSentMediaUrls", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
@@ -21,8 +21,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBeUndefined();
   });
 
-  it("preserves media URL when not in messagingToolSentMediaUrls", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
@@ -32,8 +32,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
-  it("applies media filter after text filter", () => {
-    const { replyPayloads } = buildReplyPayloads({
+  it("applies media filter after text filter", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
       messagingToolSentTexts: ["hello world!"],

@@ -36,6 +36,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { resolveOriginMessageTo } from "./origin-routing.js";
 import {
   auditPostCompactionReads,
   extractReadPaths,
@@ -44,6 +45,7 @@ import {
 } from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -185,6 +187,11 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
+  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+    cfg,
+    sessionKey,
+    workspaceDir: followupRun.run.workspaceDir,
+  });
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
       ? resolveBlockStreamingCoalescing(
@@ -443,7 +450,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
-    const payloadResult = buildReplyPayloads({
+    const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
@@ -457,8 +464,13 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      originatingChannel: sessionCtx.OriginatingChannel,
+      originatingTo: resolveOriginMessageTo({
+        originatingTo: sessionCtx.OriginatingTo,
+        to: sessionCtx.To,
+      }),
       accountId: sessionCtx.AccountId,
+      normalizeMediaPaths: normalizeReplyMediaPaths,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;

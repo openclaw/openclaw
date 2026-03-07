@@ -6,6 +6,11 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import {
+  resolveOriginAccountId,
+  resolveOriginMessageProvider,
+  resolveOriginMessageTo,
+} from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import {
   applyReplyThreading,
@@ -15,7 +20,7 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
-export function buildReplyPayloads(params: {
+export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
   didLogHeartbeatStrip: boolean;
@@ -32,9 +37,11 @@ export function buildReplyPayloads(params: {
   messagingToolSentTargets?: Parameters<
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
+  originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
-}): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
     ? params.payloads
@@ -60,22 +67,24 @@ export function buildReplyPayloads(params: {
         return [{ ...payload, text: stripped.text }];
       });
 
-  const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
-    payloads: sanitizedPayloads,
-    replyToMode: params.replyToMode,
-    replyToChannel: params.replyToChannel,
-    currentMessageId: params.currentMessageId,
-  })
-    .map(
-      (payload) =>
-        normalizeReplyPayloadDirectives({
+  const replyTaggedPayloads = (
+    await Promise.all(
+      applyReplyThreading({
+        payloads: sanitizedPayloads,
+        replyToMode: params.replyToMode,
+        replyToChannel: params.replyToChannel,
+        currentMessageId: params.currentMessageId,
+      }).map(async (payload) => {
+        const parsed = normalizeReplyPayloadDirectives({
           payload,
           currentMessageId: params.currentMessageId,
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
-        }).payload,
+        }).payload;
+        return params.normalizeMediaPaths ? await params.normalizeMediaPaths(parsed) : parsed;
+      }),
     )
-    .filter(isRenderablePayload);
+  ).filter(isRenderablePayload);
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -86,19 +95,32 @@ export function buildReplyPayloads(params: {
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
   const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: params.messageProvider,
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.originatingChannel,
+      provider: params.messageProvider,
+    }),
     messagingToolSentTargets,
-    originatingTo: params.originatingTo,
-    accountId: params.accountId,
+    originatingTo: resolveOriginMessageTo({
+      originatingTo: params.originatingTo,
+    }),
+    accountId: resolveOriginAccountId({
+      originatingAccountId: params.accountId,
+    }),
   });
-  const dedupedPayloads = filterMessagingToolDuplicates({
-    payloads: replyTaggedPayloads,
-    sentTexts: messagingToolSentTexts,
-  });
-  const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-    payloads: dedupedPayloads,
-    sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
-  });
+  const dedupeMessagingToolPayloads =
+    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const dedupedPayloads = dedupeMessagingToolPayloads
+    ? filterMessagingToolDuplicates({
+        payloads: replyTaggedPayloads,
+        sentTexts: messagingToolSentTexts,
+      })
+    : replyTaggedPayloads;
+  const mediaFilteredPayloads = dedupeMessagingToolPayloads
+    ? filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+      })
+    : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []

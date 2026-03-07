@@ -11,6 +11,7 @@ import {
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
+import { isControlCommandMessage } from "../command-detection.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -23,6 +24,65 @@ const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+
+const extractInboundText = (ctx: FinalizedMsgContext): string => {
+  if (typeof ctx.BodyForCommands === "string" && ctx.BodyForCommands.trim()) {
+    return ctx.BodyForCommands;
+  }
+  if (typeof ctx.CommandBody === "string" && ctx.CommandBody.trim()) {
+    return ctx.CommandBody;
+  }
+  if (typeof ctx.RawBody === "string" && ctx.RawBody.trim()) {
+    return ctx.RawBody;
+  }
+  return typeof ctx.Body === "string" ? ctx.Body : "";
+};
+
+const shouldSuppressFailureFallback = (ctx: FinalizedMsgContext, cfg: OpenClawConfig): boolean =>
+  !ctx.CommandAuthorized && isControlCommandMessage(extractInboundText(ctx), cfg);
+
+const buildNoOutputFallbackReply = (): ReplyPayload => ({
+  text: "The agent did not return a reply. Please try again in a moment.",
+  isError: true,
+});
+
+const buildTransientFailureFallbackReply = (err: unknown): ReplyPayload | null => {
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (
+    normalized.includes("no available auth profile") ||
+    normalized.includes("cooldown") ||
+    normalized.includes("temporarily unavailable")
+  ) {
+    return {
+      text: "The model account is cooling down or temporarily unavailable. Please try again shortly.",
+      isError: true,
+    };
+  }
+  if (normalized.includes("timed out") || normalized.includes("timeout")) {
+    return {
+      text: "This reply timed out. Please try again in a moment.",
+      isError: true,
+    };
+  }
+  if (
+    normalized.includes("request was aborted") ||
+    normalized.includes("aborted") ||
+    normalized.includes("zombie connection") ||
+    normalized.includes("no hello") ||
+    normalized.includes("gateway is recovering") ||
+    normalized.includes("gateway restart")
+  ) {
+    return {
+      text: "The gateway is recovering. Please try again in a moment.",
+      isError: true,
+    };
+  }
+  return null;
+};
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -250,14 +310,14 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) {
-      return;
+      return false;
     }
     if (abortSignal?.aborted) {
-      return;
+      return false;
     }
     const result = await routeReply({
       payload,
@@ -272,12 +332,15 @@ export async function dispatchReplyFromConfig(params: {
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
+      return false;
     }
+    return true;
   };
 
   markProcessing();
 
   try {
+    const suppressFailureFallback = shouldSuppressFailureFallback(ctx, cfg);
     const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
@@ -319,6 +382,11 @@ export async function dispatchReplyFromConfig(params: {
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
+    let queuedToolCount = 0;
+    let queuedBlockCount = 0;
+    let queuedFinalCount = 0;
+    let routedToolCount = 0;
+    let routedBlockCount = 0;
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
 
@@ -354,9 +422,13 @@ export async function dispatchReplyFromConfig(params: {
               return;
             }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
+              if (await sendPayloadAsync(deliveryPayload, undefined, false)) {
+                routedToolCount += 1;
+              }
             } else {
-              dispatcher.sendToolResult(deliveryPayload);
+              if (dispatcher.sendToolResult(deliveryPayload)) {
+                queuedToolCount += 1;
+              }
             }
           };
           return run();
@@ -380,9 +452,13 @@ export async function dispatchReplyFromConfig(params: {
               ttsAuto: sessionTtsAuto,
             });
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              if (await sendPayloadAsync(ttsPayload, context?.abortSignal, false)) {
+                routedBlockCount += 1;
+              }
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              if (dispatcher.sendBlockReply(ttsPayload)) {
+                queuedBlockCount += 1;
+              }
             }
           };
           return run();
@@ -425,7 +501,10 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        if (dispatcher.sendFinalReply(ttsReply)) {
+          queuedFinal = true;
+          queuedFinalCount += 1;
+        }
       }
     }
 
@@ -475,8 +554,10 @@ export async function dispatchReplyFromConfig(params: {
               );
             }
           } else {
-            const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
-            queuedFinal = didQueue || queuedFinal;
+            if (dispatcher.sendFinalReply(ttsOnlyPayload)) {
+              queuedFinal = true;
+              queuedFinalCount += 1;
+            }
           }
         }
       } catch (err) {
@@ -486,7 +567,43 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
+    const hasUserFacingDelivery =
+      queuedToolCount +
+        queuedBlockCount +
+        queuedFinalCount +
+        routedToolCount +
+        routedBlockCount +
+        routedFinalCount >
+      0;
+    if (!hasUserFacingDelivery && !suppressFailureFallback) {
+      const fallbackReply = buildNoOutputFallbackReply();
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReply({
+          payload: fallbackReply,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: ctx.MessageThreadId,
+          cfg,
+        });
+        if (result.ok) {
+          queuedFinal = true;
+          routedFinalCount += 1;
+        } else {
+          logVerbose(
+            `dispatch-from-config: route-reply (no-output fallback) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else if (dispatcher.sendFinalReply(fallbackReply)) {
+        queuedFinal = true;
+        queuedFinalCount += 1;
+      }
+    }
+
     const counts = dispatcher.getQueuedCounts();
+    counts.tool += routedToolCount;
+    counts.block += routedBlockCount;
     counts.final += routedFinalCount;
     recordProcessed("completed");
     markIdle("message_completed");
@@ -494,6 +611,46 @@ export async function dispatchReplyFromConfig(params: {
   } catch (err) {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
-    throw err;
+    if (shouldSuppressFailureFallback(ctx, cfg)) {
+      throw err;
+    }
+    const fallbackReply = buildTransientFailureFallbackReply(err);
+    if (!fallbackReply) {
+      throw err;
+    }
+
+    let queuedFinal = false;
+    let routedFinalCount = 0;
+    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      const result = await routeReply({
+        payload: fallbackReply,
+        channel: originatingChannel,
+        to: originatingTo,
+        sessionKey: ctx.SessionKey,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
+        cfg,
+      });
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-from-config: route-reply (error fallback) failed: ${result.error ?? "unknown error"}`,
+        );
+        throw err;
+      }
+      queuedFinal = true;
+      routedFinalCount = 1;
+    } else {
+      queuedFinal = dispatcher.sendFinalReply(fallbackReply);
+      if (!queuedFinal) {
+        throw err;
+      }
+    }
+
+    const counts = dispatcher.getQueuedCounts();
+    counts.final += routedFinalCount;
+    logVerbose(
+      `dispatch-from-config: delivered transient failure fallback after error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { queuedFinal, counts };
   }
 }

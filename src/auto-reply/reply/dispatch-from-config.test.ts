@@ -49,6 +49,10 @@ vi.mock("./abort.js", () => ({
     const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
     return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
   },
+  isAbortTrigger: (text?: string) => {
+    const normalized = text?.trim().toLowerCase();
+    return normalized === "/stop" || normalized === "stop";
+  },
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
@@ -287,6 +291,82 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({ text: "🔧 exec: ls" }),
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a fallback reply when the agent returns no user-facing output", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+      Body: "hello",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: vi.fn(async () => undefined),
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "The agent did not return a reply. Please try again in a moment.",
+      isError: true,
+    });
+  });
+
+  it("keeps silent for unauthorized control commands even when no reply is produced", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      Body: "/status",
+      CommandAuthorized: false,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: vi.fn(async () => undefined),
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("turns timeout errors into an explicit fallback reply", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+      Body: "hello",
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver: vi.fn(async () => {
+          throw new Error("LLM request timed out.");
+        }),
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        queuedFinal: true,
+      }),
+    );
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "This reply timed out. Please try again in a moment.",
+      isError: true,
+    });
   });
 
   it("suppresses native tool summaries but still forwards tool media", async () => {
