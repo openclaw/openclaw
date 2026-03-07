@@ -1148,6 +1148,7 @@ export async function runSubagentAnnounceFlow(params: {
   startedAt?: number;
   endedAt?: number;
   label?: string;
+  model?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
