@@ -14,6 +14,9 @@ describe("resolveCliBackendConfig reliability merge", () => {
                 watchdog: {
                   resume: {
                     noOutputTimeoutMs: 42_000,
+                    evidence: {
+                      tailLines: 12,
+                    },
                   },
                 },
               },
@@ -31,7 +34,12 @@ describe("resolveCliBackendConfig reliability merge", () => {
     expect(resolved?.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.3);
     expect(resolved?.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
     expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
+    expect(resolved?.config.reliability?.watchdog?.resume?.overallPolicy).toBe("extend-on-output");
+    expect(resolved?.config.reliability?.watchdog?.resume?.overallMaxMs).toBe(3_600_000);
+    expect(resolved?.config.reliability?.watchdog?.resume?.evidence?.tailLines).toBe(12);
+    expect(resolved?.config.reliability?.watchdog?.resume?.evidence?.maxChars).toBeUndefined();
     expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
+    expect(resolved?.config.reliability?.watchdog?.fresh?.overallPolicy).toBe("extend-on-output");
   });
 });
 

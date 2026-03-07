@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import {
+  CLI_CODEX_WATCHDOG_OVERALL_MAX_MS,
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "./cli-watchdog-defaults.js";
@@ -92,8 +93,16 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   imageMode: "repeat",
   reliability: {
     watchdog: {
-      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+      fresh: {
+        ...CLI_FRESH_WATCHDOG_DEFAULTS,
+        overallPolicy: "extend-on-output",
+        overallMaxMs: CLI_CODEX_WATCHDOG_OVERALL_MAX_MS,
+      },
+      resume: {
+        ...CLI_RESUME_WATCHDOG_DEFAULTS,
+        overallPolicy: "extend-on-output",
+        overallMaxMs: CLI_CODEX_WATCHDOG_OVERALL_MAX_MS,
+      },
     },
   },
   serialize: true,
@@ -123,6 +132,22 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   const baseResume = base.reliability?.watchdog?.resume ?? {};
   const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
   const overrideResume = override.reliability?.watchdog?.resume ?? {};
+  const mergedFresh = {
+    ...baseFresh,
+    ...overrideFresh,
+    evidence: {
+      ...baseFresh.evidence,
+      ...overrideFresh.evidence,
+    },
+  };
+  const mergedResume = {
+    ...baseResume,
+    ...overrideResume,
+    evidence: {
+      ...baseResume.evidence,
+      ...overrideResume.evidence,
+    },
+  };
   return {
     ...base,
     ...override,
@@ -139,14 +164,8 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
       watchdog: {
         ...base.reliability?.watchdog,
         ...override.reliability?.watchdog,
-        fresh: {
-          ...baseFresh,
-          ...overrideFresh,
-        },
-        resume: {
-          ...baseResume,
-          ...overrideResume,
-        },
+        fresh: mergedFresh,
+        resume: mergedResume,
       },
     },
   };
