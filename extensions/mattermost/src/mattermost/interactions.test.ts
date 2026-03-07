@@ -447,12 +447,14 @@ describe("createMattermostInteractionHandler", () => {
     method?: string;
     body?: unknown;
     remoteAddress?: string;
+    headers?: Record<string, string>;
   }): IncomingMessage {
     const body = params.body === undefined ? "" : JSON.stringify(params.body);
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
     const req = {
       method: params.method ?? "POST",
+      headers: params.headers ?? {},
       socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
       on(event: string, handler: (...args: unknown[]) => void) {
         const existing = listeners.get(event) ?? [];
@@ -494,7 +496,7 @@ describe("createMattermostInteractionHandler", () => {
     return res as unknown as ServerResponse & { headers: Record<string, string>; body: string };
   }
 
-  it("accepts non-localhost requests when the interaction token is valid", async () => {
+  it("accepts callback requests from an allowlisted source IP", async () => {
     const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
     const token = generateInteractionToken(context, "acct");
     const requestLog: Array<{ path: string; method?: string }> = [];
@@ -516,6 +518,7 @@ describe("createMattermostInteractionHandler", () => {
       } as unknown as MattermostClient,
       botUserId: "bot",
       accountId: "acct",
+      allowedSourceIps: ["198.51.100.8"],
     });
 
     const req = createReq({
@@ -538,6 +541,80 @@ describe("createMattermostInteractionHandler", () => {
       { path: "/posts/post-1", method: undefined },
       { path: "/posts/post-1", method: "PUT" },
     ]);
+  });
+
+  it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async (_path: string, init?: { method?: string }) => {
+          if (init?.method === "PUT") {
+            return { id: "post-1" };
+          }
+          return {
+            channel_id: "chan-1",
+            message: "Choose",
+            props: {
+              attachments: [{ actions: [{ id: "approve", name: "Approve" }] }],
+            },
+          };
+        },
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+      allowedSourceIps: ["198.51.100.8"],
+      trustedProxies: ["127.0.0.1"],
+    });
+
+    const req = createReq({
+      remoteAddress: "127.0.0.1",
+      headers: { "x-forwarded-for": "198.51.100.8" },
+      body: {
+        user_id: "user-1",
+        user_name: "alice",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+  });
+
+  it("rejects callback requests from non-allowlisted source IPs", async () => {
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async () => {
+          throw new Error("should not fetch post for rejected origins");
+        },
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+      allowedSourceIps: ["127.0.0.1"],
+    });
+
+    const req = createReq({
+      remoteAddress: "198.51.100.8",
+      body: {
+        user_id: "user-1",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain("Forbidden origin");
   });
 
   it("rejects requests with an invalid interaction token", async () => {

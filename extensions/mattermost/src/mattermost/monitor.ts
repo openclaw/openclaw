@@ -121,6 +121,10 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
+function normalizeInteractionSourceIps(values?: string[]): string[] {
+  return (values ?? []).map((value) => value.trim()).filter(Boolean);
+}
+
 const recentInboundMessages = createDedupeCache({
   ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
   maxSize: RECENT_MATTERMOST_MESSAGE_MAX,
@@ -478,6 +482,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     interactions: account.config.interactions,
   });
   setInteractionCallbackUrl(account.accountId, callbackUrl);
+  const allowedInteractionSourceIps = normalizeInteractionSourceIps(
+    account.config.interactions?.allowedSourceIps,
+  );
 
   try {
     const mmHost = new URL(baseUrl).hostname;
@@ -487,9 +494,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         `mattermost: interactions callbackUrl resolved to ${callbackUrl} (loopback) while baseUrl is ${baseUrl}. This MAY be unreachable depending on your deployment. If button clicks don't work, set channels.mattermost.interactions.callbackBaseUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).`,
       );
     }
+    if (!isLoopbackHost(callbackHost) && allowedInteractionSourceIps.length === 0) {
+      runtime.error?.(
+        `mattermost: interactions callbackUrl resolved to ${callbackUrl} without channels.mattermost.interactions.allowedSourceIps. For safety, non-loopback callback sources will be rejected until you allowlist the Mattermost server or trusted ingress IPs.`,
+      );
+    }
   } catch {
     // URL parse failed; ignore and continue (we will fail naturally if callbacks cannot be delivered).
   }
+
+  const effectiveInteractionSourceIps =
+    allowedInteractionSourceIps.length > 0 ? allowedInteractionSourceIps : ["127.0.0.1", "::1"];
 
   const unregisterInteractions = registerPluginHttpRoute({
     path: interactionPath,
@@ -499,6 +514,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       client,
       botUserId,
       accountId: account.accountId,
+      allowedSourceIps: effectiveInteractionSourceIps,
+      trustedProxies: cfg.gateway?.trustedProxies,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
       handleInteraction: handleModelPickerInteraction,
       resolveSessionKey: async (channelId: string, userId: string) => {
         const channelInfo = await resolveChannelInfo(channelId);

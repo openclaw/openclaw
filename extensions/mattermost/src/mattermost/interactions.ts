@@ -1,6 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import {
+  isTrustedProxyAddress,
+  resolveClientIp,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient } from "./client.js";
 
@@ -74,6 +78,34 @@ function isWildcardBindHost(rawHost: string): boolean {
 
 function normalizeCallbackBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || undefined;
+  }
+  return value?.trim() || undefined;
+}
+
+function isAllowedInteractionSource(params: {
+  req: IncomingMessage;
+  allowedSourceIps?: string[];
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+}): boolean {
+  const { allowedSourceIps } = params;
+  if (!allowedSourceIps?.length) {
+    return true;
+  }
+
+  const clientIp = resolveClientIp({
+    remoteAddr: params.req.socket?.remoteAddress,
+    forwardedFor: headerValue(params.req.headers["x-forwarded-for"]),
+    realIp: headerValue(params.req.headers["x-real-ip"]),
+    trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
+  });
+  return isTrustedProxyAddress(clientIp, allowedSourceIps);
 }
 
 /**
@@ -355,6 +387,9 @@ export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
   botUserId: string;
   accountId: string;
+  allowedSourceIps?: string[];
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   resolveSessionKey?: (channelId: string, userId: string) => Promise<string>;
   handleInteraction?: (opts: {
     payload: MattermostInteractionPayload;
@@ -384,6 +419,23 @@ export function createMattermostInteractionHandler(params: {
       res.setHeader("Allow", "POST");
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      return;
+    }
+
+    if (
+      !isAllowedInteractionSource({
+        req,
+        allowedSourceIps: params.allowedSourceIps,
+        trustedProxies: params.trustedProxies,
+        allowRealIpFallback: params.allowRealIpFallback,
+      })
+    ) {
+      log?.(
+        `mattermost interaction: rejected callback source remote=${req.socket?.remoteAddress ?? "?"}`,
+      );
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Forbidden origin" }));
       return;
     }
 
