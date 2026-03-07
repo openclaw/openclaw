@@ -149,6 +149,18 @@ function createOpenAiProviderTarget(params?: {
   };
 }
 
+function createOpenAiProviderHeaderTarget(params?: {
+  path?: string;
+  pathSegments?: string[];
+}): SecretsApplyPlan["targets"][number] {
+  return {
+    type: "models.providers.headers",
+    path: params?.path ?? "models.providers.openai.headers.x-api-key",
+    ...(params?.pathSegments ? { pathSegments: params.pathSegments } : {}),
+    ref: OPENAI_API_KEY_ENV_REF,
+  };
+}
+
 function createOneWayScrubOptions(): NonNullable<SecretsApplyPlan["options"]> {
   return {
     scrubEnv: true,
@@ -434,6 +446,47 @@ describe("secrets apply", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
+  });
+
+  it("applies model provider header targets", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            ...createOpenAiProviderConfig(),
+            headers: {
+              "x-api-key": "sk-header-plaintext",
+            },
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [
+        createOpenAiProviderHeaderTarget({
+          pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
+        }),
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const nextConfig = await applyPlanAndReadConfig<{
+      models?: {
+        providers?: {
+          openai?: {
+            headers?: Record<string, unknown>;
+          };
+        };
+      };
+    }>(fixture, plan);
+    expect(nextConfig.models?.providers?.openai?.headers?.["x-api-key"]).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
   });
 
   it("applies array-indexed targets for agent memory search", async () => {

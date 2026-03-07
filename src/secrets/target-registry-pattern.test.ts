@@ -39,6 +39,17 @@ describe("target registry pattern helpers", () => {
     expect(materializePathTokens(refTokens, ["anthropic"])).toBeNull();
   });
 
+  it("matches two wildcard captures in five-segment header paths", () => {
+    const tokens = parsePathPattern("models.providers.*.headers.*");
+    const match = matchPathTokens(
+      ["models", "providers", "openai", "headers", "x-api-key"],
+      tokens,
+    );
+    expect(match).toEqual({
+      captures: ["openai", "x-api-key"],
+    });
+  });
+
   it("expands wildcard and array patterns over config objects", () => {
     const root = {
       agents: {

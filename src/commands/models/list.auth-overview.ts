@@ -6,11 +6,18 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
+
+function formatMarkerOrSecret(value: string): string {
+  return isNonSecretApiKeyMarker(value, { includeEnvVarName: false })
+    ? `marker(${value.trim()})`
+    : maskApiKey(value);
+}
 
 function formatProfileSecretLabel(params: {
   value: string | undefined;
@@ -19,7 +26,8 @@ function formatProfileSecretLabel(params: {
 }): string {
   const value = typeof params.value === "string" ? params.value.trim() : "";
   if (value) {
-    return params.kind === "token" ? `token:${maskApiKey(value)}` : maskApiKey(value);
+    const display = formatMarkerOrSecret(value);
+    return params.kind === "token" ? `token:${display}` : display;
   }
   if (params.ref) {
     const refLabel = `ref(${params.ref.source}:${params.ref.id})`;
@@ -108,7 +116,7 @@ export function resolveProviderAuthOverview(params: {
       };
     }
     if (customKey) {
-      return { kind: "models.json", detail: maskApiKey(customKey) };
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
     }
     return { kind: "missing", detail: "missing" };
   })();
@@ -137,7 +145,7 @@ export function resolveProviderAuthOverview(params: {
     ...(customKey
       ? {
           modelsJson: {
-            value: maskApiKey(customKey),
+            value: formatMarkerOrSecret(customKey),
             source: `models.json: ${shortenHomePath(params.modelsPath)}`,
           },
         }
