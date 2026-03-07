@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Plimsoll Financial Guard** — Financial security guard for any agent that handles money (crypto, stocks, purchases, banking). Five deterministic engines: loop detection, spend-rate limits, credential exfiltration defense (credit cards, SSNs, API keys, crypto keys), high-value confirmation gates, and amount anomaly detection. Zero dependencies, fail-closed.
+  npm: `openclaw-plimsoll-security`
+  repo: `https://github.com/scoootscooob/openclaw-plimsoll-security`
+  install: `openclaw plugins install openclaw-plimsoll-security`
