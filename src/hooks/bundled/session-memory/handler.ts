@@ -63,10 +63,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const context = event.context || {};
 
     // Check if another hook (e.g., security plugin) blocked the save.
-    // Internal hooks execute sequentially in FIFO registration order.
-    // Managed/workspace hooks that set blockSessionSave or sessionSaveContent
-    // must register for the same event (command:new / command:reset) and will
-    // run before this bundled handler as long as they are loaded first.
+    // NOTE: Internal hooks execute sequentially in FIFO registration order.
+    // Bundled hooks register before managed/workspace hooks (see workspace.ts
+    // loadHookEntries merge order), so this check only works when the policy
+    // decision is set by a typed plugin hook (registerTypedHook) that fires
+    // earlier in the agent lifecycle, or by a hook loaded via extraDirs that
+    // registers before bundled hooks. Managed/workspace internal hooks that
+    // set blockSessionSave on the same event will run AFTER this handler.
     if (context.blockSessionSave === true) {
       log.debug("Session save blocked by upstream hook");
       return;
