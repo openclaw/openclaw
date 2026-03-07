@@ -80,14 +80,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(
-      sessionId,
-      params.sessionEntry,
-      resolveSessionFilePathOptions({
-        agentId: params.agentId,
-        storePath: params.storePath,
-      }),
-    ),
+    sessionFile: params.sessionEntry.sessionFile,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     config: params.cfg,

@@ -223,10 +223,16 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         : undefined;
 
     // Determine which session to learn from (after ACP resolution)
+    // For non-ACP resets, use previousSessionEntry because initSessionState already rotated to fresh session
     const targetSessionKey = boundAcpKey ?? params.sessionKey;
-    const targetSessionEntry = boundAcpKey
-      ? resolveSessionEntryForHookSessionKey(params.sessionStore, boundAcpKey)
-      : params.sessionEntry;
+    let targetSessionEntry: typeof params.sessionEntry;
+    if (boundAcpKey) {
+      targetSessionEntry = resolveSessionEntryForHookSessionKey(params.sessionStore, boundAcpKey);
+    } else if (params.previousSessionEntry?.sessionId) {
+      targetSessionEntry = params.previousSessionEntry;
+    } else {
+      targetSessionEntry = params.sessionEntry;
+    }
 
     // Trigger learning before reset/new commands (after ACP target resolution)
     if (targetSessionEntry?.sessionId) {
@@ -238,14 +244,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         groupChannel: targetSessionEntry.groupChannel,
         groupSpace: targetSessionEntry.space,
         spawnedBy: targetSessionEntry.spawnedBy,
-        sessionFile: resolveSessionFilePath(
-          targetSessionEntry.sessionId,
-          targetSessionEntry,
-          resolveSessionFilePathOptions({
-            agentId: params.agentId,
-            storePath: params.storePath,
-          }),
-        ),
+        sessionFile: targetSessionEntry.sessionFile,
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         config: params.cfg,
