@@ -253,7 +253,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const postModeRaw =
             typeof opts.postMode === "string" ? opts.postMode.trim() : undefined;
-          if (postModeRaw && postModeRaw !== "summary" && postModeRaw !== "off") {
+          if (postModeRaw && postModeRaw !== "summary" && postModeRaw !== "full" && postModeRaw !== "off") {
             throw new Error("--post-mode must be summary or off");
           }
 

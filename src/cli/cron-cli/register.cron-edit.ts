@@ -138,7 +138,7 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.postMode === "string") {
             const pm = opts.postMode.trim();
-            if (pm !== "summary" && pm !== "off") {
+            if (pm !== "summary" && pm !== "full" && pm !== "off") {
               throw new Error("--post-mode must be summary or off");
             }
             patch.postToMainMode = pm;
