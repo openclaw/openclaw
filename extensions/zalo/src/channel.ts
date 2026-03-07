@@ -159,10 +159,8 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       if (groupPolicy !== "open") {
         return [];
       }
-      const explicitGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) =>
-        String(entry),
-      );
-      const dmAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
+      const explicitGroupAllowFrom = mapAllowFromEntries(account.config.groupAllowFrom);
+      const dmAllowFrom = mapAllowFromEntries(account.config.allowFrom);
       const effectiveAllowFrom =
         explicitGroupAllowFrom.length > 0 ? explicitGroupAllowFrom : dmAllowFrom;
       if (effectiveAllowFrom.length > 0) {
