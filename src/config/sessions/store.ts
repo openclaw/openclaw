@@ -405,20 +405,15 @@ async function saveSessionStoreUnlocked(
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      for (const [sessionId, sessionFile] of removedSessionFiles) {
-        if (referencedSessionIds.has(sessionId)) {
-          continue;
-        }
-        const archived = archiveSessionTranscripts({
-          sessionId,
-          storePath,
-          sessionFile,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
-        for (const archivedPath of archived) {
-          archivedDirs.add(path.dirname(archivedPath));
-        }
+      const archivedForDeletedSessions = archiveRemovedSessionTranscripts({
+        removedSessionFiles,
+        referencedSessionIds,
+        storePath,
+        reason: "deleted",
+        restrictToStoreDir: true,
+      });
+      for (const archivedDir of archivedForDeletedSessions) {
+        archivedDirs.add(archivedDir);
       }
       if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
         const targetDirs =
@@ -572,6 +567,32 @@ function rememberRemovedSessionFile(
   if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
     removedSessionFiles.set(entry.sessionId, entry.sessionFile);
   }
+}
+
+export function archiveRemovedSessionTranscripts(params: {
+  removedSessionFiles: Iterable<[string, string | undefined]>;
+  referencedSessionIds: ReadonlySet<string>;
+  storePath: string;
+  reason: "deleted" | "reset";
+  restrictToStoreDir?: boolean;
+}): Set<string> {
+  const archivedDirs = new Set<string>();
+  for (const [sessionId, sessionFile] of params.removedSessionFiles) {
+    if (params.referencedSessionIds.has(sessionId)) {
+      continue;
+    }
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath: params.storePath,
+      sessionFile,
+      reason: params.reason,
+      restrictToStoreDir: params.restrictToStoreDir,
+    });
+    for (const archivedPath of archived) {
+      archivedDirs.add(path.dirname(archivedPath));
+    }
+  }
+  return archivedDirs;
 }
 
 async function writeSessionStoreAtomic(params: {

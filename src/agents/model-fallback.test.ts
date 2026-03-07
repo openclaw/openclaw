@@ -1062,7 +1062,7 @@ describe("runWithModelFallback", () => {
   describe("fallback behavior with provider cooldowns", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
-      reason: "rate_limit" | "auth" | "billing",
+      reason: "rate_limit" | "overloaded" | "auth" | "billing",
     ): Promise<{ store: AuthProfileStore; dir: string }> {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const now = Date.now();
@@ -1073,12 +1073,12 @@ describe("runWithModelFallback", () => {
         },
         usageStats: {
           [`${provider}:default`]:
-            reason === "rate_limit"
+            reason === "rate_limit" || reason === "overloaded"
               ? {
-                  // Real rate-limit cooldowns are tracked through cooldownUntil
-                  // and failureCounts, not disabledReason.
+                  // Transient cooldown reasons are tracked through
+                  // cooldownUntil and failureCounts, not disabledReason.
                   cooldownUntil: now + 300000,
-                  failureCounts: { rate_limit: 1 },
+                  failureCounts: { [reason]: 1 },
                 }
               : {
                   // Auth/billing issues use disabledUntil
@@ -1117,7 +1117,37 @@ describe("runWithModelFallback", () => {
       expect(result.result).toBe("sonnet success");
       expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
-        allowRateLimitCooldownProbe: true,
+        allowTransientCooldownProbe: true,
+      });
+    });
+
+    it("attempts same-provider fallbacks during overloaded cooldown", async () => {
+      const { dir } = await makeAuthStoreWithCooldown("anthropic", "overloaded");
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: dir,
+      });
+
+      expect(result.result).toBe("sonnet success");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowTransientCooldownProbe: true,
       });
     });
 
@@ -1224,7 +1254,7 @@ describe("runWithModelFallback", () => {
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
-        allowRateLimitCooldownProbe: true,
+        allowTransientCooldownProbe: true,
       }); // Rate limit allows attempt
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });

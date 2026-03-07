@@ -330,6 +330,131 @@ describe("sanitizeSessionHistory", () => {
     expect(assistants[1]?.usage).toBeDefined();
   });
 
+  it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer without usage" }],
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
+  });
+
+  it("normalizes mixed partial assistant usage fields to numeric totals", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer with partial usage" }],
+        usage: {
+          output: 3,
+          cache_read_input_tokens: 9,
+        },
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual({
+      input: 0,
+      output: 3,
+      cacheRead: 9,
+      cacheWrite: 0,
+      totalTokens: 12,
+    });
+  });
+
+  it("preserves existing usage cost while normalizing token fields", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer with partial usage and cost" }],
+        usage: {
+          output: 3,
+          cache_read_input_tokens: 9,
+          cost: {
+            input: 1.25,
+            output: 2.5,
+            cacheRead: 0.25,
+            cacheWrite: 0,
+            total: 4,
+          },
+        },
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual({
+      ...makeZeroUsageSnapshot(),
+      input: 0,
+      output: 3,
+      cacheRead: 9,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cost: {
+        input: 1.25,
+        output: 2.5,
+        cacheRead: 0.25,
+        cacheWrite: 0,
+        total: 4,
+      },
+    });
+  });
+
+  it("preserves unknown cost when token fields already match", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer with complete numeric usage but no cost" }],
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 3,
+          cacheWrite: 4,
+          totalTokens: 10,
+        },
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      totalTokens: 10,
+    });
+    expect((assistant?.usage as { cost?: unknown } | undefined)?.cost).toBeUndefined();
+  });
+
   it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 

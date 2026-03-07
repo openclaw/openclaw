@@ -242,6 +242,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
+    subagent: {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      getSession: vi.fn(),
+      deleteSession: vi.fn(),
+    },
   };
 
   return mergeDeep(base, overrides);

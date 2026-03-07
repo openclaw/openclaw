@@ -1,3 +1,5 @@
+import { pcmToMulaw } from "../telephony-audio.js";
+
 /**
  * OpenAI TTS Provider
  *
@@ -177,55 +179,6 @@ function resample24kTo8k(input: Buffer): Buffer {
  */
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
-}
-
-/**
- * Convert 16-bit PCM to 8-bit mu-law.
- * Standard G.711 mu-law encoding for telephony.
- */
-function pcmToMulaw(pcm: Buffer): Buffer {
-  const samples = pcm.length / 2;
-  const mulaw = Buffer.alloc(samples);
-
-  for (let i = 0; i < samples; i++) {
-    const sample = pcm.readInt16LE(i * 2);
-    mulaw[i] = linearToMulaw(sample);
-  }
-
-  return mulaw;
-}
-
-/**
- * Convert a single 16-bit linear sample to 8-bit mu-law.
- * Implements ITU-T G.711 mu-law encoding.
- */
-function linearToMulaw(sample: number): number {
-  const BIAS = 132;
-  const CLIP = 32635;
-
-  // Get sign bit
-  const sign = sample < 0 ? 0x80 : 0;
-  if (sample < 0) {
-    sample = -sample;
-  }
-
-  // Clip to prevent overflow
-  if (sample > CLIP) {
-    sample = CLIP;
-  }
-
-  // Add bias and find segment
-  sample += BIAS;
-  let exponent = 7;
-  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {
-    // Find the segment (exponent)
-  }
-
-  // Extract mantissa bits
-  const mantissa = (sample >> (exponent + 3)) & 0x0f;
-
-  // Combine into mu-law byte (inverted for transmission)
-  return ~(sign | (exponent << 4) | mantissa) & 0xff;
 }
 
 /**

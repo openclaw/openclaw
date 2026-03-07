@@ -118,26 +118,21 @@ describe("sendFileUrl", () => {
 function mockUserListResponse(
   users: Array<{ user_id: number; username: string; nickname: string }>,
 ) {
-  const httpsGet = vi.mocked((https as any).get);
-  httpsGet.mockImplementation((_url: any, _opts: any, callback: any) => {
-    const res = new EventEmitter() as any;
-    res.statusCode = 200;
-    process.nextTick(() => {
-      callback(res);
-      res.emit("data", Buffer.from(JSON.stringify({ success: true, data: { users } })));
-      res.emit("end");
-    });
-    const req = new EventEmitter() as any;
-    req.destroy = vi.fn();
-    return req;
-  });
+  mockUserListResponseImpl(users, false);
 }
 
 function mockUserListResponseOnce(
   users: Array<{ user_id: number; username: string; nickname: string }>,
 ) {
+  mockUserListResponseImpl(users, true);
+}
+
+function mockUserListResponseImpl(
+  users: Array<{ user_id: number; username: string; nickname: string }>,
+  once: boolean,
+) {
   const httpsGet = vi.mocked((https as any).get);
-  httpsGet.mockImplementationOnce((_url: any, _opts: any, callback: any) => {
+  const impl = (_url: any, _opts: any, callback: any) => {
     const res = new EventEmitter() as any;
     res.statusCode = 200;
     process.nextTick(() => {
@@ -148,7 +143,12 @@ function mockUserListResponseOnce(
     const req = new EventEmitter() as any;
     req.destroy = vi.fn();
     return req;
-  });
+  };
+  if (once) {
+    httpsGet.mockImplementationOnce(impl);
+    return;
+  }
+  httpsGet.mockImplementation(impl);
 }
 
 describe("resolveChatUserId", () => {
