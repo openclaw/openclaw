@@ -53,9 +53,43 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
 }
 
+function isKimiRootAnthropicCompatEndpoint(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (model.api !== "anthropic-messages") {
+    return false;
+  }
+
+  const provider = typeof model.provider === "string" ? model.provider.trim().toLowerCase() : "";
+  if (provider === "kimi-coding") {
+    return false;
+  }
+
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "kimi.com" && !host.endsWith(".kimi.com")) {
+      return false;
+    }
+
+    const pathname = parsed.pathname.toLowerCase();
+    return pathname === "/" || pathname === "/v1" || pathname.startsWith("/v1/");
+  } catch {
+    const normalized = model.baseUrl.trim().toLowerCase().replace(/\/+$/, "");
+    return normalized === "https://api.kimi.com" || normalized.startsWith("https://api.kimi.com/v1");
+  }
+}
+
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   api?: unknown;
   provider?: unknown;
+  baseUrl?: unknown;
   compat?: unknown;
 }): boolean {
   if (model.api !== "anthropic-messages") {
@@ -66,6 +100,10 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
     typeof model.provider === "string" &&
     requiresOpenAiCompatibleAnthropicToolPayload(model.provider)
   ) {
+    return true;
+  }
+
+  if (isKimiRootAnthropicCompatEndpoint(model)) {
     return true;
   }
 
@@ -81,9 +119,14 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
 
 function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
   provider?: unknown;
+  baseUrl?: unknown;
+  api?: unknown;
   compat?: unknown;
 }): boolean {
   if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
+    return true;
+  }
+  if (isKimiRootAnthropicCompatEndpoint(model)) {
     return true;
   }
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
@@ -97,12 +140,17 @@ function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
 
 function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
   provider?: unknown;
+  baseUrl?: unknown;
+  api?: unknown;
   compat?: unknown;
 }): boolean {
   if (
     typeof model.provider === "string" &&
     usesOpenAiStringModeAnthropicToolChoice(model.provider)
   ) {
+    return true;
+  }
+  if (isKimiRootAnthropicCompatEndpoint(model)) {
     return true;
   }
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
