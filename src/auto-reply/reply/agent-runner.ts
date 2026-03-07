@@ -161,6 +161,11 @@ export async function runReplyAgent(params: {
       : null;
 
   if (shouldSteer && isStreaming && !shouldFollowup) {
+    // Drop heartbeats when a run is active — they should never block user messages.
+    if (isHeartbeat) {
+      typing.cleanup();
+      return undefined;
+    }
     // Inject the message into the running session via followUp().
     // The main agent will see it after current tool calls complete
     // and respond naturally, avoiding duplicate replies.
@@ -182,6 +187,11 @@ export async function runReplyAgent(params: {
   }
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
+    // Drop heartbeats when a run is active — they should never block user messages.
+    if (isHeartbeat) {
+      typing.cleanup();
+      return undefined;
+    }
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     if (activeSessionEntry && activeSessionStore && sessionKey) {
       const updatedAt = Date.now();
