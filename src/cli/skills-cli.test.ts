@@ -148,6 +148,32 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
+
+    it("resolves skill info case-insensitively", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "Excel XLSX",
+          skillKey: "Excel-XLSX",
+          description: "Spreadsheet helpers",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
+    });
+
+    it("resolves skill info across separator variants", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "Excel XLSX",
+          skillKey: "excel_xlsx",
+          description: "Spreadsheet helpers",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
+    });
   });
 
   describe("formatSkillsCheck", () => {
