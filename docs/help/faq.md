@@ -2098,17 +2098,17 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
 
    ```bash
    # Windows
-   set OLLAMA_API_KEY=ollama-local
+   set OLLAMA_API_KEY=ollama-local # pragma: allowlist secret
 
    # macOS/Linux
-   export OLLAMA_API_KEY=ollama-local
+   export OLLAMA_API_KEY=ollama-local # pragma: allowlist secret
    ```
 
    - Or add to your config file:
 
    ```json5
    {
-     env: { OLLAMA_API_KEY: "ollama-local" },
+     env: { OLLAMA_API_KEY: "ollama-local" }, // pragma: allowlist secret
    }
    ```
 
@@ -2116,12 +2116,12 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
 
    ```json5
    {
-     env: { OLLAMA_API_KEY: "ollama-local" },
+     env: { OLLAMA_API_KEY: "ollama-local" }, // pragma: allowlist secret
      models: {
        providers: {
          ollama: {
            baseUrl: "http://localhost:11434", // No /v1 suffix - use native Ollama API
-           apiKey: "ollama-local",
+           apiKey: "ollama-local", // pragma: allowlist secret
            api: "ollama", // Use native Ollama API for reliable tool calling (OpenAI-compatible mode breaks tool calling)
          },
        },
