@@ -28,6 +28,7 @@ type RestartPostCheckContext = {
   stdout: Writable;
   warnings: string[];
   fail: (message: string, hints?: string[]) => void;
+  restartPort?: number;
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -253,6 +254,7 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  restartPort?: number;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
@@ -315,9 +317,9 @@ export async function runServiceRestart(params: {
   }
 
   try {
-    await params.service.restart({ env: process.env, stdout });
+    await params.service.restart({ env: process.env, stdout, port: params.restartPort });
     if (params.postRestartCheck) {
-      await params.postRestartCheck({ json, stdout, warnings, fail });
+      await params.postRestartCheck({ json, stdout, warnings, fail, restartPort: params.restartPort });
     }
     let restarted = true;
     try {
