@@ -304,6 +304,11 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Per-agent outbound A2A override. Falls back to global tools.agentToAgent.allow when unset. */
+  agentToAgent?: {
+    /** Outbound agent IDs this agent may target; [] isolates the agent from cross-agent access. */
+    allow?: string[];
+  };
   sandbox?: {
     tools?: {
       allow?: string[];
