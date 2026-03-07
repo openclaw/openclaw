@@ -673,6 +673,9 @@ export async function onTimer(state: CronServiceState) {
       });
     }
   } finally {
+    // Prevent watchdog/onTimer race that can duplicate runs.
+    stopTimer(state);
+
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
     // Placed in `finally` so the reaper runs even when a long-running job keeps
     // `state.running` true across multiple timer ticks — the early return at the
