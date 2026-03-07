@@ -1,7 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
-  mapAllowFromEntries,
+  createScopedAccountConfigAccessors,
 } from "openclaw/plugin-sdk";
 import {
   buildChannelConfigSchema,
@@ -33,6 +33,17 @@ const meta = {
   blurb: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
   systemImage: "message.fill",
 };
+
+const lineConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) =>
+    getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+  resolveAllowFrom: (account: ResolvedLineAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => entry.replace(/^line:(?:user:)?/i, "")),
+});
 
 function patchLineAccountConfig(
   cfg: OpenClawConfig,
@@ -147,19 +158,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(
-        getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined })
-          .config.allowFrom,
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => {
-          // LINE sender IDs are case-sensitive; keep original casing.
-          return entry.replace(/^line:(?:user:)?/i, "");
-        }),
+    ...lineConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

@@ -1,9 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  createScopedAccountConfigAccessors,
   formatNormalizedAllowFromEntries,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -59,6 +58,17 @@ const formatAllowFromEntry = (entry: string) =>
     .replace(/^users\//i, "")
     .toLowerCase();
 
+const googleChatConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveGoogleChatAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: formatAllowFromEntry,
+    }),
+  resolveDefaultTo: (account: ResolvedGoogleChatAccount) => account.config.defaultTo,
+});
+
 export const googlechatDock: ChannelDock = {
   id: "googlechat",
   capabilities: {
@@ -69,15 +79,7 @@ export const googlechatDock: ChannelDock = {
     blockStreaming: true,
   },
   outbound: { textChunkLimit: 4000 },
-  config: {
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveGoogleChatAccount({ cfg: cfg, accountId }).config.dm?.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: formatAllowFromEntry,
-      }),
-  },
+  config: googleChatConfigAccessors,
   groups: {
     resolveRequireMention: resolveGoogleChatGroupRequireMention,
   },
@@ -176,20 +178,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       configured: account.credentialSource !== "none",
       credentialSource: account.credentialSource,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(
-        resolveGoogleChatAccount({
-          cfg: cfg,
-          accountId,
-        }).config.dm?.allowFrom,
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: formatAllowFromEntry,
-      }),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo),
+    ...googleChatConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
