@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
@@ -6,6 +7,143 @@ export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
 };
+type NoProxyEntry = {
+  pattern: string;
+  port?: string;
+};
+
+function normalizeNoProxyEntry(entry: string): NoProxyEntry | null {
+  const value = entry.trim().toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (value === "*" || value.includes("/")) {
+    return { pattern: value };
+  }
+  if (value.startsWith("[")) {
+    const closingBracket = value.indexOf("]");
+    if (closingBracket > 0) {
+      const pattern = value.slice(1, closingBracket);
+      const remainder = value.slice(closingBracket + 1);
+      if (!remainder) {
+        return { pattern };
+      }
+      if (/^:\d+$/.test(remainder)) {
+        return { pattern, port: remainder.slice(1) };
+      }
+      return { pattern: value };
+    }
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount === 1) {
+    const lastColon = value.lastIndexOf(":");
+    const pattern = value.slice(0, lastColon);
+    const port = value.slice(lastColon + 1);
+    if (pattern && /^\d+$/.test(port)) {
+      return { pattern, port };
+    }
+  }
+  return { pattern: value };
+}
+
+function getNoProxyEntries(env: NodeJS.ProcessEnv): NoProxyEntry[] {
+  return [env.NO_PROXY, env.no_proxy]
+    .flatMap((value) => String(value ?? "").split(","))
+    .map(normalizeNoProxyEntry)
+    .filter((entry): entry is NoProxyEntry => Boolean(entry));
+}
+
+function getDefaultPort(protocol: string): string {
+  if (protocol === "http:") {
+    return "80";
+  }
+  if (protocol === "https:") {
+    return "443";
+  }
+  return "";
+}
+
+function parseIpv4(value: string): number | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+  let result = 0;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) {
+      return null;
+    }
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return null;
+    }
+    result = (result << 8) | octet;
+  }
+  return result >>> 0;
+}
+
+function matchesIpv4Cidr(hostname: string, cidr: string): boolean {
+  const [network, prefixRaw] = cidr.split("/");
+  const hostValue = parseIpv4(hostname);
+  const networkValue = parseIpv4(network ?? "");
+  const prefix = Number(prefixRaw);
+  if (hostValue === null || networkValue === null || !Number.isInteger(prefix)) {
+    return false;
+  }
+  if (prefix < 0 || prefix > 32) {
+    return false;
+  }
+  if (prefix === 0) {
+    return true;
+  }
+  const mask = (0xffffffff << (32 - prefix)) >>> 0;
+  return (hostValue & mask) === (networkValue & mask);
+}
+
+function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
+  let hostname: string;
+  let port: string;
+  try {
+    const target = new URL(targetUrl);
+    const rawHostname = target.hostname.trim().toLowerCase();
+    hostname =
+      rawHostname.startsWith("[") && rawHostname.endsWith("]")
+        ? rawHostname.slice(1, -1)
+        : rawHostname;
+    port = target.port || getDefaultPort(target.protocol);
+  } catch {
+    return false;
+  }
+
+  if (!hostname) {
+    return false;
+  }
+  if (hostname === "localhost" || hostname === "::1") {
+    return true;
+  }
+  if (isIP(hostname) === 4 && matchesIpv4Cidr(hostname, "127.0.0.0/8")) {
+    return true;
+  }
+
+  const entries = getNoProxyEntries(env);
+  return entries.some((entry) => {
+    if (entry.pattern === "*") {
+      return true;
+    }
+    if (entry.port && port && entry.port !== port) {
+      return false;
+    }
+    // Support the CIDR-style no_proxy values commonly used in local/self-hosted
+    // deployments even though undici's EnvHttpProxyAgent does not reliably do so.
+    if (entry.pattern.includes("/")) {
+      return isIP(hostname) === 4 && matchesIpv4Cidr(hostname, entry.pattern);
+    }
+    if (entry.pattern.startsWith(".")) {
+      return hostname.endsWith(entry.pattern);
+    }
+    return hostname === entry.pattern || hostname.endsWith(`.${entry.pattern}`);
+  });
+}
 
 /**
  * Create a fetch function that routes requests through the given HTTP proxy.
@@ -51,10 +189,15 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
  * Returns undefined when no proxy is configured.
  * Gracefully returns undefined if the proxy URL is malformed.
  */
-export function resolveProxyFetchFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): typeof fetch | undefined {
-  if (!hasEnvHttpProxyConfigured("https", env)) {
+export function resolveProxyFetchFromEnv(targetUrl?: string): typeof fetch | undefined {
+  if (!hasEnvHttpProxyConfigured("https")) {
+    return undefined;
+  }
+  // Use the default fetch path only for loopback targets or hosts the operator
+  // explicitly excluded through NO_PROXY. This keeps proxy behavior aligned
+  // with standard clients while still allowing self-hosted STT/media backends
+  // to opt out when multipart uploads break through proxy wrappers.
+  if (targetUrl && shouldBypassProxy(targetUrl, process.env)) {
     return undefined;
   }
   try {
