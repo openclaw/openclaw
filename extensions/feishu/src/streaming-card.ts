@@ -114,7 +114,8 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private pendingFlushTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  private updateThrottleMs = 300; // Throttle updates to ~3/sec
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -254,32 +255,55 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
+    // The incoming text is CUMULATIVE (the full response so far from onPartialReply).
+    // Treat it as a direct replacement — no merging needed.
+    if (!text || text === this.state.currentText) {
       return;
     }
 
     // Throttle: skip if updated recently, but remember pending text
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = mergedInput;
+      this.pendingText = text;
+      // Schedule a flush after throttle interval if not already scheduled
+      if (!this.pendingFlushTimer) {
+        this.pendingFlushTimer = setTimeout(() => {
+          this.pendingFlushTimer = undefined;
+          if (this.pendingText && !this.closed) {
+            const pending = this.pendingText;
+            this.pendingText = null;
+            this.lastUpdateTime = Date.now();
+            this.enqueueUpdate(pending);
+          }
+        }, this.updateThrottleMs);
+      }
       return;
     }
     this.pendingText = null;
     this.lastUpdateTime = now;
+    if (this.pendingFlushTimer) {
+      clearTimeout(this.pendingFlushTimer);
+      this.pendingFlushTimer = undefined;
+    }
 
+    this.enqueueUpdate(text);
+    // Don't await — let updates run in background so onPartialReply isn't blocked
+  }
+
+  private enqueueUpdate(text: string): void {
+    const updateText = text;
     this.queue = this.queue.then(async () => {
       if (!this.state || this.closed) {
         return;
       }
-      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
-      if (!mergedText || mergedText === this.state.currentText) {
+      if (updateText === this.state.currentText) {
         return;
       }
-      this.state.currentText = mergedText;
-      await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+      const delta = updateText.length - (this.state.currentText?.length ?? 0);
+      this.log?.(`streaming update: +${delta} chars (total ${updateText.length})`);
+      this.state.currentText = updateText;
+      await this.updateCardContent(updateText, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
-    await this.queue;
   }
 
   async close(finalText?: string): Promise<void> {
@@ -289,8 +313,8 @@ export class FeishuStreamingSession {
     this.closed = true;
     await this.queue;
 
-    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
+    // Use finalText if provided, else pending, else current
+    const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
 
     // Only send final update if content differs from what's already displayed
