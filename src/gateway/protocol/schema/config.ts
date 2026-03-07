@@ -28,6 +28,10 @@ const DeliveryContextSchema = Type.Optional(
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       accountId: Type.Optional(Type.String()),
+      // threadId is forwarded by gateway-tool for sessions where the session
+      // key is not :thread:-scoped (e.g. Slack replyToMode="all"), so the
+      // server can preserve the originating thread across restarts. See #18612.
+      threadId: Type.Optional(Type.String()),
     },
     { additionalProperties: false },
   ),

@@ -95,6 +95,12 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
         messageChannel: channel,
         threadId,
         accountId: origin?.accountId,
+        // Explicitly set senderIsOwner: false. The restart wake runs in a new
+        // process after an operator-triggered restart, and we cannot reliably
+        // infer the original sender's authorization level. Defaulting to false
+        // prevents a privilege escalation where any restarted session would
+        // inherit owner-level access. See #18612.
+        senderIsOwner: false,
       },
       defaultRuntime,
       params.deps,

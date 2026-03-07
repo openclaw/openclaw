@@ -90,7 +90,7 @@ function resolveSyntheticLocalProviderAuth(params: {
   }
 
   return {
-    apiKey: "ollama-local",
+    apiKey: "ollama-local", // pragma: allowlist secret
     source: "models.providers.ollama (synthetic local key)",
     mode: "api-key",
   };
