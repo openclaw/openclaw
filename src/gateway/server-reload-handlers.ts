@@ -1,5 +1,6 @@
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -128,6 +129,48 @@ export function createGatewayReloadHandlers(params: {
         for (const channel of plan.restartChannels) {
           await restartChannel(channel);
         }
+      }
+    }
+
+    // Handle channel groups hot reload (without restarting channel)
+    if (
+      (plan.reloadChannelGroups?.size ?? 0) > 0 &&
+      !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
+      !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+    ) {
+      for (const channelId of plan.reloadChannelGroups ?? []) {
+        // Skip if channel already restarted in this reload cycle
+        if (plan.restartChannels.has(channelId)) {
+          params.logChannels.info(
+            `skipping group reload for ${channelId} (already restarted in this reload cycle)`,
+          );
+          continue;
+        }
+
+        // Try to call plugin's reloadGroups hook for true hot-reload
+        // Fall back to channel restart if hook is not implemented
+        try {
+          const plugin = getChannelPlugin(channelId);
+          if (plugin?.reload?.reloadGroups) {
+            const accountIds = plugin.config.listAccountIds(nextConfig);
+            for (const accountId of accountIds) {
+              await plugin.reload.reloadGroups({ cfg: nextConfig, accountId });
+            }
+            params.logChannels.info(`hot reloaded groups for channel: ${channelId}`);
+            continue; // Success - no restart needed
+          }
+        } catch (err) {
+          params.logChannels.warn(
+            `failed to hot reload groups for ${channelId}: ${String(err)}, falling back to restart`,
+          );
+        }
+
+        // Fallback: restart the channel
+        params.logChannels.info(
+          `channel ${channelId} does not support group hot reload, restarting`,
+        );
+        await params.stopChannel(channelId);
+        await params.startChannel(channelId);
       }
     }
 
