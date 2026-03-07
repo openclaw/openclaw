@@ -1,20 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { storeDeviceAuthToken } from "./device-auth.ts";
+import type { DeviceIdentity } from "./device-identity.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
-const buildDeviceAuthPayloadMock = vi.hoisted(() => vi.fn(() => "signed-payload"));
-const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
-const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
-const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
-const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
-const signDevicePayloadMock = vi.hoisted(() => vi.fn(async () => "signature"));
-const generateUUIDMock = vi.hoisted(() => vi.fn(() => "req-1"));
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<DeviceIdentity> => ({
+      deviceId: "device-1",
+      privateKey: "private-key",
+      publicKey: "public-key",
+    }),
+  ),
+);
+const signDevicePayloadMock = vi.hoisted(() =>
+  vi.fn(async (_privateKeyBase64Url: string, _payload: string) => "signature"),
+);
 
 type HandlerMap = {
-  close: ((ev: { code: number; reason: string }) => void)[];
-  error: (() => void)[];
-  message: ((ev: { data: string }) => void)[];
-  open: (() => void)[];
+  close: MockWebSocketHandler[];
+  error: MockWebSocketHandler[];
+  message: MockWebSocketHandler[];
+  open: MockWebSocketHandler[];
 };
+
+type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
 
 class MockWebSocket {
   static OPEN = 1;
@@ -33,7 +42,7 @@ class MockWebSocket {
     wsInstances.push(this);
   }
 
-  addEventListener<K extends keyof HandlerMap>(type: K, handler: HandlerMap[K][number]) {
+  addEventListener(type: keyof HandlerMap, handler: MockWebSocketHandler) {
     this.handlers[type].push(handler);
   }
 
@@ -59,26 +68,36 @@ class MockWebSocket {
   }
 }
 
-vi.mock("../../../src/gateway/device-auth.js", () => ({
-  buildDeviceAuthPayload: (...args: unknown[]) => buildDeviceAuthPayloadMock(...args),
-}));
-
-vi.mock("./device-auth.ts", () => ({
-  clearDeviceAuthToken: (...args: unknown[]) => clearDeviceAuthTokenMock(...args),
-  loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
-  storeDeviceAuthToken: (...args: unknown[]) => storeDeviceAuthTokenMock(...args),
-}));
-
 vi.mock("./device-identity.ts", () => ({
-  loadOrCreateDeviceIdentity: (...args: unknown[]) => loadOrCreateDeviceIdentityMock(...args),
-  signDevicePayload: (...args: unknown[]) => signDevicePayloadMock(...args),
-}));
-
-vi.mock("./uuid.ts", () => ({
-  generateUUID: (...args: unknown[]) => generateUUIDMock(...args),
+  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
+  signDevicePayload: signDevicePayloadMock,
 }));
 
 const { GatewayBrowserClient } = await import("./gateway.ts");
+
+function createStorageMock(): Storage {
+  const store = new Map<string, string>();
+  return {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, String(value));
+    },
+  };
+}
 
 function getLatestWebSocket(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -91,23 +110,21 @@ function getLatestWebSocket(): MockWebSocket {
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
     wsInstances.length = 0;
-    buildDeviceAuthPayloadMock.mockClear();
-    clearDeviceAuthTokenMock.mockClear();
-    loadDeviceAuthTokenMock.mockReset();
-    storeDeviceAuthTokenMock.mockClear();
     loadOrCreateDeviceIdentityMock.mockReset();
     signDevicePayloadMock.mockClear();
-    generateUUIDMock.mockClear();
-
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
       privateKey: "private-key",
       publicKey: "public-key",
     });
 
+    const localStorage = createStorageMock();
     vi.stubGlobal("WebSocket", MockWebSocket);
-    vi.stubGlobal("crypto", { subtle: {} });
+    vi.stubGlobal("localStorage", localStorage);
+    vi.stubGlobal("crypto", {
+      randomUUID: vi.fn(() => "req-1"),
+      subtle: {},
+    });
     vi.stubGlobal("navigator", {
       language: "en-GB",
       platform: "test-platform",
@@ -115,7 +132,15 @@ describe("GatewayBrowserClient", () => {
     });
     vi.stubGlobal("window", {
       clearTimeout: vi.fn(),
+      localStorage,
       setTimeout: vi.fn(() => 1),
+    });
+
+    storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "operator",
+      token: "stored-device-token",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
     });
   });
 
@@ -140,15 +165,16 @@ describe("GatewayBrowserClient", () => {
     await Promise.resolve();
 
     const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+      id?: string;
       method?: string;
       params?: { auth?: { token?: string } };
     };
+    expect(connectFrame.id).toBe("req-1");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
-    expect(buildDeviceAuthPayloadMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "stored-device-token",
-      }),
-    );
+    expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
+    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    expect(signedPayload).toContain("|stored-device-token|nonce-1");
+    expect(signedPayload).not.toContain("shared-auth-token");
   });
 });
