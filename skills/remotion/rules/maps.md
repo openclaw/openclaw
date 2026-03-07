@@ -82,7 +82,7 @@ export const MyComposition = () => {
       center: [6.5615, 46.0598],
       pitch: 65,
       bearing: 0,
-      style: "⁠mapbox://styles/mapbox/standard",
+      style: "mapbox://styles/mapbox/standard",
       interactive: false,
       fadeDuration: 0,
     });
@@ -144,7 +144,7 @@ export const MyComposition = () => {
       continueRender(handle);
       setMap(_map);
     });
-  }, [handle, lineCoordinates]);
+  }, [lineCoordinates]);
 
   const style: React.CSSProperties = useMemo(
     () => ({ width, height, position: "absolute" }),
@@ -229,6 +229,7 @@ useEffect(() => {
   if (!map) {
     return;
   }
+  const delayHandle = delayRender("Moving point...");
 
   const routeDistance = turf.length(turf.lineString(lineCoordinates));
 
@@ -249,8 +250,8 @@ useEffect(() => {
   });
 
   map.setFreeCameraOptions(camera);
-  map.once("idle", () => continueRender(handle));
-}, [lineCoordinates, fps, frame, handle, map]);
+  map.once("idle", () => continueRender(delayHandle));
+}, [lineCoordinates, fps, frame, map, delayRender, continueRender]);
 ```
 
 Notes:
@@ -269,10 +270,14 @@ IMPORTANT: For multi-step animations, set all properties at all stages (zoom, po
 To animate a line that appears straight on the map, use linear interpolation between coordinates. Do NOT use turf's `lineSliceAlong` or `along` functions, as they use geodesic (great circle) calculations which appear curved on a Mercator projection.
 
 ```tsx
+import { useCurrentFrame, interpolate, Easing, useVideoConfig, useDelayRender, useState } from "remotion";
+
+// ...
+
 const frame = useCurrentFrame();
-const { durationInFrames, fps } = useVideoConfig();
+const { durationInFrames } = useVideoConfig();
 const { delayRender, continueRender } = useDelayRender();
-const [animationHandle] = useState(() => delayRender("Animating line..."));
+const [handle] = useState(() => delayRender("Animating line..."));
 
 useEffect(() => {
   if (!map) return;
@@ -303,8 +308,8 @@ useEffect(() => {
     source.setData(lineData);
   }
 
-  map.once("idle", () => continueRender(animationHandle));
-}, [frame, map, durationInFrames, animationHandle]);
+  map.once("idle", () => continueRender(handle));
+}, [frame, map, durationInFrames, handle, continueRender]);
 ```
 
 ### Curved lines (geodesic/great circle)
