@@ -10,6 +10,13 @@ export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
 
+/**
+ * Default PID limit for sandbox containers to prevent fork bomb attacks.
+ * A value of 1024 is reasonable for most agent workloads while preventing
+ * resource exhaustion attacks on the host system.
+ */
+export const DEFAULT_SANDBOX_PIDS_LIMIT = 1024;
+
 export const DEFAULT_TOOL_ALLOW = [
   "exec",
   "process",
