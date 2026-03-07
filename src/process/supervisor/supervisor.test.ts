@@ -12,6 +12,10 @@ function createWriteStdoutArgv(output: string): string[] {
   return ["/usr/bin/printf", "%s", output];
 }
 
+function createNodeEvalArgv(source: string): string[] {
+  return [process.execPath, "-e", source];
+}
+
 async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
   return supervisor.spawn({
     ...options,
@@ -80,13 +84,60 @@ describe("process supervisor", () => {
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s-timeout",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 12)"],
+      argv: createNodeEvalArgv("setTimeout(() => {}, 12)"),
       timeoutMs: 1,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
     expect(exit.reason).toBe("overall-timeout");
     expect(exit.timedOut).toBe(true);
+  });
+
+  it("extends overall timeout on each output chunk when configured", async () => {
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-extend",
+      argv: createNodeEvalArgv(
+        [
+          "let i = 0;",
+          "const timer = setInterval(() => {",
+          "  process.stdout.write('tick\\n');",
+          "  i += 1;",
+          "  if (i >= 5) {",
+          "    clearInterval(timer);",
+          "    process.exit(0);",
+          "  }",
+          "}, 40);",
+        ].join(" "),
+      ),
+      timeoutMs: 100,
+      overallTimeoutPolicy: "extend-on-output",
+      overallMaxMs: 1_000,
+      noOutputTimeoutMs: 300,
+      stdinMode: "pipe-closed",
+    });
+    const exit = await run.wait();
+    expect(exit.reason).toBe("exit");
+    expect(exit.exitCode).toBe(0);
+    expect(exit.outputActivity?.stdoutChunks).toBeGreaterThan(0);
+    expect(exit.outputActivity?.tail.lines.length).toBeGreaterThan(0);
+  });
+
+  it("enforces hard overall cap even when output keeps flowing", async () => {
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-hard-cap",
+      argv: createNodeEvalArgv("setInterval(() => process.stdout.write('busy\\n'), 5);"),
+      timeoutMs: 20,
+      overallTimeoutPolicy: "extend-on-output",
+      overallMaxMs: 60,
+      noOutputTimeoutMs: 500,
+      stdinMode: "pipe-closed",
+    });
+    const exit = await run.wait();
+    expect(exit.reason).toBe("overall-timeout");
+    expect(exit.timedOut).toBe(true);
+    expect(exit.noOutputTimedOut).toBe(false);
   });
 
   it("can stream output without retaining it in RunExit payload", async () => {

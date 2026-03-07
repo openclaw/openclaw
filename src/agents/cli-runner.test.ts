@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { resolveCliNoOutputTimeoutMs, resolveCliWatchdog } from "./cli-runner/helpers.js";
 
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
@@ -43,6 +43,20 @@ type MockRunExit = {
   stderr: string;
   timedOut: boolean;
   noOutputTimedOut: boolean;
+  outputActivity?: {
+    lastOutputAtMs: number;
+    silenceMs: number;
+    stdoutBytes: number;
+    stderrBytes: number;
+    stdoutChunks: number;
+    stderrChunks: number;
+    tail: {
+      lines: string[];
+      truncated: boolean;
+      maxLines: number;
+      maxChars: number;
+    };
+  };
 };
 
 function createManagedRun(exit: MockRunExit, pid = 1234) {
@@ -96,6 +110,10 @@ describe("runCliAgent with process supervisor", () => {
       mode?: string;
       timeoutMs?: number;
       noOutputTimeoutMs?: number;
+      overallTimeoutPolicy?: string;
+      overallMaxMs?: number;
+      outputTailLines?: number;
+      outputTailMaxChars?: number;
       replaceExistingScope?: boolean;
       scopeKey?: string;
     };
@@ -103,6 +121,10 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.argv?.[0]).toBe("codex");
     expect(input.timeoutMs).toBe(1_000);
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
+    expect(input.overallTimeoutPolicy).toBe("extend-on-output");
+    expect(input.overallMaxMs).toBeGreaterThanOrEqual(1_000);
+    expect(input.outputTailLines).toBeGreaterThan(0);
+    expect(input.outputTailMaxChars).toBeGreaterThan(0);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
   });
@@ -187,6 +209,20 @@ describe("runCliAgent with process supervisor", () => {
         stderr: "",
         timedOut: true,
         noOutputTimedOut: false,
+        outputActivity: {
+          lastOutputAtMs: Date.now() - 1_000,
+          silenceMs: 1_000,
+          stdoutBytes: 120,
+          stderrBytes: 8,
+          stdoutChunks: 4,
+          stderrChunks: 1,
+          tail: {
+            lines: ["stdout> still running", "stderr> warning"],
+            truncated: false,
+            maxLines: 20,
+            maxChars: 4_000,
+          },
+        },
       }),
     );
 
@@ -202,7 +238,7 @@ describe("runCliAgent with process supervisor", () => {
         runId: "run-3",
         cliSessionId: "thread-123",
       }),
-    ).rejects.toThrow("exceeded timeout");
+    ).rejects.toThrow("execution hard cap");
   });
 
   it("rethrows the retry failure when session-expired recovery retry also fails", async () => {
@@ -313,5 +349,29 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       useResume: true,
     });
     expect(timeoutMs).toBe(42_000);
+  });
+});
+
+describe("resolveCliWatchdog", () => {
+  it("defaults codex watchdog to extend-on-output with hard cap", () => {
+    const watchdog = resolveCliWatchdog({
+      backend: {
+        command: "codex",
+        reliability: {
+          watchdog: {
+            fresh: {
+              overallPolicy: "extend-on-output",
+            },
+          },
+        },
+      },
+      timeoutMs: 600_000,
+      useResume: false,
+    });
+
+    expect(watchdog.overallPolicy).toBe("extend-on-output");
+    expect(watchdog.overallMaxMs).toBeGreaterThanOrEqual(600_000);
+    expect(watchdog.evidenceTailLines).toBeGreaterThan(0);
+    expect(watchdog.evidenceMaxChars).toBeGreaterThan(0);
   });
 });

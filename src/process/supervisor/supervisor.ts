@@ -6,8 +6,10 @@ import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
 import type {
   ManagedRun,
+  OverallTimeoutPolicy,
   ProcessSupervisor,
   RunExit,
+  RunOutputActivity,
   RunRecord,
   SpawnInput,
   TerminationReason,
@@ -20,6 +22,9 @@ type ActiveRun = {
   scopeKey?: string;
 };
 
+const DEFAULT_OUTPUT_TAIL_LINES = 20;
+const DEFAULT_OUTPUT_TAIL_MAX_CHARS = 4_000;
+
 function clampTimeout(value?: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -27,8 +32,87 @@ function clampTimeout(value?: number): number | undefined {
   return Math.max(1, Math.floor(value));
 }
 
+function clampRange(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
 function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
+}
+
+function createOutputTailCapture(params: { maxLines: number; maxChars: number }) {
+  const maxLines = Math.max(1, params.maxLines);
+  const maxChars = Math.max(200, params.maxChars);
+  const lines: string[] = [];
+  let chars = 0;
+  let truncated = false;
+  let pendingStdout = "";
+  let pendingStderr = "";
+
+  const trimLine = (line: string) => {
+    if (line.length <= maxChars) {
+      return line;
+    }
+    truncated = true;
+    return line.slice(-maxChars);
+  };
+
+  const pushLine = (line: string) => {
+    const normalized = trimLine(line);
+    lines.push(normalized);
+    chars += normalized.length + 1;
+    while (lines.length > maxLines || chars > maxChars) {
+      const removed = lines.shift();
+      if (!removed) {
+        break;
+      }
+      chars -= removed.length + 1;
+      truncated = true;
+    }
+  };
+
+  const append = (stream: "stdout" | "stderr", chunk: string) => {
+    const prefix = stream === "stdout" ? "stdout> " : "stderr> ";
+    const current = stream === "stdout" ? pendingStdout : pendingStderr;
+    const merged = `${current}${chunk}`.replaceAll("\r\n", "\n");
+    const parts = merged.split("\n");
+    const remainder = parts.pop() ?? "";
+    for (const part of parts) {
+      pushLine(`${prefix}${part}`);
+    }
+    if (stream === "stdout") {
+      pendingStdout = remainder;
+    } else {
+      pendingStderr = remainder;
+    }
+  };
+
+  const flush = () => {
+    if (pendingStdout.length > 0) {
+      pushLine(`stdout> ${pendingStdout}`);
+      pendingStdout = "";
+    }
+    if (pendingStderr.length > 0) {
+      pushLine(`stderr> ${pendingStderr}`);
+      pendingStderr = "";
+    }
+  };
+
+  const snapshot = () => ({
+    lines: [...lines],
+    truncated,
+    maxLines,
+    maxChars,
+  });
+
+  return {
+    append,
+    flush,
+    snapshot,
+  };
 }
 
 export function createProcessSupervisor(): ProcessSupervisor {
@@ -81,12 +165,25 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let settled = false;
     let stdout = "";
     let stderr = "";
-    let timeoutTimer: NodeJS.Timeout | null = null;
+    let overallTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
 
     const overallTimeoutMs = clampTimeout(input.timeoutMs);
+    const overallMaxMs = clampTimeout(input.overallMaxMs);
     const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
+    const overallTimeoutPolicy: OverallTimeoutPolicy = input.overallTimeoutPolicy ?? "fixed";
+    const outputTail = createOutputTailCapture({
+      maxLines: clampRange(input.outputTailLines, 1, 200, DEFAULT_OUTPUT_TAIL_LINES),
+      maxChars: clampRange(input.outputTailMaxChars, 200, 40_000, DEFAULT_OUTPUT_TAIL_MAX_CHARS),
+    });
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutChunks = 0;
+    let stderrChunks = 0;
+    let lastOutputAtMs = startedAtMs;
+    let overallDeadlineAtMs = overallTimeoutMs ? startedAtMs + overallTimeoutMs : undefined;
+    const overallHardDeadlineAtMs = overallMaxMs ? startedAtMs + overallMaxMs : undefined;
 
     const setForcedReason = (reason: TerminationReason) => {
       if (forcedReason) {
@@ -103,8 +200,58 @@ export function createProcessSupervisor(): ProcessSupervisor {
       cancelAdapter?.(reason);
     };
 
+    const scheduleOverallTimer = () => {
+      if (settled) {
+        return;
+      }
+      if (overallTimer) {
+        clearTimeout(overallTimer);
+        overallTimer = null;
+      }
+      const now = Date.now();
+      const remainingSoft =
+        typeof overallDeadlineAtMs === "number"
+          ? overallDeadlineAtMs - now
+          : Number.POSITIVE_INFINITY;
+      const remainingHard =
+        typeof overallHardDeadlineAtMs === "number"
+          ? overallHardDeadlineAtMs - now
+          : Number.POSITIVE_INFINITY;
+      const remaining = Math.min(remainingSoft, remainingHard);
+      if (!Number.isFinite(remaining)) {
+        return;
+      }
+      if (remaining <= 0) {
+        requestCancel("overall-timeout");
+        return;
+      }
+      overallTimer = setTimeout(
+        () => {
+          if (settled) {
+            return;
+          }
+          const ts = Date.now();
+          if (
+            (typeof overallHardDeadlineAtMs === "number" && ts >= overallHardDeadlineAtMs) ||
+            (typeof overallDeadlineAtMs === "number" && ts >= overallDeadlineAtMs)
+          ) {
+            requestCancel("overall-timeout");
+            return;
+          }
+          scheduleOverallTimer();
+        },
+        Math.max(1, Math.floor(remaining)),
+      );
+    };
+
     const touchOutput = () => {
+      const ts = Date.now();
+      lastOutputAtMs = ts;
       registry.touchOutput(runId);
+      if (overallTimeoutPolicy === "extend-on-output" && overallTimeoutMs) {
+        overallDeadlineAtMs = ts + overallTimeoutMs;
+        scheduleOverallTimer();
+      }
       if (!noOutputTimeoutMs || settled) {
         return;
       }
@@ -147,9 +294,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
       registry.updateState(runId, "running", { pid: adapter.pid });
 
       const clearTimers = () => {
-        if (timeoutTimer) {
-          clearTimeout(timeoutTimer);
-          timeoutTimer = null;
+        if (overallTimer) {
+          clearTimeout(overallTimer);
+          overallTimer = null;
         }
         if (noOutputTimer) {
           clearTimeout(noOutputTimer);
@@ -164,10 +311,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
         adapter.kill("SIGKILL");
       };
 
-      if (overallTimeoutMs) {
-        timeoutTimer = setTimeout(() => {
-          requestCancel("overall-timeout");
-        }, overallTimeoutMs);
+      if (overallTimeoutMs || overallHardDeadlineAtMs) {
+        scheduleOverallTimer();
       }
       if (noOutputTimeoutMs) {
         noOutputTimer = setTimeout(() => {
@@ -179,6 +324,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (captureOutput) {
           stdout += chunk;
         }
+        stdoutBytes += Buffer.byteLength(chunk);
+        stdoutChunks += 1;
+        outputTail.append("stdout", chunk);
         input.onStdout?.(chunk);
         touchOutput();
       });
@@ -186,9 +334,25 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (captureOutput) {
           stderr += chunk;
         }
+        stderrBytes += Buffer.byteLength(chunk);
+        stderrChunks += 1;
+        outputTail.append("stderr", chunk);
         input.onStderr?.(chunk);
         touchOutput();
       });
+
+      const buildOutputActivity = (): RunOutputActivity => {
+        outputTail.flush();
+        return {
+          lastOutputAtMs,
+          silenceMs: Math.max(0, Date.now() - lastOutputAtMs),
+          stdoutBytes,
+          stderrBytes,
+          stdoutChunks,
+          stderrChunks,
+          tail: outputTail.snapshot(),
+        };
+      };
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
@@ -202,6 +366,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
             stderr,
             timedOut: isTimeoutReason(forcedReason ?? "exit"),
             noOutputTimedOut: forcedReason === "no-output-timeout",
+            outputActivity: buildOutputActivity(),
           };
         }
         settled = true;
@@ -220,6 +385,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           stderr,
           timedOut: isTimeoutReason(forcedReason ?? reason),
           noOutputTimedOut: forcedReason === "no-output-timeout",
+          outputActivity: buildOutputActivity(),
         };
         registry.finalize(runId, {
           reason: exit.reason,
