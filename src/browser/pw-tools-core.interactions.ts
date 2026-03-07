@@ -42,6 +42,68 @@ async function awaitEvalWithAbort<T>(
   }
 }
 
+/**
+ * Validates JavaScript function body for safe evaluation.
+ * Blocks access to sensitive APIs and dangerous patterns.
+ * 
+ * SECURITY: Defense-in-depth measure. Code runs in browser context (isolated),
+ * but we add validation to prevent XSS, data exfiltration, and DoS attacks.
+ */
+function validateEvalFunctionBody(fnBody: string): { ok: true } | { ok: false; error: string } {
+  if (!fnBody || typeof fnBody !== "string") {
+    return { ok: false, error: "Function body must be a non-empty string" };
+  }
+
+  // Maximum function body size (100KB)
+  if (fnBody.length > 100 * 1024) {
+    return { ok: false, error: "Function body exceeds maximum size (100KB)" };
+  }
+
+  // Dangerous patterns blocked for security
+  const dangerousPatterns: RegExp[] = [
+    /\bdocument\.cookie\b/i,           // Cookie theft
+    /\blocalStorage\b/i,                // Persistent storage access
+    /\bsessionStorage\b/i,              // Session storage access
+    /\bindexedDB\b/i,                   // Database access
+    /\bfetch\s*\(/i,                    // Network exfiltration
+    /\bXMLHttpRequest\b/i,              // XHR exfiltration
+    /\bWebSocket\b/i,                   // WebSocket connection
+    /\beval\s*\(/i,                     // Nested eval
+    /\bnew\s+Function\s*\(/i,          // Dynamic code execution
+    /\bdocument\.write\b/i,             // DOM injection
+    /\bdocument\.writeln\b/i,           // DOM injection
+    /\binnerHTML\s*=/i,                 // HTML injection
+    /\bouterHTML\s*=/i,                 // HTML injection
+    /\bwindow\.location\s*=/i,          // Redirect attacks
+    /\blocation\.href\s*=/i,            // Redirect attacks
+    /\blocation\.replace\b/i,           // Redirect attacks
+    /\blocation\.assign\b/i,            // Redirect attacks
+    /\bwindow\.open\b/i,                // Popup attacks
+    /\balert\s*\(/i,                    // User disruption
+    /\bconfirm\s*\(/i,                  // User disruption
+    /\bprompt\s*\(/i,                   // User disruption
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(fnBody)) {
+      return {
+        ok: false,
+        error: `Function body contains forbidden pattern. Blocked for security reasons.`
+      };
+    }
+  }
+
+  // Basic syntax validation (doesn't execute, just validates)
+  try {
+    new Function(`"use strict"; ${fnBody}`);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `Invalid JavaScript syntax: ${errorMessage}` };
+  }
+
+  return { ok: true };
+}
+
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -246,6 +308,13 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  
+  // SECURITY: Validate function body before evaluation to prevent XSS/injection
+  const validation = validateEvalFunctionBody(fnText);
+  if (!validation.ok) {
+    throw new Error(`evaluate() validation failed: ${validation.error}`);
+  }
+  
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
