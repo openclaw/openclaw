@@ -255,3 +255,96 @@ describe("filterBootstrapFilesForSession", () => {
     expectSubagentAllowedBootstrapNames(result);
   });
 });
+
+describe("loadWorkspaceBootstrapFiles — symlink support", () => {
+  it("loads symlinked bootstrap files pointing outside the workspace", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const externalDir = path.join(rootDir, "obsidian-vault");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(externalDir, { recursive: true });
+
+      // Create real files in external directory (simulating an Obsidian vault)
+      const externalSoulPath = path.join(externalDir, "SOUL.md");
+      const externalIdentityPath = path.join(externalDir, "IDENTITY.md");
+      await fs.writeFile(externalSoulPath, "Be helpful and concise.", "utf-8");
+      await fs.writeFile(externalIdentityPath, "**Mark** — AI assistant.", "utf-8");
+
+      // Create symlinks in workspace pointing to external files
+      await fs.symlink(externalSoulPath, path.join(workspaceDir, "SOUL.md"));
+      await fs.symlink(externalIdentityPath, path.join(workspaceDir, "IDENTITY.md"));
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+
+      const soul = files.find((file) => file.name === "SOUL.md");
+      expect(soul?.missing).toBe(false);
+      expect(soul?.content).toBe("Be helpful and concise.");
+
+      const identity = files.find((file) => file.name === "IDENTITY.md");
+      expect(identity?.missing).toBe(false);
+      expect(identity?.content).toBe("**Mark** — AI assistant.");
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still treats hardlinked bootstrap aliases as missing", async () => {
+    // Ensure the symlink fallback does not accidentally allow hardlinks
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-hardlink2-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      const outsideFile = path.join(outsideDir, DEFAULT_AGENTS_FILENAME);
+      const linkPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+      await fs.writeFile(outsideFile, "outside-hardlink", "utf-8");
+      try {
+        await fs.link(outsideFile, linkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads symlinked MEMORY.md pointing outside the workspace", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-mem-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const externalDir = path.join(rootDir, "vault");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(externalDir, { recursive: true });
+
+      const externalMemoryPath = path.join(externalDir, "MEMORY.md");
+      await fs.writeFile(externalMemoryPath, "# Long-term memory\nImportant.", "utf-8");
+      await fs.symlink(externalMemoryPath, path.join(workspaceDir, "MEMORY.md"));
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const memory = files.find((file) => file.name === "MEMORY.md");
+      expect(memory?.missing).toBe(false);
+      expect(memory?.content).toBe("# Long-term memory\nImportant.");
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+});
