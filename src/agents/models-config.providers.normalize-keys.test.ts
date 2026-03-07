@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { normalizeProviders } from "./models-config.providers.js";
 
 describe("normalizeProviders", () => {
@@ -69,6 +70,32 @@ describe("normalizeProviders", () => {
       expect(normalized?.openai?.baseUrl).toBe("https://example.com/v1");
       expect(normalized?.openai?.apiKey).toBe("CUSTOM_OPENAI_API_KEY");
       expect(normalized?.openai?.models?.[0]?.id).toBe("gpt-4.1-mini");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes SecretRef-backed provider headers to non-secret marker values", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          headers: {
+            Authorization: { source: "env", provider: "default", id: "OPENAI_HEADER_TOKEN" },
+            "X-Tenant-Token": { source: "file", provider: "vault", id: "/openai/token" },
+          },
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({
+        providers,
+        agentDir,
+      });
+      expect(normalized?.openai?.headers?.Authorization).toBe("secretref-env:OPENAI_HEADER_TOKEN");
+      expect(normalized?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

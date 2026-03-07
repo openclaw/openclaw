@@ -1,20 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { formatConfigChannelsStatusLines } from "./channels/status.js";
 
 function makeUnavailableTokenPlugin(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "token-only",
-    meta: {
-      id: "token-only",
-      label: "TokenOnly",
-      selectionLabel: "TokenOnly",
-      docsPath: "/channels/token-only",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "TokenOnly",
+    docsPath: "/channels/token-only",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -29,23 +24,14 @@ function makeUnavailableTokenPlugin(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
 }
 
 function makeResolvedTokenPlugin(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "token-only",
-    meta: {
-      id: "token-only",
-      label: "TokenOnly",
-      selectionLabel: "TokenOnly",
-      docsPath: "/channels/token-only",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "TokenOnly",
+    docsPath: "/channels/token-only",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -80,10 +66,7 @@ function makeResolvedTokenPlugin(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
 }
 
 function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
@@ -123,16 +106,10 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
 }
 
 function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "slack",
-    meta: {
-      id: "slack",
-      label: "Slack",
-      selectionLabel: "Slack",
-      docsPath: "/channels/slack",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "Slack",
+    docsPath: "/channels/slack",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -157,10 +134,20 @@ function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
+}
+
+function expectResolvedTokenStatusSummary(
+  summary: string,
+  options?: { includeUnavailableTokenLine?: boolean },
+) {
+  expect(summary).toContain("TokenOnly");
+  expect(summary).toContain("configured");
+  expect(summary).toContain("token:config");
+  expect(summary).not.toContain("secret unavailable in this command path");
+  if (options?.includeUnavailableTokenLine === false) {
+    expect(summary).not.toContain("token:config (unavailable)");
+  }
 }
 
 describe("config-only channels status output", () => {
@@ -211,11 +198,7 @@ describe("config-only channels status output", () => {
     );
 
     const joined = lines.join("\n");
-    expect(joined).toContain("TokenOnly");
-    expect(joined).toContain("configured");
-    expect(joined).toContain("token:config");
-    expect(joined).not.toContain("secret unavailable in this command path");
-    expect(joined).not.toContain("token:config (unavailable)");
+    expectResolvedTokenStatusSummary(joined, { includeUnavailableTokenLine: false });
   });
 
   it("does not resolve raw source config for extension channels without inspectAccount", async () => {
@@ -240,10 +223,7 @@ describe("config-only channels status output", () => {
     );
 
     const joined = lines.join("\n");
-    expect(joined).toContain("TokenOnly");
-    expect(joined).toContain("configured");
-    expect(joined).toContain("token:config");
-    expect(joined).not.toContain("secret unavailable in this command path");
+    expectResolvedTokenStatusSummary(joined);
   });
 
   it("renders Slack HTTP signing-secret availability in config-only status", async () => {
