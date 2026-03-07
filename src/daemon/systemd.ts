@@ -144,9 +144,9 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  // Concatenate both streams so pattern matchers (isSystemdUnitNotEnabled,
-  // isSystemctlMissing) can see the unit status from stdout even when
-  // execFileUtf8 populates stderr with the Node error message fallback.
+  // Concatenate both streams so pattern matchers (e.g. isSystemctlMissing)
+  // can see the unit status from stdout even when execFileUtf8 populates
+  // stderr with the Node error message fallback.
   return `${result.stderr} ${result.stdout}`.trim();
 }
 
@@ -160,22 +160,6 @@ function isSystemctlMissing(detail: string): boolean {
     normalized.includes("no such file or directory") ||
     normalized.includes("spawn systemctl enoent") ||
     normalized.includes("spawn systemctl eacces")
-  );
-}
-
-function isSystemdUnitNotEnabled(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
-  const normalized = detail.toLowerCase();
-  return (
-    normalized.includes("disabled") ||
-    normalized.includes("static") ||
-    normalized.includes("indirect") ||
-    normalized.includes("masked") ||
-    normalized.includes("not-found") ||
-    normalized.includes("could not be found") ||
-    normalized.includes("failed to get unit file state")
   );
 }
 
@@ -429,11 +413,15 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.code === 0) {
     return true;
   }
-  const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
-    return false;
-  }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  // Any non-zero exit from `is-enabled` means the unit is not in an enabled
+  // state.  This covers disabled, static, masked, not-found, systemctl not
+  // installed, and cases where the only detail is the generic Node
+  // child-process error message (e.g. "Command failed: systemctl --user
+  // is-enabled …") which doesn't match any specific systemd status keyword.
+  // Callers that need to mutate the service (install/uninstall) perform their
+  // own `assertSystemdAvailable()` check, so returning false here is safe —
+  // it just means "the service is not currently enabled; proceed".
+  return false;
 }
 
 export async function readSystemdServiceRuntime(
