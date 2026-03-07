@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveMemoryFlushPromptForRun } from "./memory-flush.js";
+import { DEFAULT_MEMORY_FLUSH_PROMPT, resolveMemoryFlushPromptForRun } from "./memory-flush.js";
 
 describe("resolveMemoryFlushPromptForRun", () => {
   const cfg = {
@@ -20,8 +20,9 @@ describe("resolveMemoryFlushPromptForRun", () => {
     });
 
     expect(prompt).toContain("memory/2026-02-16.md");
-    expect(prompt).toContain("Current time:");
-    expect(prompt).toContain("(America/New_York)");
+    expect(prompt).toContain(
+      "Current time: Monday, February 16th, 2026 — 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+    );
   });
 
   it("does not append a duplicate current time line", () => {
@@ -33,5 +34,18 @@ describe("resolveMemoryFlushPromptForRun", () => {
 
     expect(prompt).toContain("Current time: already present");
     expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
+  });
+});
+
+describe("DEFAULT_MEMORY_FLUSH_PROMPT", () => {
+  it("includes append-only instruction to prevent overwrites (#6877)", () => {
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toMatch(/APPEND/i);
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("do not overwrite");
+  });
+
+  it("includes anti-fragmentation instruction to prevent timestamped variant files (#34919)", () => {
+    // Agents must not create YYYY-MM-DD-HHMM.md variants alongside the canonical file
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped variant");
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD.md");
   });
 });
