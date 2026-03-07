@@ -299,18 +299,13 @@ export function createCliStreamFn(params: CliStreamFnParams): StreamFunction {
             break;
           }
           case "tool_start": {
-            // Close the current text block before tool execution so
-            // block streaming can flush pre-tool narration text as a
-            // separate message instead of concatenating it with the
-            // next text segment.
+            // Do NOT emit text_end here. Pre-tool narration text
+            // ("Let me check...", "Now let me look at...") is
+            // internal agent reasoning, not final output. Leaving
+            // the text block open lets the embedded subscribe
+            // handler's onBlockReplyDiscard discard it as mid-stream
+            // hedging rather than flushing it to the user.
             if (textStarted) {
-              stream.push({
-                type: "text_end",
-                contentIndex,
-                content: textParts.join(""),
-                partial: buildPartialMessage(textParts, undefined),
-              });
-              contentIndex++;
               textStarted = false;
             }
             // Track name so we can include it in the result event

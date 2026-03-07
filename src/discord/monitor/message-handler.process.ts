@@ -120,6 +120,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     rest: client.rest,
     channelId: message.channelId,
     onError: (err) => logVerbose(`discord: typing failed: ${String(err)}`),
+    onFire: () => logVerbose(`discord: typing fire channel=${message.channelId}`),
+    onDispose: () => logVerbose(`discord: typing disposed channel=${message.channelId}`),
   });
 
   // Start typing immediately for audio (transcription can take 10-30s).

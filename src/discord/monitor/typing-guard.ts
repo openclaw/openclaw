@@ -16,6 +16,10 @@ export function createTypingGuard(params: {
   /** Refresh interval in ms. Default: 6000 (Discord clears after 10s). */
   intervalMs?: number;
   onError?: (err: unknown) => void;
+  /** Called each time a typing signal is fired. */
+  onFire?: () => void;
+  /** Called when the guard is disposed (typing stops). */
+  onDispose?: () => void;
 }): {
   /** Increment ref count. Starts refresh loop on first acquire. */
   acquire: () => void;
@@ -32,6 +36,7 @@ export function createTypingGuard(params: {
   let disposed = false;
 
   function fire() {
+    params.onFire?.();
     void sendTyping({ rest: params.rest, channelId: params.channelId }).catch((err) => {
       params.onError?.(err);
     });
@@ -78,9 +83,11 @@ export function createTypingGuard(params: {
       fire();
     },
     dispose() {
+      if (disposed) return;
       disposed = true;
       refCount = 0;
       stopLoop();
+      params.onDispose?.();
     },
   };
 }
