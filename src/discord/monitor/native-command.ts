@@ -42,7 +42,8 @@ import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dis
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
@@ -85,6 +86,7 @@ import {
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
+import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
@@ -378,7 +380,7 @@ async function resolveDiscordModelPickerRoute(params: {
   accountId: string;
   threadBindings: ThreadBindingManager;
 }) {
-  const { interaction, cfg, accountId } = params;
+  const { interaction, accountId } = params;
   const channel = interaction.channel;
   const channelType = channel?.type;
   const isDirectMessage = channelType === ChannelType.DM;
@@ -407,8 +409,9 @@ async function resolveDiscordModelPickerRoute(params: {
     threadParentId = parentInfo.id;
   }
 
+  const freshCfg = loadConfig();
   const route = resolveAgentRoute({
-    cfg,
+    cfg: freshCfg,
     channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -1533,8 +1536,9 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
+  const freshCfg = loadConfig();
   const route = resolveAgentRoute({
-    cfg,
+    cfg: freshCfg,
     channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -1549,7 +1553,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const configuredRoute =
     threadBinding == null
       ? resolveConfiguredAcpRoute({
-          cfg,
+          cfg: freshCfg,
           route,
           channel: "discord",
           accountId,
@@ -1560,7 +1564,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (configuredBinding) {
     const ensured = await ensureConfiguredAcpRouteReady({
-      cfg,
+      cfg: freshCfg,
       configuredBinding,
     });
     if (!ensured.ok) {
@@ -1572,7 +1576,8 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
   const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
-  const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
+  const boundSessionKey =
+    threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey || undefined;
   const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
   const effectiveRoute = boundSessionKey
     ? {
@@ -1582,7 +1587,16 @@ async function dispatchDiscordCommandInteraction(params: {
         ...(configuredBinding ? { matchedBy: "binding.channel" as const } : {}),
       }
     : (configuredRoute?.route ?? route);
-  const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
+  const displayChannelSlug = threadParentSlug || channelSlug || channelId;
+  const groupChannel = isGuild && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
+  const groupSpace = isGuild ? (interaction.guild?.id ?? guildInfo?.id ?? undefined) : undefined;
+  const conversationLabel = isDirectMessage
+    ? buildDirectLabel(user, sender.tag)
+    : buildGuildLabel({
+        guild: interaction.guild ?? undefined,
+        channelName: channelName ?? channelId,
+        channelId,
+      });
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
     guildInfo,
@@ -1606,7 +1620,8 @@ async function dispatchDiscordCommandInteraction(params: {
     AccountId: effectiveRoute.accountId,
     ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
     ConversationLabel: conversationLabel,
-    GroupSubject: isGuild ? interaction.guild?.name : undefined,
+    GroupSubject: groupChannel,
+    GroupChannel: groupChannel,
     GroupSystemPrompt: isGuild
       ? (() => {
           const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
@@ -1632,6 +1647,7 @@ async function dispatchDiscordCommandInteraction(params: {
     SenderId: user.id,
     SenderUsername: user.username,
     SenderTag: sender.tag,
+    GroupSpace: groupSpace,
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: true,
