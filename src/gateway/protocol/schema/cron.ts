@@ -25,7 +25,6 @@ const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 const CronPostToMainModeSchema = Type.Union([
   Type.Literal("summary"),
-  Type.Literal("full"),
   Type.Literal("off"),
 ]);
 const CronRunStatusSchema = Type.Union([
