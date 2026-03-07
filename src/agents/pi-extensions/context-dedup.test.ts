@@ -6,6 +6,7 @@ import {
   applyRepeatFoldCompaction,
   rewriteReadLineageSourcePointers,
 } from "./context-dedup/extension.js";
+import { findRepeatedSubstrings } from "./context-dedup/lcs-dedup.js";
 import { resolveEffectiveDedupSettings } from "./context-dedup/settings.js";
 
 const DEDUP_ON = {
@@ -233,6 +234,18 @@ describe("context-dedup", () => {
     expect(resolved.lcsMode).toBe("off");
     expect(resolved.lcsMinSize).toBe(50);
     expect(resolved.sizeSimilarityThreshold).toBe(0.5);
+  });
+
+  it("handles tiny LCS window configs without stalling", () => {
+    const repeated = findRepeatedSubstrings(["aaaaaa", "aaaabb", "aaabaa"], {
+      mode: "on",
+      minSubstringSize: 1,
+      maxSubstringSize: 3,
+      refTagSize: 1,
+      maxIterations: 10,
+    });
+
+    expect(repeated.size).toBeGreaterThan(0);
   });
 
   it("compresses near-duplicate read chunks into line-based delta notes", () => {

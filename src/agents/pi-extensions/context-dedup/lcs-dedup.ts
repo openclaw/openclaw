@@ -140,11 +140,7 @@ export function findRepeatedSubstrings(
   const refTagSize = config.refTagSize;
 
   // Start with max window size and decrease
-  for (
-    let windowSize = config.maxSubstringSize;
-    windowSize >= config.minSubstringSize;
-    windowSize -= Math.floor(windowSize / 4)
-  ) {
+  for (let windowSize = config.maxSubstringSize; windowSize >= config.minSubstringSize; ) {
     // For each message pair
     for (let i = 0; i < messages.length; i++) {
       for (let j = i + 1; j < messages.length; j++) {
@@ -156,7 +152,8 @@ export function findRepeatedSubstrings(
         }
 
         // Slide through str1 with this window size
-        for (let pos1 = 0; pos1 <= str1.length - windowSize; pos1 += Math.floor(windowSize / 2)) {
+        const slideStep = Math.max(1, Math.floor(windowSize / 2));
+        for (let pos1 = 0; pos1 <= str1.length - windowSize; pos1 += slideStep) {
           const window = str1.slice(pos1, pos1 + windowSize);
 
           // Check if this window exists in str2
@@ -182,6 +179,9 @@ export function findRepeatedSubstrings(
         }
       }
     }
+
+    const shrinkStep = Math.max(1, Math.floor(windowSize / 4));
+    windowSize -= shrinkStep;
   }
 
   // Filter to only substrings that save space
