@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
@@ -11,6 +13,31 @@ const LEARN_DEFAULT_PROMPT = [
   "Learning turn.",
   "What important insights, lessons, or information should be remembered from this session?",
 ].join(" ");
+
+async function resolveSessionFileWithResetFallback(sessionFile: string): Promise<string> {
+  // For pre-reset learning, the session file has been archived to .reset.*
+  // so we need to look for the archived file directly
+  try {
+    const dir = path.dirname(sessionFile);
+    const base = path.basename(sessionFile);
+    const resetPrefix = `${base}.reset.`;
+    const files = await fs.readdir(dir);
+    const resetCandidates = files
+      .filter((name) => name.startsWith(resetPrefix))
+      .sort()
+      .reverse();
+
+    if (resetCandidates.length > 0) {
+      const archivedPath = path.join(dir, resetCandidates[0]);
+      logVerbose(`Learning: using archived session file ${archivedPath}`);
+      return archivedPath;
+    }
+  } catch {
+    // Fallback to original path
+  }
+
+  return sessionFile;
+}
 
 function extractLearnFocus(rawBody?: string): string | undefined {
   const trimmed = rawBody?.trim() ?? "";
@@ -53,11 +80,14 @@ export async function runLearnForSession(params: {
     ? `Focus area: ${params.customFocus}. ${LEARN_DEFAULT_PROMPT}`
     : LEARN_DEFAULT_PROMPT;
 
+  // Resolve session file, falling back to archived .reset.* file if needed
+  const resolvedSessionFile = await resolveSessionFileWithResetFallback(params.sessionFile);
+
   try {
     await runEmbeddedPiAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
+      sessionFile: resolvedSessionFile,
       messageChannel: params.messageChannel,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
