@@ -13,6 +13,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Pause before exiting on error so users can read the message.
+# Only pauses in interactive windows (not CI, not piped output).
+function Wait-BeforeExit {
+    if ([Environment]::UserInteractive -and !$env:CI) {
+        Microsoft.PowerShell.Host\Write-Host ""
+        Read-Host "Press Enter to close this window"
+    }
+}
+
 # Colors
 $ACCENT = "`e[38;2;255;77;77m"    # coral-bright
 $SUCCESS = "`e[38;2;0;229;204m"    # cyan-bright
@@ -205,8 +214,13 @@ function Install-OpenClawNpm {
     Write-Host "Installing OpenClaw (openclaw@$Version)..." -Level info
     
     try {
-        # Use -ExecutionPolicy Bypass to handle restricted execution policy
         npm install -g openclaw@$Version --no-fund --no-audit 2>&1
+        # npm is a native command — non-zero exit codes don't throw in
+        # PowerShell, so check $LASTEXITCODE explicitly.
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "npm install failed (exit code $LASTEXITCODE)" -Level error
+            return $false
+        }
         Write-Host "OpenClaw installed" -Level success
         return $true
     } catch {
@@ -217,30 +231,50 @@ function Install-OpenClawNpm {
 
 function Install-OpenClawGit {
     param([string]$RepoDir, [switch]$Update)
-    
+
     Write-Host "Installing OpenClaw from git..." -Level info
-    
+
     if (!(Test-Path $RepoDir)) {
         Write-Host "  Cloning repository..." -Level info
         git clone https://github.com/openclaw/openclaw.git $RepoDir 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "git clone failed (exit code $LASTEXITCODE)" -Level error
+            return $false
+        }
     } elseif ($Update) {
         Write-Host "  Updating repository..." -Level info
         git -C $RepoDir pull --rebase 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "git pull failed (exit code $LASTEXITCODE)" -Level error
+            return $false
+        }
     }
-    
+
     # Install pnpm if not present
     if (!(Get-Command pnpm -ErrorAction SilentlyContinue)) {
         Write-Host "  Installing pnpm..." -Level info
         npm install -g pnpm 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "pnpm install failed (exit code $LASTEXITCODE)" -Level error
+            return $false
+        }
     }
-    
+
     # Install dependencies
     Write-Host "  Installing dependencies..." -Level info
     pnpm install --dir $RepoDir 2>&1
-    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "pnpm install failed (exit code $LASTEXITCODE)" -Level error
+        return $false
+    }
+
     # Build
     Write-Host "  Building..." -Level info
     pnpm --dir $RepoDir build 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "build failed (exit code $LASTEXITCODE)" -Level error
+        return $false
+    }
     
     # Create wrapper
     $wrapperDir = "$env:USERPROFILE\.local\bin"
@@ -277,22 +311,28 @@ function Main {
     if (!(Ensure-ExecutionPolicy)) {
         Write-Host ""
         Write-Host "Installation cannot continue due to execution policy restrictions" -Level error
+        Wait-BeforeExit
         exit 1
     }
     
     if (!(Ensure-Node)) {
+        Wait-BeforeExit
         exit 1
     }
     
     if ($InstallMethod -eq "git") {
         if (!(Ensure-Git)) {
+            Wait-BeforeExit
             exit 1
         }
         
         if ($DryRun) {
             Write-Host "[DRY RUN] Would install OpenClaw from git to $GitDir" -Level info
         } else {
-            Install-OpenClawGit -RepoDir $GitDir -Update:(-not $NoGitUpdate)
+            if (!(Install-OpenClawGit -RepoDir $GitDir -Update:(-not $NoGitUpdate))) {
+                Wait-BeforeExit
+                exit 1
+            }
         }
     } else {
         # npm method
@@ -304,6 +344,7 @@ function Main {
             Write-Host "[DRY RUN] Would install OpenClaw via npm (tag: $Tag)" -Level info
         } else {
             if (!(Install-OpenClawNpm -Version $Tag)) {
+                Wait-BeforeExit
                 exit 1
             }
         }
@@ -326,4 +367,11 @@ function Main {
     Write-Host "🦞 OpenClaw installed successfully!" -Level success
 }
 
-Main
+try {
+    Main
+} catch {
+    Microsoft.PowerShell.Host\Write-Host ""
+    Microsoft.PowerShell.Host\Write-Host "$ERROR✗$NC Installation failed: $_"
+    Wait-BeforeExit
+    exit 1
+}
