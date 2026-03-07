@@ -543,7 +543,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers Featherless auth choice from --featherless-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-featherless-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        featherlessApiKey: "featherless-test-key",
+        featherlessApiKey: "featherless-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["featherless:default"]?.provider).toBe("featherless");
@@ -552,7 +552,7 @@ describe("onboard (non-interactive): provider auth", () => {
       await expectApiKeyProfile({
         profileId: "featherless:default",
         provider: "featherless",
-        key: "featherless-test-key",
+        key: "featherless-test-key", // pragma: allowlist secret
       });
     });
   });
