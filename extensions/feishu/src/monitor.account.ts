@@ -240,6 +240,22 @@ function parseCreateTimeMs(event: FeishuMessageEvent): number | undefined {
   return n < MS_EPOCH_FLOOR ? n * 1000 : n;
 }
 
+/** Common abort trigger words recognised across languages.
+ * Mirrors the ABORT_TRIGGERS set in auto-reply/reply/abort.ts so we can
+ * detect them in the feishu extension without importing core internals. */
+const FEISHU_ABORT_TRIGGERS = new Set([
+  "stop", "/stop", "esc", "abort", "wait", "exit", "interrupt",
+  "\u505c\u6b62", "\u505c", "\u53d6\u6d88",
+  "\u3084\u3081\u3066", "\u6b62\u3081\u3066", "\u0441\u0442\u043e\u043f", "\u062a\u0648\u0642\u0641",
+]);
+const TRAILING_PUNCT_RE = /[.!?\u2026,\uff0c\u3002;\uff1b:\uff1a'"\u2018\u2019\u201c\u201d\uff09)\]\}]+$/u;
+
+function isFeishuAbortTrigger(text: string | undefined): boolean {
+  if (!text) return false;
+  const normalized = text.trim().toLowerCase().replace(TRAILING_PUNCT_RE, "").trim();
+  return FEISHU_ABORT_TRIGGERS.has(normalized);
+}
+
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
@@ -253,6 +269,8 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
+
+  /** Normal dispatch - enters per-chat serial queue. */
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
     const task = () =>
@@ -266,6 +284,29 @@ function registerEventHandlers(
         accountId,
       });
     await enqueue(chatId, task);
+  };
+
+  /** Fast-path dispatch for abort commands - bypasses chatQueue so the abort
+   *  is processed immediately even while a previous message is mid-flight.
+   *  dispatchReplyFromConfig -> tryFastAbortFromMessage will detect the abort
+   *  text and call abortEmbeddedPiRun + clearSessionQueues. */
+  const dispatchFeishuMessageDirect = async (event: FeishuMessageEvent) => {
+    log(
+      `feishu[${accountId}]: fast-abort bypass - dispatching stop command directly (skip queue)`,
+    );
+    try {
+      await handleFeishuMessage({
+        cfg,
+        event,
+        botOpenId: botOpenIds.get(accountId),
+        botName: botNames.get(accountId),
+        runtime,
+        chatHistories,
+        accountId,
+      });
+    } catch (err) {
+      error(`feishu[${accountId}]: fast-abort dispatch failed: ${String(err)}`);
+    }
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
     const senderId =
@@ -333,9 +374,18 @@ function registerEventHandlers(
       if (!text) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(text, cfg);
+      return !core.channel.text.hasControlCommand(text, cfg) && !isFeishuAbortTrigger(text);
     },
     onFlush: async (entries) => {
+      // --- Fast abort check: if a single abort trigger, bypass queue ---
+      if (entries.length === 1) {
+        const text = resolveDebounceText(entries[0]);
+        if (isFeishuAbortTrigger(text)) {
+          await dispatchFeishuMessageDirect(entries[0]);
+          return;
+        }
+      }
+
       const last = entries.at(-1);
       if (!last) {
         return;
