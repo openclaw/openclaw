@@ -335,15 +335,23 @@ export async function spawnSubagentDirect(
   );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const allowAgentsRaw = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents;
+    const allowAgents = allowAgentsRaw ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
+    // When allowAgents is not configured (undefined), allow all configured agents
+    // so they are discoverable out-of-the-box.
+    const configuredIds = Array.isArray(cfg.agents?.list)
+      ? cfg.agents.list.map((entry) => normalizeAgentId(entry.id).toLowerCase())
+      : [];
+    const implicitAllow =
+      allowAgentsRaw === undefined && configuredIds.includes(normalizedTargetId);
     const allowSet = new Set(
       allowAgents
         .filter((value) => value.trim() && value.trim() !== "*")
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
+    if (!allowAny && !implicitAllow && !allowSet.has(normalizedTargetId)) {
       const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
       return {
         status: "forbidden",
