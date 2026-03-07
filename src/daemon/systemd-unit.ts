@@ -59,6 +59,9 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
+    "TimeoutStopSec=30",
+    "TimeoutStartSec=30",
+    "SuccessExitStatus=0 143",
     // Keep service children in the same lifecycle so restarts do not leave
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",
