@@ -272,14 +272,22 @@ export async function compactEmbeddedPiSessionDirect(
   const prevCwd = process.cwd();
 
   // Resolve compaction model: prefer config override, then fall back to caller-supplied model
-  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model;
+  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
   let provider: string;
   let modelId: string;
+  // When switching provider via override, drop the primary auth profile to avoid
+  // sending the wrong credentials (e.g. OpenAI profile token to OpenRouter).
+  let authProfileId: string | undefined = params.authProfileId;
   if (compactionModelOverride) {
     const slashIdx = compactionModelOverride.indexOf("/");
     if (slashIdx > 0) {
-      provider = compactionModelOverride.slice(0, slashIdx);
-      modelId = compactionModelOverride.slice(slashIdx + 1);
+      provider = compactionModelOverride.slice(0, slashIdx).trim();
+      modelId = compactionModelOverride.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
+      // Provider changed — drop primary auth profile so getApiKeyForModel
+      // falls back to provider-based key resolution for the override model.
+      if (provider !== (params.provider ?? "").trim()) {
+        authProfileId = undefined;
+      }
     } else {
       provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       modelId = compactionModelOverride;
@@ -317,7 +325,7 @@ export async function compactEmbeddedPiSessionDirect(
     const apiKeyInfo = await getApiKeyForModel({
       model,
       cfg: params.config,
-      profileId: params.authProfileId,
+      profileId: authProfileId,
       agentDir,
     });
 
