@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Telegram stale-socket restart guard: only apply stale-socket restarts to channels that publish event-liveness timestamps, preventing Telegram providers from being misclassified as stale solely due to long uptime and avoiding restart/pairing storms after upgrade. (openclaw#38464)
 - Onboarding/headless Linux daemon probe hardening: treat `systemctl --user is-enabled` probe failures as non-fatal during daemon install flow so onboarding no longer crashes on SSH/headless VPS environments before showing install guidance. (#37297) Thanks @acarbajal-web.
 - Memory/QMD mcporter Windows spawn hardening: when `mcporter.cmd` launch fails with `spawn EINVAL`, retry via bare `mcporter` shell resolution so QMD recall can continue instead of falling back to builtin memory search. (#27402) Thanks @i0ivi0i.
 - Tools/web_search Brave language-code validation: align `search_lang` handling with Brave-supported codes (including `zh-hans`, `zh-hant`, `en-gb`, and `pt-br`), map common alias inputs (`zh`, `ja`) to valid Brave values, and reject unsupported codes before upstream requests to prevent 422 failures. (#37260) Thanks @heyanming.
@@ -223,6 +224,10 @@ Docs: https://docs.openclaw.ai
 - Models/tool probing: raise the tool-capability probe budget from 32 to 256 tokens so reasoning models that spend tokens on thinking before returning a required tool call are less likely to be misclassified as not supporting tools. (#7521) Thanks @jakobdylanc.
 - Gateway/transient network classification: treat wrapped `...: fetch failed` transport messages as transient while avoiding broad matches like `Web fetch failed (404): ...`, preventing Discord reconnect wrappers from crashing the gateway without suppressing non-network tool failures. (#38530) Thanks @xinhuagu.
 - ACP/console silent reply suppression: filter ACP `NO_REPLY` lead fragments and silent-only finals before `openclaw agent` logging/delivery so console-backed ACP sessions no longer leak `NO`/`NO_REPLY` placeholders. (#38436) Thanks @ql-wade.
+- Feishu/reply delivery reliability: disable block streaming in Feishu reply options so plain-text auto-render replies are no longer silently dropped before final delivery. (#38258) Thanks @xinhuagu.
+- Agents/reply MEDIA delivery: normalize local assistant `MEDIA:` paths before block/final delivery, keep media dedupe aligned with message-tool sends, and contain malformed media normalization failures so generated files send reliably instead of falling back to empty responses. (#38572) Thanks @obviyus.
+- Sessions/bootstrap cache rollover invalidation: clear cached workspace bootstrap snapshots whenever an existing `sessionKey` rolls to a new `sessionId` across auto-reply, command, and isolated cron session resolvers, so `AGENTS.md`/`MEMORY.md`/`USER.md` updates are reloaded after daily, idle, or forced session resets instead of staying stale until gateway restart. (#38494) Thanks @LivingInDrm.
+- Gateway/Telegram polling health monitor: skip stale-socket restarts for Telegram long-polling channels and thread channel identity through shared health evaluation so polling connections are not restarted on the WebSocket stale-socket heuristic. (#38395) Thanks @ql-wade and @Takhoffman.
 
 ## 2026.3.2
 
