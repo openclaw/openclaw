@@ -3,6 +3,7 @@ import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -10,6 +11,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -69,6 +71,10 @@ const GatewayToolSchema = Type.Object({
 
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
+  agentChannel?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+  agentAccountId?: string;
   config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
@@ -85,10 +91,11 @@ export function createGatewayTool(opts?: {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
-        const sessionKey =
+        const explicitSessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+            : undefined;
+        const sessionKey = (explicitSessionKey ?? opts?.agentSessionKey?.trim()) || undefined;
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
@@ -99,9 +106,57 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        // Extract channel + threadId for routing after restart
-        // Supports both :thread: (most channels) and :topic: (Telegram)
-        const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+        // Prefer the live delivery context captured during the current agent
+        // run over extractDeliveryInfo() (which reads the persisted session
+        // store). The session store is frequently overwritten by heartbeat
+        // runs to { channel: "webchat", to: "heartbeat" }, causing the
+        // sentinel to write stale routing data that fails post-restart.
+        // See #18612.
+        //
+        // Only apply the live context when the restart targets this agent's
+        // own session. When an explicit sessionKey points to a different
+        // session, the live context belongs to the wrong session and would
+        // misroute the post-restart reply. Fall back to extractDeliveryInfo()
+        // so the server uses the correct routing for the target session.
+        // Canonicalize both keys before comparing so that aliases like "main"
+        // and "agent:main:main" are treated as the same session. Without this,
+        // an operator passing sessionKey="main" would be incorrectly treated as
+        // targeting a different session, suppressing live deliveryContext and
+        // falling back to the stale session store. See #18612.
+        const ownKey = opts?.agentSessionKey?.trim() || undefined;
+        const agentId = resolveAgentIdFromSessionKey(ownKey);
+        const canonicalize = (k: string) =>
+          canonicalizeMainSessionAlias({ cfg: opts?.config, agentId, sessionKey: k });
+        const isTargetingOtherSession =
+          explicitSessionKey != null &&
+          canonicalize(explicitSessionKey) !== (ownKey ? canonicalize(ownKey) : undefined);
+        // Only forward live context when both channel and to are present.
+        // Forwarding a partial context (channel without to) causes the server
+        // to write a sentinel without `to`, and scheduleRestartSentinelWake
+        // bails on `if (!channel || !to)`, silently degrading to a system
+        // event with no delivery/resume. See #18612.
+        const liveContext =
+          !isTargetingOtherSession &&
+          opts?.agentChannel != null &&
+          String(opts.agentChannel).trim() &&
+          opts?.agentTo != null &&
+          String(opts.agentTo).trim()
+            ? {
+                channel: String(opts.agentChannel).trim(),
+                to: String(opts.agentTo).trim(),
+                accountId: opts?.agentAccountId ?? undefined,
+              }
+            : undefined;
+        const extracted = extractDeliveryInfo(sessionKey);
+        const deliveryContext = liveContext ?? extracted.deliveryContext;
+        // Guard threadId with the same session check as deliveryContext. When
+        // targeting another session, opts.agentThreadId belongs to the current
+        // session's thread and must not be written into the sentinel — it would
+        // cause scheduleRestartSentinelWake to deliver to the wrong thread.
+        const threadId =
+          !isTargetingOtherSession && opts?.agentThreadId != null
+            ? String(opts.agentThreadId)
+            : extracted.threadId;
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
@@ -133,22 +188,71 @@ export function createGatewayTool(opts?: {
 
       const gatewayOpts = readGatewayCallOptions(params);
 
+      // Build the live delivery context from the current agent run's routing
+      // fields. This is passed to server-side handlers so they can write an
+      // accurate sentinel without reading the (potentially stale) session
+      // store. The store is frequently overwritten by heartbeat runs to
+      // { channel: "webchat", to: "heartbeat" }. See #18612.
+      //
+      // Note: agentThreadId is intentionally excluded here. threadId is
+      // reliably derived server-side from the session key (via
+      // parseSessionThreadInfo), which encodes it as :thread:N or :topic:N.
+      // That parsing is not subject to heartbeat contamination, so there is
+      // no need to forward it through the RPC params.
+      // Only forward live context when both channel and to are present.
+      // Forwarding a partial context (channel without to) causes the server
+      // to prefer an incomplete deliveryContext over extractDeliveryInfo(),
+      // writing a sentinel without `to` that scheduleRestartSentinelWake
+      // rejects, silently degrading to a system event. See #18612.
+      //
+      // threadId is included so the server can use it for sessions where the
+      // session key is not :thread:-scoped (e.g. Slack replyToMode="all"), in
+      // which case the session-key-derived threadId would be empty.
+      const liveDeliveryContextForRpc =
+        opts?.agentChannel != null &&
+        String(opts.agentChannel).trim() &&
+        opts?.agentTo != null &&
+        String(opts.agentTo).trim()
+          ? {
+              channel: String(opts.agentChannel).trim(),
+              to: String(opts.agentTo).trim(),
+              accountId: opts?.agentAccountId ?? undefined,
+              threadId: opts?.agentThreadId != null ? String(opts.agentThreadId) : undefined,
+            }
+          : undefined;
+
       const resolveGatewayWriteMeta = (): {
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
+        deliveryContext: typeof liveDeliveryContextForRpc;
       } => {
-        const sessionKey =
+        const explicitSessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+            : undefined;
+        const sessionKey = (explicitSessionKey ?? opts?.agentSessionKey?.trim()) || undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
-        return { sessionKey, note, restartDelayMs };
+        // Only forward live context when the target session is this agent's
+        // own session. Canonicalize both keys before comparing so that aliases
+        // like "main" and "agent:main:main" are treated as the same session.
+        // When an explicit sessionKey points to a different session, omit
+        // deliveryContext so the server falls back to extractDeliveryInfo(sessionKey).
+        const rpcOwnKey = opts?.agentSessionKey?.trim() || undefined;
+        const rpcAgentId = resolveAgentIdFromSessionKey(rpcOwnKey);
+        const rpcCanonicalize = (k: string) =>
+          canonicalizeMainSessionAlias({ cfg: opts?.config, agentId: rpcAgentId, sessionKey: k });
+        const isTargetingOtherSession =
+          explicitSessionKey != null &&
+          rpcCanonicalize(explicitSessionKey) !==
+            (rpcOwnKey ? rpcCanonicalize(rpcOwnKey) : undefined);
+        const deliveryContext = isTargetingOtherSession ? undefined : liveDeliveryContextForRpc;
+        return { sessionKey, note, restartDelayMs, deliveryContext };
       };
 
       const resolveConfigWriteParams = async (): Promise<{
@@ -157,6 +261,7 @@ export function createGatewayTool(opts?: {
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
+        deliveryContext: typeof liveDeliveryContextForRpc;
       }> => {
         const raw = readStringParam(params, "raw", { required: true });
         let baseHash = readStringParam(params, "baseHash");
@@ -183,7 +288,7 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, sessionKey, note, restartDelayMs, deliveryContext } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
@@ -191,11 +296,12 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          deliveryContext,
         });
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, sessionKey, note, restartDelayMs, deliveryContext } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
@@ -203,11 +309,12 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          deliveryContext,
         });
         return jsonResult({ ok: true, result });
       }
       if (action === "update.run") {
-        const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const { sessionKey, note, restartDelayMs, deliveryContext } = resolveGatewayWriteMeta();
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -217,6 +324,7 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          deliveryContext,
           timeoutMs: updateTimeoutMs,
         });
         return jsonResult({ ok: true, result });
