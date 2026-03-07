@@ -858,6 +858,23 @@ body.simple-mode .cc-grid {
   }
 }
 
+/* ── Token Status Button ── */
+
+.token-status-btn {
+  background: none;
+  border: 1px solid transparent;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.token-status-btn:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
 /* ── Panel Empty State ── */
 
 .panel-empty {

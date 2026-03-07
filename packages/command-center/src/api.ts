@@ -15,16 +15,31 @@ export function setToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
 }
 
+const FETCH_TIMEOUT_MS = 15_000; // 15 seconds
+
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   const headers: Record<string, string> = {
     "X-Admin-Token": getToken(),
     ...(init?.headers as Record<string, string>),
   };
-  const res = await fetch(url, { ...init, headers });
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+
+  try {
+    const res = await fetch(url, { ...init, headers, signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText}`);
+    }
+    return res.json() as Promise<T>;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Request timed out — is the backend running?", { cause: err });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res.json() as Promise<T>;
 }
 
 // ── Panel data ──

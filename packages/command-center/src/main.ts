@@ -80,6 +80,14 @@ async function boot() {
     guideData = {};
   }
 
+  // Wire "Start the Day" via event delegation (runs once, survives panel re-renders)
+  document.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
+    if (target.id === "start-day-btn" && !(target as HTMLButtonElement).disabled) {
+      void handleStartDay(target as HTMLButtonElement);
+    }
+  });
+
   // Initial panel load
   await refreshPanels();
 
@@ -124,6 +132,17 @@ async function boot() {
     void refreshPanels();
   });
 
+  // Token status — click to change token
+  document.getElementById("token-status")?.addEventListener("click", () => {
+    const newToken = prompt("Enter new Admin Token (X-Admin-Token):", getToken());
+    if (newToken !== null) {
+      setToken(newToken);
+      logEvent("auth", "Token changed by user");
+      updateTokenStatus();
+      void refreshPanels();
+    }
+  });
+
   // Token status
   updateTokenStatus();
   updateConnectionIndicator("connected");
@@ -143,6 +162,26 @@ function showLoadingPanels() {
     const mount = document.getElementById(id);
     if (mount) {
       mount.innerHTML = `<div class="panel panel-loading"><div class="loading-skeleton"></div><div class="loading-skeleton loading-skeleton-short"></div></div>`;
+    }
+  }
+}
+
+function showErrorPanels(message: string) {
+  const panelIds = [
+    "panel-today",
+    "panel-schedule",
+    "panel-kpi",
+    "panel-health",
+    "panel-approvals",
+  ];
+  for (const id of panelIds) {
+    const mount = document.getElementById(id);
+    if (!mount) {
+      continue;
+    }
+    // Only replace if still showing loading skeleton (don't overwrite valid data)
+    if (mount.querySelector(".panel-loading")) {
+      mount.innerHTML = `<div class="panel"><div class="panel-error">${message}</div></div>`;
     }
   }
 }
@@ -172,9 +211,6 @@ async function refreshPanels() {
     // Wire info icons
     wireInfoIcons(guideData);
 
-    // Wire "Start the Day" button
-    wireStartDay();
-
     // Update timestamp
     const refreshEl = document.getElementById("last-refresh");
     if (refreshEl) {
@@ -194,8 +230,10 @@ async function refreshPanels() {
     // Check if it's an auth error
     if (err instanceof Error && err.message.includes("401")) {
       updateConnectionIndicator("auth_error");
+      showErrorPanels('Auth error — click "Token set" in the footer to update your token');
     } else {
       updateConnectionIndicator("disconnected");
+      showErrorPanels(err instanceof Error ? err.message : "Connection lost");
     }
   } finally {
     isRefreshing = false;
@@ -213,45 +251,48 @@ function mountPanel(id: string, el: HTMLElement) {
   }
 }
 
-function wireStartDay() {
-  const btn = document.getElementById("start-day-btn");
+async function handleStartDay(btn: HTMLButtonElement) {
+  logEvent("start_day", "Start the Day clicked");
   const status = document.getElementById("start-day-status");
-  if (!btn || !status) {
-    return;
+  btn.disabled = true;
+  btn.textContent = "Syncing...";
+  if (status) {
+    status.textContent = "Running schedule sync + refresh...";
   }
 
-  btn.addEventListener("click", async () => {
-    logEvent("start_day", "Start the Day clicked");
-    (btn as HTMLButtonElement).disabled = true;
-    btn.textContent = "Syncing...";
-    status.textContent = "Running schedule sync + refresh...";
-
-    try {
-      const result = await startTheDay();
-      if ((result as Record<string, boolean>).skipped) {
+  try {
+    const result = await startTheDay();
+    if ((result as Record<string, boolean>).skipped) {
+      if (status) {
         status.textContent = "Skipped (cooldown active)";
-        showToast("Skipped: cooldown active", "warn");
-        logEvent("start_day", "Skipped — cooldown active");
-      } else if ((result as Record<string, boolean>).ok) {
-        status.textContent = "Done!";
-        showToast("Day started! Schedule synced.", "ok");
-        logEvent("start_day", "Completed successfully");
-        // Refresh panels after sync
-        setTimeout(refreshPanels, 1000);
-      } else {
-        status.textContent = "Error";
-        showToast("Start day failed", "bad");
-        logEvent("start_day", "Failed — unknown error");
       }
-    } catch (err) {
-      status.textContent = `Error: ${err instanceof Error ? err.message : "Unknown"}`;
-      showToast("Network error", "bad");
-      logEvent("start_day", `Error: ${err instanceof Error ? err.message : "Unknown"}`);
-    } finally {
-      (btn as HTMLButtonElement).disabled = false;
-      btn.textContent = "Start the Day";
+      showToast("Skipped: cooldown active", "warn");
+      logEvent("start_day", "Skipped — cooldown active");
+    } else if ((result as Record<string, boolean>).ok) {
+      if (status) {
+        status.textContent = "Done!";
+      }
+      showToast("Day started! Schedule synced.", "ok");
+      logEvent("start_day", "Completed successfully");
+      // Refresh panels after sync
+      setTimeout(refreshPanels, 1000);
+    } else {
+      if (status) {
+        status.textContent = "Error";
+      }
+      showToast("Start day failed", "bad");
+      logEvent("start_day", "Failed — unknown error");
     }
-  });
+  } catch (err) {
+    if (status) {
+      status.textContent = `Error: ${err instanceof Error ? err.message : "Unknown"}`;
+    }
+    showToast("Network error", "bad");
+    logEvent("start_day", `Error: ${err instanceof Error ? err.message : "Unknown"}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Start the Day";
+  }
 }
 
 function showToast(msg: string, kind: "ok" | "warn" | "bad") {

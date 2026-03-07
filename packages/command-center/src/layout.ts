@@ -48,7 +48,7 @@ export function createLayout(): HTMLElement {
         <button class="refresh-btn" id="refresh-btn" title="Refresh now">&#8635;</button>
       </div>
       <div class="footer-right">
-        <span class="muted" id="token-status"></span>
+        <button class="token-status-btn" id="token-status" title="Click to change token"></button>
       </div>
     </footer>
   `;
