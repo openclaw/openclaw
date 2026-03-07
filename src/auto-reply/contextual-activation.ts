@@ -21,12 +21,20 @@ function loadIdentityContext(cfg: OpenClawConfig): string {
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const parts: string[] = [];
-    for (const filename of ["SOUL.md", "IDENTITY.md"]) {
+    for (const filename of [
+      "SOUL.md",
+      "AGENTS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "MEMORY.md",
+      "TOOLS.md",
+      "HEARTBEAT.md",
+    ]) {
       const filePath = path.join(workspaceDir, filename);
       try {
         const content = fs.readFileSync(filePath, "utf-8").trim();
         if (content) {
-          parts.push(content);
+          parts.push(`## ${filename}\n\n${content}`);
         }
       } catch {
         // File doesn't exist, skip
