@@ -1,6 +1,9 @@
 import {
   applyAccountNameToChannelSection,
+  buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
+  buildRuntimeAccountStatusSnapshot,
+  clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -288,17 +291,21 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       lastStopAt: null,
       lastError: null,
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      secretSource: snapshot.secretSource ?? "none",
-      running: snapshot.running ?? false,
-      mode: "webhook",
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => {
+      const base = buildBaseChannelStatusSummary(snapshot);
+      return {
+        configured: base.configured,
+        secretSource: snapshot.secretSource ?? "none",
+        running: base.running,
+        mode: "webhook",
+        lastStartAt: base.lastStartAt,
+        lastStopAt: base.lastStopAt,
+        lastError: base.lastError,
+      };
+    },
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
+      const runtimeSnapshot = buildRuntimeAccountStatusSnapshot({ runtime });
       return {
         accountId: account.accountId,
         name: account.name,
@@ -306,10 +313,10 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         configured,
         secretSource: account.secretSource,
         baseUrl: account.baseUrl ? "[set]" : "[missing]",
-        running: runtime?.running ?? false,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
+        running: runtimeSnapshot.running,
+        lastStartAt: runtimeSnapshot.lastStartAt,
+        lastStopAt: runtimeSnapshot.lastStopAt,
+        lastError: runtimeSnapshot.lastError,
         mode: "webhook",
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
@@ -353,36 +360,20 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
           cleared = true;
           changed = true;
         }
-        const accounts =
-          nextSection.accounts && typeof nextSection.accounts === "object"
-            ? { ...nextSection.accounts }
-            : undefined;
-        if (accounts && accountId in accounts) {
-          const entry = accounts[accountId];
-          if (entry && typeof entry === "object") {
-            const nextEntry = { ...entry } as Record<string, unknown>;
-            if ("botSecret" in nextEntry) {
-              const secret = nextEntry.botSecret;
-              if (typeof secret === "string" ? secret.trim() : secret) {
-                cleared = true;
-              }
-              delete nextEntry.botSecret;
-              changed = true;
-            }
-            if (Object.keys(nextEntry).length === 0) {
-              delete accounts[accountId];
-              changed = true;
-            } else {
-              accounts[accountId] = nextEntry as typeof entry;
-            }
+        const accountCleanup = clearAccountEntryFields({
+          accounts: nextSection.accounts,
+          accountId,
+          fields: ["botSecret"],
+        });
+        if (accountCleanup.changed) {
+          changed = true;
+          if (accountCleanup.cleared) {
+            cleared = true;
           }
-        }
-        if (accounts) {
-          if (Object.keys(accounts).length === 0) {
-            delete nextSection.accounts;
-            changed = true;
+          if (accountCleanup.nextAccounts) {
+            nextSection.accounts = accountCleanup.nextAccounts;
           } else {
-            nextSection.accounts = accounts;
+            delete nextSection.accounts;
           }
         }
       }
