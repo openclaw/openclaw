@@ -16,6 +16,7 @@ export type {
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
