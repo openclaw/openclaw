@@ -114,6 +114,19 @@ describe("delivery-queue", () => {
       await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
     });
 
+    it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      await expect(ackDelivery(id, tmpDir)).resolves.toBeUndefined();
+
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
     it("ack removes .delivered marker so recovery does not replay", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
