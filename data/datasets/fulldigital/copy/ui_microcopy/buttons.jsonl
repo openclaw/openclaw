@@ -1,0 +1,4 @@
+{"id":"fd_btn_0001","brand":"fulldigital","key":"primary_cta","text":"TRY CUTMV","context":"global","constraints":["ALL_CAPS"],"source":"user_rule","status":"approved"}
+{"id":"fd_btn_0002","brand":"fulldigital","key":"contact","text":"CONTACT","context":"nav","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"fd_btn_0005","brand":"fulldigital","key":"subscribe","text":"SUBSCRIBE & SAVE","context":"landing","constraints":["ALL_CAPS"],"source":"fulldigitalll.com","status":"extracted"}
+{"id":"fd_btn_0006","brand":"fulldigital","key":"request_design","text":"REQUEST DESIGN TASK","context":"landing","constraints":["ALL_CAPS"],"source":"fulldigitalll.com","status":"extracted"}

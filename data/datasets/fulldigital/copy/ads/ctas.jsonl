@@ -1,0 +1,2 @@
+{"id":"fd_cta_0001","brand":"fulldigital","text":"TRY CUTMV","intent":"cross-sell","notes":"Global CTA rule you chose (applies to both brands).","constraints":["ALL_CAPS"],"source":"user_rule","status":"approved"}
+{"id":"fd_cta_0002","brand":"fulldigital","text":"BOOK A CALL","intent":"lead","notes":"Optional alt CTA if you later allow it.","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}

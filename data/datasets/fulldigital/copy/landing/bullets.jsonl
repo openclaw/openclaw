@@ -1,0 +1,3 @@
+{"id":"fd_bullets_0001","brand":"fulldigital","items":["COVER ART & PACKAGING","LYRIC VISUALS & MOTION","SOCIAL ASSET SYSTEMS","DELIVERY FORMATS FOR DSP + ADS"],"intent":"feature_list","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"fd_bullets_0002","brand":"fulldigital","items":["FAST TURNAROUNDS","CONSISTENT BRAND LOOK","BUILT FOR CAMPAIGNS","READY-TO-POST OUTPUTS"],"intent":"benefit_list","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"fd_bullets_0003","brand":"fulldigital","items":["STATIC DESIGN","MOTION DESIGN","VIDEO EDITING","AUDIO VISUALIZERS","SOCIAL ASSETS","ADVERTISEMENT PACKS"],"intent":"feature_list","constraints":["ALL_CAPS"],"source":"fulldigitalll.com","status":"extracted"}

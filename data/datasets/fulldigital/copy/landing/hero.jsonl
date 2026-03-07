@@ -1,0 +1,4 @@
+{"id":"fd_hero_0001","brand":"fulldigital","text":"FULL DIGITAL CREATES VISUALS THAT MOVE LIKE MUSIC.","intent":"hero_headline","notes":"Homepage hero headline option.","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"fd_hero_0002","brand":"fulldigital","text":"MULTI-PLATINUM VISUAL DIRECTION FOR ARTISTS, LABELS, AND CREATIVE TEAMS.","intent":"hero_headline","notes":"Credibility-forward hero line.","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"fd_hero_0003","brand":"fulldigital","text":"A DIGITAL ASSET & CONTENT CREATION AGENCY FOR MUSIC & ENTERTAINMENT","intent":"hero_headline","constraints":["ALL_CAPS"],"source":"fulldigitalll.com","status":"extracted"}
+{"id":"fd_hero_0004","brand":"fulldigital","text":"DESIGN. MOTION. VIDEO. BRANDING. CONTENT SYSTEMS BUILT FOR ARTISTS.","intent":"hero_support","constraints":["ALL_CAPS"],"source":"fulldigitalll.com","status":"extracted"}

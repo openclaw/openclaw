@@ -1,0 +1,3 @@
+{"content_id":"fd_hook_0001","brand":"fulldigital","status":"unknown","metrics":{"ctr":null,"cvr":null,"cpc":null},"notes":"Fill after running ads.","source":"seed"}
+{"content_id":"fd_cta_0001","brand":"fulldigital","status":"approved","metrics":{"ctr":null,"cvr":null},"notes":"Global CTA rule.","source":"user_rule"}
+{"content_id":"fd_hero_0003","brand":"fulldigital","status":"unknown","metrics":{},"notes":"Hero headline for FD homepage","source":"fulldigitalll.com"}

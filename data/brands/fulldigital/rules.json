@@ -1,0 +1,46 @@
+{
+  "brand_id": "fulldigital",
+  "version": "1.0.0",
+  "validators": {
+    "palette": {
+      "description": "All colors used must be in allowed_hex. No exceptions.",
+      "severity": "block",
+      "check": "every pixel/fill/stroke color must match an entry in visual.palette.allowed_hex"
+    },
+    "contrast": {
+      "description": "Minimum WCAG AA contrast ratio for all text on background.",
+      "severity": "block",
+      "min_ratio": 4.5,
+      "large_text_min_ratio": 3.0
+    },
+    "typography_caps": {
+      "description": "Headlines must be ALL CAPS when all_caps_default is true.",
+      "severity": "block",
+      "check": "if typography.rules.all_caps_default === true, headline text must be uppercase"
+    },
+    "logo_clearspace": {
+      "description": "Logo must have clearspace_ratio * min(width, height) of empty space around it.",
+      "severity": "block",
+      "check": "no element overlaps within clearspace zone of logo bounding box"
+    },
+    "safe_margins": {
+      "description": "No text or critical elements within safe_margins.pct of any edge.",
+      "severity": "warn",
+      "check": "all text and CTA elements are inset by at least layout.safe_margins.pct * dimension"
+    },
+    "max_fonts": {
+      "description": "No more than max_fonts distinct font families used.",
+      "severity": "block",
+      "check": "count(distinct font families) <= typography.rules.max_fonts"
+    },
+    "banned_phrases": {
+      "description": "Copy must not contain any banned phrases.",
+      "severity": "block",
+      "check": "no text element contains any string from voice.banned_phrases (case-insensitive)"
+    }
+  },
+  "pipeline_gates": {
+    "pre_render": ["palette", "banned_phrases", "max_fonts", "typography_caps"],
+    "post_render": ["contrast", "logo_clearspace", "safe_margins"]
+  }
+}
