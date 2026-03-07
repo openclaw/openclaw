@@ -726,7 +726,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig);
+      let validated = validateConfigObjectWithPlugins(resolvedConfig);
       if (!validated.ok) {
         const details = validated.issues
           .map(
@@ -738,10 +738,44 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           loggedInvalidConfigs.add(configPath);
           deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
         }
-        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
-        (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
-        (error as { code?: string; details?: string }).details = details;
-        throw error;
+
+        // Fallback: try loading .bak if the primary config is invalid.
+        // The backup-rotation module already maintains .bak files on every
+        // successful write, so a recent valid copy is usually available.
+        const bakPath = `${configPath}.bak`;
+        if (deps.fs.existsSync(bakPath)) {
+          try {
+            const bakRaw = deps.fs.readFileSync(bakPath, "utf-8");
+            const bakParsed = deps.json5.parse(bakRaw);
+            // Use a cloned env so invalid .bak config entries don't pollute process env
+            const bakEnv = { ...deps.env };
+            const { resolvedConfigRaw: bakResolved } = resolveConfigForRead(
+              resolveConfigIncludesForRead(bakParsed, bakPath, deps),
+              bakEnv,
+            );
+            warnOnConfigMiskeys(bakResolved, deps.logger);
+            const bakValidated = validateConfigObjectWithPlugins(bakResolved);
+            if (bakValidated.ok) {
+              // Merge env changes only after validation succeeds
+              Object.assign(deps.env, bakEnv);
+              deps.logger.warn(
+                `Loaded fallback config from ${bakPath} (primary config was invalid)`,
+              );
+              validated = bakValidated;
+            }
+          } catch (bakErr) {
+            deps.logger.warn(
+              `Fallback config at ${bakPath} could not be loaded: ${String(bakErr)}`,
+            );
+          }
+        }
+
+        if (!validated.ok) {
+          const error = new Error(`Invalid config at ${configPath}:\n${details}`);
+          (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
+          (error as { code?: string; details?: string }).details = details;
+          throw error;
+        }
       }
       if (validated.warnings.length > 0) {
         const details = validated.warnings
