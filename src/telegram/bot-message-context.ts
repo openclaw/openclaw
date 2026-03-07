@@ -87,6 +87,7 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import { getPreGateResult } from "./contextual-pre-gate.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
@@ -656,6 +657,13 @@ export const buildTelegramMessageContext = async ({
   const groupKey = historyKey ?? "";
   let contextualActivationHint: string | undefined;
 
+  // Check if the pre-sequentialize gate already made a peeking decision
+  // concurrently. If so, reuse it instead of calling the model again.
+  const preGate = getPreGateResult(primaryCtx);
+  if (preGate?.shouldProcess && preGate.hint) {
+    contextualActivationHint = preGate.hint;
+  }
+
   // Check whether a newer message is already queued for this chat/topic.
   // If so, skip the expensive decision-model call and just record history —
   // the newer message will carry the full context window anyway.
@@ -668,7 +676,7 @@ export const buildTelegramMessageContext = async ({
 
   // When engaged via contextual activation, skip mention gating entirely and ask
   // the model whether to continue or disengage.
-  if (isGroup && contextualConfig?.model) {
+  if (isGroup && contextualConfig?.model && !contextualActivationHint) {
     const engagement = engagementStates.get(groupKey);
     if (engagement?.mode === "engaged") {
       if (isStaleMessage) {
@@ -700,8 +708,11 @@ export const buildTelegramMessageContext = async ({
 
   if (isGroup && requireMention && canDetectMention) {
     if (mentionGate.shouldSkip) {
-      // Contextual activation (peeking): ask the decision model before skipping
-      if (contextualConfig?.model) {
+      // If pre-gate already decided to process (peeking → join), skip redundant call.
+      if (contextualActivationHint) {
+        logVerbose(`[contextual-activation] Telegram group ${chatId}: using pre-gate decision`);
+        // Fall through — treat as if mentioned
+      } else if (contextualConfig?.model) {
         if (isStaleMessage) {
           logVerbose(
             `[contextual-activation] Telegram group ${chatId}: skipping stale message #${msg.message_id} (latest: #${latestMsgId})`,

@@ -38,6 +38,7 @@ import {
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
+import { createContextualPreGate } from "./contextual-pre-gate.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -199,6 +200,74 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
+  // --- Hoist group-level state needed by the pre-sequentialize gate ---
+  const historyLimit = Math.max(
+    0,
+    telegramCfg.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const groupHistories = new Map<string, HistoryEntry[]>();
+  const resolveGroupRequireMention = (chatId: string | number) =>
+    resolveChannelGroupRequireMention({
+      cfg,
+      channel: "telegram",
+      accountId: account.accountId,
+      groupId: String(chatId),
+      requireMentionOverride: opts.requireMention,
+      overrideOrder: "after-config",
+    });
+  const resolveGroupActivation = (params: {
+    chatId: string | number;
+    agentId?: string;
+    messageThreadId?: number;
+    sessionKey?: string;
+  }) => {
+    const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
+    const sessionKey =
+      params.sessionKey ??
+      `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    try {
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey];
+      if (entry?.groupActivation === "always") {
+        return false;
+      }
+      if (entry?.groupActivation === "mention") {
+        return true;
+      }
+    } catch (err) {
+      logVerbose(`Failed to load session for activation check: ${String(err)}`);
+    }
+    return undefined;
+  };
+  const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
+    const groups = telegramCfg.groups;
+    const direct = telegramCfg.direct;
+    const chatIdStr = String(chatId);
+    const isDm = !chatIdStr.startsWith("-");
+
+    if (isDm) {
+      const directConfig = direct?.[chatIdStr] ?? direct?.["*"];
+      if (directConfig) {
+        const topicConfig =
+          messageThreadId != null ? directConfig.topics?.[String(messageThreadId)] : undefined;
+        return { groupConfig: directConfig, topicConfig };
+      }
+      // DMs without direct config: don't fall through to groups lookup
+      return { groupConfig: undefined, topicConfig: undefined };
+    }
+
+    if (!groups) {
+      return { groupConfig: undefined, topicConfig: undefined };
+    }
+    const groupConfig = groups[chatIdStr] ?? groups["*"];
+    const topicConfig =
+      messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
+    return { groupConfig, topicConfig };
+  };
+
   // Track the latest message_id per sequential key BEFORE sequentialize.
   // This lets handlers inside the queue detect if newer messages are waiting,
   // so they can skip expensive decision-model calls and just record history.
@@ -214,6 +283,24 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     return next();
   });
+
+  // Pre-sequentialize contextual activation gate: runs decision model calls
+  // concurrently so they are not blocked by an ongoing main-model response.
+  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
+  bot.use(
+    createContextualPreGate({
+      cfg,
+      groupHistories,
+      historyLimit,
+      latestGroupMessageIds,
+      resolveTelegramGroupConfig,
+      resolveGroupRequireMention,
+      resolveGroupActivation,
+      token: opts.token,
+      mediaMaxBytes,
+      proxyFetch: opts.proxyFetch,
+    }),
+  );
 
   bot.use(sequentialize(getTelegramSequentialKey));
 
@@ -257,13 +344,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     await next();
   });
 
-  const historyLimit = Math.max(
-    0,
-    telegramCfg.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
-  );
-  const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
@@ -286,7 +366,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const streamMode = resolveTelegramStreamMode(telegramCfg);
   const resolveGroupPolicy = (chatId: string | number) =>
@@ -296,65 +375,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       accountId: account.accountId,
       groupId: String(chatId),
     });
-  const resolveGroupActivation = (params: {
-    chatId: string | number;
-    agentId?: string;
-    messageThreadId?: number;
-    sessionKey?: string;
-  }) => {
-    const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
-    const sessionKey =
-      params.sessionKey ??
-      `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    try {
-      const store = loadSessionStore(storePath);
-      const entry = store[sessionKey];
-      if (entry?.groupActivation === "always") {
-        return false;
-      }
-      if (entry?.groupActivation === "mention") {
-        return true;
-      }
-    } catch (err) {
-      logVerbose(`Failed to load session for activation check: ${String(err)}`);
-    }
-    return undefined;
-  };
-  const resolveGroupRequireMention = (chatId: string | number) =>
-    resolveChannelGroupRequireMention({
-      cfg,
-      channel: "telegram",
-      accountId: account.accountId,
-      groupId: String(chatId),
-      requireMentionOverride: opts.requireMention,
-      overrideOrder: "after-config",
-    });
-  const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
-    const groups = telegramCfg.groups;
-    const direct = telegramCfg.direct;
-    const chatIdStr = String(chatId);
-    const isDm = !chatIdStr.startsWith("-");
-
-    if (isDm) {
-      const directConfig = direct?.[chatIdStr] ?? direct?.["*"];
-      if (directConfig) {
-        const topicConfig =
-          messageThreadId != null ? directConfig.topics?.[String(messageThreadId)] : undefined;
-        return { groupConfig: directConfig, topicConfig };
-      }
-      // DMs without direct config: don't fall through to groups lookup
-      return { groupConfig: undefined, topicConfig: undefined };
-    }
-
-    if (!groups) {
-      return { groupConfig: undefined, topicConfig: undefined };
-    }
-    const groupConfig = groups[chatIdStr] ?? groups["*"];
-    const topicConfig =
-      messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
-    return { groupConfig, topicConfig };
-  };
 
   // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
   // Created BEFORE the message processor so it can be injected into every message context.
