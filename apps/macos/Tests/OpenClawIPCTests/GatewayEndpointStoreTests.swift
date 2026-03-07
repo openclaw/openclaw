@@ -17,7 +17,7 @@ import Testing
             bind: nil,
             token: token,
             password: password)
-    } // pragma: allowlist secret
+    }
 
     private func makeDefaults() -> UserDefaults {
         let suiteName = "GatewayEndpointStoreTests.\(UUID().uuidString)"
@@ -234,7 +234,7 @@ import Testing
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
         #expect(url?.absoluteString == "ws://127.0.0.1:18789")
-    }
+    } // pragma: allowlist secret
 
     @Test func normalizeGatewayUrlRejectsNonLoopbackWs() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")
