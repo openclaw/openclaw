@@ -63,6 +63,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const context = event.context || {};
 
     // Check if another hook (e.g., security plugin) blocked the save.
+    // Internal hooks execute sequentially in FIFO registration order.
+    // Managed/workspace hooks that set blockSessionSave or sessionSaveContent
+    // must register for the same event (command:new / command:reset) and will
+    // run before this bundled handler as long as they are loaded first.
     if (context.blockSessionSave === true) {
       log.debug("Session save blocked by upstream hook");
       return;
@@ -188,33 +192,30 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Build Markdown entry
-    const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
-      "",
-      `- **Session Key**: ${displaySessionKey}`,
-      `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
-      "",
-    ];
-
-    // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
-    }
-
-    // Use custom content from upstream hook if available, otherwise use built entry.
-    // An empty string is a valid redaction signal — hooks may intentionally
-    // set it to persist a blank marker while avoiding transcript retention.
-    // Use custom content from upstream hook if available, otherwise use built entry.
+    // Use custom content from upstream hook if available, otherwise build entry.
     // hasCustomContent (set above) already gates session loading + slug generation.
     let entry: string;
     if (hasCustomContent) {
+      // An empty string is a valid redaction signal — hooks may intentionally
+      // set it to persist a blank marker while avoiding transcript retention.
       entry = context.sessionSaveContent as string;
       log.debug("Using custom session content from upstream hook", {
         length: entry.length,
       });
     } else {
+      const entryParts = [
+        `# Session: ${dateStr} ${timeStr} UTC`,
+        "",
+        `- **Session Key**: ${event.sessionKey}`,
+        `- **Session ID**: ${sessionId}`,
+        `- **Source**: ${source}`,
+        "",
+      ];
+
+      if (sessionContent) {
+        entryParts.push("## Conversation Summary", "", sessionContent, "");
+      }
+
       entry = entryParts.join("\n");
     }
 
