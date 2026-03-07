@@ -2,7 +2,10 @@
  * Message normalization utilities for chat rendering.
  */
 
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+} from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
@@ -50,6 +53,25 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
+  const senderLabel = (() => {
+    if (typeof m.senderLabel === "string" && m.senderLabel.trim()) {
+      return m.senderLabel.trim();
+    }
+    if (typeof m.sender === "string" && m.sender.trim()) {
+      return m.sender.trim();
+    }
+    const textSources = [
+      typeof m.content === "string" ? m.content : null,
+      typeof m.text === "string" ? m.text : null,
+    ].filter((value): value is string => typeof value === "string");
+    for (const text of textSources) {
+      const extracted = extractInboundSenderLabel(text);
+      if (extracted) {
+        return extracted;
+      }
+    }
+    return null;
+  })();
 
   // Strip AI-injected metadata prefix blocks from user messages before display.
   if (role === "user" || role === "User") {
@@ -61,7 +83,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   }
 
-  return { role, content, timestamp, id };
+  return { role, content, timestamp, id, senderLabel };
 }
 
 /**

@@ -225,4 +225,87 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("shows Telegram sender labels from inbound metadata instead of generic You", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender": "Iris"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Iris"
+}
+\`\`\`
+
+hello from topic`,
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const senderLabels = Array.from(container.querySelectorAll(".chat-sender-name")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(senderLabels).toContain("Iris");
+    expect(senderLabels).not.toContain("You");
+  });
+
+  it("keeps consecutive Telegram messages from different senders in separate groups", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: `Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Iris"
+}
+\`\`\`
+
+first`,
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: `Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Joaquin De Rojas"
+}
+\`\`\`
+
+second`,
+              timestamp: 1001,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const groups = container.querySelectorAll(".chat-group.user");
+    expect(groups).toHaveLength(2);
+    const senderLabels = Array.from(container.querySelectorAll(".chat-sender-name")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(senderLabels).toContain("Iris");
+    expect(senderLabels).toContain("Joaquin De Rojas");
+  });
 });

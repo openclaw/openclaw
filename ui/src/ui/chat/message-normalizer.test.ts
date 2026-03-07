@@ -29,6 +29,7 @@ describe("message-normalizer", () => {
         content: [{ type: "text", text: "Hello world" }],
         timestamp: 1000,
         id: "msg-1",
+        senderLabel: null,
       });
     });
 
@@ -109,6 +110,30 @@ describe("message-normalizer", () => {
       });
 
       expect(result.content[0].args).toEqual({ foo: "bar" });
+    });
+
+    it("extracts sender labels from inbound metadata blocks", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender": "Iris"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Iris"
+}
+\`\`\`
+
+Hello from Telegram`,
+      });
+
+      expect(result.senderLabel).toBe("Iris");
+      expect(result.content).toEqual([{ type: "text", text: "Hello from Telegram" }]);
     });
   });
 
