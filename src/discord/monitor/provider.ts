@@ -1,3 +1,4 @@
+import process from "node:process";
 import { inspect } from "node:util";
 import {
   Client,
@@ -28,6 +29,7 @@ import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -50,8 +52,12 @@ import {
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
-import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
+import { createDiscordGatewayPlugin, type ShutdownAwareGatewayPlugin } from "./gateway-plugin.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import {
+  createDiscordGatewayWatchdog,
+  shouldRestartDiscordGatewayProcessForError,
+} from "./gateway-watchdog.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -602,15 +608,60 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     emitter: gatewayEmitter,
     runtime,
   });
+  const gatewayWatchdog = createDiscordGatewayWatchdog();
+  let restartScheduled = false;
+  const requestGatewayProcessRestart = (reason: string) => {
+    if (restartScheduled) {
+      return;
+    }
+    restartScheduled = true;
+    runtime.error?.(
+      danger(`discord: fatal gateway state detected; restarting process (${reason})`),
+    );
+    try {
+      (gateway as ShutdownAwareGatewayPlugin | undefined)?.prepareForShutdown?.();
+      gateway?.disconnect();
+    } catch {
+      // Best effort. Exiting the process is the real recovery path.
+    }
+    const restart = restartGatewayProcessWithFreshPid();
+    if (restart.mode === "spawned") {
+      runtime.log?.(
+        warn(`discord: spawned fresh gateway process ${restart.pid ?? "unknown"} for recovery`),
+      );
+    } else if (restart.mode === "supervised") {
+      runtime.log?.(warn("discord: exiting so launchd can restart the gateway process"));
+    } else if (restart.mode === "failed") {
+      runtime.error?.(
+        danger(
+          `discord: gateway process restart failed (${restart.detail ?? "unknown error"}); exiting anyway`,
+        ),
+      );
+    } else {
+      runtime.log?.(
+        warn(
+          "discord: gateway restart fallback is disabled; exiting for manual/supervisor recovery",
+        ),
+      );
+    }
+    setTimeout(() => {
+      process.exit(1);
+    }, 50).unref?.();
+  };
+  const onGatewayErrorEvent = (err: unknown) => {
+    if (!shouldRestartDiscordGatewayProcessForError(err)) {
+      return;
+    }
+    requestGatewayProcessRestart(String(err));
+  };
   const abortSignal = opts.abortSignal;
   const onAbort = () => {
     if (!gateway) {
       return;
     }
-    // Carbon emits an error when maxAttempts is 0; keep a one-shot listener to avoid
-    // an unhandled error after we tear down listeners during abort.
+    // Swallow any late shutdown-only gateway error after listeners begin unwinding.
     gatewayEmitter?.once("error", () => {});
-    gateway.options.reconnect = { maxAttempts: 0 };
+    (gateway as ShutdownAwareGatewayPlugin).prepareForShutdown?.();
     gateway.disconnect();
   };
   if (abortSignal?.aborted) {
@@ -630,19 +681,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       clearTimeout(helloTimeoutId);
     }
     helloTimeoutId = setTimeout(() => {
-      if (!gateway?.isConnected) {
-        runtime.log?.(
-          danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
-          ),
-        );
-        gateway?.disconnect();
-        gateway?.connect(false);
+      if (gateway?.isConnected) {
+        gatewayWatchdog.resetHelloTimeouts();
+        helloTimeoutId = undefined;
+        return;
       }
+      const consecutiveTimeouts = gatewayWatchdog.getHelloTimeoutCount() + 1;
+      runtime.log?.(
+        danger(
+          `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+        ),
+      );
+      if (gatewayWatchdog.recordHelloTimeout()) {
+        requestGatewayProcessRestart(`repeated HELLO stalls (${consecutiveTimeouts} within 5m)`);
+        helloTimeoutId = undefined;
+        return;
+      }
+      gateway?.disconnect();
+      gateway?.connect(false);
       helloTimeoutId = undefined;
     }, HELLO_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
+  gatewayEmitter?.on("error", onGatewayErrorEvent);
   try {
     await waitForDiscordGatewayStop({
       gateway: gateway
@@ -675,6 +736,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       clearTimeout(helloTimeoutId);
     }
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("error", onGatewayErrorEvent);
     abortSignal?.removeEventListener("abort", onAbort);
     if (execApprovalsHandler) {
       await execApprovalsHandler.stop();
