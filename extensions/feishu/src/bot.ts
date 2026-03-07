@@ -1157,7 +1157,11 @@ export async function handleFeishuMessage(params: {
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
-    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    // P2P threads: when the inbound message carries a thread_id, the user is
+    // inside a thread even in a direct-message chat.  Honour that so the reply
+    // stays in the same thread instead of landing in the main chat.
+    const isP2pThread = isDirect && Boolean(ctx.threadId);
+    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : isP2pThread;
 
     if (isGroup && groupSession) {
       log(
@@ -1354,9 +1358,15 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+    // For P2P threads, reply to the thread root so the response stays inside
+    // the thread.  thread_id indicates a thread message per Feishu API docs,
+    // while root_id alone indicates a quote-reply.
+    const p2pThread = isDirect && Boolean(ctx.threadId);
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
-    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+      isTopicSession || configReplyInThread || p2pThread
+        ? (ctx.rootId ?? ctx.messageId)
+        : ctx.messageId;
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : p2pThread;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1407,7 +1417,7 @@ export async function handleFeishuMessage(params: {
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
             replyToMessageId: replyTargetMessageId,
-            skipReplyToInMessages: !isGroup,
+            skipReplyToInMessages: !isGroup && !p2pThread,
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
@@ -1505,7 +1515,7 @@ export async function handleFeishuMessage(params: {
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
         replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
+        skipReplyToInMessages: !isGroup && !p2pThread,
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
