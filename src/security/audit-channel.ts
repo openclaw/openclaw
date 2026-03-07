@@ -279,7 +279,25 @@ export async function collectChannelSecurityFindings(params: {
         plugin.id,
         accountId,
       );
-      const { account, enabled, configured } = await resolveChannelAuditAccount(plugin, accountId);
+      let account: unknown;
+      let enabled = true;
+      let configured = true;
+      try {
+        ({ account, enabled, configured } = await resolveChannelAuditAccount(plugin, accountId));
+      } catch (error) {
+        const detail = String(error);
+        const accountNote =
+          orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
+        findings.push({
+          checkId: `channels.${plugin.id}.account.resolve_failed`,
+          severity: "warn",
+          title: `${plugin.meta.label ?? plugin.id} account config could not be resolved${accountNote}`,
+          detail,
+          remediation:
+            "Resolve unresolved SecretRef values (or run this command against an active gateway runtime snapshot) and retry.",
+        });
+        continue;
+      }
       if (!enabled) {
         continue;
       }
