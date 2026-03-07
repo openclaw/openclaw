@@ -503,7 +503,7 @@ export function createMattermostInteractionHandler(params: {
 
     const userName = payload.user_name ?? payload.user_id;
     let originalMessage = "";
-    let clickedButtonName = actionId;
+    let clickedButtonName: string | null = null;
     try {
       const originalPost = await client.request<{
         channel_id?: string | null;
@@ -535,7 +535,7 @@ export function createMattermostInteractionHandler(params: {
           break;
         }
       }
-      if (clickedButtonName === actionId) {
+      if (clickedButtonName === null) {
         log?.(`mattermost interaction: action ${actionId} not found in post ${payload.post_id}`);
         res.statusCode = 403;
         res.setHeader("Content-Type", "application/json");
