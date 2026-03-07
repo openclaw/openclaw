@@ -46,6 +46,11 @@
       - any-glob-to-any-file:
           - "extensions/mattermost/**"
           - "docs/channels/mattermost.md"
+"channel: pumble":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/pumble/**"
+          - "docs/channels/pumble.md"
 "channel: msteams":
   - changed-files:
       - any-glob-to-any-file:

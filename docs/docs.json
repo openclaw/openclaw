@@ -910,6 +910,7 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/pumble",
                   "channels/signal",
                   "channels/synology-chat",
                   "channels/slack",
