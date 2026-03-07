@@ -59,6 +59,7 @@ export function resolvePluginTools(params: {
   const registry = loadOpenClawPlugins({
     config: effectiveConfig,
     workspaceDir: params.context.workspaceDir,
+    agentId: params.context.agentId,
     logger: createPluginLoaderLogger(log),
   });
 
@@ -69,6 +70,15 @@ export function resolvePluginTools(params: {
   const blockedPlugins = new Set<string>();
 
   for (const entry of registry.tools) {
+    // Filter by allowedAgents if configured
+    const entryConfig = normalized.entries[entry.pluginId];
+    if (entryConfig?.allowedAgents !== undefined) {
+      const currentAgentId = params.context.agentId;
+      if (!currentAgentId || !entryConfig.allowedAgents.includes(currentAgentId)) {
+        continue;
+      }
+    }
+
     if (blockedPlugins.has(entry.pluginId)) {
       continue;
     }

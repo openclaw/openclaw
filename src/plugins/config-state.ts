@@ -19,6 +19,7 @@ export type NormalizedPluginsConfig = {
         allowPromptInjection?: boolean;
       };
       config?: unknown;
+      allowedAgents?: string[];
     }
   >;
 };
@@ -78,10 +79,17 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
             allowPromptInjection: hooks.allowPromptInjection,
           }
         : undefined;
+    let allowedAgents: string[] | undefined;
+    if (Array.isArray(entry.allowedAgents)) {
+      allowedAgents = entry.allowedAgents
+        .map((agent) => (typeof agent === "string" ? agent.trim() : ""))
+        .filter(Boolean);
+    }
     normalized[key] = {
       enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
       hooks: normalizedHooks,
       config: "config" in entry ? entry.config : undefined,
+      allowedAgents,
     };
   }
   return normalized;

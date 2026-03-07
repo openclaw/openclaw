@@ -143,6 +143,7 @@ const SkillEntrySchema = z
     apiKey: SecretInputSchema.optional().register(sensitive),
     env: z.record(z.string(), z.string()).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+    allowedAgents: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -156,6 +157,7 @@ const PluginEntrySchema = z
       .strict()
       .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+    allowedAgents: z.array(z.string()).optional(),
   })
   .strict();
 

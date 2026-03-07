@@ -71,6 +71,8 @@ export type SkillEntry = {
 };
 
 export type SkillEligibilityContext = {
+  /** The agent ID for which skills are being filtered. */
+  agentId?: string;
   remote?: {
     platforms: string[];
     hasBin: (bin: string) => boolean;
