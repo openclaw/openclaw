@@ -886,6 +886,11 @@ export async function compactEmbeddedPiSessionDirect(
         skipReason !== "already_compacted_recently";
       if (isExecutionFailure) {
         recordCompactionFailure(sessionKey);
+      } else {
+        // Benign skips (nothing to compact, below threshold, already compacted recently)
+        // should reset the consecutive failure counter so intermittent real failures
+        // don't accumulate across benign gaps and prematurely open the circuit.
+        recordCompactionSuccess(sessionKey);
       }
     }
     return fail(reason);

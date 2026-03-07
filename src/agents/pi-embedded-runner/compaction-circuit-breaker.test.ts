@@ -8,11 +8,12 @@ import {
   __testing,
 } from "./compaction-circuit-breaker.js";
 
-const { DEFAULT_MAX_CONSECUTIVE_FAILURES, DEFAULT_COOLDOWN_MS } = __testing;
+const { DEFAULT_MAX_CONSECUTIVE_FAILURES, DEFAULT_COOLDOWN_MS, EVICTION_GRACE_MS } = __testing;
 
 describe("compaction-circuit-breaker", () => {
   afterEach(() => {
     resetCompactionCircuit("test-session");
+    __testing.resetLastEvictionAt();
   });
 
   it("circuit is closed with zero failures", () => {
@@ -81,6 +82,37 @@ describe("compaction-circuit-breaker", () => {
     }
     const state = getCompactionCircuitState("test-session");
     expect(state.cooldownUntil).toBeLessThanOrEqual(now + 30 * 60 * 1000);
+  });
+
+  it("eviction removes stale entries after cooldown + grace", () => {
+    const now = 100_000;
+    recordCompactionFailure("stale-session", { nowMs: now, cooldownMs: 1000 });
+    const state = getCompactionCircuitState("stale-session");
+    expect(state.consecutiveFailures).toBe(1);
+
+    // Trigger eviction well after cooldown + EVICTION_GRACE_MS
+    const futureMs = now + 1000 + EVICTION_GRACE_MS + 1;
+    // isCompactionCircuitOpen triggers lazy eviction
+    isCompactionCircuitOpen("other-session", { nowMs: futureMs });
+
+    // The stale entry should have been evicted
+    expect(__testing.states.has("stale-session")).toBe(false);
+    resetCompactionCircuit("stale-session");
+    resetCompactionCircuit("other-session");
+  });
+
+  it("eviction preserves entries still within grace period", () => {
+    const now = 100_000;
+    recordCompactionFailure("active-session", { nowMs: now, cooldownMs: 1000 });
+
+    // Trigger eviction before cooldown + EVICTION_GRACE_MS
+    const earlyMs = now + 1000 + EVICTION_GRACE_MS - 1;
+    isCompactionCircuitOpen("other-session", { nowMs: earlyMs });
+
+    // Entry should still exist
+    expect(__testing.states.has("active-session")).toBe(true);
+    resetCompactionCircuit("active-session");
+    resetCompactionCircuit("other-session");
   });
 
   it("different sessions have independent circuits", () => {
