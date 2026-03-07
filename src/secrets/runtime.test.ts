@@ -2407,6 +2407,38 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats defaults env refs as inactive when all agents override mode to off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            docker: {
+              env: {
+                SECRET: { source: "env", provider: "default", id: "MISSING_ALL_OFF_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          { id: "agent-a", sandbox: { mode: "off" } },
+          { id: "agent-b", sandbox: { mode: "off" } },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.defaults.sandbox.docker.env.SECRET",
+    );
+  });
+
   it("keeps defaults env refs active when agent overrides mode to non-off", async () => {
     const config = asConfig({
       agents: {

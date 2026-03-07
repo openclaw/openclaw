@@ -222,7 +222,7 @@ describe("sandbox docker config", () => {
       globalDocker: {
         env: {
           PLAIN: "plain-value",
-          API_KEY: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
+          API_KEY: { source: "env", provider: "default", id: "MY_KEY" },
         },
       },
     });

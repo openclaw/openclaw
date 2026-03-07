@@ -436,19 +436,22 @@ function collectAgentSandboxDockerEnvAssignments(params: {
   const list = Array.isArray(agents.list) ? agents.list : [];
   const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : "off";
 
-  // Defaults env refs are active when sandbox env is merged key-by-key (global +
-  // agent). But if sandbox mode is "off" everywhere, these refs are never consumed.
+  // Defaults env refs are active when any agent's effective sandbox mode is not "off".
+  // When a list exists, each agent's effective mode (agent override ?? defaults) is checked;
+  // when the list is empty, defaults mode applies directly.
   if (defaultsEnv) {
-    // Active if defaults mode is not "off", or any enabled agent overrides mode to non-off.
     const anyAgentSandboxed =
-      defaultsMode !== "off" ||
-      list.some((rawAgent) => {
-        if (!isRecord(rawAgent) || rawAgent.enabled === false) {
-          return false;
-        }
-        const agentSandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
-        return typeof agentSandbox?.mode === "string" && agentSandbox.mode !== "off";
-      });
+      list.length === 0
+        ? defaultsMode !== "off"
+        : list.some((rawAgent) => {
+            if (!isRecord(rawAgent) || rawAgent.enabled === false) {
+              return false;
+            }
+            const agentSandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+            const effectiveMode =
+              typeof agentSandbox?.mode === "string" ? agentSandbox.mode : defaultsMode;
+            return effectiveMode !== "off";
+          });
     collectSandboxDockerEnvAssignments({
       env: defaultsEnv,
       pathPrefix: "agents.defaults.sandbox.docker.env",
