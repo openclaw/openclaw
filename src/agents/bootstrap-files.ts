@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { listAgentEntries } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -12,6 +14,22 @@ import {
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+/** Merge default + per-agent allowedExternalPaths (union, no duplicates). */
+function resolveAllowedExternalPaths(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): string[] {
+  const defaults = config?.agents?.defaults?.workspaceConfig?.allowedExternalPaths ?? [];
+  if (!agentId) {
+    return defaults;
+  }
+  const agentEntry = listAgentEntries(config ?? {}).find(
+    (e) => normalizeAgentId(e.id) === normalizeAgentId(agentId),
+  );
+  const perAgent = agentEntry?.workspaceConfig?.allowedExternalPaths ?? [];
+  return [...new Set([...defaults, ...perAgent])];
+}
 
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
@@ -72,12 +90,14 @@ export async function resolveBootstrapFilesForRun(params: {
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
+  const allowedExternalPaths = resolveAllowedExternalPaths(params.config, params.agentId);
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
+        allowedExternalPaths,
       })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+    : await loadWorkspaceBootstrapFiles(params.workspaceDir, allowedExternalPaths);
   const bootstrapFiles = applyContextModeFilter({
     files: filterBootstrapFilesForSession(rawFiles, sessionKey),
     contextMode: params.contextMode,
