@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { applyTheme, currentThemeName, getThemeNames } from "./theme/theme.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -440,6 +441,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "abort":
         await abortActive();
+        break;
+      case "theme":
+        if (!args) {
+          chatLog.addSystem(
+            `usage: /theme <${getThemeNames().join(", ")}>  (current: ${currentThemeName})`,
+          );
+        } else if (applyTheme(args, tui)) {
+          chatLog.addSystem(`theme set to ${args}`);
+          await loadHistory();
+        } else {
+          chatLog.addSystem(`unknown theme: ${args}. available: ${getThemeNames().join(", ")}`);
+        }
         break;
       case "settings":
         openSettings();
