@@ -214,17 +214,14 @@ function resolveFeishuDebounceMentions(params: {
     }
   }
   const merged = mergeFeishuDebounceMentions(entries);
-  if (!merged) {
-    return undefined;
+  if (merged && merged.length > 0) {
+    console.log(
+      `resolveFeishuDebounceMentions[${botOpenId}]: returning ${merged.length} merged mentions`,
+    );
+    return merged;
   }
-  const normalizedBotOpenId = botOpenId?.trim();
-  if (!normalizedBotOpenId) {
-    return undefined;
-  }
-  const botMentions = merged.filter(
-    (mention) => mention.id.open_id?.trim() === normalizedBotOpenId,
-  );
-  return botMentions.length > 0 ? botMentions : undefined;
+  console.log(`resolveFeishuDebounceMentions[${botOpenId}]: returning undefined mentions`);
+  return undefined;
 }
 
 function registerEventHandlers(
