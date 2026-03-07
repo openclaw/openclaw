@@ -336,6 +336,7 @@ export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
+export const HUAWEI_MAAS_DEFAULT_MODEL_REF = "huawei-maas/deepseek-v3.2";
 
 export async function setZaiApiKey(
   key: SecretInput,
@@ -468,6 +469,18 @@ export function setQianfanApiKey(
   upsertAuthProfile({
     profileId: "qianfan:default",
     credential: buildApiKeyCredential("qianfan", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setHuaweiMaasApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "huawei-maas:default",
+    credential: {
+      type: "api_key",
+      provider: "huawei-maas",
+      key,
+    },
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

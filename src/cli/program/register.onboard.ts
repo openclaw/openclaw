@@ -1,7 +1,5 @@
 import type { Command } from "commander";
-import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -11,6 +9,8 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
+import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import { onboardCommand } from "../../commands/onboard.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -160,6 +160,7 @@ export function registerOnboardCommand(program: Command) {
           zaiApiKey: opts.zaiApiKey as string | undefined,
           xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
           qianfanApiKey: opts.qianfanApiKey as string | undefined,
+          huaweiMaasApiKey: opts.huaweiMaasApiKey as string | undefined,
           minimaxApiKey: opts.minimaxApiKey as string | undefined,
           syntheticApiKey: opts.syntheticApiKey as string | undefined,
           veniceApiKey: opts.veniceApiKey as string | undefined,

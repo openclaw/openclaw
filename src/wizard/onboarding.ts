@@ -1,3 +1,4 @@
+import { ensureOpenClawModelsJson } from "../agents/models-config.ts";
 import { formatCliCommand } from "../cli/command-format.js";
 import type {
   GatewayAuthChoice,
@@ -450,7 +451,7 @@ export async function runOnboardingWizard(
     });
     nextConfig = authResult.config;
   }
-
+  await ensureOpenClawModelsJson(nextConfig);
   if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,

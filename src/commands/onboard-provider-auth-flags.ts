@@ -23,6 +23,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "huaweiMaasApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
 >;
@@ -183,6 +184,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "huaweiMaasApiKey",
+    authChoice: "huawei-maas-api-key",
+    cliFlag: "--huawei-maas-api-key",
+    cliOption: "--huawei-maas-api-key <key>",
+    description: "Huawei Cloud MAAS API key",
   },
   {
     optionKey: "volcengineApiKey",

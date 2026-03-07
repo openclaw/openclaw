@@ -49,6 +49,7 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "huawei-maas-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -76,6 +77,7 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
+  | "huawei"
   | "volcengine"
   | "byteplus"
   | "custom";
@@ -135,6 +137,7 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  huaweiMaasApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

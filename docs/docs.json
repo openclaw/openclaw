@@ -108,6 +108,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/huawei",
+      "destination": "/providers/huawei"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1121,7 +1125,8 @@
                   "providers/venice",
                   "providers/vllm",
                   "providers/xiaomi",
-                  "providers/zai"
+                  "providers/zai",
+                  "providers/huawei"
                 ]
               }
             ]

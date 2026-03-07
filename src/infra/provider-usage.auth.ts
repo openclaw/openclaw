@@ -127,6 +127,13 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
   return normalizeSecretInput(cred.token);
 }
 
+export function resolveHuaweiMaasApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "huawei-maas",
+    envDirect: [process.env.HUAWEI_MAAS_API_KEY],
+  });
+}
+
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
   agentDir?: string;
@@ -237,6 +244,14 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "xiaomi") {
       const apiKey = resolveXiaomiApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+
+    if (provider === "huawei-maas") {
+      const apiKey = resolveHuaweiMaasApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }

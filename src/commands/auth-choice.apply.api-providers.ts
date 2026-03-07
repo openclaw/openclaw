@@ -18,6 +18,8 @@ import {
 import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
+  applyHuaweiMaasConfig,
+  applyHuaweiMaasProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyKilocodeConfig,
@@ -63,6 +65,7 @@ import {
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setHuaweiMaasApiKey,
   setKilocodeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
@@ -100,6 +103,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  "huawei-maas": "huawei-maas-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -307,6 +311,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyProviderConfig: applySyntheticProviderConfig,
     normalize: (value) => String(value ?? "").trim(),
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "huawei-maas-api-key": {
+    provider: "huawei-maas",
+    profileId: "huawei-maas:default",
+    expectedProviders: ["huawei-maas"],
+    envLabel: "HUAWEI_MAAS_API_KEY",
+    promptMessage: "Enter Huawei Cloud MAAS API key",
+    setCredential: setHuaweiMaasApiKey,
+    defaultModel: "huawei-maas/deepseek-v3.2",
+    applyDefaultConfig: applyHuaweiMaasConfig,
+    applyProviderConfig: applyHuaweiMaasProviderConfig,
+    noteDefault: "huawei-maas/deepseek-v3.2",
+    noteMessage: [
+      "Get your API key at: https://console.huaweicloud.com/modelarts/?region=cn-southwest-2#/model-studio/authmanage",
+      "API key format: sk-...",
+    ].join("\n"),
+    noteTitle: "Huawei Cloud MAAS",
   },
 };
 

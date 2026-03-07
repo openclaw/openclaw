@@ -3,6 +3,7 @@ import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "./onboard-provider-auth-flags.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
+
 export type { AuthChoiceGroupId };
 
 export type AuthChoiceOption = {
@@ -64,6 +65,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Google",
     hint: "Gemini API key + OAuth",
     choices: ["gemini-api-key", "google-gemini-cli"],
+  },
+  {
+    value: "huawei",
+    label: "Huawei Cloud MAAS",
+    hint: "ModelArts MAAS API key",
+    choices: ["huawei-maas-api-key"],
   },
   {
     value: "xai",
@@ -268,6 +275,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  },
+  {
+    value: "huawei-maas-api-key",
+    label: "Huawei Cloud MAAS API key",
+    hint: "Supports multiple models including DeepSeek, Qwen, and Kimi",
   },
   {
     value: "minimax-portal",

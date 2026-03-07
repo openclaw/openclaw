@@ -49,6 +49,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [vLLM (local models)](/providers/vllm)
 - [Xiaomi](/providers/xiaomi)
 - [Z.AI](/providers/zai)
+- [Huawei Cloud MAAS](/providers/huawei)
 
 ## Transcription providers
 

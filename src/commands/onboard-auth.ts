@@ -5,6 +5,8 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyHuaweiMaasConfig,
+  applyHuaweiMaasProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyHuggingfaceConfig,
@@ -57,6 +59,7 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  HUAWEI_MAAS_DEFAULT_MODEL_REF,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
@@ -84,6 +87,7 @@ export {
   setVolcengineApiKey,
   setZaiApiKey,
   setXaiApiKey,
+  setHuaweiMaasApiKey,
   writeOAuthCredentials,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,

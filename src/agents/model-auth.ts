@@ -1,8 +1,8 @@
-import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
-import { formatCliCommand } from "../cli/command-format.js";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -355,6 +355,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
+    "huawei-maas": "HUAWEI_MAAS_API_KEY",
     vllm: "VLLM_API_KEY",
     kilocode: "KILOCODE_API_KEY",
   };
