@@ -136,6 +136,23 @@ When E2EE is enabled, the bot will request verification from your other sessions
 Open Element (or another client) and approve the verification request to establish trust.
 Once verified, the bot can decrypt messages in encrypted rooms.
 
+<Warning>
+Automatic SAS verification on startup is currently broken ([#7649](https://github.com/openclaw/openclaw/issues/7649)).
+As a workaround, run the standalone verification script after the gateway has started:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install requests cryptography
+python3 scripts/matrix_verify.py
+```
+
+The script performs interactive SAS emoji verification between your Matrix
+client and the bot device.
+
+Make sure the gateway has started at least once with E2EE enabled before
+running the script (the gateway creates the device keys on first startup).
+</Warning>
+
 ## Multi-account
 
 Multi-account support: use `channels.matrix.accounts` with per-account credentials and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
