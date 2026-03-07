@@ -129,6 +129,31 @@ export class OpenClawApp extends LitElement {
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
+  // Persist dismissed update banner version to localStorage for durability across refreshes
+  // Wrap in try-catch for sandboxed contexts where localStorage may be unavailable
+  @state() private _updateDismissedVersion: string | null = (() => {
+    try {
+      return localStorage.getItem("updateBannerDismissed");
+    } catch {
+      return null;
+    }
+  })();
+  // eslint-disable-next-line accessor-pairs
+  set updateDismissedVersion(value: string | null) {
+    try {
+      if (value !== null) {
+        localStorage.setItem("updateBannerDismissed", value);
+      } else {
+        localStorage.removeItem("updateBannerDismissed");
+      }
+    } catch {
+      // Ignore storage errors in sandboxed contexts
+    }
+    this._updateDismissedVersion = value;
+  }
+  get updateDismissedVersion(): string | null {
+    return this._updateDismissedVersion;
+  }
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
