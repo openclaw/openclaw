@@ -864,7 +864,7 @@ describe("session-memory hook", () => {
       cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
       previousSessionEntry: { sessionId: "s1", sessionFile },
     });
-    const outsideDir = path.join(path.dirname(tempDir), "outside-workspace-target");
+    const outsideDir = path.join(path.dirname(tempDir), `outside-workspace-target-${Date.now()}`);
     const escapePath = path.join(outsideDir, "stolen-session.md");
     event.context.sessionSaveRedirectPath = escapePath;
 
