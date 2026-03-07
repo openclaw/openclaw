@@ -44,17 +44,20 @@ function encryptSSSSSecret(
 ): { encrypted: Record<string, { iv: string; ciphertext: string; mac: string }> } {
   // Derive AES/HMAC keys using the same HKDF params as the production code
   const salt = Buffer.alloc(32, 0);
-  const derived = crypto.hkdfSync("sha256", rawKey, salt, Buffer.from(secretName, "utf8"), 64) as ArrayBuffer;
+  const derived = crypto.hkdfSync(
+    "sha256",
+    rawKey,
+    salt,
+    Buffer.from(secretName, "utf8"),
+    64,
+  ) as ArrayBuffer;
   const keyBuf = Buffer.from(derived);
   const aesKey = keyBuf.subarray(0, 32);
   const hmacKey = keyBuf.subarray(32, 64);
 
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv("aes-256-ctr", aesKey, iv);
-  const ciphertext = Buffer.concat([
-    cipher.update(Buffer.from(plaintext, "utf8")),
-    cipher.final(),
-  ]);
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(plaintext, "utf8")), cipher.final()]);
   const mac = crypto.createHmac("sha256", hmacKey).update(ciphertext).digest("base64");
 
   return {
@@ -127,7 +130,9 @@ describe("decryptSSSSSecret", () => {
 
   it("throws if the key ID is not present in encrypted data", () => {
     const rawKey = crypto.randomBytes(32);
-    const encrypted = { encrypted: { "other-key": { iv: "aaa=", ciphertext: "bbb=", mac: "ccc=" } } };
+    const encrypted = {
+      encrypted: { "other-key": { iv: "aaa=", ciphertext: "bbb=", mac: "ccc=" } },
+    };
     expect(() =>
       decryptSSSSSecret(encrypted, rawKey, "m.cross_signing.self_signing", "missing-key"),
     ).toThrow(/missing-key/);

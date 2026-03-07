@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
 
 // Base58 alphabet used by Matrix recovery keys (standard Bitcoin alphabet)
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; // pragma: allowlist secret
 
 /** Decode a base58 string to bytes. */
 function base58Decode(input: string): Uint8Array {
@@ -66,10 +66,7 @@ export function decodeRecoveryKey(recoveryKey: string): Uint8Array {
  * Derive AES and HMAC keys from a raw 32-byte SSSS key using HKDF-SHA256.
  * Per Matrix spec: salt = 32 zero bytes, info = utf8(name), output = 64 bytes.
  */
-function deriveKeyMaterial(
-  rawKey: Uint8Array,
-  info: string,
-): { aesKey: Buffer; hmacKey: Buffer } {
+function deriveKeyMaterial(rawKey: Uint8Array, info: string): { aesKey: Buffer; hmacKey: Buffer } {
   const salt = Buffer.alloc(32, 0);
   const infoBuffer = Buffer.from(info, "utf8");
   const derived = crypto.hkdfSync("sha256", rawKey, salt, infoBuffer, 64) as ArrayBuffer;
@@ -128,8 +125,7 @@ function canonicalJson(obj: unknown): string {
   if (Array.isArray(obj)) return `[${obj.map(canonicalJson).join(",")}]`;
   const keys = Object.keys(obj as Record<string, unknown>).sort();
   const pairs = keys.map(
-    (k) =>
-      `${JSON.stringify(k)}:${canonicalJson((obj as Record<string, unknown>)[k])}`,
+    (k) => `${JSON.stringify(k)}:${canonicalJson((obj as Record<string, unknown>)[k])}`,
   );
   return `{${pairs.join(",")}}`;
 }
@@ -270,12 +266,18 @@ export async function bootstrapCrossSigningFromRecoveryKey(params: {
       keyId = defaultKeyData.key;
     } catch {
       const keys = Object.keys(sskEncrypted.encrypted ?? {});
-      if (keys.length === 0) throw new Error("No encrypted entries found in m.cross_signing.self_signing");
+      if (keys.length === 0)
+        throw new Error("No encrypted entries found in m.cross_signing.self_signing");
       keyId = keys[0];
     }
 
     // 3. Decrypt the self-signing key seed
-    const sskSeedBase64 = decryptSSSSSecret(sskEncrypted, rawKey, "m.cross_signing.self_signing", keyId);
+    const sskSeedBase64 = decryptSSSSSecret(
+      sskEncrypted,
+      rawKey,
+      "m.cross_signing.self_signing",
+      keyId,
+    );
     const sskSeed = Buffer.from(sskSeedBase64, "base64");
 
     // 4. Import SSK as an Ed25519 private key and derive its public key
@@ -312,7 +314,11 @@ export async function bootstrapCrossSigningFromRecoveryKey(params: {
 
     // 8. Sign the canonical device key object (without existing signatures)
     const { signatures: _omit, unsigned: _unsigned, ...deviceKeyWithoutSigs } = deviceKey;
-    const signature = crypto.sign(null, Buffer.from(canonicalJson(deviceKeyWithoutSigs)), sskPrivKey);
+    const signature = crypto.sign(
+      null,
+      Buffer.from(canonicalJson(deviceKeyWithoutSigs)),
+      sskPrivKey,
+    );
 
     // 9. Upload the signature to the homeserver
     await matrixPost<unknown>({
