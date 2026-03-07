@@ -329,7 +329,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledWith(
@@ -442,6 +442,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(draftStream.revive).toHaveBeenCalled();
     expect(draftStream.update).toHaveBeenCalledWith("After tool call");
+  });
+
+  it("coalesces multiple final payloads into one preview edit in partial mode", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+        // Simulate multiple final payloads (one per tool-call round)
+        await dispatcherOptions.deliver({ text: "First final" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Second final" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Third final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // All three finals should edit the same preview (message 999), not send new messages.
+    expect(editMessageTelegram).toHaveBeenCalledTimes(3);
+    expect(draftStream.revive).toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
   it("materializes boundary preview and keeps it when no matching final arrives", async () => {
@@ -894,6 +918,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         forceNewMessage: vi.fn().mockImplementation(() => {
           answerMessageId = undefined;
         }),
+        revive: vi.fn(),
       };
       const reasoningDraftStream = createDraftStream();
       createTelegramDraftStream

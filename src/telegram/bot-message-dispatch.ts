@@ -531,6 +531,12 @@ export const dispatchTelegramMessage = async ({
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
+            // In partial mode, allow subsequent finals to re-edit the same
+            // preview instead of falling through to sendPayload (new message).
+            if (!shouldSplitPreviewMessages && finalizedPreviewByLane.answer) {
+              answerLane.stream?.revive();
+              finalizedPreviewByLane.answer = false;
+            }
           }
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
