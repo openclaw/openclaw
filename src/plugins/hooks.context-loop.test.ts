@@ -1,8 +1,8 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 /**
  * Unit tests for agent loop observability hooks:
  * context_assembled, loop_iteration_start, loop_iteration_end.
  */
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";

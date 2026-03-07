@@ -746,7 +746,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   /**
    * Run loop_iteration_end hook.
    * Fires at the end of each agent loop iteration (after tool results are
-   * collected). Includes whether the loop will continue. Runs in parallel
+   * collected). Includes tool call count and `hasToolResults` (a heuristic
+   * hint, not a definitive continuation signal). Runs in parallel
    * (fire-and-forget).
    */
   async function runLoopIterationEnd(

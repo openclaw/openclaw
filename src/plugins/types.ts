@@ -905,7 +905,7 @@ export type PluginHookGatewayStopEvent = {
 export type PluginHookContextAssembledEvent = {
   /** Stable run identifier — same across all attempts within one user-visible run.
    *  Use for run-level deduplication when context_assembled fires multiple times. */
-  runId?: string;
+  runId: string;
   systemPrompt: string;
   /** The effective user prompt for this turn (after hook modifications). */
   prompt: string;
