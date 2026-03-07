@@ -78,11 +78,13 @@ async function openVerifiedLocalFile(
 ): Promise<SafeOpenResult> {
   // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
   // results that get sent to messaging channels). See openclaw/openclaw#31186.
+  let isSymlink = false;
   try {
     const preStat = await fs.lstat(filePath);
     if (preStat.isDirectory()) {
       throw new SafeOpenError("not-file", "not a file");
     }
+    isSymlink = preStat.isSymbolicLink();
   } catch (err) {
     if (err instanceof SafeOpenError) {
       throw err;
@@ -92,13 +94,12 @@ async function openVerifiedLocalFile(
 
   let handle: FileHandle;
   try {
-    handle = await fs.open(filePath, OPEN_READ_FLAGS);
+    // For symlinks, don't use O_NOFOLLOW to avoid ELOOP on Linux/macOS
+    const openFlags = isSymlink ? fsConstants.O_RDONLY : OPEN_READ_FLAGS;
+    handle = await fs.open(filePath, openFlags);
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
-    }
-    if (isSymlinkOpenError(err)) {
-      throw new SafeOpenError("symlink", "symlink open blocked", { cause: err });
     }
     // Defensive: if open still throws EISDIR (e.g. race), sanitize so it never leaks.
     if (hasNodeErrorCode(err, "EISDIR")) {
