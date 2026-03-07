@@ -413,6 +413,33 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history hides delivery-mirror assistant transcript entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored outbound delivery" }],
+        model: "delivery-mirror",
+        provider: "openclaw",
+        api: "openai-responses",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real assistant reply" }],
+        model: "gpt-5",
+        timestamp: 3,
+      },
+    ]);
+
+    const textValues = collectHistoryTextValues(historyMessages);
+    expect(textValues).toEqual(["hello", "real assistant reply"]);
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);

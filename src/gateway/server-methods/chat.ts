@@ -362,6 +362,14 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
+function isDeliveryMirrorTranscriptMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  return entry.role === "assistant" && entry.model === "delivery-mirror";
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -371,6 +379,14 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   for (const message of messages) {
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
+
+    // Delivery-mirror transcript writes are transport artifacts and should not be shown
+    // as normal assistant history entries in Webchat.
+    if (isDeliveryMirrorTranscriptMessage(res.message)) {
+      changed = true;
+      continue;
+    }
+
     // Drop assistant messages whose entire visible text is the silent reply token.
     const text = extractAssistantTextForSilentCheck(res.message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
