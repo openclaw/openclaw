@@ -276,7 +276,9 @@ export async function monitorWebInbox(options: {
         return null;
       }
     }
-    const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+    const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined, {
+      authDir: options.authDir,
+    });
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;

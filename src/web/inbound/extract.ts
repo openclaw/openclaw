@@ -288,7 +288,10 @@ export function extractLocationData(
   return null;
 }
 
-export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
+export function describeReplyContext(
+  rawMessage: proto.IMessage | undefined,
+  opts?: { authDir?: string },
+): {
   id?: string;
   body: string;
   sender: string;
@@ -319,7 +322,7 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
-  const senderE164 = senderJid ? (jidToE164(senderJid) ?? senderJid) : undefined;
+  const senderE164 = senderJid ? (jidToE164(senderJid, opts) ?? senderJid) : undefined;
   const sender = senderE164 ?? "unknown sender";
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
