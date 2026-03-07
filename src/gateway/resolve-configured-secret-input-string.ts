@@ -4,6 +4,7 @@ import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
+export type ConfiguredSecretInputSource = "config" | "secretRef" | "fallback";
 
 function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -86,4 +87,99 @@ export async function resolveConfiguredSecretInputString(params: {
       }),
     };
   }
+}
+
+export async function resolveConfiguredSecretInputWithFallback(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  value: unknown;
+  path: string;
+  unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
+  readFallback?: () => string | undefined;
+}): Promise<{
+  value?: string;
+  source?: ConfiguredSecretInputSource;
+  unresolvedRefReason?: string;
+  secretRefConfigured: boolean;
+}> {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    defaults: params.config.secrets?.defaults,
+  });
+  const configValue = !ref ? trimToUndefined(params.value) : undefined;
+  if (configValue) {
+    return {
+      value: configValue,
+      source: "config",
+      secretRefConfigured: false,
+    };
+  }
+  if (!ref) {
+    const fallback = params.readFallback?.();
+    if (fallback) {
+      return {
+        value: fallback,
+        source: "fallback",
+        secretRefConfigured: false,
+      };
+    }
+    return { secretRefConfigured: false };
+  }
+
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.config,
+    env: params.env,
+    value: params.value,
+    path: params.path,
+    unresolvedReasonStyle: params.unresolvedReasonStyle,
+  });
+  if (resolved.value) {
+    return {
+      value: resolved.value,
+      source: "secretRef",
+      secretRefConfigured: true,
+    };
+  }
+
+  const fallback = params.readFallback?.();
+  if (fallback) {
+    return {
+      value: fallback,
+      source: "fallback",
+      secretRefConfigured: true,
+    };
+  }
+
+  return {
+    unresolvedRefReason: resolved.unresolvedRefReason,
+    secretRefConfigured: true,
+  };
+}
+
+export async function resolveRequiredConfiguredSecretRefInputString(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  value: unknown;
+  path: string;
+  unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
+}): Promise<string | undefined> {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    defaults: params.config.secrets?.defaults,
+  });
+  if (!ref) {
+    return undefined;
+  }
+
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.config,
+    env: params.env,
+    value: params.value,
+    path: params.path,
+    unresolvedReasonStyle: params.unresolvedReasonStyle,
+  });
+  if (resolved.value) {
+    return resolved.value;
+  }
+  throw new Error(resolved.unresolvedRefReason ?? `${params.path} resolved to an empty value.`);
 }

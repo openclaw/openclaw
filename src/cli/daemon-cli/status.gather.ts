@@ -12,7 +12,6 @@ import type {
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-  resolveSecretInputRef,
 } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
@@ -27,6 +26,7 @@ import {
   trimToUndefined,
 } from "../../gateway/credentials.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
+import { resolveRequiredConfiguredSecretRefInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import {
   formatPortDiagnostics,
   inspectPortUsage,
@@ -35,8 +35,6 @@ import {
 } from "../../infra/ports.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
-import { secretRefKey } from "../../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../../secrets/resolve.js";
 import { probeGatewayStatus } from "./probe.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -127,13 +125,6 @@ async function resolveDaemonProbeToken(params: {
   }
   const defaults = params.daemonCfg.secrets?.defaults;
   const configured = params.daemonCfg.gateway?.auth?.token;
-  const { ref } = resolveSecretInputRef({
-    value: configured,
-    defaults,
-  });
-  if (!ref) {
-    return normalizeSecretInputString(configured);
-  }
   const authMode = params.daemonCfg.gateway?.auth?.mode;
   if (authMode === "password" || authMode === "none" || authMode === "trusted-proxy") {
     return undefined;
@@ -149,15 +140,16 @@ async function resolveDaemonProbeToken(params: {
       return undefined;
     }
   }
-  const resolved = await resolveSecretRefValues([ref], {
+  const resolvedToken = await resolveRequiredConfiguredSecretRefInputString({
     config: params.daemonCfg,
     env: params.mergedDaemonEnv as NodeJS.ProcessEnv,
+    value: configured,
+    path: "gateway.auth.token",
   });
-  const token = trimToUndefined(resolved.get(secretRefKey(ref)));
-  if (!token) {
-    throw new Error("gateway.auth.token resolved to an empty or non-string value.");
+  if (resolvedToken) {
+    return resolvedToken;
   }
-  return token;
+  return normalizeSecretInputString(configured);
 }
 
 async function resolveDaemonProbePassword(params: {
@@ -176,13 +168,6 @@ async function resolveDaemonProbePassword(params: {
   }
   const defaults = params.daemonCfg.secrets?.defaults;
   const configured = params.daemonCfg.gateway?.auth?.password;
-  const { ref } = resolveSecretInputRef({
-    value: configured,
-    defaults,
-  });
-  if (!ref) {
-    return normalizeSecretInputString(configured);
-  }
   const authMode = params.daemonCfg.gateway?.auth?.mode;
   if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
     return undefined;
@@ -198,15 +183,16 @@ async function resolveDaemonProbePassword(params: {
       return undefined;
     }
   }
-  const resolved = await resolveSecretRefValues([ref], {
+  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
     config: params.daemonCfg,
     env: params.mergedDaemonEnv as NodeJS.ProcessEnv,
+    value: configured,
+    path: "gateway.auth.password",
   });
-  const password = trimToUndefined(resolved.get(secretRefKey(ref)));
-  if (!password) {
-    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  if (resolvedPassword) {
+    return resolvedPassword;
   }
-  return password;
+  return normalizeSecretInputString(configured);
 }
 
 export async function gatherDaemonStatus(
