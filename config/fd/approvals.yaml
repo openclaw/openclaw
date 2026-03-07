@@ -1,0 +1,34 @@
+approvals:
+  enabled: true
+  default_mode: "require"  # require | allow | simulate
+
+  # Hard safety caps
+  max_daily_spend_hard_cap_usd: 200
+  budget_delta_approval_usd: 25
+
+  # Two-step approval for very high risk actions
+  two_step:
+    enabled: true
+    confirm_ttl_minutes: 10
+    triggers:
+      - type: "risk_level"
+        value: "high"
+      - type: "meta.absolute_daily_budget_gte"
+        value: 200
+      - type: "compound_action"
+        value: "meta.launch_campaign+meta.increase_budget"
+
+  actions_require_approval:
+    - "meta.launch_campaign"
+    - "meta.increase_budget"
+    - "meta.enable_adset"
+    - "webops.vercel.redeploy"
+    - "webops.cloudflare.purge_cache"
+    - "webflow.publish"
+    - "stripe.create_live_price"
+    - "stripe.refund"
+
+  safe_actions_auto_allowed:
+    - "meta.pause_adset"
+    - "meta.decrease_budget"
+    - "webops.run_checks"

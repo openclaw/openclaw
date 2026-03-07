@@ -1,0 +1,74 @@
+{
+  "brand": "fulldigital",
+  "display_name": "Full Digital",
+  "description": "Full Digital agency — creative services, client management, finance",
+
+  "agents": [
+    {
+      "id": "fulldigital-ops",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_FD_OPS_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Internal ops channel — approvals, summaries, status"
+        }
+      ],
+      "triggers": [
+        "status", "approve", "reject", "summary", "health",
+        "cluster", "deploy", "digest"
+      ]
+    },
+    {
+      "id": "fulldigital-sales",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_FD_SALES_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Sales pipeline — lead follow-up, proposals"
+        }
+      ],
+      "triggers": [
+        "lead", "follow-up", "proposal", "pipeline", "outreach",
+        "inquiry", "prospect"
+      ]
+    },
+    {
+      "id": "fulldigital-content",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_FD_CONTENT_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Content planning — captions, calendars, hooks"
+        }
+      ],
+      "triggers": [
+        "caption", "hook", "calendar", "content", "campaign",
+        "post", "reel", "story"
+      ]
+    },
+    {
+      "id": "fulldigital-finance",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_FD_FINANCE_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Finance — grants, bookkeeping, reports"
+        }
+      ],
+      "triggers": [
+        "grant", "invoice", "expense", "budget", "funding",
+        "bookkeeping", "finance", "report"
+      ]
+    }
+  ],
+
+  "routing_rules": {
+    "default_agent": "fulldigital-ops",
+    "fallback": "fulldigital-ops",
+    "notes": "Unmatched messages route to ops agent"
+  }
+}

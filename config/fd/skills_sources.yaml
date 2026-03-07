@@ -1,0 +1,110 @@
+# Skills Scout — allowlist-first skill discovery.
+#
+# No auto-install. No arbitrary crawling.
+# Only sources listed here are scanned. All installs require manual human approval.
+
+skills_scout:
+  enabled: true
+
+  # Hard allowlist; scout ignores everything else.
+  allow_domains:
+    - "github.com"
+    - "raw.githubusercontent.com"
+    - "api.github.com"
+    - "skills.cokac.com"
+    - "support.claude.com"
+    - "www.awesomeskills.dev"
+    - "awesomeskills.dev"
+    - "skillkit.io"
+
+  # Conservative safety defaults
+  max_candidates: 250
+  max_readme_bytes: 250000
+  max_skill_md_bytes: 250000
+
+  sources:
+    - source_key: "anthropics_skills"
+      type: "github_repo"
+      repo: "anthropics/skills"
+      branch: "main"
+      base_path: "skills"
+      trust_tier: "official"
+      notes: "Official Anthropic skills repo."
+
+    - source_key: "skills_cokac_directory"
+      type: "web_directory"
+      url: "https://skills.cokac.com/"
+      trust_tier: "community"
+      notes: "Community directory; treat as untrusted by default."
+
+    - source_key: "awesome_skills_index"
+      type: "web_directory"
+      url: "https://www.awesomeskills.dev/"
+      trust_tier: "curated"
+      notes: "Curated index; still treat installs as manual review only."
+
+    - source_key: "skillkit_index"
+      type: "web_directory"
+      url: "https://skillkit.io/"
+      trust_tier: "curated"
+      notes: "Curated index; installs require manual review."
+
+  # Fit weighting for your businesses
+  fit_profile:
+    full_digital:
+      weight: 1.0
+      keywords:
+        - "trello"
+        - "notion"
+        - "go high level"
+        - "gohighlevel"
+        - "crm"
+        - "lead"
+        - "ads"
+        - "meta"
+        - "clickfunnels"
+        - "calendly"
+        - "stripe"
+        - "quickbooks"
+        - "invoicing"
+        - "project management"
+        - "sop"
+        - "runbook"
+
+    cutmv:
+      weight: 1.0
+      keywords:
+        - "saas"
+        - "funnels"
+        - "retention"
+        - "ltv"
+        - "churn"
+        - "analytics"
+        - "posthog"
+        - "sentry"
+        - "stripe"
+        - "email"
+        - "deliverability"
+        - "onboarding"
+        - "webhooks"
+
+  # Risk flags (the scout only *detects* and labels; it does not execute)
+  risk_rules:
+    high_risk_markers:
+      - "rm -rf"
+      - "delete"
+      - "curl |"
+      - "powershell"
+      - "chmod +x"
+      - "subprocess"
+      - "os.system"
+      - "eval("
+      - "requests.post("
+      - "token"
+      - "api key"
+      - "credentials"
+
+  # Output routing
+  output:
+    json_path: "var/skills_scout/latest.json"
+    md_path: "var/skills_scout/latest.md"

@@ -1,0 +1,59 @@
+{
+  "brand": "cutmv",
+  "display_name": "CUTMV",
+  "description": "CUTMV SaaS — product ops, customer support, growth",
+
+  "agents": [
+    {
+      "id": "cutmv-ops",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_CUTMV_OPS_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Product ops — roadmap, bugs, infrastructure"
+        }
+      ],
+      "triggers": [
+        "roadmap", "bug", "deploy", "infra", "release",
+        "ops", "triage", "incident"
+      ]
+    },
+    {
+      "id": "cutmv-support",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_CUTMV_SUPPORT_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Customer support — help, FAQs, issues"
+        }
+      ],
+      "triggers": [
+        "help", "support", "faq", "issue", "problem",
+        "onboarding", "how to", "question"
+      ]
+    },
+    {
+      "id": "cutmv-growth",
+      "channels": [
+        {
+          "type": "telegram",
+          "chat_ids": ["${TELEGRAM_CUTMV_GROWTH_CHAT_ID}"],
+          "mode": "primary",
+          "notes": "Growth — promos, campaigns, announcements"
+        }
+      ],
+      "triggers": [
+        "promo", "campaign", "announce", "launch", "growth",
+        "conversion", "feature", "follow-up"
+      ]
+    }
+  ],
+
+  "routing_rules": {
+    "default_agent": "cutmv-ops",
+    "fallback": "cutmv-ops",
+    "notes": "Unmatched messages route to ops agent"
+  }
+}

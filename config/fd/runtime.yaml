@@ -1,0 +1,199 @@
+# OpenClaw Runtime Configuration
+# Single source of truth for cluster layout, creative lanes, and skills policy.
+
+# ── Cluster Layout ──
+# Deployment: each node has its own git clone at ~/openclaw.
+# GitHub is the distribution layer (make cluster-update = git pull on all nodes).
+# Physical cluster dir lives on M4: /Users/fdclaw-m4/cluster
+# Shared over SMB. All nodes mount at ~/cluster.
+# ~/cluster is for jobs/logs/results ONLY — never repo, venv, DB, or secrets.
+cluster:
+  shared_dir: "~/cluster"
+  shared_jobs: "~/cluster/jobs"
+  shared_logs: "~/cluster/logs"
+  shared_results: "~/cluster/results"
+
+  nodes:
+    m1:
+      ip: "10.0.0.145"
+      role: "inference_heavy_worker"
+      notes: "Primary inference (Ollama) + heavy workers. Strongest AI box."
+      ollama_host: "http://10.0.0.145:11434"
+      models: ["qwen3.5:9b", "qwen3.5:4b", "qwen3.5:27b"]
+
+    m4:
+      ip: "10.0.0.10"
+      user: "fdclaw-m4"
+      ssh_alias: "claw-m4"
+      role: "gateway_coordinator"
+      notes: "Always-on brain stem. OpenClaw Gateway + webhooks + cron + approvals."
+      gateway_port: 18789
+      ollama_host: "http://10.0.0.10:11434"
+      models: ["qwen3.5:2b", "qwen3.5:4b"]
+
+    i7:
+      ip: "10.0.0.11"
+      user: "fdclaw-i7"
+      ssh_alias: "claw-i7"
+      role: "utility_overflow"
+      notes: "Backup worker, testing, browser automation, low-priority jobs."
+
+  # Tailscale (optional, for remote access)
+  tailscale:
+    enabled: false
+    aliases:
+      m4: "ts-claw-m4"
+      i7: "ts-claw-i7"
+
+# ── Repo Layout ──
+repo:
+  local_repo_dir: "~/openclaw"
+  local_db_path: "~/openclaw/data/openclaw.db"
+  migrations_dir: "~/openclaw/db/migrations"
+
+# ── Creative Engine ──
+# Multi-lane ad generation. Remotion JSON is default (deterministic, versionable, cheap).
+# Each lane has its own pipeline; all lanes share the attribution/metrics layer.
+creative:
+  default_lane: "remotion_json"
+  lanes_enabled:
+    - remotion_json      # JSON-prompted Remotion compositions (highest leverage)
+    - ugc                # UGC pipeline (Kling/Higgsfield)
+    - faceless           # Text overlays + b-roll + captions
+    - pov                # First-person script templates
+    - infographic        # Vibe Motion / motion typography
+
+  # Local asset sources (M1)
+  assets:
+    cutmv:
+      library_path: "~/cutmv-ad-library"
+      remotion_json_path: "~/cutmv-ad-library/remotion"
+      notes: "CUTMV ad dataset + Remotion JSON experiments"
+
+    fulldigital:
+      library_path: "~/fulldigital-ad-library"
+      remotion_json_path: "~/fulldigital-ad-library/remotion"
+      notes: "Full Digital ad dataset + Remotion JSON experiments"
+
+# ── Skills Policy ──
+# "Skills" = trusted open-source repos with workflows, data, prompts, schemas
+# for whichever models OpenClaw uses. NOT plugins, NOT auto-installs.
+skills:
+  definition: >
+    Trusted open-source repos (or vetted internal repos) containing tools,
+    prompts, schemas, workflows, and training datasets that OpenClaw can
+    fork/reference. Human-approved only. No auto-install.
+  auto_install: false
+  human_approval_required: true
+  sources_config: "config/skills_sources.yaml"
+
+# ── Job Routing ──
+# File-based job queue using ~/cluster/jobs as shared medium.
+# Workers poll pending/, claim via atomic rename, output to ~/cluster/results/.
+jobs:
+  poll_interval_seconds: 5
+  stale_claim_seconds: 300  # any worker can claim after 5 min
+  max_attempts: 3
+
+  routing:
+    # Lane -> preferred node mapping
+    remotion_json: "m4"    # has local assets
+    ugc: "i7"              # CPU-heavy compute
+    faceless: "any"        # both nodes capable
+    pov: "i7"              # compute worker
+    infographic: "m4"      # pairs with Remotion pipeline
+
+# ── Finance → GrantOps ──
+# Automated grant discovery, scoring, drafting, and submission.
+# Lives under Finance in the Command Center — not a separate product.
+# See docs/ops/GRANTOPS_COMMAND_CENTER_INTEGRATION.md for full spec.
+grantops:
+  enabled: false          # Must be explicitly enabled
+  auto_submit: false      # Submittable auto-submit (requires Telegram approval regardless)
+  fit_score_threshold: 0.7
+  max_submissions_per_day: 3
+  require_telegram_approval: true
+
+  daily_scan:
+    hour: 6               # 06:00 ET
+    timezone: "America/New_York"
+    sources:
+      - candid
+      # - grants_gov     # Enable when API access confirmed
+
+  notion_databases:
+    opportunities: "finance.grant_opportunities"
+    drafts: "finance.grant_drafts"
+    submissions: "finance.grant_submissions"
+
+  widgets:
+    - "finance.grants.summary"
+    - "finance.grants.new_today"
+    - "finance.grants.high_priority"
+    - "finance.grants.packages_review"
+    - "finance.grants.submissions_action_needed"
+
+# ── OpenClaw Gateway ──
+# Official upstream: https://github.com/openclaw/openclaw
+# Gateway runs on M4 (always-on coordinator).
+# Config file: gateway/openclaw.json5
+# Bindings: gateway/bindings/{fulldigital,cutmv}.json
+openclaw_gateway:
+  enabled: true
+  config_path: "gateway/openclaw.json5"
+  node: "m4"
+  port: 18789
+
+  # Inference routing
+  inference:
+    primary:
+      host: "http://10.0.0.145:11434"  # M1 Ollama
+      models:
+        workhorse: "qwen3.5:9b"
+        fast: "qwen3.5:4b"
+        escalation: "qwen3.5:27b"
+    fallback:
+      host: "http://10.0.0.10:11434"   # M4 Ollama
+      models:
+        triage: "qwen3.5:2b"
+        fallback: "qwen3.5:4b"
+    cloud:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      use_for: ["complex_analysis", "code_generation", "long_context"]
+
+# ── Agents ──
+# 7 agents across 2 brands. Each has an isolated workspace.
+# See agents/{agent_id}/SOUL.md for personality and rules.
+agents:
+  fulldigital:
+    - id: "fulldigital-ops"
+      role: "Internal command center, approvals, summaries"
+      model: "qwen3.5:9b"
+    - id: "fulldigital-sales"
+      role: "Lead follow-up, outreach, proposals"
+      model: "qwen3.5:9b"
+    - id: "fulldigital-content"
+      role: "Captions, calendars, hooks, campaigns"
+      model: "qwen3.5:4b"
+    - id: "fulldigital-finance"
+      role: "Grants, bookkeeping, reports"
+      model: "qwen3.5:9b"
+
+  cutmv:
+    - id: "cutmv-ops"
+      role: "Roadmap, bugs, infrastructure"
+      model: "qwen3.5:9b"
+    - id: "cutmv-support"
+      role: "Customer help, FAQs, onboarding"
+      model: "qwen3.5:4b"
+    - id: "cutmv-growth"
+      role: "Promos, campaigns, announcements"
+      model: "qwen3.5:9b"
+
+# ── Safety Defaults ──
+safety:
+  dry_run: true
+  kill_switch: false
+  read_only: false
+  secrets_on_shared_mount: false  # NEVER store secrets on ~/cluster (SMB)

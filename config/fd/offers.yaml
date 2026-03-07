@@ -1,0 +1,222 @@
+# ── Full Digital Offer Positioning Matrix ──
+#
+# Each offer rotates hooks, angles, mechanisms, and CTAs.
+# brain.py tests offer × angle × hook × CTA combinations.
+#
+# Primary anchor: major_label_rollout_sim (The Major Label Rollout Simulation)
+# Everything else funnels into it or serves as upsell.
+# All systems orbit this: ads, authority, expansion, profit, brain, funnel.
+#
+# Mechanism: "The Visual Era Framework™"
+# Steps: Era Identity Mapping → Asset Multiplication → Performance Creative Loop
+#        → Drop Spike Strategy → Post-Release Retargeting
+
+offers:
+  # ── PRIMARY ANCHOR ──
+  major_label_rollout_sim:
+    name: "The Major Label Rollout Simulation"
+    brand: fulldigital
+    tier: flagship
+    primary_anchor: true
+    core_outcome: "Execute your release like you're already signed"
+    icp: emerging_rapper
+    icp_detail:
+      monthly_listeners_range: [50000, 500000]
+      segments:
+        - "Emerging hip-hop artist"
+        - "Mid-tier with label interest"
+        - "Label-backed but under-optimized"
+        - "Independent with strong catalog"
+    mechanism: "The Visual Era Framework™"
+    mechanism_steps:
+      - "Era Identity Mapping"
+      - "Asset Multiplication"
+      - "Performance Creative Loop"
+      - "Drop Spike Strategy (14 days)"
+      - "Post-Release Retargeting"
+    pain_primary: "Drop day underperforms — no attention spike"
+    pain_secondary: "Inconsistent visuals, no structured rollout"
+    outcome_bullets:
+      - "30-day structured rollout"
+      - "Visual dominance across platforms"
+      - "Ad-ready assets from day 1"
+      - "DSP optimized presence"
+      - "Billboard-grade presentation"
+      - "Measurable lift in streams + engagement"
+    price_anchor:
+      lite: 7500
+      pro: 12000
+      elite: 20000
+    fulfillment_cost_cents:
+      lite: 60000       # $600
+      pro: 150000        # $1,500
+      elite: 350000      # $3,500
+    margin_floor: 0.35
+    capacity_hours_est: 40
+    conversion_event: application_submit
+    revenue_event: stripe_paid
+    primary_kpi: booked_calls
+    hooks:
+      - "What if your next drop looked like it had a label budget behind it?"
+      - "Stop dropping music into the void. Here's how to make it an event."
+      - "The difference between 500 views and 50K? A rollout strategy."
+    angles:
+      - authority: "We've run rollouts for artists with 10M+ streams"
+      - pain: "You're making great music. Your rollout strategy is killing it."
+      - mechanism: "The 30-day rollout system that turns singles into movements"
+      - social_proof: "See how [Artist] went from 2K to 200K views in 30 days"
+    ctas:
+      - "Book your free strategy call"
+      - "DM 'ROLLOUT' for the playbook"
+      - "Watch the free VSL — link in bio"
+    upsells:
+      - performance_creative_pack
+      - visual_era_pro
+
+  visual_era_pro:
+    name: "Visual Era Pro"
+    brand: fulldigital
+    tier: mid
+    core_outcome: "Control the visual era of your release"
+    icp: emerging_rapper
+    mechanism: "Complete visual identity system for your next era"
+    pain_primary: "No visual cohesion across platforms"
+    pain_secondary: "Looks amateur compared to signed artists"
+    price_anchor:
+      lite: 1500
+      pro: 3500
+      elite: 6000
+    fulfillment_cost_cents:
+      lite: 40000
+      pro: 80000
+      elite: 150000
+    margin_floor: 0.35
+    hooks:
+      - "Your music sounds like a major. Your visuals should match."
+      - "Why do signed artists look different? It's not talent — it's system."
+    angles:
+      - authority: "We build the visual systems that labels charge $50K for"
+      - pain: "Mismatched covers, random thumbnails, no visual thread"
+      - mechanism: "The Visual Era Blueprint: colors, type, motion, everything"
+    ctas:
+      - "Book your visual audit call"
+      - "DM 'VISUAL' to see examples"
+    upsells:
+      - major_label_rollout_sim
+
+  performance_creative_pack:
+    name: "Performance Creative Pack"
+    brand: fulldigital
+    tier: addon
+    core_outcome: "Ad creatives that convert cold audiences into fans"
+    icp: emerging_rapper
+    mechanism: "5-variant creative pack optimized for Meta + YouTube"
+    pain_primary: "Ads that burn money with no results"
+    pain_secondary: "No idea which creative will work"
+    price_anchor:
+      lite: 2500
+      pro: 5000
+      elite: 8000
+    fulfillment_cost_cents:
+      lite: 50000
+      pro: 100000
+    margin_floor: 0.35
+    conversion_event: booking_complete
+    primary_kpi: booked_calls
+    hooks:
+      - "Your last ad got 3 clicks. Here's why."
+      - "Stop boosting posts. Start running performance creative."
+    angles:
+      - mechanism: "5 creatives, each targeting a different awareness stage"
+      - pain: "You're spending on ads. Are they actually converting?"
+    ctas:
+      - "Get your creative audit"
+      - "DM 'ADS' for a free review"
+    upsells:
+      - major_label_rollout_sim
+
+  content_engine_monthly:
+    name: "Content Engine Monthly"
+    brand: fulldigital
+    tier: recurring
+    core_outcome: "Never run out of content again"
+    icp: emerging_rapper
+    mechanism: "Monthly content system: 4 posts/week, repurposed from 1 shoot"
+    pain_primary: "Inconsistent posting kills momentum"
+    pain_secondary: "No time to create content while making music"
+    price_anchor:
+      lite: 1500
+      pro: 3000
+    fulfillment_cost_cents:
+      lite: 30000
+      pro: 60000
+    margin_floor: 0.35
+    hooks:
+      - "Post 4x/week without spending 4x the time"
+      - "1 shoot. 30 pieces of content. Zero stress."
+    angles:
+      - mechanism: "The 1-to-30 content repurposing system"
+      - authority: "How we keep artists visible between releases"
+    ctas:
+      - "Book your content strategy call"
+      - "DM 'CONTENT' for the system breakdown"
+    upsells:
+      - visual_era_pro
+      - major_label_rollout_sim
+
+  # ── CUTMV OFFERS ──
+  cutmv_pro:
+    name: "CUTMV Pro"
+    brand: cutmv
+    tier: self_serve
+    core_outcome: "Professional music visuals on demand"
+    icp: independent_artist
+    mechanism: "Self-serve platform with pro templates + AI assist"
+    pain_primary: "Can't afford a designer for every release"
+    pain_secondary: "DIY tools look amateur"
+    price_anchor:
+      monthly: 29
+      annual: 290
+    hooks:
+      - "Pro visuals in minutes, not weeks"
+      - "Stop paying $500 for a cover art that should cost $29"
+    angles:
+      - mechanism: "AI-powered templates designed by music industry creatives"
+      - pain: "Your cover art budget shouldn't eat your marketing budget"
+      - social_proof: "Join 2,000+ artists using CUTMV Pro"
+    ctas:
+      - "Start your free trial"
+      - "Try it free — cancel anytime"
+    upsells:
+      - visual_era_pro
+
+  cutmv_teams:
+    name: "CUTMV Teams"
+    brand: cutmv
+    tier: expansion
+    core_outcome: "Visual production pipeline for labels and managers"
+    icp: label_manager
+    mechanism: "Multi-seat CUTMV with brand controls + approval flows"
+    pain_primary: "Managing visuals for multiple artists is chaos"
+    pain_secondary: "No brand consistency across roster"
+    price_anchor:
+      monthly: 149
+      annual: 1490
+    hooks:
+      - "Your roster deserves consistent visuals. Your team deserves simple tools."
+      - "Stop emailing PSD files back and forth"
+    angles:
+      - mechanism: "One dashboard for your entire roster's visual identity"
+      - pain: "5 artists, 5 designers, 5 different brand styles"
+    ctas:
+      - "Book a team demo"
+      - "DM 'TEAMS' for a walkthrough"
+    upsells:
+      - major_label_rollout_sim
+
+# ── Fulfillment cost model (default per-offer, cents) ──
+# Used by profit engine when offer-specific costs aren't set above
+fulfillment_cost_model:
+  visual_era_lite: 60000
+  visual_era_pro: 150000
+  major_label_simulation: 350000

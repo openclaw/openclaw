@@ -1,0 +1,93 @@
+# ── Retainer Conversion Funnel ──
+#
+# Post-purchase conversion system: one-off → retainer.
+# Retainer = "Era Control Retainer" or "90-Day Growth Pack"
+
+retainer_funnel:
+  # Candidate detection rules
+  candidate_rules:
+    min_total_spend_cents: 500000   # $5,000
+    min_projects_completed: 2
+    min_days_since_first_purchase: 30
+    exclude_active_retainer: true
+
+  # Available retainer offers
+  offers:
+    - retainer_id: era_control_90
+      name: "Era Control Retainer"
+      brand: fulldigital
+      price_monthly_cents: 600000   # $6,000/mo
+      duration_days: 90
+      promise: "Run your release visuals like a major label — every month."
+      includes:
+        - "Monthly visual refresh"
+        - "Performance creative loop"
+        - "Ad creative rotation"
+        - "DSP asset updates"
+        - "Priority support"
+
+    - retainer_id: growth_pack_90
+      name: "90-Day Growth Pack"
+      brand: fulldigital
+      price_monthly_cents: 400000   # $4,000/mo
+      duration_days: 90
+      promise: "Consistent visual presence without thinking about it."
+      includes:
+        - "Bi-weekly content refresh"
+        - "Ad creative pack"
+        - "Social media templates"
+        - "Monthly strategy call"
+
+  # Outreach sequences (day offsets from candidate detection)
+  sequences:
+    - seq_id: post_delivery_standard
+      trigger: project_delivered
+      steps:
+        - day_offset: 2
+          channel: email
+          template: retainer_nudge_1
+          subject: "Your project is live — here's what's next"
+
+        - day_offset: 5
+          channel: dm
+          template: retainer_dm_1
+          message_preview: "Hey — your [project] is performing. Want to keep the momentum?"
+
+        - day_offset: 9
+          channel: email
+          template: retainer_case_study
+          subject: "How [similar artist] turned one project into a movement"
+
+        - day_offset: 14
+          channel: email
+          template: retainer_final_nudge
+          subject: "Last chance: lock in your retainer rate"
+
+    - seq_id: high_engagement_fast
+      trigger: high_engagement_detected
+      steps:
+        - day_offset: 1
+          channel: dm
+          template: retainer_dm_fast
+          message_preview: "Your content is crushing — let's build on this"
+
+        - day_offset: 3
+          channel: email
+          template: retainer_fast_pitch
+          subject: "Your results speak for themselves"
+
+# ── Asset generation ──
+assets:
+  generate_on_candidate_detection:
+    - pitch_doc
+    - dm_script
+    - email_sequence
+    - call_agenda
+    - stripe_offer_intent
+
+# ── Safety ──
+safety:
+  auto_send_messages: false   # v1: never auto-send
+  require_approval: true
+  max_candidates_per_run: 20
+  idempotency_prefix: "retainer"

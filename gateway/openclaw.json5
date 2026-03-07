@@ -1,0 +1,326 @@
+// OpenClaw Gateway Configuration
+// M4 Mac mini — always-on coordinator, routing, cron, approvals
+// See: docs/architecture/SYSTEM_OVERVIEW.md
+{
+  // ── Gateway Core ──
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18789,
+    "name": "openclaw-fulldigital",
+    "environment": "${ENVIRONMENT:-dev}",
+
+    // WebSocket control plane
+    "ws": {
+      "path": "/ws",
+      "heartbeat_interval_ms": 30000,
+      "max_payload_bytes": 1048576
+    },
+
+    // Health endpoint
+    "health": {
+      "path": "/health",
+      "include_agents": true,
+      "include_channels": true
+    }
+  },
+
+  // ── Channel Integrations ──
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "${TELEGRAM_BOT_TOKEN}",
+      "allowed_chat_ids": "${TELEGRAM_ALLOWED_CHAT_IDS}",
+      "webhook_secret": "${TELEGRAM_WEBHOOK_SECRET}",
+      "dm_pairing": "code",
+      "group_mode": "mention_only"
+    },
+    "discord": {
+      "enabled": false,
+      "token": "${DISCORD_BOT_TOKEN}",
+      "guild_ids": "${DISCORD_GUILD_IDS}",
+      "dm_pairing": "code"
+    },
+    "slack": {
+      "enabled": false,
+      "bot_token": "${SLACK_BOT_TOKEN}",
+      "app_token": "${SLACK_APP_TOKEN}",
+      "signing_secret": "${SLACK_SIGNING_SECRET}"
+    },
+    "webchat": {
+      "enabled": false,
+      "serve_ui": true,
+      "auth": "token"
+    }
+  },
+
+  // ── Agent Workspaces ──
+  // Each agent has an isolated workspace with its own SOUL, tools, and routing.
+  // Agents are bound to channels via bindings/ configs.
+  "agents": {
+    "workspace_root": "~/openclaw/agents",
+    "defaults": {
+      "model": "qwen3.5:9b",
+      "fallback_model": "qwen3.5:4b",
+      "max_turns": 20,
+      "timeout_seconds": 120,
+      "require_approval_for": [
+        "financial_action",
+        "client_send",
+        "production_deploy",
+        "billing_change"
+      ]
+    },
+
+    // Agent definitions — each references a workspace dir under agents/
+    "registered": [
+      {
+        "id": "fulldigital-ops",
+        "workspace": "agents/fulldigital-ops",
+        "description": "Internal command center, approvals, status reporting",
+        "brand": "fulldigital",
+        "model_override": null
+      },
+      {
+        "id": "fulldigital-sales",
+        "workspace": "agents/fulldigital-sales",
+        "description": "Lead follow-up, outreach, proposals, inquiry triage",
+        "brand": "fulldigital",
+        "model_override": null
+      },
+      {
+        "id": "fulldigital-content",
+        "workspace": "agents/fulldigital-content",
+        "description": "Captions, campaign ideas, hooks, calendars, content planning",
+        "brand": "fulldigital",
+        "model_override": "qwen3.5:4b"
+      },
+      {
+        "id": "fulldigital-finance",
+        "workspace": "agents/fulldigital-finance",
+        "description": "Grants, bookkeeping reminders, reports, funding workflows",
+        "brand": "fulldigital",
+        "model_override": null
+      },
+      {
+        "id": "cutmv-ops",
+        "workspace": "agents/cutmv-ops",
+        "description": "Roadmap, bug triage, infrastructure, internal product ops",
+        "brand": "cutmv",
+        "model_override": null
+      },
+      {
+        "id": "cutmv-support",
+        "workspace": "agents/cutmv-support",
+        "description": "Customer help, FAQs, issue classification, onboarding",
+        "brand": "cutmv",
+        "model_override": "qwen3.5:4b"
+      },
+      {
+        "id": "cutmv-growth",
+        "workspace": "agents/cutmv-growth",
+        "description": "Promo campaigns, follow-ups, feature announcements",
+        "brand": "cutmv",
+        "model_override": null
+      }
+    ]
+  },
+
+  // ── Model Providers ──
+  "providers": {
+    "ollama": {
+      "enabled": true,
+      "primary_host": "http://10.0.0.145:11434",
+      "fallback_host": "http://10.0.0.10:11434",
+      "health_check_interval_ms": 30000,
+      "models": {
+        "qwen3.5:9b": {
+          "context_window": 131072,
+          "node": "m1",
+          "role": "primary_workhorse",
+          "notes": "Main inference model — complex reasoning, agent tasks"
+        },
+        "qwen3.5:4b": {
+          "context_window": 131072,
+          "node": "m1",
+          "role": "fast_helper",
+          "notes": "Quick classification, simple responses, content generation"
+        },
+        "qwen3.5:27b": {
+          "context_window": 131072,
+          "node": "m1",
+          "role": "escalation",
+          "notes": "Heavy reasoning — only if 9b is insufficient"
+        },
+        "qwen3.5:2b": {
+          "context_window": 131072,
+          "node": "m4",
+          "role": "gateway_triage",
+          "notes": "Ultra-fast local triage/routing on M4"
+        }
+      }
+    },
+
+    // Cloud API fallbacks (when local inference is insufficient)
+    "claude": {
+      "enabled": true,
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "model": "claude-sonnet-4-6",
+      "use_for": ["complex_analysis", "code_generation", "long_context"],
+      "notes": "Cloud fallback for tasks exceeding local model capability"
+    }
+  },
+
+  // ── Prompt-First Operating Model ──
+  // See docs/architecture/PROMPT_FIRST_OPERATING_MODEL.md
+  // All user interactions are natural language prompts.
+  // The intent layer (packages/intent/) classifies, plans, and responds.
+  "prompt_first": {
+    "enabled": true,
+    "intent_engine": "packages.intent.handler.handle_prompt",
+    "interaction_modes": [
+      "prompt_to_conversation",
+      "prompt_to_action",
+      "prompt_to_code",
+      "prompt_to_workflow"
+    ],
+    "response_style": {
+      "language": "plain_english",
+      "no_technical_jargon": true,
+      "suggest_next_steps": true,
+      "config_ref": "config/intent_mapping.yaml"
+    }
+  },
+
+  // ── Routing Policy ──
+  "routing": {
+    // Prompt-first flow: receive → classify intent → plan → (approve?) → execute → respond
+    "default_flow": [
+      "receive_on_m4",
+      "classify_intent",
+      "build_action_plan",
+      "check_approval_required",
+      "bind_to_agent",
+      "route_inference",
+      "execute_plan",
+      "format_response",
+      "return_response"
+    ],
+
+    "inference_routing": {
+      "default": "m1_ollama",
+      "fallback": "m4_ollama",
+      "cloud_escalation": "claude",
+      "rules": [
+        {
+          "condition": "simple_faq_or_greeting",
+          "target": "m4_local",
+          "model": "qwen3.5:2b"
+        },
+        {
+          "condition": "normal_agent_work",
+          "target": "m1_ollama",
+          "model": "qwen3.5:9b"
+        },
+        {
+          "condition": "content_generation",
+          "target": "m1_ollama",
+          "model": "qwen3.5:4b"
+        },
+        {
+          "condition": "complex_analysis_or_long_context",
+          "target": "cloud",
+          "model": "claude-sonnet-4-6"
+        },
+        {
+          "condition": "long_running_job",
+          "target": "worker_queue",
+          "notes": "Push to file-based job queue for async processing"
+        }
+      ]
+    }
+  },
+
+  // ── Cron / Scheduled Jobs ──
+  "cron": {
+    "enabled": true,
+    "timezone": "America/New_York",
+    "jobs": [
+      {
+        "id": "grantops_daily_scan",
+        "schedule": "0 6 * * *",
+        "agent": "fulldigital-finance",
+        "action": "run_daily_grant_scan",
+        "enabled": "${GRANTOPS_ENABLED:-false}"
+      },
+      {
+        "id": "daily_digest",
+        "schedule": "0 8 * * 1-5",
+        "agent": "fulldigital-ops",
+        "action": "send_daily_digest",
+        "channels": ["telegram"]
+      },
+      {
+        "id": "pipeline_health_check",
+        "schedule": "0 9 * * 1-5",
+        "agent": "fulldigital-sales",
+        "action": "check_pipeline_health",
+        "channels": ["telegram"]
+      },
+      {
+        "id": "content_calendar_reminder",
+        "schedule": "0 10 * * 1",
+        "agent": "fulldigital-content",
+        "action": "weekly_content_planning",
+        "channels": ["telegram"]
+      },
+      {
+        "id": "cutmv_metrics_snapshot",
+        "schedule": "0 7 * * 1-5",
+        "agent": "cutmv-ops",
+        "action": "daily_metrics_snapshot",
+        "channels": ["telegram"]
+      }
+    ]
+  },
+
+  // ── Approvals ──
+  "approvals": {
+    "default_channel": "telegram",
+    "ttl_minutes": 60,
+    "require_for": [
+      "outbound_financial_action",
+      "client_facing_send",
+      "production_repo_change",
+      "billing_account_action",
+      "grant_submission",
+      "ad_spend_change"
+    ]
+  },
+
+  // ── Skills ──
+  "skills": {
+    "auto_install": false,
+    "human_approval_required": true,
+    "audit_before_install": true,
+    "trusted_sources": [
+      "github.com/openclaw/openclaw",
+      "github.com/datysonjr/FD-Claw"
+    ],
+    "notes": "Security researchers have flagged malicious skills in the ClawHub ecosystem. Always audit before installing."
+  },
+
+  // ── Webhooks (inbound to Gateway) ──
+  "webhooks": {
+    "enabled": true,
+    "base_path": "/webhooks",
+    "verify_auth": true,
+    "endpoints": {
+      "ghl": { "path": "/ghl", "auth": "shared_secret" },
+      "manychat": { "path": "/manychat", "auth": "shared_secret" },
+      "stripe": { "path": "/stripe", "auth": "stripe_signature" },
+      "trello": { "path": "/trello", "auth": "url_secret" },
+      "calendly": { "path": "/calendly", "auth": "shared_secret" },
+      "clickfunnels": { "path": "/clickfunnels", "auth": "shared_secret" }
+    }
+  }
+}

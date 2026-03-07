@@ -1,0 +1,210 @@
+# OpenClaw WebOps — Tool Access Config
+# Declares how OpenClaw authenticates + what it's allowed to do per tool.
+# Rate limits are enforced by RateLimiter per-client instance.
+#
+# lane: api       — has a REST API client implemented
+# lane: local     — runs locally (CLI tools, repo ops)
+# lane: planned   — no client yet; listed so reports include planned actions
+
+tools:
+  cloudflare:
+    lane: api
+    auth: api_token
+    secret_ref: CLOUDFLARE_API_TOKEN
+    allowed: [read, write]
+    rate_limit:
+      rpm: 60
+    planned:
+      - zone_dns_integrity
+      - ssl_settings_integrity
+      - cache_purge_repair
+      - tunnel_health
+
+  vercel:
+    lane: api
+    auth: api_token
+    secret_ref: VERCEL_API_TOKEN
+    allowed: [read, write]
+    rate_limit:
+      rpm: 60
+    planned:
+      - deployments_health
+      - domain_binding_integrity
+      - redeploy_on_failed
+      - rollback_guarded
+
+  webflow:
+    lane: api
+    auth: api_token
+    secret_ref: WEBFLOW_API_TOKEN
+    allowed: [read]
+    rate_limit:
+      rpm: 30
+    planned:
+      - publish_health
+      - domain_binding_check
+      - cms_item_integrity
+      - publish_repair_guarded
+
+  stripe:
+    lane: api
+    auth: secret_key
+    secret_ref: STRIPE_SECRET_KEY
+    allowed: [read, write]
+    rate_limit:
+      rpm: 60
+    planned:
+      - webhook_integrity
+      - product_price_integrity
+      - refund_event_ingestion
+      - payout_monitoring
+
+  posthog:
+    lane: api
+    auth: project_api_key
+    secret_ref: POSTHOG_API_KEY
+    allowed: [read]
+    rate_limit:
+      rpm: 60
+    planned:
+      - ingest_health
+      - event_schema_drift
+      - funnel_health
+
+  google_analytics:
+    lane: api
+    auth: api_key
+    secret_ref: GA4_API_KEY
+    allowed: [read]
+    rate_limit:
+      rpm: 30
+    planned:
+      - tag_presence_check
+      - api_reporting
+      - conversion_integrity
+
+  # ── Tools with planned support (no live API client yet) ──
+
+  squarespace:
+    lane: planned
+    auth: none
+    allowed: [read]
+    planned:
+      - dns_binding_check_via_cloudflare
+      - uptime_checks
+      - content_drift_report
+
+  google_workspace:
+    lane: planned
+    auth: none
+    allowed: [read]
+    planned:
+      - domain_verification_checks
+      - mx_spf_dkim_dmarc_checks
+      - deliverability_alerts
+
+  replit:
+    lane: planned
+    auth: api_token
+    secret_ref: REPLIT_API_TOKEN
+    allowed: [read, write]
+    planned:
+      - app_health_checks
+      - redeploy_restart_guarded
+      - secrets_presence_check
+
+  claude_code:
+    lane: local
+    auth: none
+    allowed: [read, write]
+    planned:
+      - repo_skeleton_generation
+      - docs_generation
+      - safe_refactor_plans
+
+  r2_storage:
+    lane: api
+    auth: s3_compat
+    secret_ref: R2_S3_CREDENTIALS
+    allowed: [read, write]
+    planned:
+      - bucket_object_integrity
+      - signed_url_health
+      - lifecycle_policy_check
+
+  supabase:
+    lane: api
+    auth: service_key
+    secret_ref: SUPABASE_SERVICE_KEY
+    allowed: [read, write]
+    planned:
+      - health_checks
+      - migrations_integrity
+      - auth_provider_config_monitor
+
+  resend:
+    lane: api
+    auth: api_key
+    secret_ref: RESEND_API_KEY
+    allowed: [read, write]
+    planned:
+      - domain_verification_status
+      - webhook_integrity
+      - suppression_monitoring
+
+  sentry:
+    lane: api
+    auth: api_token
+    secret_ref: SENTRY_API_TOKEN
+    allowed: [read]
+    planned:
+      - error_rate_health
+      - release_tracking_health
+      - alert_rules_audit
+
+  neon:
+    lane: planned
+    auth: api_key
+    secret_ref: NEON_API_KEY
+    allowed: [read]
+    planned:
+      - db_health
+      - branch_integrity
+      - backup_status
+
+  openai:
+    lane: api
+    auth: api_key
+    secret_ref: OPENAI_API_KEY
+    allowed: [read, write]
+    planned:
+      - usage_budget_alerts
+      - key_rotation_plan
+      - model_availability_check
+
+  kickbox:
+    lane: api
+    auth: api_key
+    secret_ref: KICKBOX_API_KEY
+    allowed: [read]
+    planned:
+      - email_validation_health
+      - bounce_risk_reporting
+
+  # ── OAuth monitors (key/redirect presence only, NOT sign-in automation) ──
+
+  google_oauth:
+    lane: planned
+    auth: none
+    allowed: [read]
+    planned:
+      - redirect_uri_integrity
+      - key_presence_check
+
+  microsoft_oauth:
+    lane: planned
+    auth: none
+    allowed: [read]
+    planned:
+      - redirect_uri_integrity
+      - key_presence_check
