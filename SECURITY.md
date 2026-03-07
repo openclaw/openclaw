@@ -206,6 +206,39 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 
 - `https://docs.openclaw.ai/gateway/security`
 
+### Operator safety foot-guns and expectations
+
+These are default behaviors worth understanding. None are vulnerabilities — they're documented tradeoffs in OpenClaw's one-operator trust model. Each has opt-in mitigations for operators who want tighter guardrails.
+
+#### Sandbox execution fallthrough
+
+When `agents.defaults.sandbox.mode` is `non-main` or `all`, OpenClaw routes tool execution to a Docker container. If Docker is unavailable at runtime (not installed, daemon stopped, permission denied), execution **falls through to the host** silently. This is by design — it keeps the gateway functional — but may surprise operators who assume sandbox mode guarantees isolation.
+
+- `openclaw doctor` warns when sandbox mode is enabled but Docker is unreachable.
+- Set `agents.defaults.sandbox.requireAvailable: true` to make the gateway refuse to start when Docker is unavailable while sandbox mode is enabled. This converts a silent fallthrough into a hard startup failure.
+
+#### Model failover tool-access inheritance
+
+When the primary model fails (rate limit, outage, auth error), OpenClaw automatically falls back to the next model in the configured list. The fallback model inherits the same tool permissions and session context as the primary. If the fallback model is less capable (smaller context window, no reasoning support), it may handle dangerous tools with less judgment.
+
+- The gateway logs a warning whenever a fallback model is used instead of the primary.
+- `openclaw doctor` checks whether fallback models have significantly reduced context windows or missing reasoning capabilities compared to the primary, and warns if dangerous tools are available.
+- Review your model list ordering with tool access in mind, not just cost.
+
+#### Voice-originated commands and dangerous tools
+
+Voice transcripts are inherently lossy — homophones, ambient noise, and transcription errors can produce tool invocations the operator did not intend. When voice input drives a tool-enabled agent, there is no visual confirmation step before execution.
+
+- Set `voice.requireConfirmForDangerousTools: true` to inject a system-prompt hint asking the model to confirm before executing destructive or irreversible tools when the input originated from voice.
+- This is a soft guardrail (model-level, not policy-enforced) and depends on model compliance. It reduces accidental execution but does not guarantee it.
+
+#### Command queue memory growth
+
+The gateway command queue is unbounded by default. Under sustained high-rate input (automated senders, webhook floods, runaway cron jobs), the queue can grow without limit, consuming memory until the process is killed by the OS.
+
+- Set `gateway.maxCommandQueueSize` to a positive integer (default: `500`) to cap queue depth per lane. When the cap is reached, the oldest queued entry is dropped to make room.
+- Set to `0` to explicitly disable the bound (unbounded, legacy behavior). The gateway logs a warning at startup when unbounded mode is active.
+
 ### Tool filesystem hardening
 
 - `tools.exec.applyPatch.workspaceOnly: true` (recommended): keeps `apply_patch` writes/deletes within the configured workspace directory.

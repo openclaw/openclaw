@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { logWarn } from "../logger.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -527,6 +528,18 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
+      // Warn when a fallback (non-primary) model was used. Fallback models
+      // inherit the same tool access as the primary, which may be a safety
+      // concern if the fallback has reduced capability.
+      if (i > 0) {
+        const primaryRef = `${candidates[0].provider}/${candidates[0].model}`;
+        const fallbackRef = `${candidate.provider}/${candidate.model}`;
+        logWarn(
+          `model failover: using fallback "${fallbackRef}" instead of primary "${primaryRef}". ` +
+            "Fallback model inherits the same tool access. " +
+            "Review fallback configuration if this is unexpected.",
+        );
+      }
       return attemptRun.success;
     }
     const err = attemptRun.error;

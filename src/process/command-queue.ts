@@ -23,8 +23,31 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when a new command is rejected because the
+ * queue has reached its maximum size limit.
+ */
+export class CommandQueueOverflowError extends Error {
+  constructor(lane: string, size: number, maxSize: number) {
+    super(
+      `Command queue overflow: lane "${lane}" has ${size} entries (max: ${maxSize}). ` +
+        "Oldest entry was dropped to make room.",
+    );
+    this.name = "CommandQueueOverflowError";
+  }
+}
+
 // Set while gateway is draining for restart; new enqueues are rejected.
 let gatewayDraining = false;
+
+/**
+ * Maximum number of entries allowed in a single lane's queue.
+ * When exceeded, the oldest queued entry is dropped and rejected with
+ * `CommandLaneClearedError`. Set via `setMaxCommandQueueSize()`.
+ * Default: 500 (generous enough for bursty workloads, bounded enough
+ * to prevent unbounded memory growth).
+ */
+let maxCommandQueueSize = 500;
 
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
@@ -151,6 +174,25 @@ export function markGatewayDraining(): void {
   gatewayDraining = true;
 }
 
+/**
+ * Set the maximum number of entries a single lane's queue may hold.
+ * When a new enqueue would exceed this limit, the oldest queued entry
+ * is dropped (rejected with `CommandLaneClearedError`) and a diagnostic
+ * warning is emitted.
+ *
+ * Pass 0 or negative to disable the limit (unbounded, legacy behavior).
+ */
+export function setMaxCommandQueueSize(size: number): void {
+  maxCommandQueueSize = size > 0 ? Math.floor(size) : 0;
+}
+
+/**
+ * Returns the current max queue size setting. 0 means unbounded.
+ */
+export function getMaxCommandQueueSize(): number {
+  return maxCommandQueueSize;
+}
+
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = lane.trim() || CommandLane.Main;
   const state = getLaneState(cleaned);
@@ -172,6 +214,21 @@ export function enqueueCommandInLane<T>(
   const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+
+  // Enforce queue size limit: drop oldest entry when at capacity.
+  // This prevents unbounded memory growth from sustained high-rate input.
+  if (maxCommandQueueSize > 0 && state.queue.length >= maxCommandQueueSize) {
+    const dropped = state.queue.shift();
+    if (dropped) {
+      diag.warn(
+        `command queue overflow: lane=${cleaned} size=${state.queue.length + 1} max=${maxCommandQueueSize} — dropping oldest entry`,
+      );
+      dropped.reject(
+        new CommandLaneClearedError(`${cleaned} (queue overflow: max ${maxCommandQueueSize})`),
+      );
+    }
+  }
+
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
       task: () => task(),

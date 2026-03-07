@@ -112,6 +112,15 @@ export type OpenClawConfig = {
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
+  /** Voice input safety settings. */
+  voice?: {
+    /**
+     * When true, voice-originated inputs will include a system prompt hint
+     * instructing the model to ask for explicit confirmation before using
+     * dangerous tools (exec, fs write, message send). Default: false.
+     */
+    requireConfirmForDangerousTools?: boolean;
+  };
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
 };

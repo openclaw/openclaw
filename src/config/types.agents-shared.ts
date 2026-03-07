@@ -28,6 +28,12 @@ export type AgentSandboxConfig = {
   /** Legacy alias for scope ("session" when true, "shared" when false). */
   perSession?: boolean;
   workspaceRoot?: string;
+  /**
+   * When true, refuse to start the gateway if sandbox mode is enabled but
+   * the sandbox runtime (Docker) is unavailable. Prevents silent fallthrough
+   * to host execution. Default: false (warn only).
+   */
+  requireAvailable?: boolean;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
   /** Optional sandboxed browser settings. */
