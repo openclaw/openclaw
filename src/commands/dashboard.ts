@@ -1,12 +1,10 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { readGatewayTokenEnv } from "../gateway/credentials.js";
+import { resolveConfiguredSecretInputWithFallback } from "../gateway/resolve-configured-secret-input-string.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -27,49 +25,26 @@ async function resolveDashboardToken(
   unresolvedRefReason?: string;
   tokenSecretRefConfigured: boolean;
 }> {
-  const { ref } = resolveSecretInputRef({
+  const resolved = await resolveConfiguredSecretInputWithFallback({
+    config: cfg,
+    env,
     value: cfg.gateway?.auth?.token,
-    defaults: cfg.secrets?.defaults,
+    path: "gateway.auth.token",
+    readFallback: () => readGatewayTokenEnv(env),
   });
-  const configToken =
-    ref || typeof cfg.gateway?.auth?.token !== "string"
-      ? undefined
-      : cfg.gateway.auth.token.trim() || undefined;
-  if (configToken) {
-    return { token: configToken, source: "config", tokenSecretRefConfigured: false };
-  }
-  if (!ref) {
-    const envToken = readGatewayTokenEnv(env);
-    return envToken
-      ? { token: envToken, source: "env", tokenSecretRefConfigured: false }
-      : { tokenSecretRefConfigured: false };
-  }
-  const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: cfg,
-      env,
-    });
-    const value = resolved.get(secretRefKey(ref));
-    if (typeof value === "string" && value.trim().length > 0) {
-      return { token: value.trim(), source: "secretRef", tokenSecretRefConfigured: true };
-    }
-    const envToken = readGatewayTokenEnv(env);
-    return envToken
-      ? { token: envToken, source: "env", tokenSecretRefConfigured: true }
-      : {
-          unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${refLabel}).`,
-          tokenSecretRefConfigured: true,
-        };
-  } catch {
-    const envToken = readGatewayTokenEnv(env);
-    return envToken
-      ? { token: envToken, source: "env", tokenSecretRefConfigured: true }
-      : {
-          unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${refLabel}).`,
-          tokenSecretRefConfigured: true,
-        };
-  }
+  return {
+    token: resolved.value,
+    source:
+      resolved.source === "config"
+        ? "config"
+        : resolved.source === "secretRef"
+          ? "secretRef"
+          : resolved.source === "fallback"
+            ? "env"
+            : undefined,
+    unresolvedRefReason: resolved.unresolvedRefReason,
+    tokenSecretRefConfigured: resolved.secretRefConfigured,
+  };
 }
 
 export async function dashboardCommand(
