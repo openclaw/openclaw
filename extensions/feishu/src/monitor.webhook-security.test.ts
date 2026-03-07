@@ -1,9 +1,20 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createFeishuClientMockModule,
+  createFeishuRuntimeMockModule,
+} from "./monitor.test-mocks.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./probe.js", () => ({
+  probeFeishu: probeFeishuMock,
+}));
+
+vi.mock("./client.js", () => createFeishuClientMockModule());
+vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   adaptDefault: vi.fn(
@@ -14,16 +25,13 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-}));
-
-vi.mock("./client.js", () => ({
-  createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
-}));
-
-import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import {
+  clearFeishuWebhookRateLimitStateForTest,
+  getFeishuWebhookRateLimitStateSizeForTest,
+  isWebhookRateLimitedForTest,
+  monitorFeishuProvider,
+  stopFeishuMonitor,
+} from "./monitor.js";
 
 async function getFreePort(): Promise<number> {
   const server = createServer();
@@ -114,6 +122,7 @@ async function withRunningWebhookMonitor(
 }
 
 afterEach(() => {
+  clearFeishuWebhookRateLimitStateForTest();
   stopFeishuMonitor();
 });
 
@@ -179,5 +188,24 @@ describe("Feishu webhook security hardening", () => {
         expect(saw429).toBe(true);
       },
     );
+  });
+
+  it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
+    const now = 1_000_000;
+    for (let i = 0; i < 4_500; i += 1) {
+      isWebhookRateLimitedForTest(`/feishu-rate-limit:key-${i}`, now);
+    }
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBeLessThanOrEqual(4_096);
+  });
+
+  it("prunes stale webhook rate-limit state after window elapses", () => {
+    const now = 2_000_000;
+    for (let i = 0; i < 100; i += 1) {
+      isWebhookRateLimitedForTest(`/feishu-rate-limit-stale:key-${i}`, now);
+    }
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(100);
+
+    isWebhookRateLimitedForTest("/feishu-rate-limit-stale:fresh", now + 60_001);
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(1);
   });
 });

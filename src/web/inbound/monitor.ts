@@ -19,8 +19,217 @@ import {
   extractText,
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
-import { createWebSendApi } from "./send-api.js";
+import {
+  extractDigits,
+  mentionUserPart,
+  normalizeMentionJid,
+  toPreferredParticipantMentionJid,
+  type ParticipantMentionInfo,
+} from "./mention-utils.js";
+import {
+  createWebSendApi,
+  extractNameMentions,
+  injectMentionTokens,
+  resolveMentionJids,
+} from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+
+function normalizeNameToken(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/[^\p{L}\p{N}_\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitNameAliases(value: string): string[] {
+  const normalized = normalizeNameToken(value);
+  if (!normalized) {
+    return [];
+  }
+  const aliases = new Set<string>([normalized]);
+  for (const part of normalized.split(/[\s_]+/)) {
+    if (part.length >= 3) {
+      aliases.add(part);
+    }
+  }
+  return [...aliases];
+}
+
+function tokenMatchesName(token: string, name: string): boolean {
+  const normalizedToken = normalizeNameToken(token);
+  const normalizedName = normalizeNameToken(name);
+  if (!normalizedToken || !normalizedName) {
+    return false;
+  }
+  if (normalizedName === normalizedToken) {
+    return true;
+  }
+  if (normalizedName.includes(normalizedToken) || normalizedToken.includes(normalizedName)) {
+    return true;
+  }
+  for (const part of normalizedName.split(" ")) {
+    if (!part) {
+      continue;
+    }
+    if (
+      part === normalizedToken ||
+      part.startsWith(normalizedToken) ||
+      normalizedToken.startsWith(part)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type InferredMentionResolution = {
+  mentionJids: string[];
+  aliasHintsByUser: Map<string, string[]>;
+};
+
+function inferMentionJidsFromNames(params: {
+  responseText: string;
+  participants: ParticipantMentionInfo[];
+  senderName?: string;
+  senderE164?: string | null;
+  selfE164?: string | null;
+  selfAliases?: string[];
+}): InferredMentionResolution {
+  if (!params.participants.length) {
+    return { mentionJids: [], aliasHintsByUser: new Map() };
+  }
+
+  const participantRecords = params.participants
+    .map((participant) => {
+      const mentionJid = toPreferredParticipantMentionJid(participant);
+      if (!mentionJid) {
+        return null;
+      }
+      const aliases = new Set<string>();
+      for (const name of [participant.name, participant.notify]) {
+        if (!name) {
+          continue;
+        }
+        for (const alias of splitNameAliases(name)) {
+          aliases.add(alias);
+        }
+      }
+      const phoneDigits = extractDigits(participant.phoneNumber);
+      if (phoneDigits.length >= 6) {
+        aliases.add(phoneDigits);
+      }
+      return {
+        mentionJid,
+        aliases: [...aliases],
+      };
+    })
+    .filter((record): record is { mentionJid: string; aliases: string[] } => Boolean(record));
+
+  if (!participantRecords.length) {
+    return { mentionJids: [], aliasHintsByUser: new Map() };
+  }
+
+  const participantJids = participantRecords.map((record) => record.mentionJid);
+  const participantByUser = new Map<string, string>();
+  for (const jid of participantJids) {
+    participantByUser.set(mentionUserPart(jid), jid);
+  }
+
+  const resolveByE164 = (e164: string | null | undefined): string | null => {
+    const digits = extractDigits(e164);
+    if (digits.length < 6) {
+      return null;
+    }
+    return participantByUser.get(digits) ?? `${digits}@s.whatsapp.net`;
+  };
+
+  const senderMentionJid = resolveByE164(params.senderE164);
+  const selfMentionJid = resolveByE164(params.selfE164);
+  const chosen = new Set<string>();
+  const aliasHintsByUser = new Map<string, Set<string>>();
+  const addAliasHint = (jid: string, alias: string) => {
+    const trimmed = alias.trim();
+    if (!trimmed) {
+      return;
+    }
+    const user = mentionUserPart(jid);
+    if (!user) {
+      return;
+    }
+    const bucket = aliasHintsByUser.get(user) ?? new Set<string>();
+    bucket.add(trimmed);
+    aliasHintsByUser.set(user, bucket);
+  };
+  const markMention = (jid: string, alias?: string) => {
+    chosen.add(jid);
+    if (alias) {
+      addAliasHint(jid, alias);
+    }
+  };
+  const nameTokens = extractNameMentions(params.responseText);
+  const normalizedSelfAliases = (params.selfAliases ?? [])
+    .map((alias) => normalizeNameToken(alias))
+    .filter(Boolean);
+  if (senderMentionJid && params.senderName) {
+    addAliasHint(senderMentionJid, params.senderName);
+  }
+
+  for (const token of nameTokens) {
+    const normalizedToken = normalizeNameToken(token);
+    if (!normalizedToken) {
+      continue;
+    }
+
+    if (
+      selfMentionJid &&
+      normalizedSelfAliases.some((alias) => tokenMatchesName(normalizedToken, alias))
+    ) {
+      markMention(selfMentionJid, token);
+      continue;
+    }
+
+    if (
+      senderMentionJid &&
+      params.senderName &&
+      tokenMatchesName(normalizedToken, params.senderName)
+    ) {
+      markMention(senderMentionJid, token);
+      addAliasHint(senderMentionJid, params.senderName);
+      continue;
+    }
+
+    const matches = participantRecords.filter((record) =>
+      record.aliases.some((alias) => tokenMatchesName(normalizedToken, alias)),
+    );
+    if (matches.length === 1) {
+      markMention(matches[0].mentionJid, token);
+      continue;
+    }
+
+    if (matches.length > 1) {
+      const exact = matches.find((record) =>
+        record.aliases.some((alias) => normalizeNameToken(alias) === normalizedToken),
+      );
+      if (exact) {
+        markMention(exact.mentionJid, token);
+        continue;
+      }
+    }
+  }
+  const aliasHints = new Map<string, string[]>();
+  for (const [user, aliases] of aliasHintsByUser.entries()) {
+    aliasHints.set(
+      user,
+      [...aliases].toSorted((left, right) => right.length - left.length),
+    );
+  }
+
+  return { mentionJids: [...chosen], aliasHintsByUser: aliasHints };
+}
 
 export async function monitorWebInbox(options: {
   verbose: boolean;
@@ -67,6 +276,20 @@ export async function monitorWebInbox(options: {
 
   const selfJid = sock.user?.id;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
+  const selfProfileName = (sock.user as { name?: unknown } | undefined)?.name;
+  const selfMentionJid = (() => {
+    const selfDigits = extractDigits(selfE164);
+    if (selfDigits.length >= 6) {
+      return `${selfDigits}@s.whatsapp.net`;
+    }
+    if (selfJid) {
+      return normalizeMentionJid(selfJid);
+    }
+    return undefined;
+  })();
+  const selfMentionAliases = [
+    typeof selfProfileName === "string" ? selfProfileName : undefined,
+  ].filter((alias): alias is string => Boolean(alias && alias.trim().length > 0));
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
@@ -114,7 +337,12 @@ export async function monitorWebInbox(options: {
   });
   const groupMetaCache = new Map<
     string,
-    { subject?: string; participants?: string[]; expires: number }
+    {
+      subject?: string;
+      participants?: string[];
+      participantInfo?: ParticipantMentionInfo[];
+      expires: number;
+    }
   >();
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const lidLookup = sock.signalRepository?.lidMapping;
@@ -122,13 +350,20 @@ export async function monitorWebInbox(options: {
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
 
-  const getGroupMeta = async (jid: string) => {
+  const getGroupMeta = async (jid: string, options?: { forceRefresh?: boolean }) => {
     const cached = groupMetaCache.get(jid);
-    if (cached && cached.expires > Date.now()) {
+    if (!options?.forceRefresh && cached && cached.expires > Date.now()) {
       return cached;
     }
     try {
       const meta = await sock.groupMetadata(jid);
+      const participantInfo: ParticipantMentionInfo[] =
+        meta.participants?.map((p) => ({
+          jid: p.id,
+          name: p.name,
+          notify: p.notify,
+          phoneNumber: p.phoneNumber,
+        })) ?? [];
       const participants =
         (
           await Promise.all(
@@ -141,13 +376,367 @@ export async function monitorWebInbox(options: {
       const entry = {
         subject: meta.subject,
         participants,
+        participantInfo,
         expires: Date.now() + GROUP_META_TTL_MS,
       };
       groupMetaCache.set(jid, entry);
       return entry;
     } catch (err) {
       logVerbose(`Failed to fetch group metadata for ${jid}: ${String(err)}`);
+      if (cached) {
+        return cached;
+      }
       return { expires: Date.now() + GROUP_META_TTL_MS };
+    }
+  };
+
+  type NormalizedInboundMessage = {
+    id?: string;
+    remoteJid: string;
+    group: boolean;
+    participantJid?: string;
+    from: string;
+    senderE164: string | null;
+    groupSubject?: string;
+    groupParticipants?: string[];
+    messageTimestampMs?: number;
+    access: Awaited<ReturnType<typeof checkInboundAccessControl>>;
+  };
+
+  const normalizeInboundMessage = async (
+    msg: WAMessage,
+  ): Promise<NormalizedInboundMessage | null> => {
+    const id = msg.key?.id ?? undefined;
+    const remoteJid = msg.key?.remoteJid;
+    if (!remoteJid) {
+      return null;
+    }
+    if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) {
+      return null;
+    }
+
+    const group = isJidGroup(remoteJid) === true;
+    if (id) {
+      const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
+      if (isRecentInboundMessage(dedupeKey)) {
+        return null;
+      }
+    }
+    const participantJid = msg.key?.participant ?? undefined;
+    const from = group ? remoteJid : await resolveInboundJid(remoteJid);
+    if (!from) {
+      return null;
+    }
+    const senderE164 = group
+      ? participantJid
+        ? await resolveInboundJid(participantJid)
+        : null
+      : from;
+
+    let groupSubject: string | undefined;
+    let groupParticipants: string[] | undefined;
+    if (group) {
+      const meta = await getGroupMeta(remoteJid);
+      groupSubject = meta.subject;
+      groupParticipants = meta.participants;
+    }
+    const messageTimestampMs = msg.messageTimestamp
+      ? Number(msg.messageTimestamp) * 1000
+      : undefined;
+
+    const access = await checkInboundAccessControl({
+      accountId: options.accountId,
+      from,
+      selfE164,
+      senderE164,
+      group,
+      pushName: msg.pushName ?? undefined,
+      isFromMe: Boolean(msg.key?.fromMe),
+      messageTimestampMs,
+      connectedAtMs,
+      sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
+      remoteJid,
+    });
+    if (!access.allowed) {
+      return null;
+    }
+
+    return {
+      id,
+      remoteJid,
+      group,
+      participantJid,
+      from,
+      senderE164,
+      groupSubject,
+      groupParticipants,
+      messageTimestampMs,
+      access,
+    };
+  };
+
+  const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
+    const { id, remoteJid, participantJid, access } = inbound;
+    if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+      try {
+        await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
+        if (shouldLogVerbose()) {
+          const suffix = participantJid ? ` (participant ${participantJid})` : "";
+          logVerbose(`Marked message ${id} as read for ${remoteJid}${suffix}`);
+        }
+      } catch (err) {
+        logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
+      }
+    } else if (id && access.isSelfChat && shouldLogVerbose()) {
+      // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
+      logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
+    }
+  };
+
+  type EnrichedInboundMessage = {
+    body: string;
+    location?: ReturnType<typeof extractLocationData>;
+    replyContext?: ReturnType<typeof describeReplyContext>;
+    mediaPath?: string;
+    mediaType?: string;
+    mediaFileName?: string;
+  };
+
+  const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
+    const location = extractLocationData(msg.message ?? undefined);
+    const locationText = location ? formatLocationText(location) : undefined;
+    let body = extractText(msg.message ?? undefined);
+    if (locationText) {
+      body = [body, locationText].filter(Boolean).join("\n").trim();
+    }
+    if (!body) {
+      body = extractMediaPlaceholder(msg.message ?? undefined);
+      if (!body) {
+        return null;
+      }
+    }
+    let replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+    if (replyContext?.senderJid) {
+      const resolvedReplySender = await resolveInboundJid(replyContext.senderJid);
+      if (resolvedReplySender) {
+        replyContext = {
+          ...replyContext,
+          sender: resolvedReplySender,
+          senderE164: resolvedReplySender,
+        };
+      }
+    }
+
+    let mediaPath: string | undefined;
+    let mediaType: string | undefined;
+    let mediaFileName: string | undefined;
+    try {
+      const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
+      if (inboundMedia) {
+        const maxMb =
+          typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0
+            ? options.mediaMaxMb
+            : 50;
+        const maxBytes = maxMb * 1024 * 1024;
+        const saved = await saveMediaBuffer(
+          inboundMedia.buffer,
+          inboundMedia.mimetype,
+          "inbound",
+          maxBytes,
+          inboundMedia.fileName,
+        );
+        mediaPath = saved.path;
+        mediaType = inboundMedia.mimetype;
+        mediaFileName = inboundMedia.fileName;
+      }
+    } catch (err) {
+      logVerbose(`Inbound media download failed: ${String(err)}`);
+    }
+
+    return {
+      body,
+      location: location ?? undefined,
+      replyContext,
+      mediaPath,
+      mediaType,
+      mediaFileName,
+    };
+  };
+
+  const enqueueInboundMessage = async (
+    msg: WAMessage,
+    inbound: NormalizedInboundMessage,
+    enriched: EnrichedInboundMessage,
+  ) => {
+    const chatJid = inbound.remoteJid;
+    const senderName = msg.pushName ?? undefined;
+    const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
+    let groupParticipantInfo: ParticipantMentionInfo[] | undefined = inbound.group
+      ? (await getGroupMeta(chatJid)).participantInfo
+      : undefined;
+    const resolveOutboundMentions = async (text: string) => {
+      let participants = groupParticipantInfo;
+      let mentionAliasHintsByUser: Map<string, string[]> | undefined;
+      const hasMentionToken = text.includes("@");
+      if (inbound.group && hasMentionToken && (!participants || participants.length === 0)) {
+        const refreshed = await getGroupMeta(chatJid, { forceRefresh: true });
+        participants = refreshed.participantInfo;
+        groupParticipantInfo = participants;
+      }
+
+      let mentionJids = await resolveMentionJids(text, {
+        lidLookup,
+        participants,
+        selfMentionJid,
+        selfMentionAliases,
+      });
+      if (inbound.group && hasMentionToken && participants?.length) {
+        const inferred = inferMentionJidsFromNames({
+          responseText: text,
+          participants,
+          senderName,
+          senderE164: inbound.senderE164,
+          selfE164,
+          selfAliases: selfMentionAliases,
+        });
+        if (inferred.mentionJids.length > 0) {
+          const existing = new Set(mentionJids);
+          const inferredOnly = inferred.mentionJids.filter((jid) => !existing.has(jid));
+          if (inferredOnly.length > 0) {
+            mentionJids = [...mentionJids, ...inferredOnly];
+            mentionAliasHintsByUser = inferred.aliasHintsByUser;
+            inboundLogger.debug(
+              { chatJid, inferredMentionJids: inferredOnly },
+              "applied participant-alias mention inference",
+            );
+          }
+        }
+      }
+      const outgoingText = injectMentionTokens(text, mentionJids, participants, {
+        selfMentionJid,
+        selfMentionAliases,
+        mentionAliasHintsByUser,
+      });
+
+      if (inbound.group && (mentionJids.length > 0 || text.includes("@"))) {
+        inboundLogger.debug(
+          {
+            chatJid,
+            participantCount: participants?.length ?? 0,
+            mentionJids,
+            outgoingTextPreview:
+              outgoingText.length > 240 ? `${outgoingText.slice(0, 240)}...` : outgoingText,
+          },
+          "resolved outbound mentions",
+        );
+      }
+
+      return {
+        mentionJids,
+        outgoingText,
+      };
+    };
+    const sendComposing = async () => {
+      try {
+        await sock.sendPresenceUpdate("composing", chatJid);
+      } catch (err) {
+        logVerbose(`Presence update failed: ${String(err)}`);
+      }
+    };
+    const reply = async (text: string) => {
+      const { mentionJids, outgoingText } = await resolveOutboundMentions(text);
+      const mentionPayload = mentionJids.length > 0 ? { mentions: mentionJids } : {};
+      if (inbound.group && (mentionJids.length > 0 || text.includes("@"))) {
+        inboundLogger.debug(
+          { chatJid, mentionCount: mentionJids.length, mentionJids },
+          "sending outbound text reply",
+        );
+      }
+      await sock.sendMessage(chatJid, { text: outgoingText, ...mentionPayload });
+    };
+    const sendMedia = async (payload: AnyMessageContent) => {
+      const caption = (payload as { caption?: unknown }).caption;
+      const body = typeof caption === "string" ? caption : "";
+      if (!body) {
+        await sock.sendMessage(chatJid, payload);
+        return;
+      }
+
+      const { mentionJids, outgoingText: mentionCaption } = await resolveOutboundMentions(body);
+      if (mentionJids.length === 0) {
+        await sock.sendMessage(chatJid, payload);
+        return;
+      }
+
+      if (inbound.group && (mentionJids.length > 0 || body.includes("@"))) {
+        inboundLogger.debug(
+          { chatJid, mentionCount: mentionJids.length, mentionJids },
+          "sending outbound media reply",
+        );
+      }
+
+      await sock.sendMessage(chatJid, {
+        ...payload,
+        caption: mentionCaption,
+        mentions: mentionJids,
+      });
+    };
+    const timestamp = inbound.messageTimestampMs;
+
+    inboundLogger.info(
+      {
+        from: inbound.from,
+        to: selfE164 ?? "me",
+        body: enriched.body,
+        mediaPath: enriched.mediaPath,
+        mediaType: enriched.mediaType,
+        mediaFileName: enriched.mediaFileName,
+        timestamp,
+      },
+      "inbound message",
+    );
+    const inboundMessage: WebInboundMessage = {
+      id: inbound.id,
+      from: inbound.from,
+      conversationId: inbound.from,
+      to: selfE164 ?? "me",
+      accountId: inbound.access.resolvedAccountId,
+      body: enriched.body,
+      pushName: senderName,
+      timestamp,
+      chatType: inbound.group ? "group" : "direct",
+      chatId: inbound.remoteJid,
+      senderJid: inbound.participantJid,
+      senderE164: inbound.senderE164 ?? undefined,
+      senderName,
+      replyToId: enriched.replyContext?.id,
+      replyToBody: enriched.replyContext?.body,
+      replyToSender: enriched.replyContext?.sender,
+      replyToSenderJid: enriched.replyContext?.senderJid,
+      replyToSenderE164: enriched.replyContext?.senderE164,
+      groupSubject: inbound.groupSubject,
+      groupParticipants: inbound.groupParticipants,
+      mentionedJids: mentionedJids ?? undefined,
+      selfJid,
+      selfE164,
+      fromMe: Boolean(msg.key?.fromMe),
+      location: enriched.location ?? undefined,
+      sendComposing,
+      reply,
+      sendMedia,
+      mediaPath: enriched.mediaPath,
+      mediaType: enriched.mediaType,
+      mediaFileName: enriched.mediaFileName,
+    };
+    try {
+      const task = Promise.resolve(debouncer.enqueue(inboundMessage));
+      void task.catch((err) => {
+        inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
+        inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
+      });
+    } catch (err) {
+      inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
+      inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
     }
   };
 
@@ -161,186 +750,22 @@ export async function monitorWebInbox(options: {
         accountId: options.accountId,
         direction: "inbound",
       });
-      const id = msg.key?.id ?? undefined;
-      const remoteJid = msg.key?.remoteJid;
-      if (!remoteJid) {
+      const inbound = await normalizeInboundMessage(msg);
+      if (!inbound) {
         continue;
       }
-      if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) {
-        continue;
-      }
-
-      const group = isJidGroup(remoteJid) === true;
-      if (id) {
-        const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
-        if (isRecentInboundMessage(dedupeKey)) {
-          continue;
-        }
-      }
-      const participantJid = msg.key?.participant ?? undefined;
-      const from = group ? remoteJid : await resolveInboundJid(remoteJid);
-      if (!from) {
-        continue;
-      }
-      const senderE164 = group
-        ? participantJid
-          ? await resolveInboundJid(participantJid)
-          : null
-        : from;
-
-      let groupSubject: string | undefined;
-      let groupParticipants: string[] | undefined;
-      if (group) {
-        const meta = await getGroupMeta(remoteJid);
-        groupSubject = meta.subject;
-        groupParticipants = meta.participants;
-      }
-      const messageTimestampMs = msg.messageTimestamp
-        ? Number(msg.messageTimestamp) * 1000
-        : undefined;
-
-      const access = await checkInboundAccessControl({
-        accountId: options.accountId,
-        from,
-        selfE164,
-        senderE164,
-        group,
-        pushName: msg.pushName ?? undefined,
-        isFromMe: Boolean(msg.key?.fromMe),
-        messageTimestampMs,
-        connectedAtMs,
-        sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
-        remoteJid,
-      });
-      if (!access.allowed) {
-        continue;
-      }
-
-      if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
-        const participant = msg.key?.participant;
-        try {
-          await sock.readMessages([{ remoteJid, id, participant, fromMe: false }]);
-          if (shouldLogVerbose()) {
-            const suffix = participant ? ` (participant ${participant})` : "";
-            logVerbose(`Marked message ${id} as read for ${remoteJid}${suffix}`);
-          }
-        } catch (err) {
-          logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
-        }
-      } else if (id && access.isSelfChat && shouldLogVerbose()) {
-        // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
-        logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
-      }
+      await maybeMarkInboundAsRead(inbound);
 
       // If this is history/offline catch-up, mark read above but skip auto-reply.
       if (upsert.type === "append") {
         continue;
       }
-
-      const location = extractLocationData(msg.message ?? undefined);
-      const locationText = location ? formatLocationText(location) : undefined;
-      let body = extractText(msg.message ?? undefined);
-      if (locationText) {
-        body = [body, locationText].filter(Boolean).join("\n").trim();
-      }
-      if (!body) {
-        body = extractMediaPlaceholder(msg.message ?? undefined);
-        if (!body) {
-          continue;
-        }
-      }
-      const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
-
-      let mediaPath: string | undefined;
-      let mediaType: string | undefined;
-      let mediaFileName: string | undefined;
-      try {
-        const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
-        if (inboundMedia) {
-          const maxMb =
-            typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0
-              ? options.mediaMaxMb
-              : 50;
-          const maxBytes = maxMb * 1024 * 1024;
-          const saved = await saveMediaBuffer(
-            inboundMedia.buffer,
-            inboundMedia.mimetype,
-            "inbound",
-            maxBytes,
-            inboundMedia.fileName,
-          );
-          mediaPath = saved.path;
-          mediaType = inboundMedia.mimetype;
-          mediaFileName = inboundMedia.fileName;
-        }
-      } catch (err) {
-        logVerbose(`Inbound media download failed: ${String(err)}`);
+      const enriched = await enrichInboundMessage(msg);
+      if (!enriched) {
+        continue;
       }
 
-      const chatJid = remoteJid;
-      const sendComposing = async () => {
-        try {
-          await sock.sendPresenceUpdate("composing", chatJid);
-        } catch (err) {
-          logVerbose(`Presence update failed: ${String(err)}`);
-        }
-      };
-      const reply = async (text: string) => {
-        await sock.sendMessage(chatJid, { text });
-      };
-      const sendMedia = async (payload: AnyMessageContent) => {
-        await sock.sendMessage(chatJid, payload);
-      };
-      const timestamp = messageTimestampMs;
-      const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
-      const senderName = msg.pushName ?? undefined;
-
-      inboundLogger.info(
-        { from, to: selfE164 ?? "me", body, mediaPath, mediaType, mediaFileName, timestamp },
-        "inbound message",
-      );
-      const inboundMessage: WebInboundMessage = {
-        id,
-        from,
-        conversationId: from,
-        to: selfE164 ?? "me",
-        accountId: access.resolvedAccountId,
-        body,
-        pushName: senderName,
-        timestamp,
-        chatType: group ? "group" : "direct",
-        chatId: remoteJid,
-        senderJid: participantJid,
-        senderE164: senderE164 ?? undefined,
-        senderName,
-        replyToId: replyContext?.id,
-        replyToBody: replyContext?.body,
-        replyToSender: replyContext?.sender,
-        replyToSenderJid: replyContext?.senderJid,
-        replyToSenderE164: replyContext?.senderE164,
-        groupSubject,
-        groupParticipants,
-        mentionedJids: mentionedJids ?? undefined,
-        selfJid,
-        selfE164,
-        location: location ?? undefined,
-        sendComposing,
-        reply,
-        sendMedia,
-        mediaPath,
-        mediaType,
-        mediaFileName,
-      };
-      try {
-        const task = Promise.resolve(debouncer.enqueue(inboundMessage));
-        void task.catch((err) => {
-          inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-          inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-        });
-      } catch (err) {
-        inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-        inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-      }
+      await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
@@ -370,6 +795,16 @@ export async function monitorWebInbox(options: {
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
+    lidLookup,
+    selfMentionJid,
+    selfMentionAliases,
+    getParticipants: async (jid) => {
+      if (!isJidGroup(jid)) {
+        return [];
+      }
+      const meta = await getGroupMeta(jid);
+      return meta.participantInfo ?? [];
+    },
   });
 
   return {

@@ -38,12 +38,9 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let fixtureRoot = "";
 let fixtureCount = 0;
 
-const createCaseDir = async (prefix: string, { skipHeartbeatFile = false } = {}) => {
+const createCaseDir = async (prefix: string) => {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
-  if (!skipHeartbeatFile) {
-    await fs.writeFile(path.join(dir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-  }
   return dir;
 };
 
@@ -1083,8 +1080,27 @@ describe("runHeartbeatOnce", () => {
       reason: params.reason,
       deps: createHeartbeatDeps(sendWhatsApp),
     });
-    return { res, replySpy, sendWhatsApp };
+    return { res, replySpy, sendWhatsApp, workspaceDir };
   }
+
+  it("adds explicit workspace HEARTBEAT.md path guidance to heartbeat prompts", async () => {
+    const { res, replySpy, sendWhatsApp, workspaceDir } = await runHeartbeatFileScenario({
+      fileState: "actionable",
+      reason: "interval",
+      replyText: "Checked logs and PRs",
+    });
+    try {
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
+      expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
+      expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
 
   it("applies HEARTBEAT.md gating rules across file states and triggers", async () => {
     const cases: Array<{

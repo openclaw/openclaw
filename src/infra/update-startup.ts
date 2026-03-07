@@ -6,6 +6,7 @@ import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
+import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
@@ -124,8 +125,7 @@ async function readState(statePath: string): Promise<UpdateCheckState> {
 }
 
 async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  await fs.writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
+  await writeJsonAtomic(statePath, state);
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {

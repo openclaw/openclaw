@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspaceSkillEntries } from "./skills.js";
+import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
 const tempDirs: string[] = [];
 
@@ -24,26 +25,28 @@ async function setupWorkspaceWithProsePlugin() {
   const bundledDir = path.join(workspaceDir, ".bundled");
   const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
 
-  await fs.mkdir(path.join(pluginRoot, "skills", "prose"), { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: "open-prose",
-        skills: ["./skills"],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  await fs.writeFile(path.join(pluginRoot, "index.ts"), "export {};\n", "utf-8");
-  await fs.writeFile(
-    path.join(pluginRoot, "skills", "prose", "SKILL.md"),
-    `---\nname: prose\ndescription: test\n---\n`,
-    "utf-8",
-  );
+  await writePluginWithSkill({
+    pluginRoot,
+    pluginId: "open-prose",
+    skillId: "prose",
+    skillDescription: "test",
+  });
+
+  return { workspaceDir, managedDir, bundledDir };
+}
+
+async function setupWorkspaceWithDiffsPlugin() {
+  const workspaceDir = await createTempWorkspaceDir();
+  const managedDir = path.join(workspaceDir, ".managed");
+  const bundledDir = path.join(workspaceDir, ".bundled");
+  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "diffs");
+
+  await writePluginWithSkill({
+    pluginRoot,
+    pluginId: "diffs",
+    skillId: "diffs",
+    skillDescription: "test",
+  });
 
   return { workspaceDir, managedDir, bundledDir };
 }
@@ -92,5 +95,37 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("prose");
+  });
+
+  it("includes diffs plugin skill when the plugin is enabled", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        plugins: {
+          entries: { diffs: { enabled: true } },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("diffs");
+  });
+
+  it("excludes diffs plugin skill when the plugin is disabled", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        plugins: {
+          entries: { diffs: { enabled: false } },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
   });
 });

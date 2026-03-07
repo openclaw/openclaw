@@ -1,9 +1,18 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
-import type { ModelRegistry } from "./pi-model-discovery.js";
 
+const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_GPT_54_MAX_TOKENS = 128_000;
+const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
+const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
+
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
@@ -16,6 +25,66 @@ const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet
 
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
+
+// gemini-3.1-pro-preview / gemini-3.1-flash-preview are not yet in pi-ai's built-in
+// google-gemini-cli catalog. Clone the gemini-3-pro/flash-preview template so users
+// don't get "Unknown model" errors when Google releases a new minor version.
+const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
+const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
+const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+
+function resolveOpenAIGpt54ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "openai") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  let templateIds: readonly string[];
+  if (lower === OPENAI_GPT_54_MODEL_ID) {
+    templateIds = OPENAI_GPT_54_TEMPLATE_MODEL_IDS;
+  } else if (lower === OPENAI_GPT_54_PRO_MODEL_ID) {
+    templateIds = OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS;
+  } else {
+    return undefined;
+  }
+
+  return (
+    cloneFirstTemplateModel({
+      normalizedProvider,
+      trimmedModelId,
+      templateIds: [...templateIds],
+      modelRegistry,
+      patch: {
+        api: "openai-responses",
+        provider: normalizedProvider,
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+        maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+      },
+    }) ??
+    normalizeModelCompat({
+      id: trimmedModelId,
+      name: trimmedModelId,
+      api: "openai-responses",
+      provider: normalizedProvider,
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    } as Model<Api>)
+  );
+}
 
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
@@ -40,21 +109,35 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-function resolveOpenAICodexGpt53FallbackModel(
+const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
+const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+
+function resolveOpenAICodexForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
-  if (normalizedProvider !== "openai-codex") {
-    return undefined;
-  }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+  const lower = trimmedModelId.toLowerCase();
+
+  let templateIds: readonly string[];
+  let eligibleProviders: Set<string>;
+  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
+    eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
+  } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
+    templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
+    eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
+  } else {
     return undefined;
   }
 
-  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
+  if (!eligibleProviders.has(normalizedProvider)) {
+    return undefined;
+  }
+
+  for (const templateId of templateIds) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
     if (!template) {
       continue;
@@ -158,6 +241,38 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
+// gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
+// google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
+// "Unknown model" errors when Google Gemini CLI gains new minor-version models.
+function resolveGoogleGeminiCli31ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+
+  let templateIds: readonly string[];
+  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
+    templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
+    templateIds = GEMINI_3_1_FLASH_TEMPLATE_IDS;
+  } else {
+    return undefined;
+  }
+
+  return cloneFirstTemplateModel({
+    normalizedProvider: "google-gemini-cli",
+    trimmedModelId: trimmed,
+    templateIds: [...templateIds],
+    modelRegistry,
+    patch: { reasoning: true },
+  });
+}
+
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
 // When a user configures zai/glm-5 without a models.json entry, clone glm-4.7 as a forward-compat fallback.
 function resolveZaiGlm5ForwardCompatModel(
@@ -206,9 +321,11 @@ export function resolveForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   return (
-    resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
+    resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

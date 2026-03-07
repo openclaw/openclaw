@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -146,13 +147,36 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
+    const normalizedLeft = (left ?? "").trim().toLowerCase();
+    const normalizedRight = (right ?? "").trim().toLowerCase();
+    if (!normalizedLeft || !normalizedRight) {
+      return false;
+    }
+    if (normalizedLeft === normalizedRight) {
+      return true;
+    }
+    const parsedLeft = parseAgentSessionKey(normalizedLeft);
+    const parsedRight = parseAgentSessionKey(normalizedRight);
+    if (parsedLeft && parsedRight) {
+      return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
+    }
+    if (parsedLeft) {
+      return parsedLeft.rest === normalizedRight;
+    }
+    if (parsedRight) {
+      return normalizedLeft === parsedRight.rest;
+    }
+    return false;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (evt.sessionKey !== state.currentSessionKey) {
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
@@ -202,7 +226,12 @@ export function createEventHandlers(context: EventHandlerContext) {
             : ""
           : "";
 
-      const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      const finalText = streamAssembler.finalize(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+        evt.errorMessage,
+      );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {

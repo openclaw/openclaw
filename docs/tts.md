@@ -93,6 +93,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       },
       openai: {
         apiKey: "openai_api_key",
+        baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
@@ -216,6 +217,9 @@ Then run:
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
 - `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
+- `openai.baseUrl`: override the OpenAI TTS endpoint.
+  - Resolution order: `messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
+  - Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
   - `useSpeakerBoost`: `true|false`

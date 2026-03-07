@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   buildGatewayAuthConfig: vi.fn(),
   note: vi.fn(),
   randomToken: vi.fn(),
+  getTailnetHostname: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importActual) => {
@@ -35,6 +37,7 @@ vi.mock("./configure.gateway-auth.js", () => ({
 
 vi.mock("../infra/tailscale.js", () => ({
   findTailscaleBinary: vi.fn(async () => undefined),
+  getTailnetHostname: mocks.getTailnetHostname,
 }));
 
 vi.mock("./onboard-helpers.js", async (importActual) => {
@@ -58,13 +61,20 @@ function makeRuntime(): RuntimeEnv {
 async function runGatewayPrompt(params: {
   selectQueue: string[];
   textQueue: Array<string | undefined>;
+  baseConfig?: OpenClawConfig;
   randomToken?: string;
   confirmResult?: boolean;
   authConfigFactory?: (input: Record<string, unknown>) => Record<string, unknown>;
 }) {
   vi.clearAllMocks();
   mocks.resolveGatewayPort.mockReturnValue(18789);
-  mocks.select.mockImplementation(async () => params.selectQueue.shift());
+  mocks.select.mockImplementation(async (input) => {
+    const next = params.selectQueue.shift();
+    if (next !== undefined) {
+      return next;
+    }
+    return input.initialValue ?? input.options[0]?.value;
+  });
   mocks.text.mockImplementation(async () => params.textQueue.shift());
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockResolvedValue(params.confirmResult ?? true);
@@ -72,7 +82,7 @@ async function runGatewayPrompt(params: {
     params.authConfigFactory ? params.authConfigFactory(input as Record<string, unknown>) : input,
   );
 
-  const result = await promptGatewayConfig({}, makeRuntime());
+  const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
   const call = mocks.buildGatewayAuthConfig.mock.calls[0]?.[0];
   return { result, call };
 }
@@ -91,7 +101,7 @@ async function runTrustedProxyPrompt(params: {
 describe("promptGatewayConfig", () => {
   it("generates a token when the prompt returns undefined", async () => {
     const { result } = await runGatewayPrompt({
-      selectQueue: ["loopback", "token", "off"],
+      selectQueue: ["loopback", "token", "off", "plaintext"],
       textQueue: ["18789", undefined],
       randomToken: "generated-token",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
@@ -153,5 +163,104 @@ describe("promptGatewayConfig", () => {
     expect(result.config.gateway?.bind).toBe("loopback");
     expect(result.config.gateway?.tailscale?.mode).toBe("off");
     expect(result.config.gateway?.tailscale?.resetOnExit).toBe(false);
+  });
+
+  it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const { result } = await runGatewayPrompt({
+      // bind=loopback, auth=token, tailscale=serve
+      selectQueue: ["loopback", "token", "serve", "plaintext"],
+      textQueue: ["18789", "my-token"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+      "https://my-host.tail1234.ts.net",
+    );
+  });
+
+  it("adds Tailscale origin to controlUi.allowedOrigins when tailscale funnel is enabled", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const { result } = await runGatewayPrompt({
+      // bind=loopback, auth=password (funnel requires password), tailscale=funnel
+      selectQueue: ["loopback", "password", "funnel"],
+      textQueue: ["18789", "my-password"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, password }) => ({ mode, password }),
+    });
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+      "https://my-host.tail1234.ts.net",
+    );
+  });
+
+  it("does not add Tailscale origin when getTailnetHostname fails", async () => {
+    mocks.getTailnetHostname.mockRejectedValue(new Error("not found"));
+    const { result } = await runGatewayPrompt({
+      selectQueue: ["loopback", "token", "serve", "plaintext"],
+      textQueue: ["18789", "my-token"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+  });
+
+  it("does not duplicate Tailscale origin if already present", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const { result } = await runGatewayPrompt({
+      baseConfig: {
+        gateway: {
+          controlUi: {
+            allowedOrigins: ["HTTPS://MY-HOST.TAIL1234.TS.NET"],
+          },
+        },
+      },
+      selectQueue: ["loopback", "token", "serve", "plaintext"],
+      textQueue: ["18789", "my-token"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    const origins = result.config.gateway?.controlUi?.allowedOrigins ?? [];
+    const tsOriginCount = origins.filter(
+      (origin) => origin.toLowerCase() === "https://my-host.tail1234.ts.net",
+    ).length;
+    expect(tsOriginCount).toBe(1);
+  });
+
+  it("formats IPv6 Tailscale fallback addresses as valid HTTPS origins", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("fd7a:115c:a1e0::12");
+    const { result } = await runGatewayPrompt({
+      selectQueue: ["loopback", "token", "serve", "plaintext"],
+      textQueue: ["18789", "my-token"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+      "https://[fd7a:115c:a1e0::12]",
+    );
+  });
+
+  it("stores gateway token as SecretRef when token source is ref", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-gateway-token";
+    try {
+      const { call, result } = await runGatewayPrompt({
+        selectQueue: ["loopback", "token", "off", "ref"],
+        textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
+        authConfigFactory: ({ mode, token }) => ({ mode, token }),
+      });
+
+      expect(call?.token).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      expect(result.token).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
   });
 });

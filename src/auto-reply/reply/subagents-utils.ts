@@ -41,6 +41,7 @@ export function resolveSubagentTargetFromRuns(params: {
   token: string | undefined;
   recentWindowMinutes: number;
   label: (entry: SubagentRunRecord) => string;
+  isActive?: (entry: SubagentRunRecord) => boolean;
   errors: {
     missingTarget: string;
     invalidIndex: (value: string) => string;
@@ -59,10 +60,13 @@ export function resolveSubagentTargetFromRuns(params: {
   if (trimmed === "last") {
     return { entry: sorted[0] };
   }
+  const isActive = params.isActive ?? ((entry: SubagentRunRecord) => !entry.endedAt);
   const recentCutoff = Date.now() - params.recentWindowMinutes * 60_000;
   const numericOrder = [
-    ...sorted.filter((entry) => !entry.endedAt),
-    ...sorted.filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff),
+    ...sorted.filter((entry) => isActive(entry)),
+    ...sorted.filter(
+      (entry) => !isActive(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+    ),
   ];
   if (/^\d+$/.test(trimmed)) {
     const idx = Number.parseInt(trimmed, 10);

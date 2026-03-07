@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { isDangerousHostEnvVarName } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
@@ -8,8 +9,66 @@ import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 const log = createSubsystemLogger("env-overrides");
 
-type EnvUpdate = { key: string; prev: string | undefined };
+type EnvUpdate = { key: string };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
+type ActiveSkillEnvEntry = {
+  baseline: string | undefined;
+  value: string;
+  count: number;
+};
+
+/**
+ * Tracks env var keys that are currently injected by skill overrides.
+ * Used by ACP harness spawn to strip skill-injected keys so they don't
+ * leak to child processes (e.g., OPENAI_API_KEY leaking to Codex CLI).
+ * @see https://github.com/openclaw/openclaw/issues/36280
+ */
+const activeSkillEnvEntries = new Map<string, ActiveSkillEnvEntry>();
+
+/** Returns a snapshot of env var keys currently injected by skill overrides. */
+export function getActiveSkillEnvKeys(): ReadonlySet<string> {
+  return new Set(activeSkillEnvEntries.keys());
+}
+
+function acquireActiveSkillEnvKey(key: string, value: string): boolean {
+  const active = activeSkillEnvEntries.get(key);
+  if (active) {
+    active.count += 1;
+    if (process.env[key] === undefined) {
+      process.env[key] = active.value;
+    }
+    return true;
+  }
+  if (process.env[key] !== undefined) {
+    return false;
+  }
+  activeSkillEnvEntries.set(key, {
+    baseline: process.env[key],
+    value,
+    count: 1,
+  });
+  return true;
+}
+
+function releaseActiveSkillEnvKey(key: string) {
+  const active = activeSkillEnvEntries.get(key);
+  if (!active) {
+    return;
+  }
+  active.count -= 1;
+  if (active.count > 0) {
+    if (process.env[key] === undefined) {
+      process.env[key] = active.value;
+    }
+    return;
+  }
+  activeSkillEnvEntries.delete(key);
+  if (active.baseline === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = active.baseline;
+  }
+}
 
 type SanitizedSkillEnvOverrides = {
   allowed: Record<string, string>;
@@ -98,16 +157,27 @@ function applySkillConfigEnvOverrides(params: {
   if (skillConfig.env) {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
       const envKey = rawKey.trim();
-      if (!envKey || !envValue || process.env[envKey]) {
+      const hasExternallyManagedValue =
+        process.env[envKey] !== undefined && !activeSkillEnvEntries.has(envKey);
+      if (!envKey || !envValue || hasExternallyManagedValue) {
         continue;
       }
       pendingOverrides[envKey] = envValue;
     }
   }
 
-  if (normalizedPrimaryEnv && skillConfig.apiKey && !process.env[normalizedPrimaryEnv]) {
+  const resolvedApiKey =
+    normalizeResolvedSecretInputString({
+      value: skillConfig.apiKey,
+      path: `skills.entries.${skillKey}.apiKey`,
+    }) ?? "";
+  const canInjectPrimaryEnv =
+    normalizedPrimaryEnv &&
+    (process.env[normalizedPrimaryEnv] === undefined ||
+      activeSkillEnvEntries.has(normalizedPrimaryEnv));
+  if (canInjectPrimaryEnv && resolvedApiKey) {
     if (!pendingOverrides[normalizedPrimaryEnv]) {
-      pendingOverrides[normalizedPrimaryEnv] = skillConfig.apiKey;
+      pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
   }
 
@@ -124,22 +194,18 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
-    if (process.env[envKey]) {
+    if (!acquireActiveSkillEnvKey(envKey, envValue)) {
       continue;
     }
-    updates.push({ key: envKey, prev: process.env[envKey] });
-    process.env[envKey] = envValue;
+    updates.push({ key: envKey });
+    process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
   }
 }
 
 function createEnvReverter(updates: EnvUpdate[]) {
   return () => {
     for (const update of updates) {
-      if (update.prev === undefined) {
-        delete process.env[update.key];
-      } else {
-        process.env[update.key] = update.prev;
-      }
+      releaseActiveSkillEnvKey(update.key);
     }
   };
 }

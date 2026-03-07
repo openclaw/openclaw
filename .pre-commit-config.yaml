@@ -30,7 +30,7 @@ repos:
           - --baseline
           - .secrets.baseline
           - --exclude-files
-          - '(^|/)(dist/|vendor/|pnpm-lock\.yaml$|\.detect-secrets\.cfg$)'
+          - '(^|/)pnpm-lock\.yaml$'
           - --exclude-lines
           - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
           - --exclude-lines
@@ -47,6 +47,8 @@ repos:
           - '=== "string"'
           - --exclude-lines
           - 'typeof remote\?\.password === "string"'
+          - --exclude-lines
+          - "OPENCLAW_DOCKER_GPG_FINGERPRINT="
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0

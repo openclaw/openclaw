@@ -157,7 +157,7 @@ describe("getApiKeyForModel", () => {
           } catch (err) {
             error = err;
           }
-          expect(String(error)).toContain("openai-codex/gpt-5.3-codex");
+          expect(String(error)).toContain("openai-codex/gpt-5.4");
         },
       );
     } finally {
@@ -223,6 +223,62 @@ describe("getApiKeyForModel", () => {
       });
       expect(resolved.apiKey).toBe("qianfan-test-key");
       expect(resolved.source).toContain("QIANFAN_API_KEY");
+    });
+  });
+
+  it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://gpu-node-server:11434",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("ollama-local");
+      expect(resolved.mode).toBe("api-key");
+      expect(resolved.source).toContain("synthetic local key");
+    });
+  });
+
+  it("prefers explicit OLLAMA_API_KEY over synthetic local key", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: "env-ollama-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://gpu-node-server:11434",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("env-ollama-key");
+      expect(resolved.source).toContain("OLLAMA_API_KEY");
+    });
+  });
+
+  it("still throws for ollama when no env/profile/config provider is available", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "ollama",
+          store: { version: 1, profiles: {} },
+        }),
+      ).rejects.toThrow('No API key found for provider "ollama".');
     });
   });
 
