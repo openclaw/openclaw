@@ -563,6 +563,7 @@ export function renderApp(state: AppViewState) {
                 agentFileContents: state.agentFileContents,
                 agentFileDrafts: state.agentFileDrafts,
                 agentFileSaving: state.agentFileSaving,
+                agentFileWordWrap: state.agentFileWordWrap,
                 agentIdentityLoading: state.agentIdentityLoading,
                 agentIdentityError: state.agentIdentityError,
                 agentIdentityById: state.agentIdentityById,
@@ -661,6 +662,9 @@ export function renderApp(state: AppViewState) {
                   const content =
                     state.agentFileDrafts[name] ?? state.agentFileContents[name] ?? "";
                   void saveAgentFile(state, resolvedAgentId, name, content);
+                },
+                onToggleWordWrap: () => {
+                  state.agentFileWordWrap = !state.agentFileWordWrap;
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
                   if (!configValue) {
@@ -1066,6 +1070,7 @@ export function renderApp(state: AppViewState) {
                 // Voice/audio toggles
                 voiceInputEnabled: state.voiceInputEnabled,
                 audioOutputEnabled: state.audioOutputEnabled,
+                microphoneAvailable: state.microphoneAvailable,
                 onToggleVoiceInput: () => state.toggleVoiceInput!(),
                 onToggleAudioOutput: () => state.toggleAudioOutput!(),
                 // Sidebar props for tool output viewing
