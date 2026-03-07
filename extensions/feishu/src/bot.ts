@@ -99,6 +99,9 @@ const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 const GROUP_NAME_TTL_MS = 10 * 60 * 1000;
 const groupNameCache = new Map<string, { name: string; expireAt: number }>();
+const TOPIC_LABEL_TTL_MS = 10 * 60 * 1000;
+const TOPIC_LABEL_MAX_CHARS = 48;
+const topicLabelCache = new Map<string, { label: string; expireAt: number }>();
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -313,6 +316,70 @@ function buildFeishuDirectDisplayName(params: {
   // Keep display human-readable and traceable for auditing/review.
   if (senderName.includes(senderId)) return senderName;
   return `${senderName} (${senderId})`;
+}
+
+function truncateFeishuTopicLabel(raw: string): string {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= TOPIC_LABEL_MAX_CHARS) return normalized;
+  return `${normalized.slice(0, TOPIC_LABEL_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+async function resolveFeishuTopicLabel(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  topicRootId: string;
+  log: (...args: any[]) => void;
+}): Promise<string | undefined> {
+  const { cfg, account, topicRootId, log } = params;
+  const normalizedTopicRootId = topicRootId.trim();
+  if (!normalizedTopicRootId) return undefined;
+
+  const cacheKey = `${account.accountId}:${normalizedTopicRootId}`;
+  const cached = topicLabelCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expireAt > now) {
+    return cached.label;
+  }
+
+  try {
+    const rootMessage = await getMessageFeishu({
+      cfg,
+      messageId: normalizedTopicRootId,
+      accountId: account.accountId,
+    });
+    const label = truncateFeishuTopicLabel(rootMessage?.content ?? "");
+    if (!label) return undefined;
+    topicLabelCache.set(cacheKey, {
+      label,
+      expireAt: now + TOPIC_LABEL_TTL_MS,
+    });
+    return label;
+  } catch (err) {
+    log(`feishu: failed to resolve topic label for ${normalizedTopicRootId}: ${String(err)}`);
+    return undefined;
+  }
+}
+
+function shortFeishuTopicId(raw: string): string {
+  const normalized = raw.trim();
+  if (normalized.length <= 16) return normalized;
+  return `${normalized.slice(0, 8)}…${normalized.slice(-6)}`;
+}
+
+function buildFeishuTopicThreadLabel(params: {
+  groupDisplayName?: string;
+  chatId: string;
+  topicLabel?: string;
+  topicThreadId: string;
+}): string {
+  const groupLabel =
+    params.groupDisplayName?.trim() || buildFeishuGroupDisplayName({ chatId: params.chatId });
+  const topic = params.topicLabel?.trim();
+  if (topic) {
+    return `${groupLabel} › ${topic}`;
+  }
+  return `${groupLabel} › topic:${shortFeishuTopicId(params.topicThreadId)}`;
 }
 
 export type FeishuMessageEvent = {
@@ -1475,6 +1542,32 @@ export async function handleFeishuMessage(params: {
           }))
         : undefined;
 
+    const topicThreadId = isGroup
+      ? ctx.rootId?.trim() || ctx.threadId?.trim() || undefined
+      : undefined;
+    const isTopicScopedSession =
+      isGroup &&
+      (groupSession?.groupSessionScope === "group_topic" ||
+        groupSession?.groupSessionScope === "group_topic_sender");
+    const topicLabel =
+      isTopicScopedSession && ctx.rootId
+        ? await resolveFeishuTopicLabel({
+            cfg,
+            account,
+            topicRootId: ctx.rootId,
+            log,
+          })
+        : undefined;
+    const topicThreadLabel =
+      isTopicScopedSession && topicThreadId
+        ? buildFeishuTopicThreadLabel({
+            groupDisplayName,
+            chatId: ctx.chatId,
+            topicLabel,
+            topicThreadId,
+          })
+        : undefined;
+
     // --- Shared context builder for dispatch ---
     const buildCtxPayloadForAgent = (
       agentSessionKey: string,
@@ -1495,6 +1588,8 @@ export async function handleFeishuMessage(params: {
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? groupDisplayName : undefined,
+        ThreadLabel: topicThreadLabel,
+        MessageThreadId: topicThreadId,
         SenderName: isGroup
           ? (ctx.senderName ?? ctx.senderOpenId)
           : (directDisplayName ?? ctx.senderName ?? ctx.senderOpenId),
