@@ -136,6 +136,18 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "google") {
     return normalizeGoogleModelId(model);
   }
+
+  // For non-OpenRouter providers, tolerate accidental "provider/model" input
+  // when a provider is already selected. This keeps API payloads model-only
+  // (e.g. "gemini-2.0-flash" instead of "gemini/gemini-2.0-flash").
+  if (provider !== "openrouter") {
+    const lower = model.toLowerCase();
+    const ownPrefix = `${provider}/`;
+    if (lower.startsWith(ownPrefix)) {
+      return model.slice(ownPrefix.length);
+    }
+  }
+
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
   // "openrouter/<name>" as the model ID sent to the API. Models from external
   // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and

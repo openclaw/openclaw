@@ -148,6 +148,17 @@ describe("model-selection", () => {
       });
     });
 
+    it("strips duplicated provider prefix for non-openrouter refs", () => {
+      expect(parseModelRef("gemini/gemini-2.0-flash", "openai")).toEqual({
+        provider: "gemini",
+        model: "gemini-2.0-flash",
+      });
+      expect(parseModelRef("openai/openai/gpt-5.2", "anthropic")).toEqual({
+        provider: "openai",
+        model: "gpt-5.2",
+      });
+    });
+
     it("normalizes Vercel Claude shorthand to anthropic-prefixed model ids", () => {
       expect(parseModelRef("vercel-ai-gateway/claude-opus-4.6", "openai")).toEqual({
         provider: "vercel-ai-gateway",
