@@ -147,6 +147,16 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
+### Fal OpenRouter
+
+- Provider: `fal-openrouter`
+- Auth: `FAL_API_KEY`
+- Example model: `fal-openrouter/google/gemini-2.5-flash`
+- CLI: `openclaw onboard --fal-openrouter-api-key <key>`
+- Base URL: `https://fal.run/openrouter/router/openai/v1`
+
+See [/providers/fal-openrouter](/providers/fal-openrouter) for setup details and available models.
+
 ### Other built-in providers
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)

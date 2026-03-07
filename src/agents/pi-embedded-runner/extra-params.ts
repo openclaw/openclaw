@@ -534,8 +534,35 @@ function createAnthropicBetaHeadersWrapper(
   };
 }
 
+/**
+ * Create a streamFn wrapper that replaces the default Bearer auth header
+ * with Fal's required `Authorization: Key <fal_key>` format.
+ */
+function createFalOpenrouterAuthWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const apiKey = options?.apiKey;
+    const falHeaders: Record<string, string> = apiKey ? { Authorization: `Key ${apiKey}` } : {};
+    return underlying(model, context, {
+      ...options,
+      // Keep apiKey so pi-ai's validation passes. The OpenAI SDK merges
+      // defaultHeaders after authHeaders, so our `Authorization: Key …`
+      // header below overrides the `Authorization: Bearer …` that pi-ai
+      // would set from apiKey.
+      headers: {
+        ...options?.headers,
+        ...falHeaders,
+      },
+    });
+  };
+}
+
 function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
+  const normalizedProvider = provider.toLowerCase();
+  return (
+    (normalizedProvider === "openrouter" || normalizedProvider === "fal-openrouter") &&
+    modelId.toLowerCase().startsWith("anthropic/")
+  );
 }
 
 type PayloadMessage = {
@@ -1177,6 +1204,17 @@ export function applyExtraParamsToAgent(
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  // Fal routes to OpenRouter — apply the same reasoning-format transformation
+  // that regular OpenRouter uses, and rewrite the auth header to `Key <fal_key>`.
+  if (provider === "fal-openrouter") {
+    const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
+    const falThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, falThinkingLevel);
+    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+    log.debug(`applying Fal Authorization: Key header for ${provider}/${modelId}`);
+    agent.streamFn = createFalOpenrouterAuthWrapper(agent.streamFn);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.

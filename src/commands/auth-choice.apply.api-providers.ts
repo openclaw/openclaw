@@ -8,6 +8,7 @@ import {
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
+import { applyAuthChoiceFalOpenRouter } from "./auth-choice.apply.fal-openrouter.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
@@ -82,6 +83,7 @@ import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
 const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
+  "fal-openrouter": "fal-openrouter-api-key",
   openrouter: "openrouter-api-key",
   litellm: "litellm-api-key",
   "vercel-ai-gateway": "ai-gateway-api-key",
@@ -402,6 +404,10 @@ export async function applyAuthChoiceApiProviders(
     });
 
     return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "fal-openrouter-api-key") {
+    return applyAuthChoiceFalOpenRouter(params);
   }
 
   if (authChoice === "openrouter-api-key") {
