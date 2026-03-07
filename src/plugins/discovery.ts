@@ -433,7 +433,20 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) {
+
+    // Handle symlinks: resolve to target type
+    let isDir = entry.isDirectory();
+    if (!isDir && entry.isSymbolicLink()) {
+      try {
+        const stat = fs.statSync(fullPath); // follows symlinks
+        isDir = stat.isDirectory();
+      } catch {
+        // broken symlink — skip
+        continue;
+      }
+    }
+
+    if (!isDir) {
       continue;
     }
     if (shouldIgnoreScannedDirectory(entry.name)) {
