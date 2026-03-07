@@ -234,7 +234,10 @@ describe("finalizeOnboardingWizard", () => {
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
-    expect("token" in buildGatewayInstallPlan.mock.calls[0][0]).toBe(false);
+    const calls = buildGatewayInstallPlan.mock.calls as unknown as Array<[unknown]>;
+    const planArgs = calls[0]?.[0];
+    expect(planArgs).toBeDefined();
+    expect(planArgs && "token" in (planArgs as object)).toBe(false);
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
   });
 });

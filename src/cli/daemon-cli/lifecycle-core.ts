@@ -281,7 +281,9 @@ export async function runServiceRestart(params: {
       const command = await params.service.readCommand(process.env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const cfg = loadConfig();
-      const configToken = cfg.gateway?.auth?.token?.trim() || undefined;
+      const rawConfigToken = cfg.gateway?.auth?.token;
+      const configToken =
+        typeof rawConfigToken === "string" ? rawConfigToken.trim() || undefined : undefined;
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
         const warning = driftIssue.detail

@@ -198,7 +198,10 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
-    expect("token" in buildGatewayInstallPlanMock.mock.calls[0][0]).toBe(false);
+    const calls = buildGatewayInstallPlanMock.mock.calls as unknown as Array<[unknown]>;
+    const planArgs = calls[0]?.[0];
+    expect(planArgs).toBeDefined();
+    expect(planArgs && "token" in (planArgs as object)).toBe(false);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(
       actionState.warnings.some((warning) =>
@@ -223,7 +226,10 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed).toEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
-    expect("token" in buildGatewayInstallPlanMock.mock.calls[0][0]).toBe(false);
+    const calls = buildGatewayInstallPlanMock.mock.calls as unknown as Array<[unknown]>;
+    const planArgs = calls[0]?.[0];
+    expect(planArgs).toBeDefined();
+    expect(planArgs && "token" in (planArgs as object)).toBe(false);
   });
 
   it("auto-mints and persists token when no source exists", async () => {
@@ -245,7 +251,10 @@ describe("runDaemonInstall", () => {
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
       expect.objectContaining({ port: 18789 }),
     );
-    expect("token" in buildGatewayInstallPlanMock.mock.calls[0][0]).toBe(false);
+    const calls = buildGatewayInstallPlanMock.mock.calls as unknown as Array<[unknown]>;
+    const planArgs = calls[0]?.[0];
+    expect(planArgs).toBeDefined();
+    expect(planArgs && "token" in (planArgs as object)).toBe(false);
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
   });

@@ -7,8 +7,8 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(
     async (): Promise<DeviceIdentity> => ({
       deviceId: "device-1",
-      privateKey: "private-key",
-      publicKey: "public-key",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
     }),
   ),
 );
@@ -23,7 +23,7 @@ type HandlerMap = {
   open: MockWebSocketHandler[];
 };
 
-type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
+type MockWebSocketHandler = (ev?: unknown) => void;
 
 class MockWebSocket {
   static OPEN = 1;
@@ -43,6 +43,7 @@ class MockWebSocket {
   }
 
   addEventListener(type: keyof HandlerMap, handler: MockWebSocketHandler) {
+    // matches WebSocket addEventListener signature
     this.handlers[type].push(handler);
   }
 
@@ -114,8 +115,8 @@ describe("GatewayBrowserClient", () => {
     signDevicePayloadMock.mockClear();
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
-      privateKey: "private-key",
-      publicKey: "public-key",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
     });
 
     const localStorage = createStorageMock();

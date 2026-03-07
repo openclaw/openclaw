@@ -125,18 +125,18 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       cfg: cfg({
         gateway: {
           mode: "local",
-          auth: { token: "config-token", password: "config-password" },
+          auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         },
       }),
       env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+        OPENCLAW_GATEWAY_TOKEN: "env-token", // pragma: allowlist secret
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
         OPENCLAW_SERVICE_KIND: "gateway",
       } as NodeJS.ProcessEnv,
     });
     expect(resolved).toEqual({
-      token: "config-token",
-      password: "env-password",
+      token: "config-token", // pragma: allowlist secret
+      password: "env-password", // pragma: allowlist secret
     });
   });
 

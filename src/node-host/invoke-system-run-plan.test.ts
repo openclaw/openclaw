@@ -130,6 +130,10 @@ describe("hardenApprovedExecutionPaths", () => {
   }
 
   it("captures mutable shell script operands in approval plans", () => {
+    if (process.platform === "win32") {
+      // Windows runners don't have /bin/sh; this is a POSIX-only approval-plan scenario.
+      return;
+    }
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
     const script = path.join(tmp, "run.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
