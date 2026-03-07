@@ -641,53 +641,6 @@ export function discoverOpenClawPlugins(params: {
   const seen = new Set<string>();
   const workspaceDir = params.workspaceDir?.trim();
 
-  // Scan order: lowest priority → highest priority
-  // This allows higher-priority plugins to silently override lower-priority ones
-  // without triggering duplicate warnings.
-  // Priority: bundled(3) < global(2) < workspace(1) < config(0)
-
-  // 1. Bundled plugins (lowest priority - from npm package)
-  const bundledDir = resolveBundledPluginsDir();
-  if (bundledDir) {
-    discoverInDirectory({
-      dir: bundledDir,
-      origin: "bundled",
-      ownershipUid: params.ownershipUid,
-      candidates,
-      diagnostics,
-      seen,
-    });
-  }
-
-  // 2. Global extensions (~/.openclaw/extensions)
-  const globalDir = path.join(resolveConfigDir(), "extensions");
-  discoverInDirectory({
-    dir: globalDir,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    candidates,
-    diagnostics,
-    seen,
-  });
-
-  // 3. Workspace extensions (.openclaw/extensions)
-  if (workspaceDir) {
-    const workspaceRoot = resolveUserPath(workspaceDir);
-    const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
-    for (const dir of workspaceExtDirs) {
-      discoverInDirectory({
-        dir,
-        origin: "workspace",
-        ownershipUid: params.ownershipUid,
-        workspaceDir: workspaceRoot,
-        candidates,
-        diagnostics,
-        seen,
-      });
-    }
-  }
-
-  // 4. Config paths (highest priority - explicit plugins.load.paths)
   const extra = params.extraPaths ?? [];
   for (const extraPath of extra) {
     if (typeof extraPath !== "string") {
@@ -707,6 +660,45 @@ export function discoverOpenClawPlugins(params: {
       seen,
     });
   }
+  if (workspaceDir) {
+    const workspaceRoot = resolveUserPath(workspaceDir);
+    const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
+    for (const dir of workspaceExtDirs) {
+      discoverInDirectory({
+        dir,
+        origin: "workspace",
+        ownershipUid: params.ownershipUid,
+        workspaceDir: workspaceRoot,
+        candidates,
+        diagnostics,
+        seen,
+      });
+    }
+  }
+
+  const bundledDir = resolveBundledPluginsDir();
+  if (bundledDir) {
+    discoverInDirectory({
+      dir: bundledDir,
+      origin: "bundled",
+      ownershipUid: params.ownershipUid,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
+
+  // Keep auto-discovered global extensions behind bundled plugins.
+  // Users can still intentionally override via plugins.load.paths (origin=config).
+  const globalDir = path.join(resolveConfigDir(), "extensions");
+  discoverInDirectory({
+    dir: globalDir,
+    origin: "global",
+    ownershipUid: params.ownershipUid,
+    candidates,
+    diagnostics,
+    seen,
+  });
 
   const result = { candidates, diagnostics };
   if (cacheEnabled) {
