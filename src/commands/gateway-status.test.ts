@@ -149,7 +149,7 @@ function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok
   };
 }
 
-function mockLocalTokenSecretRefConfig(secretId = "MISSING_GATEWAY_TOKEN") {
+function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
   loadConfig.mockReturnValueOnce({
     secrets: {
       providers: {
@@ -160,7 +160,7 @@ function mockLocalTokenSecretRefConfig(secretId = "MISSING_GATEWAY_TOKEN") {
       mode: "local",
       auth: {
         mode: "token",
-        token: { source: "env", provider: "default", id: secretId },
+        token: { source: "env", provider: "default", id: envTokenId },
       },
     },
   } as unknown as ReturnType<typeof loadConfig>);
@@ -204,7 +204,7 @@ describe("gateway-status command", () => {
   it("surfaces unresolved SecretRef auth diagnostics in warnings", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
-      mockLocalTokenSecretRefConfig();
+      mockLocalTokenEnvRefConfig();
 
       await runGatewayStatus(runtime, { timeout: "1000", json: true });
     });
@@ -232,7 +232,7 @@ describe("gateway-status command", () => {
         MISSING_GATEWAY_TOKEN: undefined,
       },
       async () => {
-        mockLocalTokenSecretRefConfig();
+        mockLocalTokenEnvRefConfig();
 
         await runGatewayStatus(runtime, { timeout: "1000", json: true });
       },
