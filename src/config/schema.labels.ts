@@ -217,14 +217,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
-  "tools.web.search.perplexity.apiKey": "Perplexity API Key",
+  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
   "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
   "tools.web.search.perplexity.model": "Perplexity Model",
-  "tools.web.search.gemini.apiKey": "Gemini Search API Key",
+  "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
-  "tools.web.search.grok.apiKey": "Grok Search API Key",
+  "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Search Model",
-  "tools.web.search.kimi.apiKey": "Kimi Search API Key",
+  "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
@@ -236,7 +236,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl Fallback",
-  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key",
+  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key", // pragma: allowlist secret
   "tools.web.fetch.firecrawl.baseUrl": "Firecrawl Base URL",
   "tools.web.fetch.firecrawl.onlyMainContent": "Firecrawl Main Content Only",
   "tools.web.fetch.firecrawl.maxAgeMs": "Firecrawl Cache Max Age (ms)",
@@ -278,6 +278,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
+  "media.ttlHours": "Media Retention TTL (hours)",
   audio: "Audio",
   "audio.transcription": "Audio Transcription",
   "audio.transcription.command": "Audio Transcription Command",
@@ -411,7 +412,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.mode": "Model Catalog Mode",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
-  "models.providers.*.apiKey": "Model Provider API Key",
+  "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
@@ -454,6 +455,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
+  "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -483,7 +485,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.useAccessGroups": "Use Access Groups",
   "commands.ownerAllowFrom": "Command Owners",
   "commands.ownerDisplay": "Owner ID Display",
-  "commands.ownerDisplaySecret": "Owner ID Hash Secret",
+  "commands.ownerDisplaySecret": "Owner ID Hash Secret", // pragma: allowlist secret
   "commands.allowFrom": "Command Elevated Access Rules",
   ui: "UI",
   "ui.seamColor": "Accent Color",
@@ -678,8 +680,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.providers.*.voiceAliases": "Talk Provider Voice Aliases",
   "talk.providers.*.modelId": "Talk Provider Model ID",
   "talk.providers.*.outputFormat": "Talk Provider Output Format",
-  "talk.providers.*.apiKey": "Talk Provider API Key",
-  "talk.apiKey": "Talk API Key",
+  "talk.providers.*.apiKey": "Talk Provider API Key", // pragma: allowlist secret
+  "talk.apiKey": "Talk API Key", // pragma: allowlist secret
   channels: "Channels",
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",
@@ -822,7 +824,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
-  "plugins.entries.*.apiKey": "Plugin API Key",
+  "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
   "plugins.installs": "Plugin Install Records",
