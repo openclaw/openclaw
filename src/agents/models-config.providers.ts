@@ -40,6 +40,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
+import { buildGroqProvider } from "./groq-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
@@ -1105,6 +1106,16 @@ export async function resolveImplicitProviders(params: {
     providers.huggingface = {
       ...hfProvider,
       apiKey: huggingfaceKey,
+    };
+  }
+
+  const groqKey =
+    resolveEnvApiKeyVarName("groq") ??
+    resolveApiKeyFromProfiles({ provider: "groq", store: authStore });
+  if (groqKey) {
+    providers.groq = {
+      ...buildGroqProvider(),
+      apiKey: groqKey,
     };
   }
 
