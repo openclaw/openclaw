@@ -14,6 +14,19 @@ export type SenderGroupAccessDecision = {
   reason: SenderGroupAccessReason;
 };
 
+export type GroupRouteAccessReason =
+  | "allowed"
+  | "disabled"
+  | "empty_allowlist"
+  | "route_not_allowlisted"
+  | "route_disabled";
+
+export type GroupRouteAccessDecision = {
+  allowed: boolean;
+  groupPolicy: GroupPolicy;
+  reason: GroupRouteAccessReason;
+};
+
 export function resolveSenderScopedGroupPolicy(params: {
   groupPolicy: GroupPolicy;
   groupAllowFrom: string[];
@@ -22,6 +35,52 @@ export function resolveSenderScopedGroupPolicy(params: {
     return "disabled";
   }
   return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
+}
+
+export function evaluateGroupRouteAccessForPolicy(params: {
+  groupPolicy: GroupPolicy;
+  routeAllowlistConfigured: boolean;
+  routeMatched: boolean;
+  routeEnabled?: boolean;
+}): GroupRouteAccessDecision {
+  if (params.groupPolicy === "disabled") {
+    return {
+      allowed: false,
+      groupPolicy: params.groupPolicy,
+      reason: "disabled",
+    };
+  }
+
+  if (params.routeMatched && params.routeEnabled === false) {
+    return {
+      allowed: false,
+      groupPolicy: params.groupPolicy,
+      reason: "route_disabled",
+    };
+  }
+
+  if (params.groupPolicy === "allowlist") {
+    if (!params.routeAllowlistConfigured) {
+      return {
+        allowed: false,
+        groupPolicy: params.groupPolicy,
+        reason: "empty_allowlist",
+      };
+    }
+    if (!params.routeMatched) {
+      return {
+        allowed: false,
+        groupPolicy: params.groupPolicy,
+        reason: "route_not_allowlisted",
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    groupPolicy: params.groupPolicy,
+    reason: "allowed",
+  };
 }
 
 export function evaluateSenderGroupAccessForPolicy(params: {

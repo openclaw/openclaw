@@ -5,6 +5,7 @@ import {
   createReplyPrefixOptions,
   createTypingCallbacks,
   dispatchReplyFromConfigWithSettledDispatcher,
+  evaluateGroupRouteAccessForPolicy,
   formatAllowlistMatchMeta,
   logInboundDrop,
   logTypingFailure,
@@ -194,10 +195,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       const isRoom = !isDirectMessage;
 
-      if (isRoom && groupPolicy === "disabled") {
-        return;
-      }
-
       const roomConfigInfo = isRoom
         ? resolveMatrixRoomConfig({
             rooms: roomsConfig,
@@ -213,17 +210,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }`
         : "matchKey=none matchSource=none";
 
-      if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
-        logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
-        return;
-      }
-      if (isRoom && groupPolicy === "allowlist") {
-        if (!roomConfigInfo?.allowlistConfigured) {
-          logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
-          return;
-        }
-        if (!roomConfig) {
-          logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
+      if (isRoom) {
+        const routeAccess = evaluateGroupRouteAccessForPolicy({
+          groupPolicy,
+          routeAllowlistConfigured: Boolean(roomConfigInfo?.allowlistConfigured),
+          routeMatched: Boolean(roomConfig),
+          routeEnabled: roomConfigInfo?.allowed ?? true,
+        });
+        if (!routeAccess.allowed) {
+          if (routeAccess.reason === "route_disabled") {
+            logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
+          } else if (routeAccess.reason === "empty_allowlist") {
+            logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
+          } else if (routeAccess.reason === "route_not_allowlisted") {
+            logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
+          }
           return;
         }
       }

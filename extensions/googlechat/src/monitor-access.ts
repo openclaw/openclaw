@@ -1,6 +1,7 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
+  evaluateGroupRouteAccessForPolicy,
   issuePairingChallenge,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -195,24 +196,23 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   let effectiveWasMentioned: boolean | undefined;
 
   if (isGroup) {
-    if (groupPolicy === "disabled") {
-      logVerbose(`drop group message (groupPolicy=disabled, space=${spaceId})`);
-      return { ok: false };
-    }
     const groupAllowlistConfigured = groupConfigResolved.allowlistConfigured;
-    const groupAllowed = Boolean(groupEntry) || Boolean((account.config.groups ?? {})["*"]);
-    if (groupPolicy === "allowlist") {
-      if (!groupAllowlistConfigured) {
+    const routeAccess = evaluateGroupRouteAccessForPolicy({
+      groupPolicy,
+      routeAllowlistConfigured: groupAllowlistConfigured,
+      routeMatched: Boolean(groupEntry),
+      routeEnabled: groupEntry?.enabled !== false && groupEntry?.allow !== false,
+    });
+    if (!routeAccess.allowed) {
+      if (routeAccess.reason === "disabled") {
+        logVerbose(`drop group message (groupPolicy=disabled, space=${spaceId})`);
+      } else if (routeAccess.reason === "empty_allowlist") {
         logVerbose(`drop group message (groupPolicy=allowlist, no allowlist, space=${spaceId})`);
-        return { ok: false };
-      }
-      if (!groupAllowed) {
+      } else if (routeAccess.reason === "route_not_allowlisted") {
         logVerbose(`drop group message (not allowlisted, space=${spaceId})`);
-        return { ok: false };
+      } else if (routeAccess.reason === "route_disabled") {
+        logVerbose(`drop group message (space disabled, space=${spaceId})`);
       }
-    }
-    if (groupEntry?.enabled === false || groupEntry?.allow === false) {
-      logVerbose(`drop group message (space disabled, space=${spaceId})`);
       return { ok: false };
     }
 
