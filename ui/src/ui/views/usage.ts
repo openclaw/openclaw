@@ -89,11 +89,18 @@ function addUsageTotals(
   return acc;
 }
 
+const tr = (key: string, fallback: string, params?: Record<string, string>) => {
+  const v = t(key, params);
+  if (v !== key) {
+    return v;
+  }
+  if (!params) {
+    return fallback;
+  }
+  return fallback.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
+};
+
 export function renderUsage(props: UsageProps) {
-  const tr = (key: string, fallback: string, params?: Record<string, string>) => {
-    const v = t(key, params);
-    return v === key ? fallback : v;
-  };
   // Show loading skeleton if loading and no data yet
   if (props.loading && !props.totals) {
     // Use inline styles since main stylesheet hasn't loaded yet on initial render

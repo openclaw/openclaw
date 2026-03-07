@@ -13,7 +13,13 @@ import {
 
 const tr = (key: string, fallback: string, params?: Record<string, string>) => {
   const v = t(key, params);
-  return v === key ? fallback : v;
+  if (v !== key) {
+    return v;
+  }
+  if (!params) {
+    return fallback;
+  }
+  return fallback.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
 };
 
 // Chart constants
