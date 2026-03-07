@@ -69,9 +69,9 @@ function throwUnresolvedGatewaySecretInput(path: string): never {
   throw new GatewaySecretRefUnavailableError(path);
 }
 
-function readGatewayTokenEnv(
-  env: NodeJS.ProcessEnv,
-  includeLegacyEnv: boolean,
+export function readGatewayTokenEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
 ): string | undefined {
   const primary = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   if (primary) {
@@ -83,9 +83,9 @@ function readGatewayTokenEnv(
   return trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
 }
 
-function readGatewayPasswordEnv(
-  env: NodeJS.ProcessEnv,
-  includeLegacyEnv: boolean,
+export function readGatewayPasswordEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
 ): string | undefined {
   const primary = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
   if (primary) {
@@ -95,6 +95,20 @@ function readGatewayPasswordEnv(
     return undefined;
   }
   return trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
+}
+
+export function hasGatewayTokenEnvCandidate(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
+): boolean {
+  return Boolean(readGatewayTokenEnv(env, includeLegacyEnv));
+}
+
+export function hasGatewayPasswordEnvCandidate(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
+): boolean {
+  return Boolean(readGatewayPasswordEnv(env, includeLegacyEnv));
 }
 
 export function resolveGatewayCredentialsFromValues(params: {

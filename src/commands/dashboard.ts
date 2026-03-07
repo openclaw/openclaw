@@ -1,6 +1,7 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { readGatewayTokenEnv } from "../gateway/credentials.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -16,15 +17,6 @@ import {
 type DashboardOptions = {
   noOpen?: boolean;
 };
-
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const primary = env.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (primary) {
-    return primary;
-  }
-  const legacy = env.CLAWDBOT_GATEWAY_TOKEN?.trim();
-  return legacy || undefined;
-}
 
 async function resolveDashboardToken(
   cfg: OpenClawConfig,
