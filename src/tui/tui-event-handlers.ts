@@ -1,5 +1,5 @@
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
