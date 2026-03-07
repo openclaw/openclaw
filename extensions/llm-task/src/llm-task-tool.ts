@@ -1,5 +1,7 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
@@ -26,8 +28,13 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
 
   // Bundled install (built)
   // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const distExtensionApi = "../../../dist/extensionAPI.js";
-  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
+  const distModulePath = path.resolve(import.meta.dirname, "../../../dist/extensionAPI.js");
+  if (!fs.existsSync(distModulePath)) {
+    throw new Error(
+      `Internal error: missing core module at ${distModulePath}. Run \`pnpm build\` or install the official package.`,
+    );
+  }
+  const mod = await import(pathToFileURL(distModulePath).href);
   // oxlint-disable-next-line typescript/no-explicit-any
   const fn = (mod as any).runEmbeddedPiAgent;
   if (typeof fn !== "function") {
@@ -184,7 +191,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       let tmpDir: string | null = null;
       try {
-        tmpDir = await fs.mkdtemp(
+        tmpDir = await fsPromises.mkdtemp(
           path.join(resolvePreferredOpenClawTmpDir(), "openclaw-llm-task-"),
         );
         const sessionId = `llm-task-${Date.now()}`;
@@ -248,7 +255,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       } finally {
         if (tmpDir) {
           try {
-            await fs.rm(tmpDir, { recursive: true, force: true });
+            await fsPromises.rm(tmpDir, { recursive: true, force: true });
           } catch {
             // ignore
           }
