@@ -308,6 +308,43 @@ describe("tts", () => {
       expect(result.overrides.openai?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
     });
+
+    it("recognizes bare [[tts]] tag as a directive trigger", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleanedText.trim()).toBe("Hello  world");
+    });
+
+    it("recognizes bare [[tts]] alongside [[tts:text]] blocks", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts]]\n[[tts:text]]Good morning[[/tts:text]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.ttsText).toBe("Good morning");
+      expect(result.cleanedText).not.toContain("[[tts]]");
+    });
+
+    it("handles case-insensitive bare [[TTS]] tag", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[TTS]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleanedText.trim()).toBe("Hello  world");
+    });
+
+    it("does not match bare [[tts]] when overrides are disabled", () => {
+      const policy = resolveModelOverridePolicy({ enabled: false });
+      const input = "Hello [[tts]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
   });
 
   describe("summarizeText", () => {
