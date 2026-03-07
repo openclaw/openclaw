@@ -643,12 +643,6 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
-
     const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
     const fileEntries = (
       await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
@@ -711,10 +705,11 @@ export abstract class MemoryManagerSyncOps {
       } catch {}
       this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
       if (this.fts.enabled && this.fts.available) {
+        const model = this.provider?.model ?? "fts-only";
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "memory", this.provider.model);
+            .run(stale.path, "memory", model);
         } catch {}
       }
     }
@@ -724,12 +719,6 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
-
     const files = await listSessionFilesForAgent(this.agentId);
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
@@ -818,10 +807,11 @@ export abstract class MemoryManagerSyncOps {
         .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
         .run(stale.path, "sessions");
       if (this.fts.enabled && this.fts.available) {
+        const model = this.provider?.model ?? "fts-only";
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
+            .run(stale.path, "sessions", model);
         } catch {}
       }
     }
