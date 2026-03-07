@@ -2,7 +2,8 @@ import { retryAsync } from "../../infra/retry.js";
 
 export interface LlmRetryConfig {
   /**
-   * Max retry attempts for LLM calls (default: 7).
+   * Maximum total attempts for LLM calls, including the initial call.
+   * For example, 7 means 1 initial attempt plus up to 6 retries (default: 7).
    */
   attempts?: number;
 
@@ -20,6 +21,11 @@ export interface LlmRetryConfig {
    * Jitter factor (0-1) to randomize retry delays (default: 0.1).
    */
   jitter?: number;
+
+  /**
+   * Optional AbortSignal to cancel retry attempts.
+   */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_RETRY_CONFIG = {
@@ -37,8 +43,8 @@ export function isRetryableLlmError(err: unknown): boolean {
     return false;
   }
 
-  const errorObj = err as { status?: number; code?: string; message?: string };
-  const status = errorObj.status;
+  const errorObj = err as { status?: number; statusCode?: number; code?: string; message?: string };
+  const status = errorObj.status ?? errorObj.statusCode;
   const message = errorObj.message ?? "";
 
   // Retry on rate limit (429)
@@ -58,7 +64,7 @@ export function isRetryableLlmError(err: unknown): boolean {
   }
 
   // Retry on timeout errors
-  if (/timeout|timed out|deadline exceeded/i.test(message)) {
+  if (/timeout|timed out|deadline exceeded|deadline_exceeded/i.test(message)) {
     return true;
   }
 
@@ -120,19 +126,25 @@ export function extractRetryAfterMs(err: unknown): number | undefined {
 
   // Check error message for retry delay hints
   const message = errorObj.message ?? "";
-  const retryInMatch = message.match(/retry in ([0-9.]+)(?:ms|seconds?|secs?|s)/i);
+  const retryInMatch = message.match(
+    /retry\s+in\s+([0-9.]+)\s*(ms|milliseconds?|seconds?|secs?|s)/i,
+  );
   if (retryInMatch?.[1]) {
     const value = parseFloat(retryInMatch[1]);
+    const unit = (retryInMatch[2] ?? "s").toLowerCase();
     if (Number.isFinite(value) && value > 0) {
-      return value * 1000;
+      return unit === "ms" || unit.startsWith("millisec") ? value : value * 1000;
     }
   }
 
-  const resetAfterMatch = message.match(/reset after ([0-9.]+)(?:ms|seconds?|secs?|s)/i);
+  const resetAfterMatch = message.match(
+    /reset\s+after\s+([0-9.]+)\s*(ms|milliseconds?|seconds?|secs?|s)/i,
+  );
   if (resetAfterMatch?.[1]) {
     const value = parseFloat(resetAfterMatch[1]);
+    const unit = (resetAfterMatch[2] ?? "s").toLowerCase();
     if (Number.isFinite(value) && value > 0) {
-      return value * 1000;
+      return unit === "ms" || unit.startsWith("millisec") ? value : value * 1000;
     }
   }
 
