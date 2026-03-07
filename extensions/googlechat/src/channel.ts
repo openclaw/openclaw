@@ -1,6 +1,7 @@
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -504,25 +505,25 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ account }) => probeGoogleChat(account),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.credentialSource !== "none",
-      credentialSource: account.credentialSource,
-      audienceType: account.config.audienceType,
-      audience: account.config.audience,
-      webhookPath: account.config.webhookPath,
-      webhookUrl: account.config.webhookUrl,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
-      dmPolicy: account.config.dm?.policy ?? "pairing",
-      probe,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) => {
+      const base = buildComputedAccountStatusSnapshot({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.credentialSource !== "none",
+        runtime,
+        probe,
+      });
+      return {
+        ...base,
+        credentialSource: account.credentialSource,
+        audienceType: account.config.audienceType,
+        audience: account.config.audience,
+        webhookPath: account.config.webhookPath,
+        webhookUrl: account.config.webhookUrl,
+        dmPolicy: account.config.dm?.policy ?? "pairing",
+      };
+    },
   },
   gateway: {
     startAccount: async (ctx) => {
