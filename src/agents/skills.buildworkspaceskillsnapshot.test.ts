@@ -263,6 +263,40 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt).toContain("late-skill");
   });
 
+  it("scans up to maxCandidatesPerRoot before applying skill-load caps", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+
+    for (let i = 0; i < 200; i += 1) {
+      await fs.mkdir(path.join(workspaceDir, "skills", `junk-${String(i).padStart(3, "0")}`), {
+        recursive: true,
+      });
+    }
+
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "valid-skill"),
+      name: "valid-skill",
+      description: "Should be discovered even after many non-skill dirs",
+    });
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 300,
+              maxSkillsLoadedPerSource: 10,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(snapshot.skills.map((s) => s.name)).toContain("valid-skill");
+    expect(snapshot.prompt).toContain("valid-skill");
+  });
+
   it("enforces maxSkillFileBytes for root-level SKILL.md", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const rootSkillDir = await fixtureSuite.createCaseDir("root-skill");

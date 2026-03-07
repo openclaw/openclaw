@@ -259,7 +259,7 @@ function loadSkillEntries(
     const childDirs = listChildDirectories(baseDir);
     const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
 
-    const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
+    const maxCandidates = Math.max(0, limits.maxCandidatesPerRoot);
     const limitedChildren = childDirs.slice().sort().slice(0, maxCandidates);
 
     if (suspicious) {
