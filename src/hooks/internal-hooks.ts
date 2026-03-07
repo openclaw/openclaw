@@ -292,14 +292,12 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   // a chance to mutate event.context, eliminating FIFO ordering issues.
   // Actions execute in push order; errors are caught per-action so one
   // failure doesn't block others.
-  if (event.postHookActions.length > 0) {
-    for (const action of event.postHookActions) {
-      try {
-        await action();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error(`Post-hook action error [${event.type}:${event.action}]: ${message}`);
-      }
+  for (const action of event.postHookActions) {
+    try {
+      await action();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`Post-hook action error [${event.type}:${event.action}]: ${message}`);
     }
   }
 }

@@ -544,12 +544,17 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Only message 2");
   });
 
-  // Helper to drain postHookActions (simulates what triggerInternalHook does)
+  // Helper to drain postHookActions with per-action error isolation,
+  // matching triggerInternalHook's actual drain behaviour.
   async function drainPostHookActions(event: {
     postHookActions: Array<() => Promise<void> | void>;
   }) {
     for (const action of event.postHookActions) {
-      await action();
+      try {
+        await action();
+      } catch {
+        // Per-action isolation — one failure doesn't block others.
+      }
     }
   }
 
