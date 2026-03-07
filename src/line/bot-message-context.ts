@@ -11,6 +11,7 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { normalizeAllowFrom } from "./bot-access.js";
+import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
 import type { ResolvedLineAccount, LineGroupConfig } from "./types.js";
 
 interface MediaRef {
@@ -52,11 +53,12 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
 }
 
 function buildPeerId(source: EventSource): string {
-  if (source.type === "group" && source.groupId) {
-    return source.groupId;
-  }
-  if (source.type === "room" && source.roomId) {
-    return source.roomId;
+  const groupKey = resolveLineGroupHistoryKey({
+    groupId: source.type === "group" ? source.groupId : undefined,
+    roomId: source.type === "room" ? source.roomId : undefined,
+  });
+  if (groupKey) {
+    return groupKey;
   }
   if (source.type === "user" && source.userId) {
     return source.userId;
@@ -214,13 +216,10 @@ function resolveLineGroupSystemPrompt(
   groups: Record<string, LineGroupConfig | undefined> | undefined,
   source: LineSourceInfoWithPeerId,
 ): string | undefined {
-  if (!groups) {
-    return undefined;
-  }
-  const entry =
-    (source.groupId ? (groups[source.groupId] ?? groups[`group:${source.groupId}`]) : undefined) ??
-    (source.roomId ? (groups[source.roomId] ?? groups[`room:${source.roomId}`]) : undefined) ??
-    groups["*"];
+  const entry = resolveLineGroupConfigEntry(groups, {
+    groupId: source.groupId,
+    roomId: source.roomId,
+  });
   return entry?.systemPrompt?.trim() || undefined;
 }
 

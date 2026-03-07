@@ -46,6 +46,7 @@ import {
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 
@@ -224,14 +225,10 @@ function resolveLineGroupConfig(params: {
   groupId?: string;
   roomId?: string;
 }): LineGroupConfig | undefined {
-  const groups = params.config.groups ?? {};
-  if (params.groupId) {
-    return groups[params.groupId] ?? groups[`group:${params.groupId}`] ?? groups["*"];
-  }
-  if (params.roomId) {
-    return groups[params.roomId] ?? groups[`room:${params.roomId}`] ?? groups["*"];
-  }
-  return groups["*"];
+  return resolveLineGroupConfigEntry(params.config.groups, {
+    groupId: params.groupId,
+    roomId: params.roomId,
+  });
 }
 
 async function sendLinePairingReply(params: {
