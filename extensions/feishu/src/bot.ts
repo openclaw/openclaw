@@ -769,9 +769,10 @@ export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
   botName?: string,
+  log?: (...args: any[]) => void,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId, botName);
+  const mentionedBot = checkBotMentioned(event, botOpenId, botName, log);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // In p2p, the bot mention is a pure addressing prefix with no semantic value;
   // strip it so slash commands like @Bot /help still have a leading /.
@@ -890,7 +891,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, log);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
