@@ -9,6 +9,9 @@ export type RuntimeLogger = {
 
 export type PluginRuntimeCore = {
   version: string;
+  agents: {
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+  };
   config: {
     loadConfig: typeof import("../../config/config.js").loadConfig;
     writeConfigFile: typeof import("../../config/config.js").writeConfigFile;

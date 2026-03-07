@@ -260,6 +260,7 @@ type MessageSentEvent = {
   content: string;
   error?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
 };
 
 function hasMediaPayload(payload: ReplyPayload): boolean {
@@ -353,6 +354,7 @@ function createMessageSentEmitter(params: {
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
       messageId: event.messageId,
+      metadata: event.metadata,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
@@ -651,6 +653,7 @@ async function deliverOutboundPayloadsCore(
     };
     return {
       channel: "signal" as const,
+      meta: undefined as Record<string, unknown> | undefined,
       ...(await sendSignal(to, formatted.text, {
         cfg,
         mediaUrl,
@@ -720,6 +723,7 @@ async function deliverOutboundPayloadsCore(
           success: true,
           content: payloadSummary.text,
           messageId: delivery.messageId,
+          metadata: delivery.meta,
         });
         continue;
       }
@@ -735,6 +739,7 @@ async function deliverOutboundPayloadsCore(
           success: results.length > beforeCount,
           content: payloadSummary.text,
           messageId,
+          metadata: results.at(-1)?.meta,
         });
         continue;
       }
@@ -761,12 +766,14 @@ async function deliverOutboundPayloadsCore(
           success: results.length > beforeCount,
           content: payloadSummary.text,
           messageId,
+          metadata: results.at(-1)?.meta,
         });
         continue;
       }
 
       let first = true;
       let lastMessageId: string | undefined;
+      let lastMeta: Record<string, unknown> | undefined;
       for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
@@ -775,16 +782,19 @@ async function deliverOutboundPayloadsCore(
           const delivery = await sendSignalMedia(caption, url);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          lastMeta = delivery.meta;
         } else {
           const delivery = await handler.sendMedia(caption, url, sendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          lastMeta = delivery.meta;
         }
       }
       emitMessageSent({
         success: true,
         content: payloadSummary.text,
         messageId: lastMessageId,
+        metadata: lastMeta,
       });
     } catch (err) {
       emitMessageSent({

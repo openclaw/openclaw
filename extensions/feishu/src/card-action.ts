@@ -24,6 +24,7 @@ export async function handleFeishuCardAction(params: {
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   botOpenId?: string;
+  botOpenIdsByAccount?: Record<string, string | undefined>;
   runtime?: RuntimeEnv;
   accountId?: string;
 }): Promise<void> {
@@ -73,6 +74,7 @@ export async function handleFeishuCardAction(params: {
     cfg,
     event: messageEvent,
     botOpenId: params.botOpenId,
+    botOpenIdsByAccount: params.botOpenIdsByAccount,
     runtime,
     accountId,
   });

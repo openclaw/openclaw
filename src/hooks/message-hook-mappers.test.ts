@@ -137,6 +137,7 @@ describe("message hook mappers", () => {
       content: "reply",
       success: false,
       error: "network error",
+      messageId: "out-1",
     });
     expect(toInternalMessageSentContext(canonical)).toEqual({
       to: "telegram:chat:456",

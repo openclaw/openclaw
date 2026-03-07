@@ -248,6 +248,7 @@ function registerEventHandlers(
         event,
         botOpenId: botOpenIds.get(accountId),
         botName: botNames.get(accountId),
+        botOpenIdsByAccount: Object.fromEntries(botOpenIds),
         runtime,
         chatHistories,
         accountId,
@@ -432,6 +433,7 @@ function registerEventHandlers(
           event: syntheticEvent,
           botOpenId: myBotId,
           botName: botNames.get(accountId),
+          botOpenIdsByAccount: Object.fromEntries(botOpenIds),
           runtime,
           chatHistories,
           accountId,
@@ -468,6 +470,7 @@ function registerEventHandlers(
           cfg,
           event,
           botOpenId: botOpenIds.get(accountId),
+          botOpenIdsByAccount: Object.fromEntries(botOpenIds),
           runtime,
           accountId,
         });
