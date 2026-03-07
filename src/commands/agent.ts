@@ -748,15 +748,6 @@ async function agentCommandInternal(
         throw acpError;
       }
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          endedAt: Date.now(),
-        },
-      });
-
       const finalVisibleText = visibleTextAccumulator.finalize();
       if (finalVisibleText && sessionKey) {
         await appendAssistantMessageToSessionTranscript({
@@ -766,6 +757,16 @@ async function agentCommandInternal(
           storePath,
         });
       }
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: Date.now(),
+        },
+      });
+
       const normalizedFinalPayload = normalizeReplyPayload({
         text: finalVisibleText,
       });
