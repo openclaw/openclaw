@@ -600,15 +600,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=work");
   });
 
-  it("includes reasoning visibility hint", () => {
+  it("includes static reasoning hint without dynamic level", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       reasoningLevel: "off",
     });
 
-    expect(prompt).toContain("Reasoning: off");
+    // Reasoning line must NOT contain the dynamic level value — this preserves prompt cache
+    expect(prompt).not.toContain("Reasoning: off");
+    expect(prompt).not.toContain("Reasoning: on");
     expect(prompt).toContain("/reasoning");
-    expect(prompt).toContain("/status shows Reasoning");
+    expect(prompt).toContain("/status shows current level");
+
+    // Changing reasoningLevel must not change the system prompt
+    const prompt2 = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "on",
+    });
+    expect(prompt).toBe(prompt2);
   });
 
   it("builds runtime line with agent and channel details", () => {
