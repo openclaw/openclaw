@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
@@ -82,6 +83,47 @@ describe("group policy warning builders", () => {
         groupAllowFromPath: "channels.example.groupAllowFrom",
       }),
     ).toHaveLength(1);
+  });
+
+  it("resolves allowlist-provider runtime policy before collecting restrict-senders warnings", () => {
+    expect(
+      collectAllowlistProviderRestrictSendersWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "open" },
+          },
+        },
+        providerConfigPresent: false,
+        configuredGroupPolicy: undefined,
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ).toEqual([]);
+
+    expect(
+      collectAllowlistProviderRestrictSendersWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "open" },
+          },
+        },
+        providerConfigPresent: true,
+        configuredGroupPolicy: "open",
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ).toEqual([
+      buildOpenGroupPolicyRestrictSendersWarning({
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ]);
   });
 
   it("collects route allowlist warning variants", () => {
