@@ -579,6 +579,63 @@ export const registerTelegramNativeCommands = ({
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
+
+          // Handle /getpinned command specially - fetch pinned message from Telegram
+          if (command.name.toLowerCase() === "getpinned") {
+            const { fetchTelegramPinnedMessage } = await import("../channels/telegram/api.js");
+            const token = telegramCfg.botToken;
+            if (!token) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, "Telegram bot token not configured.", {
+                    ...threadParams,
+                  }),
+              });
+              return;
+            }
+            const pinnedMsg = await fetchTelegramPinnedMessage({
+              token,
+              chatId: String(chatId),
+            });
+            if (!pinnedMsg) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, "No pinned message found in this chat.", {
+                    ...threadParams,
+                  }),
+              });
+            } else {
+              const text = pinnedMsg.text ?? pinnedMsg.caption ?? "";
+              const date = new Date(pinnedMsg.date * 1000).toLocaleString();
+              const sender = pinnedMsg.from
+                ? (pinnedMsg.from.first_name ?? pinnedMsg.from.username ?? "Unknown")
+                : "Unknown";
+              const chatTitle = pinnedMsg.chat?.title ?? pinnedMsg.chat?.username ?? "";
+              const header = chatTitle ? `📌 Pinned in ${chatTitle}` : "📌 Pinned Message";
+              const content = [
+                header,
+                `👤 From: ${sender}`,
+                `📅 Date: ${date}`,
+                "",
+                text || "(No text content)",
+              ].join("\n");
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, content, {
+                    ...threadParams,
+                    parse_mode: "Markdown",
+                  }),
+              });
+            }
+            return;
+          }
+
           const commandArgs = commandDefinition
             ? parseCommandArgs(commandDefinition, rawText)
             : rawText
