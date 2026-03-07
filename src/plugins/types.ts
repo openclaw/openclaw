@@ -914,9 +914,11 @@ export type PluginHookBeforeLlmCallResult = {
 };
 
 // after_llm_call hook (modifying — sequential)
-// Runs after the LLM response is received. Plugins can block all tool execution
-// or filter individual tool calls. Decisions are stored as a Promise and
-// enforced deterministically by the tool wrapper before each tool executes.
+// ONLY fires when the LLM response includes tool calls. Text-only responses
+// do not trigger this hook — use before_response_emit for output inspection.
+// Plugins can block all tool execution or filter individual tool calls.
+// Decisions are stored as a Promise and enforced deterministically by the
+// tool wrapper before each tool executes.
 export type PluginHookAfterLlmCallEvent = {
   response: AgentMessage;
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
