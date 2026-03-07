@@ -79,6 +79,14 @@ async function ensureSessionHeader(params: {
   });
 }
 
+async function hardenSessionFilePermissions(sessionFile: string): Promise<void> {
+  try {
+    await fs.promises.chmod(sessionFile, 0o600);
+  } catch {
+    // Best-effort on platforms without POSIX chmod support.
+  }
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
@@ -152,6 +160,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     stopReason: "stop",
     timestamp: Date.now(),
   });
+  await hardenSessionFilePermissions(sessionFile);
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };

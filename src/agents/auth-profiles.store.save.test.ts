@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isSealedJsonText } from "../infra/sealed-json-file.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolveAuthStorePath } from "./auth-profiles/paths.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -57,6 +60,39 @@ describe("saveAuthProfileStore", () => {
       });
 
       expect(parsed.profiles["anthropic:default"]?.key).toBe("sk-anthropic-plain");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("seals auth-profiles.json when OPENCLAW_PASSPHRASE is set", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));
+    try {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-secret",
+          },
+        },
+      };
+
+      await withEnvAsync({ OPENCLAW_PASSPHRASE: "test-passphrase" }, async () => {
+        saveAuthProfileStore(store, agentDir);
+
+        const raw = await fs.readFile(resolveAuthStorePath(agentDir), "utf8");
+        expect(isSealedJsonText(raw)).toBe(true);
+        expect(raw).not.toContain("sk-secret");
+
+        const loaded = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+        expect(loaded.profiles["openai:default"]).toMatchObject({
+          type: "api_key",
+          provider: "openai",
+          key: "sk-secret",
+        });
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

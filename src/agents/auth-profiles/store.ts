@@ -2,7 +2,12 @@ import fs from "node:fs";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { loadJsonFile } from "../../infra/json-file.js";
+import {
+  SealedJsonPassphraseRequiredError,
+  loadSealedJsonFile,
+  saveSealedJsonFile,
+} from "../../infra/sealed-json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
@@ -22,6 +27,19 @@ const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
+}
+
+function loadProtectedAuthJson(pathname: string, label: string): unknown {
+  try {
+    return loadSealedJsonFile(pathname);
+  } catch (err) {
+    if (err instanceof SealedJsonPassphraseRequiredError) {
+      log.warn(`${label} is encrypted but OPENCLAW_PASSPHRASE is not set`, { pathname });
+      return undefined;
+    }
+    log.warn(`failed to load ${label}`, { pathname, err });
+    return undefined;
+  }
 }
 
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
@@ -278,7 +296,7 @@ function mergeAuthProfileStores(
 
 function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   const oauthPath = resolveOAuthPath();
-  const oauthRaw = loadJsonFile(oauthPath);
+  const oauthRaw = loadProtectedAuthJson(oauthPath, "oauth.json");
   if (!oauthRaw || typeof oauthRaw !== "object") {
     return false;
   }
@@ -339,7 +357,7 @@ function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): voi
 }
 
 function loadCoercedStore(authPath: string): AuthProfileStore | null {
-  const raw = loadJsonFile(authPath);
+  const raw = loadProtectedAuthJson(authPath, "auth-profiles.json");
   return coerceAuthStore(raw);
 }
 
@@ -350,7 +368,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
     // Sync from external CLI tools on every load.
     const synced = syncExternalCliCredentials(asStore);
     if (synced) {
-      saveJsonFile(authPath, asStore);
+      saveSealedJsonFile(authPath, asStore);
     }
     return asStore;
   }
@@ -383,7 +401,7 @@ function loadAuthProfileStoreForAgent(
     // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
     if (synced && !readOnly) {
-      saveJsonFile(authPath, asStore);
+      saveSealedJsonFile(authPath, asStore);
     }
     return asStore;
   }
@@ -395,7 +413,7 @@ function loadAuthProfileStoreForAgent(
     const mainStore = coerceAuthStore(mainRaw);
     if (mainStore && Object.keys(mainStore.profiles).length > 0) {
       // Clone main store to subagent directory for auth inheritance
-      saveJsonFile(authPath, mainStore);
+      saveSealedJsonFile(authPath, mainStore);
       log.info("inherited auth-profiles from main agent", { agentDir });
       return mainStore;
     }
@@ -417,7 +435,7 @@ function loadAuthProfileStoreForAgent(
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
-    saveJsonFile(authPath, store);
+    saveSealedJsonFile(authPath, store);
   }
 
   // PR #368: legacy auth.json could get re-migrated from other agent dirs,
@@ -505,5 +523,5 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     lastGood: store.lastGood ?? undefined,
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
-  saveJsonFile(authPath, payload);
+  saveSealedJsonFile(authPath, payload);
 }

@@ -39,12 +39,14 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
+  cleanup?: () => void;
 };
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
+  requestTimeoutMs?: number;
   token?: string;
   deviceToken?: string;
   password?: string;
@@ -442,6 +444,7 @@ export class GatewayClient {
 
   private flushPendingErrors(err: Error) {
     for (const [, p] of this.pending) {
+      p.cleanup?.();
       p.reject(err);
     }
     this.pending.clear();
@@ -501,7 +504,7 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeoutMs?: number },
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -514,14 +517,46 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const rawTimeoutMs = opts?.timeoutMs ?? this.opts.requestTimeoutMs;
+    const timeoutMs =
+      typeof rawTimeoutMs === "number" && Number.isFinite(rawTimeoutMs)
+        ? Math.max(1, Math.min(300_000, rawTimeoutMs))
+        : 30_000;
     const p = new Promise<T>((resolve, reject) => {
+      let timeout: NodeJS.Timeout | null = setTimeout(() => {
+        timeout = null;
+        this.pending.delete(id);
+        reject(new Error(`gateway request timeout for ${method}`));
+      }, timeoutMs);
+      timeout.unref?.();
+      const cleanup = () => {
+        if (!timeout) {
+          return;
+        }
+        clearTimeout(timeout);
+        timeout = null;
+      };
       this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
-        reject,
+        resolve: (value) => {
+          cleanup();
+          resolve(value as T);
+        },
+        reject: (err) => {
+          cleanup();
+          reject(err);
+        },
         expectFinal,
+        cleanup,
       });
     });
-    this.ws.send(JSON.stringify(frame));
+    try {
+      this.ws.send(JSON.stringify(frame));
+    } catch (err) {
+      const pending = this.pending.get(id);
+      pending?.cleanup?.();
+      this.pending.delete(id);
+      throw err;
+    }
     return p;
   }
 }

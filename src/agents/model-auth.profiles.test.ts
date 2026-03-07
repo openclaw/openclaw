@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { saveSealedJsonFile } from "../infra/sealed-json-file.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
@@ -106,6 +107,41 @@ describe("getApiKeyForModel", () => {
               access: oauthFixture.access,
               refresh: oauthFixture.refresh,
             },
+          });
+        },
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates sealed legacy oauth.json into auth-profiles.json", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
+
+    try {
+      const agentDir = path.join(tempDir, "agent");
+      await withEnvAsync(
+        {
+          OPENCLAW_PASSPHRASE: "test-passphrase",
+          OPENCLAW_STATE_DIR: tempDir,
+          OPENCLAW_AGENT_DIR: agentDir,
+          PI_CODING_AGENT_DIR: agentDir,
+        },
+        async () => {
+          const oauthDir = path.join(tempDir, "credentials");
+          await fs.mkdir(oauthDir, { recursive: true, mode: 0o700 });
+          saveSealedJsonFile(path.join(oauthDir, "oauth.json"), {
+            "openai-codex": oauthFixture,
+          });
+
+          const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
+            allowKeychainPrompt: false,
+          });
+          expect(store.profiles["openai-codex:default"]).toMatchObject({
+            type: "oauth",
+            provider: "openai-codex",
+            access: oauthFixture.access,
+            refresh: oauthFixture.refresh,
           });
         },
       );

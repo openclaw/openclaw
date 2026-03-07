@@ -19,11 +19,14 @@ type WsEventHandlers = {
 };
 
 class MockWebSocket {
+  static readonly OPEN = 1;
+  static readonly CLOSED = 3;
   private openHandlers: WsEventHandlers["open"][] = [];
   private messageHandlers: WsEventHandlers["message"][] = [];
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
+  readyState = MockWebSocket.CLOSED;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -59,6 +62,7 @@ class MockWebSocket {
   }
 
   emitOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
     for (const handler of this.openHandlers) {
       handler();
     }
@@ -71,6 +75,7 @@ class MockWebSocket {
   }
 
   emitClose(code: number, reason: string): void {
+    this.readyState = MockWebSocket.CLOSED;
     for (const handler of this.closeHandlers) {
       handler(code, Buffer.from(reason));
     }
@@ -437,5 +442,31 @@ describe("GatewayClient connect auth payload", () => {
       deviceToken: "explicit-device-token",
     });
     client.stop();
+  });
+
+  it("times out pending requests and cleans them up", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        requestTimeoutMs: 25,
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+
+      const pending = client.request("health.check");
+      const observed = pending.catch((err) => err);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(observed).resolves.toMatchObject({
+        message: "gateway request timeout for health.check",
+      });
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
