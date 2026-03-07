@@ -620,6 +620,7 @@ If you plan to install packages in `setupCommand`, note:
           capDrop: ["ALL"],
           env: { LANG: "C.UTF-8" },
           setupCommand: "apt-get update && apt-get install -y git curl jq",
+          // Explicit example value; unset by default unless you configure it.
           pidsLimit: 256,
           memory: "1g",
           memorySwap: "2g",
@@ -666,6 +667,7 @@ Hardening knobs live under `agents.defaults.sandbox.docker`:
 `network`, `user`, `pidsLimit`, `memory`, `memorySwap`, `cpus`, `ulimits`,
 `seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`,
 `dangerouslyAllowContainerNamespaceJoin` (break-glass only).
+`pidsLimit` has no built-in default today, so set it explicitly if you want a process cap.
 
 Multi-agent: override `agents.defaults.sandbox.{docker,browser,prune}.*` per agent via `agents.list[].sandbox.{docker,browser,prune}.*`
 (ignored when `agents.defaults.sandbox.scope` / `agents.list[].sandbox.scope` is `"shared"`).

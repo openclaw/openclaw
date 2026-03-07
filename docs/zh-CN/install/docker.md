@@ -356,6 +356,7 @@ pnpm test:docker:qr
           capDrop: ["ALL"],
           env: { LANG: "C.UTF-8" },
           setupCommand: "apt-get update && apt-get install -y git curl jq",
+          // 显式示例值；如果未配置，当前不会自动提供默认值。
           pidsLimit: 256,
           memory: "1g",
           memorySwap: "2g",
@@ -398,7 +399,7 @@ pnpm test:docker:qr
 }
 ```
 
-加固选项位于 `agents.defaults.sandbox.docker` 下：`network`、`user`、`pidsLimit`、`memory`、`memorySwap`、`cpus`、`ulimits`、`seccompProfile`、`apparmorProfile`、`dns`、`extraHosts`。
+加固选项位于 `agents.defaults.sandbox.docker` 下：`network`、`user`、`pidsLimit`、`memory`、`memorySwap`、`cpus`、`ulimits`、`seccompProfile`、`apparmorProfile`、`dns`、`extraHosts`。当前 `pidsLimit` 没有内置默认值，如果你需要进程数上限，请显式配置。
 
 多智能体：通过 `agents.list[].sandbox.{docker,browser,prune}.*` 按智能体覆盖 `agents.defaults.sandbox.{docker,browser,prune}.*`（当 `agents.defaults.sandbox.scope` / `agents.list[].sandbox.scope` 是 `"shared"` 时忽略）。
 

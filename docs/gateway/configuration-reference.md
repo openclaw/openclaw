@@ -1130,6 +1130,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
           capDrop: ["ALL"],
           env: { LANG: "C.UTF-8" },
           setupCommand: "apt-get update && apt-get install -y git curl jq",
+          // Explicit example value; unset by default unless you configure it.
           pidsLimit: 256,
           memory: "1g",
           memorySwap: "2g",
