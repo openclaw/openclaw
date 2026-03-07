@@ -58,6 +58,12 @@ US tickers: `AAPL`, `NVDA`, `TSLA`, `MSFT` (no suffix, no exchange code)
 | massive  | supplementary                  | —                  |
 | yfinance | price + fundamentals + options | free, ~15min delay |
 
+> **⚠️ US 股票 Provider 注意事项:**
+>
+> - `price/historical` 默认 tushare provider，对 US 股票返回 500；**必须添加 `provider="yfinance"`**
+> - `fundamental/ratios` 仅 tushare provider 可用，对 US 股票返回 204；改用 `fundamental/metrics` (polygon) 或 `us/income` 手动计算
+> - `fundamental/balance` 路径正确（非 `us/balance`），需确认 provider 支持
+
 ## Analysis Patterns
 
 ### Earnings Analysis Tree (US Core)

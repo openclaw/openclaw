@@ -92,7 +92,8 @@ user question about A-share stock
 ### Valuation Tree (A-share adapted)
 
 ```
-Step 1: fin_stock(fundamental/metrics) → pe_deducted (not headline PE)
+Step 1: fin_stock(fundamental/ratios) → dt_eps (扣非EPS)
+  → PE_deducted = price / dt_eps (手动计算，fundamental/metrics 对 A 股返回 204)
   ├─ pe_deducted < sector 50th pctl
   │   ├─ ROE>15% + OCF/NI>0.8 → undervalued candidate
   │   └─ ROE<8% or OCF/NI<0.5 → value trap warning
@@ -213,11 +214,12 @@ Three-signal resonance model:
 Signal 1: fin_stock(moneyflow/individual, symbol=X)
   → main force net inflow/outflow (institutional flow on single stock)
 
-Signal 2: fin_market(market/top_list, trade_date=D) + fin_market(market/top_inst)
+Signal 2: fin_market(market/top_list, date=YYYY-MM-DD) + fin_market(market/top_inst)
   → dragon-tiger list: which institutional seats are buying/selling
   → only triggered when stock hits unusual move thresholds
+  → ⚠️ 这些端点使用 `date` 参数（非 `trade_date`）
 
-Signal 3: fin_market(flow/hsgt_top10, trade_date=D)
+Signal 3: fin_market(flow/hsgt_top10, date=YYYY-MM-DD)
   → northbound (foreign) holdings change on target stock
 
 Cross-validation matrix:
@@ -304,5 +306,5 @@ Step 3: Cross-validate with capital flow
 ## References
 
 - Pledge tiers, lock-up rules, CAS vs IFRS differences, registration reform impacts — see Chip Analysis Tree and Policy-Driven Analysis Tree above
-- DCF/DDM/PE Band methodology — see Valuation Tree above; use `fundamental/metrics` + `fundamental/ratios` for inputs
+- DCF/DDM/PE Band methodology — see Valuation Tree above; use `fundamental/ratios` (dt_eps 计算 PE_deducted) for inputs
 - DuPont decomposition, industry benchmarks — derive from `fundamental/ratios` (ROE breakdown) + `fin_index(constituents)` for peer comparison

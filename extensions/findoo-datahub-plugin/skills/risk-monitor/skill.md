@@ -1,6 +1,6 @@
 ---
 name: fin-risk-monitor
-description: "Risk monitoring dashboard — market regime detection, rate risk (Shibor/treasury spread), leverage risk (margin), foreign capital flows, macro warning signals. Orchestrates fin_data_regime + fin_macro + fin_market + fin_index. Use when: user asks about market risk assessment, stress signals, risk dashboard, or hedging recommendations. NOT for: trade decisions (use fin-a-share), macro analysis (use fin-macro)."
+description: "Risk monitoring dashboard — market regime detection, rate risk (Shibor/treasury spread), leverage risk (margin), foreign capital flows, macro warning signals. Orchestrates fin_data_regime + fin_macro + fin_market + fin_index. Use when: user asks about market risk assessment, stress signals, risk dashboard, or hedging recommendations. NOT for: trade decisions (use fin-a-share), macro cycle forecasting or positioning (use fin-macro)."
 metadata: { "openclaw": { "emoji": "🚨", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 

@@ -43,7 +43,7 @@ Use **fin_macro** for macroeconomic indicators and interest rate data via DataHu
 | `shibor`       | Shanghai Interbank Rate    | Daily          |
 | `shibor_quote` | Shibor bank-level quotes   | Daily          |
 | `shibor_lpr`   | Loan Prime Rate            | Monthly (20th) |
-| `libor`        | London Interbank Rate      | Daily          |
+| `libor`        | London Interbank Rate ⚠️   | Daily          |
 | `hibor`        | Hong Kong Interbank Rate   | Daily          |
 | `treasury_cn`  | China treasury yields      | Daily          |
 | `treasury_us`  | US treasury yields         | Daily          |
@@ -76,7 +76,7 @@ Use **fin_macro** for macroeconomic indicators and interest rate data via DataHu
 
 `fin_macro(endpoint="fixedincome/rate/shibor")` 等 4 个端点是 `shibor`/`shibor_lpr`/`libor`/`hibor` 的别名路径，返回相同数据。
 可用端点: `fixedincome/rate/shibor`, `fixedincome/rate/shibor_lpr`, `fixedincome/rate/libor`, `fixedincome/rate/hibor`。
-注意: LIBOR 于 2023 年终止，数据截止 2020-06-24; HIBOR 固收路径同样停在 2020-06。`economy/hibor` 可能有更新数据。
+⚠️ **LIBOR 已于 2023 年正式终止**，DataHub 数据截止 2020-06-24。USD 浮动利率基准已迁移至 SOFR，DataHub 暂无 SOFR 端点。替代方案: 使用 `treasury_us` 短端 (2Y) 作为 USD 利率代理。HIBOR 固收路径同样停在 2020-06，使用 `economy/hibor` 获取更新数据。
 
 ## Analysis Patterns
 
@@ -127,7 +127,14 @@ Auxiliary signals:
 
 ### CN-US Spread Trade
 
-`treasury_cn`(limit=60) + `treasury_us`(limit=60) + `currency/price/historical`(symbol="USDCNH", limit=60)
+`treasury_cn`(limit=60) + `treasury_us`(limit=60) + `currency/price/historical`(symbol="USDCNH", limit=60, provider="polygon")
+
+> **字段名注意:**
+>
+> - `treasury_cn` 返回: `yield_value` (收益率) + `curve_term` (期限: 1Y/2Y/5Y/10Y/30Y)
+> - `treasury_us` 返回: `y5`/`y7`/`y10`/`y20`/`y30` (各期限收益率，非通用 `yield` 字段)
+> - ⚠️ `treasury_us` 数据源待验证 — 部分返回值与中国国债收益率相似 (10Y≈1.80%)，跨境利差计算前请人工校验
+> - `currency/price/historical` 需添加 `provider="polygon"` 以获取 FX 数据
 
 | 10Y Spread (CN-US) | FX impact        | Positioning                                      |
 | ------------------ | ---------------- | ------------------------------------------------ |

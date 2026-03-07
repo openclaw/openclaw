@@ -137,7 +137,7 @@ const findooDatahubPlugin = {
         name: "fin_stock",
         label: "Stock Data (A/HK/US)",
         description:
-          "Fetch A-share, HK, or US equity data — quotes, historical prices, financials, ratios, money flow, holders, dividends, shareholder trades, repurchase, pledge, earnings forecast.",
+          "Fetch A-share, HK, or US equity data — quotes, historical prices, financials (income/balance/cash/ratios/metrics + VIP variants), ownership (top10/shareholder_trade/repurchase/pledge), money flow, concept lists, calendar (earnings/ipo), discovery (gainers/losers), HK subset (hk/*), US subset (us/*). Notes: estimates/consensus is yfinance-only (US/HK, rate-limited, NOT for A-share — use fundamental/earnings_forecast instead). fundamental/stock_factor returns pre-computed MACD/KDJ/RSI/BOLL/CCI. market/stock_limit requires symbol param (no batch scan by date).",
         parameters: Type.Object({
           symbol: Type.String({
             description: "Stock code. A-shares: 600519.SH; HK: 00700.HK; US: AAPL",
@@ -256,7 +256,7 @@ const findooDatahubPlugin = {
         name: "fin_index",
         label: "Index / ETF / Fund",
         description:
-          "Query index constituents, valuations, ETF prices/NAV, fund manager/portfolio.",
+          "Query index data — constituents, daily valuations (PE/PB via daily_basic), thematic/concept indices (ths_index/ths_daily/ths_member), classification, global indices. Use constituents (not members) for index composition.",
         parameters: Type.Object({
           symbol: Type.Optional(
             Type.String({ description: "Index/ETF/fund code. Index: 000300.SH; ETF: 510050.SH" }),
@@ -306,7 +306,7 @@ const findooDatahubPlugin = {
         name: "fin_macro",
         label: "Macro / Rates / FX",
         description:
-          "China macro (GDP/CPI/PPI/PMI/M2), interest rates (Shibor/LPR/Libor/Hibor), treasury yields, FX rates, WorldBank data, economic calendar.",
+          "China macro (GDP/CPI/PPI/PMI/M2/social financing), interest rates (Shibor/LPR/Libor/Hibor), CN/US treasury yields, FX rates (currency/*), WorldBank data (worldbank/*), economic calendar, fixedincome rate aliases (fixedincome/rate/*). Notes: LIBOR terminated 2023 (data stops 2020-06). fixedincome/rate/* are aliases for shibor/libor/hibor. worldbank/country provides country classification for EM vs DM analysis.",
         parameters: Type.Object({
           endpoint: Type.Unsafe<string>({
             type: "string",
@@ -386,7 +386,7 @@ const findooDatahubPlugin = {
         name: "fin_derivatives",
         label: "Futures / Options / CB",
         description:
-          "Futures (daily, holdings, settlement, warehouse, mapping), options (basic, daily, chains), convertible bonds.",
+          "Futures (daily OHLCV, holdings/OI, settlement, warehouse receipts, contract mapping, term structure curve), options (basic info, daily, chains with Greeks/IV), convertible bonds (basic, daily). Use futures/curve for contango/backwardation analysis.",
         parameters: Type.Object({
           symbol: Type.Optional(
             Type.String({ description: "Contract code, e.g. IF2501.CFX, 113xxx.SH (CB)" }),
@@ -439,7 +439,7 @@ const findooDatahubPlugin = {
         name: "fin_crypto",
         label: "Crypto & DeFi",
         description:
-          "Crypto market data (tickers, orderbook, funding rates) via CEX, DeFi (TVL, yields, stablecoins, fees, DEX volumes) via DefiLlama, market cap rankings via CoinGecko.",
+          "Crypto market data (ticker/orderbook/trades/funding_rate) via CEX, DeFi (protocols/TVL/yields/stablecoins/fees/dex_volumes/bridges/chains) via DefiLlama, market metrics (coin/market/info/categories/trending/global_stats) via CoinGecko. price/historical for crypto OHLCV, search for symbol lookup.",
         parameters: Type.Object({
           endpoint: Type.Unsafe<string>({
             type: "string",
@@ -473,12 +473,32 @@ const findooDatahubPlugin = {
           symbol: Type.Optional(
             Type.String({ description: "Coin ID, trading pair, or protocol slug" }),
           ),
+          start_date: Type.Optional(
+            Type.String({ description: "Start date for coin/historical (YYYY-MM-DD)" }),
+          ),
+          end_date: Type.Optional(
+            Type.String({ description: "End date for coin/historical (YYYY-MM-DD)" }),
+          ),
           limit: Type.Optional(Type.Number()),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
             const endpoint = String(params.endpoint ?? "coin/market");
             const qp = buildParams(params);
+            // Endpoint-specific param mapping for crypto APIs
+            if (qp.symbol) {
+              const coinIdEndpoints = ["coin/historical", "coin/info"];
+              if (coinIdEndpoints.includes(endpoint)) {
+                qp.coin_id = qp.symbol;
+                delete qp.symbol;
+              } else if (endpoint === "defi/protocol_tvl") {
+                qp.protocol = qp.symbol;
+                delete qp.symbol;
+              } else if (endpoint === "defi/coin_prices") {
+                qp.coins = qp.symbol;
+                delete qp.symbol;
+              }
+            }
             const results = await client.crypto(endpoint, qp);
             return json({
               success: true,
@@ -500,7 +520,7 @@ const findooDatahubPlugin = {
         name: "fin_market",
         label: "Market Radar",
         description:
-          "Market monitoring — dragon-tiger list, limit-up/down stats, block trades, sector money flow, margin trading, Stock Connect (north+south), IPO calendar.",
+          "A-share market monitoring — dragon-tiger list (top_list/top_inst), limit-up/down stats (limit_list), block trades, sector money flow (moneyflow/industry), margin (summary/detail/trading), Stock Connect northbound (hsgt_flow/hsgt_top10) and southbound (ggt_daily/ggt_monthly), market snapshots, discovery (gainers/losers/active/new_share). Notes: flow/hsgt_top10 requires 'date' param (NOT trade_date). flow/hs_const requires 'hs_type' param (SH or SZ). market/stock_limit requires 'symbol' (no date-only scan). market_snapshots returns full market snapshot (12000+ records, no params needed).",
         parameters: Type.Object({
           endpoint: Type.Unsafe<string>({
             type: "string",
@@ -552,6 +572,17 @@ const findooDatahubPlugin = {
           try {
             const endpoint = String(params.endpoint ?? "market/top_list");
             const qp = buildParams(params);
+            // Auto-alias: trade_date→date for endpoints that use 'date' param
+            const dateEndpoints = [
+              "market/top_list",
+              "market/top_inst",
+              "market/limit_list",
+              "flow/hsgt_top10",
+            ];
+            if (qp.trade_date && !qp.date && dateEndpoints.includes(endpoint)) {
+              qp.date = qp.trade_date;
+              delete qp.trade_date;
+            }
             const results = await client.equity(endpoint, qp);
             return json({
               success: true,
@@ -573,7 +604,7 @@ const findooDatahubPlugin = {
         name: "fin_query",
         label: "Raw DataHub Query",
         description:
-          "Direct passthrough to any of 172 DataHub endpoints by path. Use when other tools don't cover the specific data.",
+          "Direct passthrough to any of 168 DataHub endpoints by path. Use when other tools don't cover the specific data. Accepts arbitrary query params. Example paths: equity/fundamental/income, crypto/defi/protocols, economy/cpi, fixedincome/rate/shibor.",
         parameters: Type.Object({
           path: Type.String({
             description:
@@ -766,7 +797,7 @@ const findooDatahubPlugin = {
         name: "fin_etf",
         label: "ETF & Fund",
         description:
-          "ETF and fund data — NAV, info, historical prices, fund portfolio holdings, manager track record, dividends, share changes, adjusted NAV, search.",
+          "ETF and fund data — NAV history, fund info (type/size/fees), historical prices, portfolio holdings (top 10, quarterly), manager track record, dividends, share changes (subscription/redemption trends), adjusted NAV (dividend-reinvested), search. Use fund/manager with a known fund code to find manager info; manager param available for search.",
         parameters: Type.Object({
           symbol: Type.Optional(
             Type.String({
@@ -822,7 +853,7 @@ const findooDatahubPlugin = {
         name: "fin_currency",
         label: "FX & News",
         description:
-          "Foreign exchange rates (historical, search, snapshots) and company news. Covers major pairs like USDCNH, EURUSD, USDJPY.",
+          "Foreign exchange rates (price/historical, search, snapshots) and company news (news/company). Major pairs: USDCNH, EURUSD, USDJPY. Use search to find available currency pair symbols.",
         parameters: Type.Object({
           endpoint: Type.Unsafe<string>({
             type: "string",
