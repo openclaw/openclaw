@@ -28,6 +28,7 @@ export {
   promptSingleChannelSecretInput,
 } from "../channels/plugins/onboarding/helpers.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";

@@ -45,6 +45,7 @@ export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
 export type {
   BaseProbeResult,
