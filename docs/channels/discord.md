@@ -945,6 +945,7 @@ Default slash command settings:
     Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
 
     - env-first local auth (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` then `gateway.auth.*`)
+    - in local mode, `gateway.remote.*` can be used as fallback when `gateway.auth.*` is unset
     - remote-mode support via `gateway.remote.*` when applicable
     - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
 

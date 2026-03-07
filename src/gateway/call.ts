@@ -584,16 +584,22 @@ async function resolvePreferredGatewaySecretInputs(params: {
     if (nextConfig === params.config) {
       nextConfig = structuredClone(params.config);
     }
-    const resolvedValue = await resolveConfiguredGatewaySecretInput({
-      config: nextConfig,
-      path,
-      env: params.env,
-    });
-    assignResolvedGatewaySecretInput({
-      config: nextConfig,
-      path,
-      value: resolvedValue,
-    });
+    try {
+      const resolvedValue = await resolveConfiguredGatewaySecretInput({
+        config: nextConfig,
+        path,
+        env: params.env,
+      });
+      assignResolvedGatewaySecretInput({
+        config: nextConfig,
+        path,
+        value: resolvedValue,
+      });
+    } catch {
+      // Keep scanning candidate paths so unresolved higher-priority refs do not
+      // prevent valid fallback refs from being considered.
+      continue;
+    }
   }
   return nextConfig;
 }

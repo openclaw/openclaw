@@ -64,6 +64,7 @@ Options:
 
 - `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` are checked first.
 - Then local config fallback: `gateway.auth.token` / `gateway.auth.password`.
+- In local mode, `gateway.remote.token` / `gateway.remote.password` are also eligible as fallback when `gateway.auth.*` is unset.
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Legacy `CLAWDBOT_GATEWAY_*` env vars are ignored for node host auth resolution.
 
