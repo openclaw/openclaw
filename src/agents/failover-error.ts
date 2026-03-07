@@ -148,12 +148,21 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
+export function resolveFailoverReasonFromError(
+  err: unknown,
+  context?: { provider?: string },
+): FailoverReason | null {
   if (isFailoverError(err)) {
     return err.reason;
   }
 
   const status = getStatusCode(err);
+
+  // Anthropic Claude Max plan uses HTTP 402 for rate limits, not billing.
+  if (status === 402 && context?.provider?.toLowerCase().trim() === "anthropic") {
+    return "rate_limit";
+  }
+
   const message = getErrorMessage(err);
   const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
   if (statusReason) {
@@ -185,7 +194,10 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   return classifyFailoverReason(message);
 }
 
-export function describeFailoverError(err: unknown): {
+export function describeFailoverError(
+  err: unknown,
+  context?: { provider?: string },
+): {
   message: string;
   reason?: FailoverReason;
   status?: number;
@@ -202,7 +214,7 @@ export function describeFailoverError(err: unknown): {
   const message = getErrorMessage(err) || String(err);
   return {
     message,
-    reason: resolveFailoverReasonFromError(err) ?? undefined,
+    reason: resolveFailoverReasonFromError(err, context) ?? undefined,
     status: getStatusCode(err),
     code: getErrorCode(err),
   };
@@ -219,7 +231,7 @@ export function coerceToFailoverError(
   if (isFailoverError(err)) {
     return err;
   }
-  const reason = resolveFailoverReasonFromError(err);
+  const reason = resolveFailoverReasonFromError(err, context);
   if (!reason) {
     return null;
   }
