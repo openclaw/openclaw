@@ -253,7 +253,7 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
+      ? "Add a message..."
       : "Message (↩ to send, Shift+↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
 
