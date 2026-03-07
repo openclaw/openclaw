@@ -18,6 +18,33 @@ export type ChatEvent = {
   errorMessage?: string;
 };
 
+export type PlanInputQuestion = {
+  header: string;
+  id: string;
+  question: string;
+  options: Array<{
+    label: string;
+    description: string;
+  }>;
+};
+
+export type PlanInputRequestedEvent = {
+  id: string;
+  runId: string;
+  sessionKey: string;
+  questions: PlanInputQuestion[];
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+export type PlanInputResolvedEvent = {
+  id: string;
+  runId: string;
+  sessionKey: string;
+  status: "answered" | "cancelled" | "expired";
+  ts: number;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;
@@ -85,6 +112,7 @@ export type GatewayStatusSummary = {
 };
 
 export type TuiStateAccess = {
+  interactionMode: "chat" | "plan";
   agentDefaultId: string;
   sessionMainKey: string;
   sessionScope: SessionScope;

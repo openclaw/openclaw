@@ -1,0 +1,120 @@
+{
+  "id": "comfyui",
+  "name": "ComfyUI",
+  "description": "Local ComfyUI bridge tool for image generation with optional control stack.",
+  "uiHints": {
+    "bridgeUrl": {
+      "label": "Bridge URL",
+      "help": "Loopback URL for the comfy_bridge.py sidecar",
+      "placeholder": "http://127.0.0.1:8787"
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)",
+      "help": "Default timeout for generation requests",
+      "advanced": true,
+      "placeholder": "180000"
+    },
+    "allowedModels": {
+      "label": "Allowed Models",
+      "help": "Optional allowlist for model overrides"
+    },
+    "outputDir": {
+      "label": "Output Directory",
+      "help": "Optional generated image directory allowlist",
+      "advanced": true
+    },
+    "allowedPathRoots": {
+      "label": "Allowed Path Roots",
+      "help": "Absolute root paths allowed for input/workflow files",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "bridgeUrl": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1000
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "allowedModels": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "outputDir": {
+        "type": "string"
+      },
+      "allowedPathRoots": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "allowedControlTypes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "allowedLoras": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "maxWidth": {
+        "type": "number",
+        "minimum": 64,
+        "maximum": 4096
+      },
+      "maxHeight": {
+        "type": "number",
+        "minimum": 64,
+        "maximum": 4096
+      },
+      "maxControls": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 8
+      },
+      "maxLoras": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 8
+      },
+      "defaultWidth": {
+        "type": "number",
+        "minimum": 64,
+        "maximum": 4096
+      },
+      "defaultHeight": {
+        "type": "number",
+        "minimum": 64,
+        "maximum": 4096
+      },
+      "defaultSteps": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 200
+      },
+      "defaultGuidance": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 30
+      },
+      "defaultDenoise": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      }
+    }
+  }
+}

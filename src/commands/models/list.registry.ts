@@ -9,6 +9,7 @@ import {
 } from "../../agents/model-auth.js";
 import {
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
+  OPENAI_CODEX_FORWARD_COMPAT_CANDIDATES,
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
@@ -105,7 +106,7 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
   await ensurePiAuthJsonFromAuthProfiles(agentDir);
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const appended = appendAntigravityForwardCompatModels(registry.getAll(), registry);
+  const appended = appendForwardCompatModels(registry.getAll(), registry);
   const models = appended.models;
   const synthesizedForwardCompat = appended.synthesizedForwardCompat;
   let availableKeys: Set<string> | undefined;
@@ -139,29 +140,48 @@ type SynthesizedForwardCompat = {
   templatePrefixes: readonly string[];
 };
 
-function appendAntigravityForwardCompatModels(
+function appendForwardCompatModels(
   models: Model<Api>[],
   modelRegistry: ModelRegistry,
 ): { models: Model<Api>[]; synthesizedForwardCompat: SynthesizedForwardCompat[] } {
   const nextModels = [...models];
   const synthesizedForwardCompat: SynthesizedForwardCompat[] = [];
 
-  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
-    const key = modelKey("google-antigravity", candidate.id);
+  const addCandidate = (params: {
+    provider: string;
+    id: string;
+    templatePrefixes: readonly string[];
+  }) => {
+    const key = modelKey(params.provider, params.id);
     const hasForwardCompat = nextModels.some((model) => modelKey(model.provider, model.id) === key);
     if (hasForwardCompat) {
-      continue;
+      return;
     }
 
-    const fallback = resolveForwardCompatModel("google-antigravity", candidate.id, modelRegistry);
+    const fallback = resolveForwardCompatModel(params.provider, params.id, modelRegistry);
     if (!fallback) {
-      continue;
+      return;
     }
 
     nextModels.push(fallback);
     synthesizedForwardCompat.push({
       key,
+      templatePrefixes: params.templatePrefixes,
+    });
+  };
+
+  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
+    addCandidate({
+      provider: "google-antigravity",
+      id: candidate.id,
       templatePrefixes: candidate.templatePrefixes,
+    });
+  }
+  for (const candidate of OPENAI_CODEX_FORWARD_COMPAT_CANDIDATES) {
+    addCandidate({
+      provider: "openai-codex",
+      id: candidate.id,
+      templatePrefixes: candidate.templateIds.map((templateId) => `openai-codex/${templateId}`),
     });
   }
 

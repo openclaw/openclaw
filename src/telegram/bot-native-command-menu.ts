@@ -73,12 +73,56 @@ export function buildCappedTelegramMenuCommands(params: {
   return { commandsToRegister, totalCommands, maxCommands, overflowCount };
 }
 
+const TELEGRAM_DESCRIPTION_MAX_LENGTH = 256;
+
+function sanitizeTelegramMenuCommands(
+  commands: TelegramMenuCommand[],
+  runtime: RuntimeEnv,
+): TelegramMenuCommand[] {
+  const sanitized: TelegramMenuCommand[] = [];
+  for (const cmd of commands) {
+    if (!TELEGRAM_COMMAND_NAME_PATTERN.test(cmd.command)) {
+      runtime.error?.(
+        `Telegram command "/${cmd.command}" has an invalid name (must be a-z, 0-9, underscore; 1-32 chars). Skipping.`,
+      );
+      continue;
+    }
+    const description = cmd.description?.trim().slice(0, TELEGRAM_DESCRIPTION_MAX_LENGTH);
+    if (!description) {
+      runtime.error?.(
+        `Telegram command "/${cmd.command}" has an empty description. Skipping.`,
+      );
+      continue;
+    }
+    sanitized.push({ command: cmd.command, description });
+  }
+  return sanitized;
+}
+
+async function identifyInvalidCommands(
+  bot: Bot,
+  commands: TelegramMenuCommand[],
+): Promise<TelegramMenuCommand[]> {
+  const invalid: TelegramMenuCommand[] = [];
+  for (const cmd of commands) {
+    try {
+      await bot.api.setMyCommands([cmd]);
+    } catch {
+      invalid.push(cmd);
+    }
+  }
+  // Clean up after probing
+  await bot.api.deleteMyCommands().catch(() => {});
+  return invalid;
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
 }): void {
-  const { bot, runtime, commandsToRegister } = params;
+  const { bot, runtime } = params;
+  const commandsToRegister = sanitizeTelegramMenuCommands(params.commandsToRegister, runtime);
   const sync = async () => {
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
     if (typeof bot.api.deleteMyCommands === "function") {
@@ -93,11 +137,35 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
-    await withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
-    });
+    try {
+      await bot.api.setMyCommands(commandsToRegister);
+    } catch (err) {
+      const errText = String((err as Error).message ?? err);
+      if (errText.includes("BOT_COMMAND_INVALID")) {
+        runtime.error?.(
+          `setMyCommands failed (BOT_COMMAND_INVALID) for ${commandsToRegister.length} commands. Identifying invalid entries…`,
+        );
+        const invalid = await identifyInvalidCommands(bot, commandsToRegister);
+        if (invalid.length > 0) {
+          for (const cmd of invalid) {
+            runtime.error?.(
+              `Invalid Telegram command: /${cmd.command} — description: "${cmd.description}"`,
+            );
+          }
+          // Retry without invalid commands
+          const valid = commandsToRegister.filter((cmd) => !invalid.includes(cmd));
+          if (valid.length > 0) {
+            await bot.api.setMyCommands(valid).catch(() => {});
+          }
+        } else {
+          runtime.error?.(
+            `setMyCommands failed but all commands pass individually. Dumping: ${JSON.stringify(commandsToRegister.map((c) => c.command))}`,
+          );
+        }
+      } else {
+        throw err;
+      }
+    }
   };
 
   void sync().catch((err) => {

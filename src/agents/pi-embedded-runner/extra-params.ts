@@ -162,6 +162,56 @@ function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): 
   };
 }
 
+/**
+ * Clamp max_tokens / max_completion_tokens in the outgoing payload to the
+ * space that is actually available in the context window.
+ *
+ * vLLM (and some other providers) return a hard 400 error when
+ * max_tokens > contextWindow - inputTokens.  This wrapper estimates the
+ * input-token count from the serialised messages in the payload (using a
+ * conservative 3 chars-per-token ratio) and silently lowers the field so
+ * the request never exceeds the available budget.
+ *
+ * Applied unconditionally so it also covers the case where the model's
+ * built-in maxTokens (used by pi-ai as the default when no explicit
+ * max_tokens option is provided) is too large for the current prompt.
+ */
+function createContextClampingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const ctxWindow = model.contextWindow;
+    if (!ctxWindow || ctxWindow <= 0) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as Record<string, unknown>;
+          for (const field of ["max_tokens", "max_completion_tokens"]) {
+            if (typeof p[field] === "number") {
+                  // Estimate from the full payload (messages + tools + all params).
+              // Tool schemas use verbose JSON; empirical ratio is ~4 chars/token.
+              // Use 4.5 to stay slightly conservative without being extreme.
+              const roughInputTokens = Math.ceil(JSON.stringify(p).length / 4.5);
+              const safetyBuffer = 50;
+              const available = Math.max(1, ctxWindow - roughInputTokens - safetyBuffer);
+              if ((p[field] as number) > available) {
+                log.debug(
+                  `[context-clamp] lowering ${field} from ${p[field]} to ${available} (ctxWindow=${ctxWindow}, roughInput=${roughInputTokens})`,
+                );
+                p[field] = available;
+              }
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -313,6 +363,45 @@ function createZaiToolStreamWrapper(
   };
 }
 
+function isDirectOpenAIProvider(provider: string): boolean {
+  return provider === "openai" || provider === "openai-codex";
+}
+
+/**
+ * Rewrite `role: "developer"` → `role: "system"` in outgoing payloads.
+ *
+ * pi-ai sends `role: "developer"` for the system prompt when a model has
+ * `reasoning: true`.  Only OpenAI's own API actually supports this role;
+ * vLLM and other OpenAI-compatible providers reject it with
+ * "400 Unexpected message role".
+ */
+function createDeveloperRoleFixupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const msgs = (payload as Record<string, unknown>).messages;
+          if (Array.isArray(msgs)) {
+            for (const msg of msgs) {
+              if (
+                msg &&
+                typeof msg === "object" &&
+                (msg as Record<string, unknown>).role === "developer"
+              ) {
+                (msg as Record<string, unknown>).role = "system";
+              }
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -372,4 +461,15 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+
+  // Rewrite role: "developer" → "system" for providers that don't support it.
+  // Only actual OpenAI endpoints recognize the developer role; vLLM and other
+  // OpenAI-compatible providers reject it with "400 Unexpected message role".
+  if (!isDirectOpenAIProvider(provider)) {
+    agent.streamFn = createDeveloperRoleFixupWrapper(agent.streamFn);
+  }
+
+  // Always clamp max_tokens to available context window space so providers
+  // like vLLM that hard-reject oversized values don't silently break the bot.
+  agent.streamFn = createContextClampingWrapper(agent.streamFn);
 }

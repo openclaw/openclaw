@@ -39,6 +39,7 @@ describe("tui session actions", () => {
       autoMessageSent: false,
       toolsExpanded: false,
       showThinking: false,
+      interactionMode: "chat",
       connectionStatus: "connected",
       activityStatus: "idle",
       statusTimeout: null,

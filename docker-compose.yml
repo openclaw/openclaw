@@ -1,7 +1,10 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: "1000:1000"
     network_mode: host
+    group_add:
+       - "125"
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -15,11 +18,18 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
       VLLM_API_KEY: ${VLLM_API_KEY:-dummy}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+      SCRAPEDO_API_KEY: ${SCRAPEDO_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      KL_AUCTION_CHANNEL_ID: ${KL_AUCTION_CHANNEL_ID}
+      KL_AUCTION_OWNER_ID: ${KL_AUCTION_OWNER_ID}
     #extra_hosts:
       #- "host.docker.internal:host-gateway"
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
     #ports:
       #- "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       #- "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
@@ -38,6 +48,7 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: "1000:1000"
     network_mode: host
     environment:
       HOME: /home/node

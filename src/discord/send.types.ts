@@ -25,6 +25,7 @@ export const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
 export type DiscordSendResult = {
   messageId: string;
   channelId: string;
+  /** User or role ID to set permissions for. */
 };
 
 export type DiscordReactOpts = {
@@ -49,6 +50,7 @@ export type DiscordReactionSummary = {
 
 export type DiscordPermissionsSummary = {
   channelId: string;
+  /** User or role ID to set permissions for. */
   guildId?: string;
   permissions: string[];
   raw: string;
@@ -136,6 +138,7 @@ export type DiscordChannelCreate = {
 
 export type DiscordChannelEdit = {
   channelId: string;
+  /** User or role ID to set permissions for. */
   name?: string;
   topic?: string;
   position?: number;
@@ -150,14 +153,20 @@ export type DiscordChannelEdit = {
 export type DiscordChannelMove = {
   guildId: string;
   channelId: string;
+  /** User or role ID to set permissions for. */
   parentId?: string | null;
   position?: number;
 };
 
 export type DiscordChannelPermissionSet = {
+  /** Channel to modify. */
   channelId: string;
+  /** User or role ID to set permissions for. */
   targetId: string;
+  /** Target type: 0 = role, 1 = member (user). */
   targetType: 0 | 1;
+  /** Allowed permissions as comma-separated names (e.g., "ViewChannel,SendMessages") or bitmask string. */
   allow?: string;
+  /** Denied permissions as comma-separated names (e.g., "ViewChannel") or bitmask string. */
   deny?: string;
 };

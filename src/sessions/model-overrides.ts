@@ -36,6 +36,17 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // An explicit model switch should immediately change the selected model shown in UI/status.
+  // Clear the last runtime pair so readers fall back to the fresh override until the next run.
+  if (entry.modelProvider !== undefined) {
+    delete entry.modelProvider;
+    updated = true;
+  }
+  if (entry.model !== undefined) {
+    delete entry.model;
+    updated = true;
+  }
+
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;

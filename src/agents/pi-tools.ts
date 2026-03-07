@@ -161,6 +161,21 @@ export const __testing = {
   assertRequiredParams,
 } as const;
 
+const PLAN_MODE_ALLOWED_TOOLS = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "web_search",
+  "web_fetch",
+  "agents_list",
+  "sessions_list",
+  "sessions_history",
+  "session_status",
+  "image",
+  "request_user_input",
+]);
+
 export function createOpenClawCodingTools(options?: {
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
@@ -215,6 +230,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  interactionMode?: "chat" | "plan";
+  runId?: string;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -457,11 +474,17 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
+      interactionMode: options?.interactionMode,
+      runId: options?.runId,
     }),
   ];
+  const interactionFiltered =
+    options?.interactionMode === "plan"
+      ? tools.filter((tool) => PLAN_MODE_ALLOWED_TOOLS.has(tool.name.toLowerCase()))
+      : tools;
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(interactionFiltered, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

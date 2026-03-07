@@ -26,6 +26,7 @@ export type GatewayConnectionOptions = {
 export type ChatSendOptions = {
   sessionKey: string;
   message: string;
+  interactionMode?: "chat" | "plan";
   thinking?: string;
   deliver?: boolean;
   timeoutMs?: number;
@@ -36,6 +37,19 @@ export type GatewayEvent = {
   event: string;
   payload?: unknown;
   seq?: number;
+};
+
+export type ResolvePlanInputOptions = {
+  id: string;
+  status: "answered" | "cancelled" | "expired";
+  answers?: Record<
+    string,
+    {
+      answer: string;
+      source: "option" | "other";
+      optionIndex?: number;
+    }
+  >;
 };
 
 export type GatewaySessionList = {
@@ -166,6 +180,7 @@ export class GatewayChatClient {
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
       message: opts.message,
+      interactionMode: opts.interactionMode,
       thinking: opts.thinking,
       deliver: opts.deliver,
       timeoutMs: opts.timeoutMs,
@@ -179,6 +194,10 @@ export class GatewayChatClient {
       sessionKey: opts.sessionKey,
       runId: opts.runId,
     });
+  }
+
+  async resolvePlanInput(opts: ResolvePlanInputOptions) {
+    return await this.client.request<{ ok: boolean }>("plan.input.resolve", opts);
   }
 
   async loadHistory(opts: { sessionKey: string; limit?: number }) {

@@ -39,6 +39,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     autoMessageSent: false,
     toolsExpanded: false,
     showThinking: false,
+    interactionMode: "chat",
     connectionStatus: "connected",
     activityStatus: "idle",
     statusTimeout: null,

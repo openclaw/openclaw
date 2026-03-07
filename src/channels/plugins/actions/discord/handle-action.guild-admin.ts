@@ -444,5 +444,36 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
+  if (action === "permissions-set") {
+    const channelId = readStringParam(actionParams, "channelId", {
+      required: true,
+    });
+    const targetId = readStringParam(actionParams, "targetId", {
+      required: true,
+    });
+    const type = readStringParam(actionParams, "type", {
+      required: true,
+    });
+    const allow = readStringParam(actionParams, "allow", { trim: false });
+    const deny = readStringParam(actionParams, "deny", { trim: false });
+    
+    // Type validation happens in the underlying handler
+    // Accept "role"/"0" or "member"/"1"
+    const targetType = (type === "member" || type === "1") ? "member" : "role";
+    
+    return await handleDiscordAction(
+      {
+        action: "channelPermissionSet",
+        accountId: accountId ?? undefined,
+        channelId,
+        targetId,
+        targetType,
+        allow: allow ?? undefined,
+        deny: deny ?? undefined,
+      },
+      cfg,
+    );
+  }
+
   return undefined;
 }

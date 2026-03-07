@@ -118,6 +118,12 @@ import {
   NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import {
+  PlanInputPromptSchema,
+  PlanInputRequestParamsSchema,
+  PlanInputResolveParamsSchema,
+  PlanInputResultSchema,
+} from "./plan-input.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SessionsCompactParamsSchema,
@@ -246,6 +252,10 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  PlanInputRequestParams: PlanInputRequestParamsSchema,
+  PlanInputResolveParams: PlanInputResolveParamsSchema,
+  PlanInputPrompt: PlanInputPromptSchema,
+  PlanInputResult: PlanInputResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,

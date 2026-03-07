@@ -281,7 +281,7 @@ export async function handleDiscordGuildAction(
     }
     case "channelCreate": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const guildId = readStringParam(params, "guildId", { required: true });
       const name = readStringParam(params, "name", { required: true });
@@ -316,7 +316,7 @@ export async function handleDiscordGuildAction(
     }
     case "channelEdit": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const channelId = readStringParam(params, "channelId", {
         required: true,
@@ -366,7 +366,7 @@ export async function handleDiscordGuildAction(
     }
     case "channelDelete": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const channelId = readStringParam(params, "channelId", {
         required: true,
@@ -378,7 +378,7 @@ export async function handleDiscordGuildAction(
     }
     case "channelMove": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const guildId = readStringParam(params, "guildId", { required: true });
       const channelId = readStringParam(params, "channelId", {
@@ -408,7 +408,7 @@ export async function handleDiscordGuildAction(
     }
     case "categoryCreate": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const guildId = readStringParam(params, "guildId", { required: true });
       const name = readStringParam(params, "name", { required: true });
@@ -433,7 +433,7 @@ export async function handleDiscordGuildAction(
     }
     case "categoryEdit": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const categoryId = readStringParam(params, "categoryId", {
         required: true,
@@ -458,7 +458,7 @@ export async function handleDiscordGuildAction(
     }
     case "categoryDelete": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const categoryId = readStringParam(params, "categoryId", {
         required: true,
@@ -469,8 +469,8 @@ export async function handleDiscordGuildAction(
       return jsonResult(result);
     }
     case "channelPermissionSet": {
-      if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+      if (!isActionEnabled("permissionsSet")) {
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const channelId = readStringParam(params, "channelId", {
         required: true,
@@ -506,7 +506,7 @@ export async function handleDiscordGuildAction(
     }
     case "channelPermissionRemove": {
       if (!isActionEnabled("channels")) {
-        throw new Error("Discord channel management is disabled.");
+        throw new Error("Discord permissions-set action is disabled.");
       }
       const channelId = readStringParam(params, "channelId", {
         required: true,

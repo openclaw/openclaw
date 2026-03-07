@@ -62,7 +62,11 @@ function parseExtractedContent(stdout: string): { title?: string; content: strin
   return { title, content };
 }
 
-function buildAgentSummaryPrompt(params: { input: string; title?: string; transcript: string }): string {
+function buildAgentSummaryPrompt(params: {
+  input: string;
+  title?: string;
+  transcript: string;
+}): string {
   const titleLine = params.title ? `Video title: ${params.title}\n` : "";
   return (
     "Summarize the following YouTube video transcript.\n" +

@@ -61,6 +61,14 @@ describe("directive behavior", () => {
       );
     });
   });
+  it("rejects /thinking xhigh for openai-codex/gpt-5.4", async () => {
+    await withTempHome(async (home) => {
+      const texts = await runThinkingDirective(home, "openai-codex/gpt-5.4");
+      expect(texts).toContain(
+        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
+      );
+    });
+  });
   it("keeps reserved command aliases from matching after trimming", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(

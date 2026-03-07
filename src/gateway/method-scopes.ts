@@ -87,6 +87,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.invoke",
     "chat.send",
     "chat.abort",
+    "plan.input.request",
+    "plan.input.resolve",
     "browser.request",
     "push.test",
   ],

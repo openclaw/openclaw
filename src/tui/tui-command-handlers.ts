@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { resolveTuiModelSelection } from "./tui-model-selection.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -33,6 +34,7 @@ type CommandHandlerContext = {
   deliverDefault: boolean;
   openOverlay: (component: Component) => void;
   closeOverlay: () => void;
+  updateFooter: () => void;
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
@@ -55,6 +57,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     deliverDefault,
     openOverlay,
     closeOverlay,
+    updateFooter,
     refreshSessionInfo,
     loadHistory,
     setSession,
@@ -295,11 +298,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await openModelSelector();
         } else {
           try {
+            const resolved = await resolveTuiModelSelection({
+              raw: args,
+              currentProvider: state.sessionInfo.modelProvider,
+              currentModel: state.sessionInfo.model,
+            });
+            if (!resolved.selection) {
+              throw new Error(resolved.error ?? `invalid model: ${args}`);
+            }
+            const modelRef = `${resolved.selection.provider}/${resolved.selection.model}`;
+            const selectedLabel = resolved.selection.alias
+              ? `${resolved.selection.alias} (${modelRef})`
+              : modelRef;
             const result = await client.patchSession({
               key: state.currentSessionKey,
-              model: args,
+              model: modelRef,
             });
-            chatLog.addSystem(`model set to ${args}`);
+            chatLog.addSystem(
+              resolved.selection.isDefault
+                ? `model reset to default (${selectedLabel})`
+                : `model set to ${selectedLabel}`,
+            );
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
@@ -427,6 +446,26 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
         break;
+      case "plan":
+        if (!args || args === "on") {
+          state.interactionMode = "plan";
+          chatLog.addSystem("plan mode enabled");
+          updateFooter();
+          break;
+        }
+        if (args === "off") {
+          state.interactionMode = "chat";
+          chatLog.addSystem("plan mode disabled");
+          updateFooter();
+          break;
+        }
+        chatLog.addSystem("usage: /plan or /plan off");
+        break;
+      case "implement":
+        state.interactionMode = "chat";
+        chatLog.addSystem("plan mode disabled; next message will run normally");
+        updateFooter();
+        break;
       case "new":
       case "reset":
         try {
@@ -473,6 +512,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await client.sendChat({
         sessionKey: state.currentSessionKey,
         message: text,
+        interactionMode: state.interactionMode,
         thinking: opts.thinking,
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,

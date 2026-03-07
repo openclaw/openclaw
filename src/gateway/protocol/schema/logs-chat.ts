@@ -35,6 +35,7 @@ export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     message: Type.String(),
+    interactionMode: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("plan")])),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),

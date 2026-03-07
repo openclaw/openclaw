@@ -231,9 +231,10 @@ export async function runNodeMain(params = {}) {
   }
 
   logRunner("Building TypeScript (dist is stale).", deps);
-  const buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
+  const localTsdown = path.join(deps.cwd, "node_modules/.bin/tsdown");
+  const buildCmd = deps.platform === "win32" ? "cmd.exe" : localTsdown;
   const buildArgs =
-    deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
+    deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : ["--no-clean"];
   const build = deps.spawn(buildCmd, buildArgs, {
     cwd: deps.cwd,
     env: deps.env,

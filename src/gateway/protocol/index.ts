@@ -154,6 +154,14 @@ import {
   NodePairVerifyParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
+  type PlanInputPrompt,
+  PlanInputPromptSchema,
+  type PlanInputRequestParams,
+  PlanInputRequestParamsSchema,
+  type PlanInputResolveParams,
+  PlanInputResolveParamsSchema,
+  type PlanInputResult,
+  PlanInputResultSchema,
   type PollParams,
   PollParamsSchema,
   PROTOCOL_VERSION,
@@ -366,12 +374,20 @@ export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
 );
+export const validatePlanInputRequestParams = ajv.compile<PlanInputRequestParams>(
+  PlanInputRequestParamsSchema,
+);
+export const validatePlanInputResolveParams = ajv.compile<PlanInputResolveParams>(
+  PlanInputResolveParamsSchema,
+);
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
+export const validatePlanInputPrompt = ajv.compile<PlanInputPrompt>(PlanInputPromptSchema);
+export const validatePlanInputResult = ajv.compile<PlanInputResult>(PlanInputResultSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
@@ -502,6 +518,10 @@ export {
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
+  PlanInputPromptSchema,
+  PlanInputRequestParamsSchema,
+  PlanInputResolveParamsSchema,
+  PlanInputResultSchema,
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
@@ -606,6 +626,10 @@ export type {
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
+  PlanInputPrompt,
+  PlanInputRequestParams,
+  PlanInputResolveParams,
+  PlanInputResult,
   LogsTailParams,
   LogsTailResult,
   PollParams,

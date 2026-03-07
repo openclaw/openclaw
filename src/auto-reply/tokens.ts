@@ -15,6 +15,5 @@ export function isSilentReplyText(
   if (prefix.test(text)) {
     return true;
   }
-  const suffix = new RegExp(`\\b${escaped}\\b\\W*$`);
-  return suffix.test(text);
+  return false;
 }

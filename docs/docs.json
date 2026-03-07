@@ -967,6 +967,7 @@
               {
                 "group": "Built-in tools",
                 "pages": [
+                  "tools/comfyui",
                   "tools/lobster",
                   "tools/llm-task",
                   "tools/exec",

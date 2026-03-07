@@ -154,6 +154,8 @@ describe("gateway sessions patch", () => {
       "agent:main:main": {
         sessionId: "sess",
         updatedAt: 1,
+        modelProvider: "cyankiwi",
+        model: "Qwen3.5-27B-AWQ-4bit",
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-5",
         authProfileOverride: "anthropic:default",
@@ -174,6 +176,8 @@ describe("gateway sessions patch", () => {
     }
     expect(res.entry.providerOverride).toBe("openai");
     expect(res.entry.modelOverride).toBe("gpt-5.2");
+    expect(res.entry.modelProvider).toBeUndefined();
+    expect(res.entry.model).toBeUndefined();
     expect(res.entry.authProfileOverride).toBeUndefined();
     expect(res.entry.authProfileOverrideSource).toBeUndefined();
     expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();

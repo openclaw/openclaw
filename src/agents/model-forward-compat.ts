@@ -5,7 +5,14 @@ import { normalizeProviderId } from "./model-selection.js";
 import type { ModelRegistry } from "./pi-model-discovery.js";
 
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+
+export const OPENAI_CODEX_FORWARD_COMPAT_CANDIDATES = [
+  {
+    id: OPENAI_CODEX_GPT_54_MODEL_ID,
+    templateIds: [OPENAI_CODEX_GPT_53_MODEL_ID, "gpt-5.2-codex"],
+  },
+] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -64,32 +71,10 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-function resolveOpenAICodexGpt53FallbackModel(
-  provider: string,
-  modelId: string,
-  modelRegistry: ModelRegistry,
-): Model<Api> | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
-  const trimmedModelId = modelId.trim();
-  if (normalizedProvider !== "openai-codex") {
-    return undefined;
-  }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
-    return undefined;
-  }
-
-  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as Model<Api>);
-  }
-
+function buildOpenAICodexFallbackModel(
+  normalizedProvider: string,
+  trimmedModelId: string,
+): Model<Api> {
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
@@ -102,6 +87,34 @@ function resolveOpenAICodexGpt53FallbackModel(
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
+}
+
+function resolveOpenAICodexForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim();
+  if (normalizedProvider !== "openai-codex") {
+    return undefined;
+  }
+  const lower = trimmedModelId.toLowerCase();
+  const candidate =
+    lower === OPENAI_CODEX_GPT_53_MODEL_ID
+      ? { id: OPENAI_CODEX_GPT_53_MODEL_ID, templateIds: ["gpt-5.2-codex"] as const }
+      : OPENAI_CODEX_FORWARD_COMPAT_CANDIDATES.find((entry) => lower === entry.id);
+  if (!candidate) {
+    return undefined;
+  }
+
+  const cloned = cloneFirstTemplateModel({
+    normalizedProvider,
+    trimmedModelId,
+    templateIds: [...candidate.templateIds],
+    modelRegistry,
+  });
+  return cloned ?? buildOpenAICodexFallbackModel(normalizedProvider, trimmedModelId);
 }
 
 function resolveAnthropic46ForwardCompatModel(params: {
@@ -284,7 +297,7 @@ export function resolveForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   return (
-    resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
+    resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??

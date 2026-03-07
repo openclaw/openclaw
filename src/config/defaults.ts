@@ -19,10 +19,14 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // OpenAI
   gpt: "openai/gpt-5.2",
   "gpt-mini": "openai/gpt-5-mini",
+  codex: "openai-codex/gpt-5.3-codex",
 
   // Google Gemini (3.x are preview ids in the catalog)
   gemini: "google/gemini-3-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
+
+  // Qwen Portal
+  qwen: "qwen-portal/coder-model",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {

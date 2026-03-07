@@ -72,6 +72,7 @@ Text + native (when enabled):
 - `/help`
 - `/commands`
 - `/skill <name> [input]` (run a skill by name)
+- `/summarize <url|path|text>` (summarize a URL, local file path, or YouTube link)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
@@ -79,6 +80,7 @@ Text + native (when enabled):
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/subagents list|kill|log|info|send|steer|spawn` (inspect, control, or spawn sub-agent runs for the current session)
+- `/run list|kill|log|info|send|steer|spawn` (alias for `/subagents`)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)

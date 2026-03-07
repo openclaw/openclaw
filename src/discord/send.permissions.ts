@@ -209,3 +209,54 @@ export async function fetchChannelPermissionsDiscord(
     channelType,
   };
 }
+
+/**
+ * Converts a permission name or bitmask to a Discord permission bitmask.
+ * Supports:
+ * - Single permission name (e.g., "ViewChannel")
+ * - Comma-separated permission names (e.g., "ViewChannel,SendMessages")
+ * - Raw bitmask as string (e.g., "1073741824")
+ * - Raw bitmask as bigint
+ */
+export function permissionNameToBitmask(permission: string | bigint): bigint {
+  if (typeof permission === "bigint") {
+    return permission;
+  }
+  
+  // Try parsing as a raw bitmask
+  const parsed = BigInt(permission);
+  if (parsed > 0n) {
+    // Check if it looks like a bitmask (not a permission name)
+    try {
+      return parsed;
+    } catch {
+      // Not a valid bigint, continue to permission name lookup
+    }
+  }
+  
+  // Handle comma-separated permission names
+  const names = permission.split(",").map((n) => n.trim());
+  let result = 0n;
+  
+  for (const name of names) {
+    if (name in PermissionFlagsBits) {
+      const bit = PermissionFlagsBits[name as keyof typeof PermissionFlagsBits];
+      if (typeof bit === "bigint") {
+        result |= bit;
+      }
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Converts a permission bitmask to a comma-separated list of permission names.
+ */
+export function bitmaskToPermissionNames(bitmask: bigint | string): string {
+  const bit = typeof bitmask === "string" ? BigInt(bitmask) : bitmask;
+  const permissions = PERMISSION_ENTRIES.filter(([, value]) => (bit & value) === value)
+    .map(([name]) => name)
+    .toSorted();
+  return permissions.join(",");
+}

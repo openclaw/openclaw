@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
+  createTextEndBlockReplyHarness,
   emitMessageStartAndEndForAssistantText,
   expectSingleAgentEventText,
   extractAgentEventPayloads,
@@ -194,6 +195,31 @@ describe("subscribeEmbeddedPiSession", () => {
       expect(combined).toBe("Final answer");
     },
   );
+
+  it("drops leaked plain-text preamble when a lone </think> appears in streaming text", () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta:
+          "User is asking for a summary. I should recap key status.\n</think>\n\nHere's where we left off.",
+      },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end" },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Here's where we left off.");
+    expect(subscription.assistantTexts).toEqual(["Here's where we left off."]);
+  });
 
   it("streams native thinking_delta events and signals reasoning end", () => {
     let handler: ((evt: unknown) => void) | undefined;

@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
+  getModelCatalogMocks,
   installTriggerHandlingE2eTestHooks,
   makeCfg,
   withTempHome,
@@ -130,6 +131,38 @@ describe("trigger handling", () => {
       const store = loadSessionStore(requireSessionStorePath(cfg));
       expect(store[sessionKey]?.providerOverride).toBe("openai");
       expect(store[sessionKey]?.modelOverride).toBe("gpt-5.2");
+    });
+  });
+
+  it("selects an allowlisted openai-codex/gpt-5.4 model via /model gpt-5.4", async () => {
+    await withTempHome(async (home) => {
+      getModelCatalogMocks().loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "anthropic",
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          contextWindow: 200000,
+        },
+        {
+          provider: "openai-codex",
+          id: "gpt-5.3-codex",
+          name: "GPT-5.3 Codex",
+          reasoning: true,
+          contextWindow: 272000,
+        },
+      ]);
+
+      const cfg = makeCfg(home);
+      cfg.agents.defaults.models = { "openai-codex/gpt-5.4": {} };
+
+      const res = await getReplyFromConfig(makeTelegramModelCommand("/model gpt-5.4"), {}, cfg);
+      const normalized = normalizeTestText(firstReplyText(res));
+
+      expect(normalized).toContain("Model set to openai-codex/gpt-5.4");
+
+      const store = loadSessionStore(requireSessionStorePath(cfg));
+      expect(store[DEFAULT_SESSION_KEY]?.providerOverride).toBe("openai-codex");
+      expect(store[DEFAULT_SESSION_KEY]?.modelOverride).toBe("gpt-5.4");
     });
   });
 });

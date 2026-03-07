@@ -111,6 +111,12 @@ import type {
   NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import type {
+  PlanInputPromptSchema,
+  PlanInputRequestParamsSchema,
+  PlanInputResolveParamsSchema,
+  PlanInputResultSchema,
+} from "./plan-input.js";
 import type { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import type {
   SessionsCompactParamsSchema,
@@ -235,6 +241,10 @@ export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParam
 export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
 export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
 export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
+export type PlanInputRequestParams = Static<typeof PlanInputRequestParamsSchema>;
+export type PlanInputResolveParams = Static<typeof PlanInputResolveParamsSchema>;
+export type PlanInputPrompt = Static<typeof PlanInputPromptSchema>;
+export type PlanInputResult = Static<typeof PlanInputResultSchema>;
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;

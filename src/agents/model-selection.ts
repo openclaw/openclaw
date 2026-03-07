@@ -23,6 +23,7 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.5": "claude-sonnet-4-5",
 };
 const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
+const FORWARD_COMPAT_ALLOWLIST_KEYS = new Set(["openai-codex/gpt-5.4"]);
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -394,6 +395,11 @@ export function buildAllowedModelSet(params: {
     if (isCliProvider(parsed.provider, params.cfg)) {
       allowedKeys.add(key);
     } else if (catalogKeys.has(key)) {
+      allowedKeys.add(key);
+    } else if (FORWARD_COMPAT_ALLOWLIST_KEYS.has(key.toLowerCase())) {
+      // Some forward-compat models are synthesized later at runtime and may not
+      // be present in the discovered catalog yet, but they should still be
+      // selectable when explicitly allowlisted.
       allowedKeys.add(key);
     } else if (configuredProviders[providerKey] != null) {
       // Explicitly configured providers should be allowlist-able even when

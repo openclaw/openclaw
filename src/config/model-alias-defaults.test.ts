@@ -36,6 +36,8 @@ describe("applyModelDefaults", () => {
           models: {
             "anthropic/claude-opus-4-6": {},
             "openai/gpt-5.2": {},
+            "openai-codex/gpt-5.3-codex": {},
+            "qwen-portal/coder-model": {},
           },
         },
       },
@@ -44,6 +46,8 @@ describe("applyModelDefaults", () => {
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
+    expect(next.agents?.defaults?.models?.["openai-codex/gpt-5.3-codex"]?.alias).toBe("codex");
+    expect(next.agents?.defaults?.models?.["qwen-portal/coder-model"]?.alias).toBe("qwen");
   });
 
   it("does not override existing aliases", () => {

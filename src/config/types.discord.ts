@@ -80,6 +80,8 @@ export type DiscordActionConfig = {
   emojiUploads?: boolean;
   stickerUploads?: boolean;
   channels?: boolean;
+  /** Enable channel permission overwrite management (default: false). */
+  permissionsSet?: boolean;
   /** Enable bot presence/activity changes (default: false). */
   presence?: boolean;
 };

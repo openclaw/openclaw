@@ -419,6 +419,11 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
+function isDeliveryMirrorMessage(msg: AgentMessage): boolean {
+  const m = msg as unknown as Record<string, unknown>;
+  return m.model === "delivery-mirror" || m.provider === "openclaw";
+}
+
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
@@ -438,8 +443,11 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const withoutDeliveryMirrors = withInterSessionMarkers.filter(
+    (msg) => !isDeliveryMirrorMessage(msg),
+  );
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    withoutDeliveryMirrors,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,

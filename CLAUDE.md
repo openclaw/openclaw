@@ -9,12 +9,15 @@ pnpm install          # Install dependencies
 pnpm build            # Build (tsdown) + type-check
 pnpm tsgo             # Type-check only (fast)
 pnpm check            # Lint + format check (run before commits)
-pnpm lint:fix         # Fix lint issues
-pnpm format:fix       # Fix formatting (oxfmt)
+pnpm lint:fix         # Fix lint issues + auto-format
+pnpm format:fix       # Fix formatting only (oxfmt --write)
 pnpm dev              # Run dev server
 pnpm openclaw ...     # Run CLI in dev mode (via bun)
-pnpm test             # Run unit tests (Vitest)
+pnpm test             # Run unit tests (Vitest, parallel runner)
 pnpm test <path>      # Run a single test file
+pnpm test:fast        # Run unit tests (direct vitest, no parallel wrapper)
+pnpm test:e2e         # Run e2e tests
+pnpm test:watch       # Run vitest in watch mode
 pnpm test:coverage    # Tests + V8 coverage (70% threshold)
 pnpm test:live        # Live tests (requires CLAWDBOT_LIVE_TEST=1 or LIVE=1)
 ```
@@ -81,6 +84,7 @@ CLI entry (src/entry.ts → src/index.ts → src/cli/run-main.ts)
 - **File size** — aim for ~700 LOC; split/refactor when it helps clarity or testability.
 - **Colocated tests** — `*.test.ts` next to source; e2e as `*.e2e.test.ts`.
 - **Naming** — `OpenClaw` in headings/docs; `openclaw` for CLI, package, paths, config keys.
+- **Control UI (Lit)** — uses legacy decorators (`@state()`, `@property()`); do not use `accessor` fields or standard decorators (Rollup doesn't support them). Root tsconfig has `experimentalDecorators: true` and `useDefineForClassFields: false`.
 
 ### Source-of-Truth Locations
 

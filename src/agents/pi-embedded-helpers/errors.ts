@@ -108,6 +108,10 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const LEAKED_PLANNING_OPEN_RE = /^(?:the\s+user|user)\b/i;
+const LEAKED_PLANNING_ACTION_RE =
+  /\b(ask(?:ing|ed|s)?|want(?:s|ed)?|request(?:ed|s)?|said|send(?:ing|s)?|sent)\b/i;
+const LEAKED_PLANNING_SELF_RE = /\b(i should|i need to|let me|i(?:'|’)ll|i will)\b/i;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -186,6 +190,40 @@ function stripFinalTagsFromText(text: string): string {
     return text;
   }
   return text.replace(FINAL_TAG_RE, "");
+}
+
+function stripLeakedPlanningPreamble(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart) {
+    return text;
+  }
+
+  // Detect plain-text chain-of-thought preambles like:
+  // "The user is asking ... I should ... Let me ..."
+  const firstParagraphBreak = trimmedStart.search(/\r?\n[ \t]*\r?\n/);
+  const firstParagraphRaw =
+    firstParagraphBreak >= 0 ? trimmedStart.slice(0, firstParagraphBreak) : trimmedStart;
+  const firstParagraph = firstParagraphRaw.trim().replace(/\s+/g, " ");
+  const looksLikeLeakedPreamble =
+    LEAKED_PLANNING_OPEN_RE.test(firstParagraph) &&
+    LEAKED_PLANNING_ACTION_RE.test(firstParagraph) &&
+    LEAKED_PLANNING_SELF_RE.test(firstParagraph);
+  if (!looksLikeLeakedPreamble) {
+    return text;
+  }
+
+  // If there is no paragraph break, treat the whole message as leaked planning.
+  if (firstParagraphBreak < 0) {
+    return "";
+  }
+
+  return trimmedStart
+    .slice(firstParagraphBreak)
+    .replace(/^(?:[ \t]*\r?\n)+/, "")
+    .trimStart();
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -514,7 +552,8 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     mode: "strict",
     trim: "both",
   });
-  const trimmed = stripped.trim();
+  const noPlanningPreamble = stripLeakedPlanningPreamble(stripped);
+  const trimmed = noPlanningPreamble.trim();
   if (!trimmed) {
     return "";
   }
@@ -565,7 +604,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
-  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = noPlanningPreamble.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 

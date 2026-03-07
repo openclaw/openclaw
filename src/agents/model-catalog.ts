@@ -1,5 +1,6 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { OPENAI_CODEX_FORWARD_COMPAT_CANDIDATES } from "./model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 export type ModelCatalogEntry = {
@@ -54,6 +55,36 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
     id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
     name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
   });
+}
+
+function applyOpenAICodexForwardCompatFallbacks(models: ModelCatalogEntry[]): void {
+  for (const candidate of OPENAI_CODEX_FORWARD_COMPAT_CANDIDATES) {
+    const hasCandidate = models.some(
+      (entry) => entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === candidate.id,
+    );
+    if (hasCandidate) {
+      continue;
+    }
+
+    const template = candidate.templateIds
+      .map((templateId) =>
+        models.find(
+          (entry) =>
+            entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === templateId.toLowerCase(),
+        ),
+      )
+      .find((entry): entry is ModelCatalogEntry => Boolean(entry));
+    if (!template) {
+      continue;
+    }
+
+    models.push({
+      ...template,
+      id: candidate.id,
+      name: candidate.id,
+      reasoning: true,
+    });
+  }
 }
 
 export function resetModelCatalogCacheForTest() {
@@ -140,6 +171,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       applyOpenAICodexSparkFallback(models);
+      applyOpenAICodexForwardCompatFallbacks(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

@@ -388,7 +388,7 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
       },
-      cfg,
+      // cfg removed — getReplyFromConfig calls loadConfig() fresh each time
     );
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];

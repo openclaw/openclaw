@@ -192,6 +192,7 @@
   - launchd PATH is minimal; ensure the app’s launch agent PATH includes standard system paths plus your pnpm bin (typically `$HOME/Library/pnpm`) so `pnpm`/`openclaw` binaries resolve when invoked via `openclaw-mac`.
 - For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
+- YouTube link summaries: when a user asks to summarize a YouTube URL, use the bundled `summarize` skill/CLI (`summarize "<url>" --youtube auto`) and return a concise summary only; do not include raw transcript text or transcript quotes in normal output.
 
 ## NPM + 1Password (publish/verify)
 

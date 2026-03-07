@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  buildAllowedModelSet,
   parseModelRef,
   resolveModelRefFromString,
   resolveConfiguredModelRef,
@@ -176,6 +177,29 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("buildAllowedModelSet", () => {
+    it("allows explicit openai-codex/gpt-5.4 entries even when the catalog does not know them yet", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      };
+
+      const result = buildAllowedModelSet({
+        cfg: cfg as OpenClawConfig,
+        catalog: [{ provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.4")).toBe(true);
     });
   });
 });

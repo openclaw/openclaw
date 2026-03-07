@@ -24,9 +24,12 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
+import { createPlanInputController } from "./tui-plan-input.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type {
   AgentSummary,
+  PlanInputRequestedEvent,
+  PlanInputResolvedEvent,
   SessionInfo,
   SessionScope,
   TuiOptions,
@@ -213,6 +216,7 @@ export async function runTui(opts: TuiOptions) {
   let wasDisconnected = false;
   let toolsExpanded = false;
   let showThinking = false;
+  let interactionMode: "chat" | "plan" = "chat";
   const localRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
@@ -228,6 +232,12 @@ export async function runTui(opts: TuiOptions) {
   let lastActivityStatus = activityStatus;
 
   const state: TuiStateAccess = {
+    get interactionMode() {
+      return interactionMode;
+    },
+    set interactionMode(value) {
+      interactionMode = value;
+    },
     get agentDefaultId() {
       return agentDefaultId;
     },
@@ -620,6 +630,7 @@ export async function runTui(opts: TuiOptions) {
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
+      interactionMode === "plan" ? "mode plan" : null,
       modelLabel,
       think !== "off" ? `think ${think}` : null,
       verbose !== "off" ? `verbose ${verbose}` : null,
@@ -630,6 +641,14 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const planInputController = createPlanInputController({
+    client,
+    chatLog,
+    tui,
+    openOverlay,
+    closeOverlay,
+    setActivityStatus,
+  });
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) {
@@ -686,6 +705,7 @@ export async function runTui(opts: TuiOptions) {
       deliverDefault,
       openOverlay,
       closeOverlay,
+      updateFooter,
       refreshSessionInfo,
       applySessionInfoFromPatch,
       loadHistory,
@@ -708,7 +728,12 @@ export async function runTui(opts: TuiOptions) {
   const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
-    sendMessage,
+    sendMessage: async (text) => {
+      if (await planInputController.consumeFreeformAnswer(text)) {
+        return;
+      }
+      await sendMessage(text);
+    },
     handleBangLine: runLocalShellLine,
   });
   editor.onSubmit = createSubmitBurstCoalescer({
@@ -767,6 +792,12 @@ export async function runTui(opts: TuiOptions) {
     }
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
+    }
+    if (evt.event === "plan.input.requested") {
+      planInputController.handleRequested(evt.payload as PlanInputRequestedEvent);
+    }
+    if (evt.event === "plan.input.resolved") {
+      planInputController.handleResolved(evt.payload as PlanInputResolvedEvent);
     }
   };
 

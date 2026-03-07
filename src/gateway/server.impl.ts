@@ -1,4 +1,5 @@
 import path from "node:path";
+import { getMinimalServicePathPartsFromEnv } from "../daemon/service-env.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -56,6 +57,7 @@ import {
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
+import { PlanInputManager } from "./plan-input-manager.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
@@ -67,6 +69,7 @@ import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { planInputHandlers } from "./server-methods/plan-input.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -171,6 +174,15 @@ export async function startGatewayServer(
 ): Promise<GatewayServer> {
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+
+  // Ensure user bin directories are on PATH so skill binary checks (hasBinary)
+  // find tools like `summarize` regardless of how the gateway was launched.
+  const currentParts = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const minimalParts = getMinimalServicePathPartsFromEnv();
+  const missingPathParts = minimalParts.filter((dir) => !currentParts.includes(dir));
+  if (missingPathParts.length > 0) {
+    process.env.PATH = [...currentParts, ...missingPathParts].join(path.delimiter);
+  }
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -556,6 +568,7 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
+  const planInputManager = new PlanInputManager();
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
@@ -580,6 +593,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...planInputHandlers,
     },
     broadcast,
     context: {
@@ -587,6 +601,7 @@ export async function startGatewayServer(
       cron,
       cronStorePath,
       execApprovalManager,
+      planInputManager,
       loadGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshot,

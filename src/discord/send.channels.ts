@@ -1,4 +1,8 @@
-import type { APIChannel } from "discord-api-types/v10";
+import { permissionNameToBitmask } from "./send.permissions.js";
+import type {
+  APIChannel,
+  PermissionFlagsBits,
+} from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
@@ -103,10 +107,10 @@ export async function setChannelPermissionDiscord(
     type: payload.targetType,
   };
   if (payload.allow !== undefined) {
-    body.allow = payload.allow;
+    body.allow = permissionNameToBitmask(payload.allow).toString();
   }
   if (payload.deny !== undefined) {
-    body.deny = payload.deny;
+    body.deny = permissionNameToBitmask(payload.deny).toString();
   }
   await rest.put(`/channels/${payload.channelId}/permissions/${payload.targetId}`, { body });
   return { ok: true };

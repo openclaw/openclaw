@@ -56,6 +56,29 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+  it("defaults /think to low for reasoning-capable openai-codex/gpt-5.4", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          provider: "openai-codex",
+          reasoning: true,
+        },
+      ]);
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(home, { model: "openai-codex/gpt-5.4" }),
+      );
+
+      const text = replyText(res);
+      expect(text).toContain("Current thinking level: low");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("shows off when /think has no argument and model lacks reasoning", async () => {
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([

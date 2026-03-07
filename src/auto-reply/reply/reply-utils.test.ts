@@ -102,6 +102,16 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("keeps real text when NO_REPLY is appended at the end", () => {
+    const normalized = normalizeReplyPayload({
+      text: `Leg press can replace hack squats for most goals.\n\n${SILENT_REPLY_TOKEN}`,
+    });
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toContain("Leg press can replace hack squats");
+    expect(normalized?.text).not.toContain(SILENT_REPLY_TOKEN);
+  });
+
   it("records empty skips", () => {
     const reasons: string[] = [];
     const normalized = normalizeReplyPayload(

@@ -20,6 +20,30 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(leaked)).toBe("Hello!");
   });
 
+  it("strips leaked plain-text planning preamble without tags", () => {
+    const leaked =
+      "The user is asking for a summary of where we left off. I should recap the key status.\n\nHere's where we left off.";
+    expect(sanitizeUserFacingText(leaked)).toBe("Here's where we left off.");
+  });
+
+  it("strips leaked plain-text planning preamble from greeting intent", () => {
+    const leaked =
+      "User sent a simple greeting, so I should respond naturally with a brief, friendly reply that invites them to share what they need help with.\n\nHey Bryan. What's on your mind?";
+    expect(sanitizeUserFacingText(leaked)).toBe("Hey Bryan. What's on your mind?");
+  });
+
+  it("drops planning-only leaked plain-text preambles", () => {
+    const leaked =
+      "The user is asking if I'm running the command. I need to execute the command now.";
+    expect(sanitizeUserFacingText(leaked)).toBe("");
+  });
+
+  it("does not clobber normal messages that mention user docs", () => {
+    const text =
+      "The user manual is in docs/reference. I will point you to the exact section.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("does not clobber normal numeric prefixes", () => {
     expect(sanitizeUserFacingText("202 results found")).toBe("202 results found");
     expect(sanitizeUserFacingText("400 days left")).toBe("400 days left");

@@ -30,6 +30,14 @@ export type {
   ToolResultFormat,
 } from "./pi-embedded-subscribe.types.js";
 
+function isStandaloneThinkingCloseTagLine(text: string, start: number, end: number): boolean {
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  const lineEndIdx = text.indexOf("\n", end);
+  const lineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
+  const line = text.slice(lineStart, lineEnd).trim();
+  return /^<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>$/i.test(line);
+}
+
 export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
@@ -374,20 +382,44 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let inThinking = state.thinking;
+    let sawOpenThinkingInChunk = false;
+    let droppedLeakedPreamble = false;
     for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       if (codeSpans.isInside(idx)) {
         continue;
       }
-      if (!inThinking) {
-        processed += text.slice(lastIndex, idx);
-      }
       const isClose = match[1] === "/";
+      if (!inThinking) {
+        const segment = text.slice(lastIndex, idx);
+        // Some models leak plain-text planning followed by a lone closing
+        // reasoning tag. When that closing tag is alone on its line and we
+        // have not seen an opening reasoning tag in this chunk, drop the
+        // leaked preamble before it.
+        if (
+          isClose &&
+          !state.thinking &&
+          !sawOpenThinkingInChunk &&
+          isStandaloneThinkingCloseTagLine(text, idx, idx + match[0].length)
+        ) {
+          processed = "";
+          droppedLeakedPreamble = true;
+        } else {
+          processed += segment;
+        }
+      }
       inThinking = !isClose;
+      if (!isClose) {
+        sawOpenThinkingInChunk = true;
+      }
       lastIndex = idx + match[0].length;
     }
     if (!inThinking) {
-      processed += text.slice(lastIndex);
+      let trailing = text.slice(lastIndex);
+      if (droppedLeakedPreamble && !processed) {
+        trailing = trailing.replace(/^(?:[ \t]*\r?\n)+/, "");
+      }
+      processed += trailing;
     }
     state.thinking = inThinking;
 
