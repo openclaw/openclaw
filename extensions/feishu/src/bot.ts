@@ -369,6 +369,7 @@ function parseMergeForwardContent(params: {
     msg_type?: string;
     body?: { content?: string };
     sender?: { id?: string };
+    mentions?: Array<{ key?: string; id?: string; name?: string }>;
     upper_message_id?: string;
     create_time?: string;
   }>;
@@ -408,7 +409,20 @@ function parseMergeForwardContent(params: {
     const msgContent = item.body?.content || "";
     const msgType = item.msg_type || "text";
     const formatted = formatSubMessageContent(msgContent, msgType);
-    lines.push(`- ${formatted}`);
+    const senderId = item.sender?.id || "unknown";
+
+    // Resolve @_user_N placeholders using item.mentions from Feishu API
+    let resolved = formatted;
+    if (item.mentions && item.mentions.length > 0) {
+      for (const m of item.mentions) {
+        if (m.key) {
+          const display = m.name && m.id ? `${m.name}(${m.id})` : m.name || m.id || m.key;
+          resolved = resolved.replaceAll(m.key, `@${display}`);
+        }
+      }
+    }
+
+    lines.push(`- [${senderId}] ${resolved}`);
   }
 
   if (subMessages.length > maxMessages) {
