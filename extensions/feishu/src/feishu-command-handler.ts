@@ -34,12 +34,14 @@ export async function handleFeishuCommand(
   const isResetCommand = DEFAULT_RESET_TRIGGERS.some(
     (trigger) => trimmed === trigger || trimmed.startsWith(`${trigger} `),
   );
+
   if (!isResetCommand) {
     return false;
   }
 
   const command = trimmed.split(" ")[0];
   const action: "new" | "reset" = command === "/new" ? "new" : "reset";
+
   await hookRunner.runBeforeReset(
     {
       type: "command",
