@@ -564,6 +564,10 @@ const memoryPlugin = {
             prependContext: formatRelevantMemoriesContext(
               results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
+            lancedbPluginMemoryContext: {
+              prependTag: "relevant-memories",
+              stripRegex: "^<relevant-memories[^>]*>[\\s\\S]*?</relevant-memories>\\s*",
+            },
           };
         } catch (err) {
           api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);

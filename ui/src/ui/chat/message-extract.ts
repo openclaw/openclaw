@@ -2,17 +2,38 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
+interface LancedbPluginMemoryContext {
+  prependTag: string;
+  stripRegex: string;
+}
+
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
-function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = role.toLowerCase() === "user";
+function processMessageText(text: string, role: string, memoryContext?: LancedbPluginMemoryContext): string {
   if (role.toLowerCase() === "assistant") {
     return stripThinkingTags(text);
   }
-  return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(text))
-    : stripEnvelope(text);
+
+  const isUser = role.toLowerCase() === "user";
+  if (!isUser) {
+    return stripEnvelope(text);
+  }
+
+  // Strip inbound metadata (channel info, etc.)
+  let result = stripInboundMetadata(stripEnvelope(text));
+
+  // If memory-lancedb plugin injected context, apply the stripRegex
+  if (memoryContext?.stripRegex) {
+    try {
+      const regex = new RegExp(memoryContext.stripRegex, "i");
+      result = result.replace(regex, "").trim();
+    } catch (e) {
+      // Invalid regex, skip
+    }
+  }
+
+  return result;
 }
 
 export function extractText(message: unknown): string | null {
@@ -22,7 +43,8 @@ export function extractText(message: unknown): string | null {
   if (!raw) {
     return null;
   }
-  return processMessageText(raw, role);
+  const memoryContext = m.lancedbPluginMemoryContext as LancedbPluginMemoryContext | undefined;
+  return processMessageText(raw, role, memoryContext);
 }
 
 export function extractTextCached(message: unknown): string | null {
