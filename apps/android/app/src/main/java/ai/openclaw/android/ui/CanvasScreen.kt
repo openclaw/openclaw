@@ -22,6 +22,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import ai.openclaw.android.MainViewModel
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayInputStream
+import android.net.Uri
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -107,6 +112,14 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               }
               return true
             }
+
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+              if (request == null) return null
+              val url = request.url?.toString() ?: return null
+              if (!url.contains("__openclaw__")) return null
+              if (!isGatewayUrl(url, viewModel, isDebuggable)) return null
+              return interceptGatewayRequest(url, request, isDebuggable, viewModel)
+            }
           }
         webChromeClient =
           object : WebChromeClient() {
@@ -134,6 +147,105 @@ private fun disableForceDarkIfSupported(settings: WebSettings) {
   if (!WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) return
   @Suppress("DEPRECATION")
   WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
+}
+
+
+/** Default port for a URL scheme. */
+private fun defaultPort(scheme: String?): Int = when (scheme?.lowercase()) {
+  "https" -> 443
+  "http" -> 80
+  else -> -1
+}
+
+/**
+ * Validate that [url] belongs to the connected gateway by comparing
+ * scheme, host, and port against the stored gateway config.
+ * Returns false (and skips auth injection) for any unknown or mismatched origin.
+ */
+private fun isGatewayUrl(url: String, viewModel: MainViewModel, debug: Boolean): Boolean {
+  return try {
+    val trustedOrigin = viewModel.gatewayOrigin() ?: return false
+    val trustedUri = Uri.parse(trustedOrigin)
+    val requestUri = Uri.parse(url)
+
+    val reqScheme = requestUri.scheme?.lowercase()
+    val trustedScheme = trustedUri.scheme?.lowercase()
+    val reqHost = requestUri.host?.lowercase()
+    val trustedHost = trustedUri.host?.lowercase()
+    val reqPort = requestUri.port.takeIf { it != -1 } ?: defaultPort(reqScheme)
+    val trustedPort = trustedUri.port.takeIf { it != -1 } ?: defaultPort(trustedScheme)
+
+    val match = reqScheme == trustedScheme && reqHost == trustedHost && reqPort == trustedPort
+    if (!match && debug) {
+      Log.w("OpenClawWebView", "Auth injection blocked: origin mismatch")
+    }
+    match
+  } catch (e: Exception) {
+    if (debug) Log.w("OpenClawWebView", "URL validation failed")
+    false
+  }
+}
+
+/** Shared OkHttpClient for gateway-authenticated WebView requests. */
+private val gatewayHttpClient: OkHttpClient by lazy { OkHttpClient.Builder().build() }
+
+/**
+ * Intercepts WebView requests to gateway __openclaw__ endpoints and
+ * adds the Authorization: Bearer header so the gateway doesn't reject them.
+ */
+private fun interceptGatewayRequest(
+  url: String,
+  request: WebResourceRequest,
+  debug: Boolean,
+  viewModel: MainViewModel,
+): WebResourceResponse? {
+  try {
+    val token = viewModel.loadGatewayToken()
+    if (token.isNullOrBlank()) {
+      if (debug) Log.w("OpenClawWebView", "Gateway token not available for: $url")
+      return null
+    }
+    if (debug) Log.d("OpenClawWebView", "Adding auth header for gateway request: $url")
+
+    val reqBuilder = Request.Builder()
+      .url(url)
+      .addHeader("Authorization", "Bearer $token")
+
+    // Copy original headers (skip Authorization to avoid conflict)
+    request.requestHeaders?.forEach { (key, value) ->
+      if (!key.equals("Authorization", ignoreCase = true)) {
+        reqBuilder.addHeader(key, value)
+      }
+    }
+
+    // Mirror the HTTP method
+    when (request.method?.uppercase()) {
+      "POST" -> reqBuilder.post(ByteArray(0).toRequestBody(null))
+      "PUT"  -> reqBuilder.put(ByteArray(0).toRequestBody(null))
+      "DELETE" -> reqBuilder.delete()
+      "HEAD" -> reqBuilder.head()
+      else -> reqBuilder.get()
+    }
+
+    val response = gatewayHttpClient.newCall(reqBuilder.build()).execute()
+    if (debug) Log.d("OpenClawWebView", "Gateway response: ${response.code} for $url")
+
+    val body = response.body
+    val inputStream = body?.byteStream() ?: ByteArrayInputStream(ByteArray(0))
+    val contentType = response.header("Content-Type") ?: "text/html"
+    val mimeType = contentType.split(";")[0].trim()
+    val charset = Regex("charset=([^;\\s]+)", RegexOption.IGNORE_CASE)
+      .find(contentType)?.groupValues?.get(1) ?: "UTF-8"
+    // HTTP/2 may have empty reason phrase; WebResourceResponse needs something non-empty
+    val reason = response.message.ifEmpty { "OK" }
+
+    return WebResourceResponse(mimeType, charset, response.code, reason,
+      response.headers.toMultimap().mapValues { it.value.joinToString(", ") },
+      inputStream)
+  } catch (e: Exception) {
+    if (debug) Log.e("OpenClawWebView", "Failed to intercept gateway request: $url", e)
+    return null
+  }
 }
 
 private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
