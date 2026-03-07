@@ -103,6 +103,8 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         postCompactionSections: z.array(z.string()).optional(),
+        /** Compaction timeout in milliseconds. Defaults to 300000 (5 min). */
+        timeoutMs: z.number().int().min(30_000).max(1_800_000).optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

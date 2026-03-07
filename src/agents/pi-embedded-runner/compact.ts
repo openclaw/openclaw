@@ -65,6 +65,11 @@ import {
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
+  isCompactionCircuitOpen,
+  recordCompactionFailure,
+  recordCompactionSuccess,
+} from "./compaction-circuit-breaker.js";
+import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
 } from "./compaction-safety-timeout.js";
@@ -131,6 +136,8 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  /** External abort signal to cancel compaction immediately. */
+  abortSignal?: AbortSignal;
 };
 
 type CompactionMessageMetrics = {
@@ -268,6 +275,21 @@ export async function compactEmbeddedPiSessionDirect(
   const runId = params.runId ?? params.sessionId;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
+  const sessionKey = params.sessionKey ?? params.sessionId;
+
+  // Circuit breaker: skip compaction if too many recent consecutive failures
+  if (isCompactionCircuitOpen(sessionKey)) {
+    log.warn(
+      `[compaction-circuit-breaker] skipping compaction: sessionKey=${sessionKey} ` +
+        `diagId=${diagId} trigger=${trigger} — circuit open due to repeated failures`,
+    );
+    return {
+      ok: false,
+      compacted: false,
+      reason:
+        "Compaction circuit breaker open — too many consecutive failures. Will retry after cooldown.",
+    };
+  }
 
   const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
   const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -533,10 +555,14 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
+    // Resolve compaction timeout: config > default constant
+    const compactionTimeoutMs =
+      params.config?.agents?.defaults?.compaction?.timeoutMs ?? EMBEDDED_COMPACTION_TIMEOUT_MS;
+
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
+        timeoutMs: compactionTimeoutMs,
       }),
     });
     try {
@@ -734,8 +760,13 @@ export async function compactEmbeddedPiSessionDirect(
         // Measure compactedCount from the original pre-limiting transcript so compaction
         // lifecycle metrics represent total reduction through the compaction pipeline.
         const messageCountCompactionInput = messageCountOriginal;
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
+        // Note: session.compact() does not accept an abort signal directly,
+        // but the merged signal ensures Promise.race resolves immediately
+        // on external abort, and the caller's session.abort() handles cleanup.
+        const result = await compactWithSafetyTimeout(
+          () => session.compact(params.customInstructions),
+          compactionTimeoutMs,
+          params.abortSignal,
         );
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -813,6 +844,7 @@ export async function compactEmbeddedPiSessionDirect(
             });
           }
         }
+        recordCompactionSuccess(sessionKey);
         return {
           ok: true,
           compacted: true,
@@ -837,6 +869,16 @@ export async function compactEmbeddedPiSessionDirect(
     }
   } catch (err) {
     const reason = describeUnknownError(err);
+    // Only record as circuit breaker failure for actual execution errors
+    // (timeouts, provider errors), not for benign skip conditions.
+    const skipReason = classifyCompactionReason(reason);
+    const isExecutionFailure =
+      skipReason !== "no_compactable_entries" &&
+      skipReason !== "below_threshold" &&
+      skipReason !== "already_compacted_recently";
+    if (isExecutionFailure) {
+      recordCompactionFailure(sessionKey);
+    }
     return fail(reason);
   } finally {
     restoreSkillEnv?.();
