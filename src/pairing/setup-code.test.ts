@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SecretInput } from "../config/types.secrets.js";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
 
 describe("pairing setup code", () => {
@@ -204,7 +205,7 @@ describe("pairing setup code", () => {
     ).rejects.toThrow(/MISSING_GW_TOKEN/i);
   });
 
-  async function resolveInferredModeWithPasswordEnv(token: unknown) {
+  async function resolveInferredModeWithPasswordEnv(token: SecretInput) {
     return await resolvePairingSetupFromConfig(
       {
         gateway: {
