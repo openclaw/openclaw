@@ -2,6 +2,8 @@ import { Type } from "@sinclair/typebox";
 import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
+const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return"] as const;
+
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal("task_completion"),
@@ -94,6 +96,7 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    continuationTrigger: Type.Optional(Type.String({ enum: [...CONTINUATION_TRIGGER_VALUES] })),
     extraSystemPrompt: Type.Optional(Type.String()),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(

@@ -232,6 +232,11 @@ function createAcpVisibleTextAccumulator() {
   };
 }
 
+function resolveAgentRunTrigger(
+  continuationTrigger: AgentCommandOpts["continuationTrigger"] | undefined,
+): string {
+  return continuationTrigger ?? "user";
+}
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
@@ -374,7 +379,7 @@ function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
-    trigger: "user",
+    trigger: resolveAgentRunTrigger(params.opts.continuationTrigger),
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
