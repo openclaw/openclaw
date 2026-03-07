@@ -95,7 +95,22 @@ export async function modelsStatusCommand(
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
   const resolvedLabel = `${resolved.provider}/${resolved.model}`;
-  const defaultLabel = rawModel || resolvedLabel;
+  // Use resolvedLabel when the raw model references a provider that was removed
+  // from models.providers, so stale provider references don't leak into status.
+  const rawModelProvider = rawModel
+    ? parseModelRef(rawModel, DEFAULT_PROVIDER)?.provider
+    : undefined;
+  const configuredProviders = new Set(
+    Object.keys(cfg.models?.providers ?? {})
+      .map((p) => p.trim())
+      .filter(Boolean),
+  );
+  const defaultLabel =
+    rawModel &&
+    rawModelProvider &&
+    (configuredProviders.has(rawModelProvider) || rawModelProvider === DEFAULT_PROVIDER)
+      ? rawModel
+      : resolvedLabel;
   const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
   const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
