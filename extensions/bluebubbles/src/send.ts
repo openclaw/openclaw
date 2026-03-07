@@ -390,6 +390,7 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles password is required");
   }
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -435,18 +436,20 @@ export async function sendMessageBlueBubbles(
     tempGuid: crypto.randomUUID(),
     message: strippedText,
   };
-  if (privateApiDecision.canUsePrivateApi) {
+  // Prefer private-api transport whenever available. This avoids legacy AppleScript
+  // fallback failures on newer macOS/BlueBubbles combinations.
+  if (privateApiEnabled) {
     payload.method = "private-api";
   }
 
   // Add reply threading support
-  if (wantsReplyThread && privateApiDecision.canUsePrivateApi) {
+  if (wantsReplyThread && privateApiEnabled) {
     payload.selectedMessageGuid = opts.replyToMessageGuid;
     payload.partIndex = typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
   }
 
   // Add message effects support
-  if (effectId && privateApiDecision.canUsePrivateApi) {
+  if (effectId && privateApiEnabled) {
     payload.effectId = effectId;
   }
 

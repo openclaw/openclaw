@@ -240,21 +240,50 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   return [];
 }
 
+function isStructuredErrorPayload(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const status = typeof record.status === "string" ? record.status.trim() : "";
+  if (status && isErrorLikeStatus(status)) {
+    return true;
+  }
+  if (record.ok === false || record.success === false) {
+    return true;
+  }
+  if (typeof record.error === "string" && normalizeToolErrorText(record.error)) {
+    return true;
+  }
+  if (record.error && typeof record.error === "object") {
+    const nested = record.error as Record<string, unknown>;
+    if (typeof nested.message === "string" && normalizeToolErrorText(nested.message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
+  if (isStructuredErrorPayload(result)) {
+    return true;
+  }
+  if (result && typeof result === "object") {
+    const details = (result as { details?: unknown }).details;
+    if (isStructuredErrorPayload(details)) {
+      return true;
+    }
+  }
+  const text = extractToolResultText(result);
+  if (!text) {
     return false;
   }
-  const record = result as { details?: unknown };
-  const details = record.details;
-  if (!details || typeof details !== "object") {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return isStructuredErrorPayload(parsed);
+  } catch {
     return false;
   }
-  const status = (details as { status?: unknown }).status;
-  if (typeof status !== "string") {
-    return false;
-  }
-  const normalized = status.trim().toLowerCase();
-  return normalized === "error" || normalized === "timeout";
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {

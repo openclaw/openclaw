@@ -1,7 +1,7 @@
+import * as pluginSdk from "openclaw/plugin-sdk/bluebubbles";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
   DM_GROUP_ACCESS_REASON,
-  createScopedPairingAccess,
   createReplyPrefixOptions,
   evictOldHistoryKeys,
   logAckFailure,
@@ -68,6 +68,82 @@ type PendingOutboundMessageId = {
 
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
+
+type PairingReadInput = Parameters<
+  BlueBubblesCoreRuntime["channel"]["pairing"]["readAllowFromStore"]
+>[0];
+type PairingUpsertInput = Parameters<
+  BlueBubblesCoreRuntime["channel"]["pairing"]["upsertPairingRequest"]
+>[0];
+
+type ScopedPairingAccessArgs = {
+  core: BlueBubblesCoreRuntime;
+  channel: "bluebubbles";
+  accountId: string;
+};
+
+type ScopedPairingAccessCompat = {
+  accountId: string;
+  readAllowFromStore: () => ReturnType<
+    BlueBubblesCoreRuntime["channel"]["pairing"]["readAllowFromStore"]
+  >;
+  readStoreForDmPolicy: (
+    provider: PairingReadInput["channel"],
+    accountId: string,
+  ) => ReturnType<BlueBubblesCoreRuntime["channel"]["pairing"]["readAllowFromStore"]>;
+  upsertPairingRequest: (
+    input: Omit<PairingUpsertInput, "channel" | "accountId">,
+  ) => ReturnType<BlueBubblesCoreRuntime["channel"]["pairing"]["upsertPairingRequest"]>;
+};
+
+function normalizePairingAccountIdCompat(value: string | undefined | null): string {
+  const normalizeAccountId = (
+    pluginSdk as {
+      normalizeAccountId?: (raw: string | undefined | null) => string;
+    }
+  ).normalizeAccountId;
+  if (typeof normalizeAccountId === "function") {
+    return normalizeAccountId(value);
+  }
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return trimmed || "default";
+}
+
+function createScopedPairingAccessCompat(
+  params: ScopedPairingAccessArgs,
+): ScopedPairingAccessCompat {
+  // Use namespace lookup so older plugin-sdk builds (without this export) still load.
+  const createScopedPairingAccess = (
+    pluginSdk as {
+      createScopedPairingAccess?: (args: ScopedPairingAccessArgs) => ScopedPairingAccessCompat;
+    }
+  ).createScopedPairingAccess;
+  if (typeof createScopedPairingAccess === "function") {
+    return createScopedPairingAccess(params);
+  }
+
+  // Compatibility fallback for older plugin-sdk builds missing createScopedPairingAccess.
+  const resolvedAccountId = normalizePairingAccountIdCompat(params.accountId);
+  return {
+    accountId: resolvedAccountId,
+    readAllowFromStore: () =>
+      params.core.channel.pairing.readAllowFromStore({
+        channel: params.channel,
+        accountId: resolvedAccountId,
+      }),
+    readStoreForDmPolicy: (provider: PairingReadInput["channel"], accountId: string) =>
+      params.core.channel.pairing.readAllowFromStore({
+        channel: provider,
+        accountId: normalizePairingAccountIdCompat(accountId),
+      }),
+    upsertPairingRequest: (input: Omit<PairingUpsertInput, "channel" | "accountId">) =>
+      params.core.channel.pairing.upsertPairingRequest({
+        channel: params.channel,
+        accountId: resolvedAccountId,
+        ...input,
+      }),
+  };
+}
 
 function trimOrUndefined(value?: string | null): string | undefined {
   const trimmed = value?.trim();
@@ -423,7 +499,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const pairing = createScopedPairingAccess({
+  const pairing = createScopedPairingAccessCompat({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,
@@ -1389,7 +1465,7 @@ export async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
-  const pairing = createScopedPairingAccess({
+  const pairing = createScopedPairingAccessCompat({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,

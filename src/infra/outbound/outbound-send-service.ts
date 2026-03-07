@@ -9,7 +9,7 @@ import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
-import { extractToolPayload } from "./tool-payload.js";
+import { extractToolPayload, getToolPayloadError } from "./tool-payload.js";
 
 export type OutboundGatewayContext = {
   url?: string;
@@ -73,10 +73,15 @@ async function tryHandleWithPluginAction(params: {
   if (!handled) {
     return null;
   }
+  const payload = extractToolPayload(handled);
+  const payloadError = getToolPayloadError(payload);
+  if (payloadError) {
+    throw new Error(payloadError);
+  }
   await params.onHandled?.();
   return {
     handledBy: "plugin",
-    payload: extractToolPayload(handled),
+    payload,
     toolResult: handled,
   };
 }
