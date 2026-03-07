@@ -1641,8 +1641,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const resolvedBaseUrl = normalizeMattermostBaseUrl(account.baseUrl);
     const resolvedBotToken = account.botToken?.trim();
+    // Respect explicit blockStreaming=false opt-out. When disabled, skip all
+    // streaming state and fall back to normal final-only delivery.
+    const streamingEnabled = account.blockStreaming !== false;
     const blockStreamingClient =
-      resolvedBaseUrl && resolvedBotToken
+      streamingEnabled && resolvedBaseUrl && resolvedBotToken
         ? createMattermostClient({ baseUrl: resolvedBaseUrl, botToken: resolvedBotToken })
         : null;
 
@@ -1658,12 +1661,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return;
       }
       if (!streamMessageId) {
-        const result = await sendMessageMattermost(to, text, {
-          accountId: account.accountId,
-          replyToId: threadRootId,
-        });
-        streamMessageId = result.messageId;
-        runtime.log?.(`stream-patch started ${streamMessageId}`);
+        try {
+          const result = await sendMessageMattermost(to, text, {
+            accountId: account.accountId,
+            replyToId: threadRootId,
+          });
+          streamMessageId = result.messageId;
+          runtime.log?.(`stream-patch started ${streamMessageId}`);
+        } catch (err) {
+          logVerboseMessage(`mattermost stream-patch flush send failed: ${String(err)}`);
+        }
       } else {
         try {
           await patchMattermostPost(blockStreamingClient, {
@@ -1679,6 +1686,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     // Schedule a throttled patch. Leading-edge: first call fires after THROTTLE_MS;
     // subsequent calls within the window update pendingPatchText only (latest wins).
+    // patchTimer is cleared only AFTER the async network call completes so that
+    // flushPendingPatch() (called before final delivery) reliably detects any
+    // in-flight patch and waits for it to settle.
     const schedulePatch = (fullText: string) => {
       if (!blockStreamingClient) {
         return;
@@ -1688,34 +1698,37 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // Timer already running — just update pendingPatchText (latest text wins).
         return;
       }
-      patchTimer = setTimeout(async () => {
-        patchTimer = null;
-        const text = pendingPatchText;
-        if (!text) {
-          return;
-        }
-        if (!streamMessageId) {
-          try {
-            const result = await sendMessageMattermost(to, text, {
-              accountId: account.accountId,
-              replyToId: threadRootId,
-            });
-            streamMessageId = result.messageId;
-            runtime.log?.(`stream-patch started ${streamMessageId}`);
-          } catch (err) {
-            logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+      patchTimer = setTimeout(() => {
+        void (async () => {
+          const text = pendingPatchText;
+          if (!text) {
+            patchTimer = null;
+            return;
           }
-        } else {
-          try {
-            await patchMattermostPost(blockStreamingClient, {
-              postId: streamMessageId,
-              message: text,
-            });
-            runtime.log?.(`stream-patch edited ${streamMessageId}`);
-          } catch (err) {
-            logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
+          if (!streamMessageId) {
+            try {
+              const result = await sendMessageMattermost(to, text, {
+                accountId: account.accountId,
+                replyToId: threadRootId,
+              });
+              streamMessageId = result.messageId;
+              runtime.log?.(`stream-patch started ${streamMessageId}`);
+            } catch (err) {
+              logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+            }
+          } else {
+            try {
+              await patchMattermostPost(blockStreamingClient, {
+                postId: streamMessageId,
+                message: text,
+              });
+              runtime.log?.(`stream-patch edited ${streamMessageId}`);
+            } catch (err) {
+              logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
+            }
           }
-        }
+          patchTimer = null;
+        })();
       }, STREAM_PATCH_THROTTLE_MS);
     };
 
