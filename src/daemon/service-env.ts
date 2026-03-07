@@ -245,11 +245,10 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
-  token?: string;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
-  const { env, port, token, launchdLabel } = params;
+  const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
   const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
   const profile = env.OPENCLAW_PROFILE;
@@ -260,7 +259,6 @@ export function buildServiceEnvironment(params: {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_GATEWAY_PORT: String(port),
-    OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
