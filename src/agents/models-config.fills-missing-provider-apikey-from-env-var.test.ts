@@ -82,12 +82,13 @@ async function runCustomProviderMergeTest(seedProvider: {
 function createMoonshotConfig(overrides: {
   contextWindow: number;
   maxTokens: number;
+  baseUrl?: string;
 }): OpenClawConfig {
   return {
     models: {
       providers: {
         moonshot: {
-          baseUrl: "https://api.moonshot.ai/v1",
+          baseUrl: overrides.baseUrl ?? "https://api.moonshot.ai/v1",
           api: "openai-completions",
           models: [
             {
@@ -288,6 +289,27 @@ describe("models-config", () => {
         const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
         expect(kimi?.contextWindow).toBe(350000);
         expect(kimi?.maxTokens).toBe(16384);
+      });
+    });
+  });
+
+  it("preserves explicit moonshot china endpoint when filling api key from env", async () => {
+    await withTempHome(async () => {
+      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
+        const cfg = createMoonshotConfig({
+          baseUrl: "https://api.moonshot.cn/v1",
+          contextWindow: 256000,
+          maxTokens: 8192,
+        });
+
+        await ensureOpenClawModelsJson(cfg);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string; apiKey?: string }>;
+        }>();
+
+        expect(parsed.providers.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+        expect(parsed.providers.moonshot?.apiKey).toBe("MOONSHOT_API_KEY");
       });
     });
   });
