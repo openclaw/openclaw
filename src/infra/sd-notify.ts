@@ -165,6 +165,14 @@ export function startWatchdogHeartbeat(): (() => void) | undefined {
   };
 }
 
+/**
+ * Check whether the systemd-notify binary is available at a trusted path.
+ * Used at install time to decide whether to emit Type=notify/WatchdogSec.
+ */
+export function isSystemdNotifyAvailable(): boolean {
+  return resolveSystemdNotifyPath() !== undefined;
+}
+
 /** @internal Reset notify command resolution cache. Exported for testing only. */
 export function _resetSystemdNotifyPathForTests(): void {
   resolvedSystemdNotifyPath = undefined;

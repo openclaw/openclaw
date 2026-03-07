@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isSystemdNotifyAvailable } from "../infra/sd-notify.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -489,6 +490,16 @@ export async function installSystemdService({
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   await assertSystemdAvailable(env);
 
+  // Gate watchdog on systemd-notify availability: if the binary is not at a
+  // trusted path (non-FHS layouts like NixOS), fall back to Type=simple so
+  // the service doesn't enter a restart loop waiting for READY=1.
+  const effectiveWatchdog = watchdog && isSystemdNotifyAvailable();
+  if (watchdog && !effectiveWatchdog) {
+    stdout.write(
+      "Warning: systemd-notify not found; installing without Type=notify/WatchdogSec.\n",
+    );
+  }
+
   // Derive the service name first so unitPath, enable, and restart all
   // operate on the same resolved name (respects OPENCLAW_SYSTEMD_UNIT).
   const serviceName = resolveSystemdServiceName(env);
@@ -513,7 +524,7 @@ export async function installSystemdService({
     programArguments,
     workingDirectory,
     environment,
-    watchdog,
+    watchdog: effectiveWatchdog,
   });
   await fs.writeFile(unitPath, unit, "utf8");
 
