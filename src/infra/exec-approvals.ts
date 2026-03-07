@@ -11,6 +11,30 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
+export function normalizeExecHost(value?: string | null): ExecHost | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecAsk(value?: string | null): ExecAsk | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized;
+  }
+  return null;
+}
+
 export type SystemRunApprovalBinding = {
   argv: string[];
   cwd: string | null;

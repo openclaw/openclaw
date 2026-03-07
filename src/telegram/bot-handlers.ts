@@ -16,7 +16,11 @@ import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.j
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "../config/sessions.js";
 import type { DmPolicy } from "../config/types.base.js";
 import type {
   TelegramDirectConfig,
@@ -50,6 +54,7 @@ import {
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   evaluateTelegramGroupBaseAccess,
@@ -268,9 +273,10 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     messageThreadId?: number;
     resolvedThreadId?: number;
+    senderId?: string | number;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof loadSessionStore>[string];
+    sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
     model?: string;
   } => {
     const resolvedThreadId =
@@ -279,26 +285,20 @@ export const registerTelegramHandlers = ({
         isForum: params.isForum,
         messageThreadId: params.messageThreadId,
       });
-    const peerId = params.isGroup
-      ? buildTelegramGroupPeerId(params.chatId, resolvedThreadId)
-      : String(params.chatId);
-    const parentPeer = buildTelegramParentPeer({
+    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
+    const topicThreadId = resolvedThreadId ?? dmThreadId;
+    const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+    const { route } = resolveTelegramConversationRoute({
+      cfg,
+      accountId,
+      chatId: params.chatId,
       isGroup: params.isGroup,
       resolvedThreadId,
-      chatId: params.chatId,
-    });
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "telegram",
-      accountId,
-      peer: {
-        kind: params.isGroup ? "group" : "direct",
-        id: peerId,
-      },
-      parentPeer,
+      replyThreadId: topicThreadId,
+      senderId: params.senderId,
+      topicAgentId: topicConfig?.agentId,
     });
     const baseSessionKey = route.sessionKey;
-    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const threadKeys =
       dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
@@ -306,7 +306,7 @@ export const registerTelegramHandlers = ({
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
     const store = loadSessionStore(storePath);
-    const entry = store[sessionKey];
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
