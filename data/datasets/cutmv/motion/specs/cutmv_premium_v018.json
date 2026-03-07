@@ -1,0 +1,441 @@
+{
+  "id": "cutmv_premium_v018",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.3,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.16
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.5
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.1,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook_platforms",
+      "type": "hookText",
+      "from": 0,
+      "duration": 97,
+      "headlineLines": [
+        {
+          "text": "SOCIAL READY.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "TIKTOK • IG • SHORTS",
+      "transitionOut": {
+        "type": "crossfade",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "SOCIAL READY.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "sub1",
+          "kind": "support",
+          "text": "TIKTOK • IG • SHORTS",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 54
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_ui_configure_aspects",
+      "type": "uiMock",
+      "from": 97,
+      "duration": 203,
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "title": "CONFIGURE OUTPUTS",
+        "aspectToggles": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "outputs": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "primaryButton": "START CREATING NOW"
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "AUTO FORMATTED.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "wipe",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "aspect_head",
+          "kind": "headline",
+          "text": "AUTO FORMATTED.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 130
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "uiOptions": {
+            "title": "CONFIGURE OUTPUTS",
+            "aspectToggles": [
+              "9:16",
+              "1:1",
+              "16:9"
+            ],
+            "outputs": [
+              "CLIPS",
+              "GIFS",
+              "THUMBNAILS",
+              "CANVAS"
+            ],
+            "primaryButton": "START CREATING NOW"
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 126
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": true
+                  },
+                  {
+                    "label": "GIFS",
+                    "on": true
+                  },
+                  {
+                    "label": "THUMBNAILS",
+                    "on": false
+                  },
+                  {
+                    "label": "CANVAS",
+                    "on": false
+                  }
+                ],
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 22,
+              "props": {
+                "tapTarget": "aspect.1:1",
+                "tap": {
+                  "x": 162,
+                  "y": 179
+                },
+                "activeAspect": 1
+              }
+            },
+            {
+              "at": 44,
+              "props": {
+                "tapTarget": "aspect.16:9",
+                "tap": {
+                  "x": 252,
+                  "y": 179
+                },
+                "activeAspect": 2
+              }
+            },
+            {
+              "at": 66,
+              "props": {
+                "tapTarget": "aspect.9:16",
+                "tap": {
+                  "x": 72,
+                  "y": 179
+                },
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 86,
+              "props": {
+                "tapTarget": "toggle.thumbnails",
+                "tap": {
+                  "x": 762,
+                  "y": 384
+                },
+                "toggles": [
+                  {
+                    "label": "THUMBNAILS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 2
+              }
+            },
+            {
+              "at": 104,
+              "props": {
+                "tapTarget": "button.start",
+                "pressed": true,
+                "tap": {
+                  "x": 410,
+                  "y": 520
+                }
+              }
+            },
+            {
+              "at": 110,
+              "props": {
+                "pressed": false,
+                "progress": 0,
+                "status": "generating"
+              }
+            },
+            {
+              "at": 122,
+              "props": {
+                "progress": 0.6
+              }
+            },
+            {
+              "at": 138,
+              "props": {
+                "progress": 1,
+                "status": "done",
+                "checkmarks": [
+                  "CLIPS",
+                  "GIFS",
+                  "THUMBNAILS"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_dense",
+        "seed": 355,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s3_cta",
+      "type": "ctaEndcard",
+      "from": 300,
+      "duration": 150,
+      "headline": {
+        "text": "TRY CUTMV NOW.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED",
+        "style": "solid_green"
+      },
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "TRY CUTMV NOW.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "BETA ACCESS — FREE",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 54
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

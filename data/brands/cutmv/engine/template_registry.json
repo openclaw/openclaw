@@ -1,0 +1,103 @@
+{
+  "brand": "cutmv",
+  "version": "2.0.0",
+  "templates": [
+    {
+      "id": "hook_metrics_v1",
+      "type": "motion_ad",
+      "use_case": "speed_social_proof",
+      "description": "Opens with bold metric, transitions to product benefit, ends with CTA.",
+      "aspect_ratios": ["9:16", "4:5"],
+      "duration_range": [10, 15],
+      "required_blocks": ["metric", "headline", "cta"],
+      "optional_blocks": ["subheadline", "ui_demo"],
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/hook_metrics_v1_example.json"
+    },
+    {
+      "id": "ui_walkthrough_v1",
+      "type": "motion_demo",
+      "use_case": "dashboard_showcase",
+      "description": "Step-by-step UI walkthrough showing upload → process → export flow.",
+      "aspect_ratios": ["16:9", "9:16"],
+      "duration_range": [8, 15],
+      "required_blocks": ["headline", "ui_demo", "cta"],
+      "optional_blocks": ["bullet_list", "subheadline"],
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/ui_walkthrough_v1_example.json"
+    },
+    {
+      "id": "feature_stack_v1",
+      "type": "motion_ad",
+      "use_case": "feature_highlight",
+      "description": "Staggered reveal of product features with icons/screenshots, CTA close.",
+      "aspect_ratios": ["1:1", "4:5", "9:16"],
+      "duration_range": [8, 12],
+      "required_blocks": ["headline", "bullet_list", "cta"],
+      "optional_blocks": ["screenshot", "metric"],
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/feature_stack_v1_example.json"
+    },
+    {
+      "id": "before_after_v1",
+      "type": "motion_ad",
+      "use_case": "transformation_demo",
+      "description": "Shows raw video input → CUTMV processed outputs split-screen.",
+      "aspect_ratios": ["9:16", "16:9"],
+      "duration_range": [10, 15],
+      "required_blocks": ["headline", "ui_demo", "cta"],
+      "optional_blocks": ["metric", "subheadline"],
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/before_after_v1_example.json"
+    },
+    {
+      "id": "testimonial_stat_v1",
+      "type": "motion_ad",
+      "use_case": "social_proof_authority",
+      "description": "Large metric reveal, supporting stat, social proof, CTA.",
+      "aspect_ratios": ["1:1", "9:16"],
+      "duration_range": [8, 12],
+      "required_blocks": ["metric", "headline", "cta"],
+      "optional_blocks": ["body", "logo"],
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/testimonial_stat_v1_example.json"
+    },
+    {
+      "id": "hormozi_education_v1",
+      "type": "motion_ad",
+      "style_profile": "fast_educational_mixed_media",
+      "use_case": "saas_education_high_retention",
+      "description": "Hormozi-style fast educational cut. Hook → value punch → UI demo → benefit flash → CTA. Aggressive pacing, scribble overlays, caption always on.",
+      "aspect_ratios": ["9:16"],
+      "duration_range": [9, 15],
+      "required_blocks": ["hook_text", "value_punch", "ui_demo_clip", "benefit_flash", "cta"],
+      "optional_blocks": ["scribble_overlay", "marker_highlight"],
+      "overlay_system_ref": "brands/cutmv/engine/overlay_system.json",
+      "rhythm_profile": "educational_fast",
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/hormozi_education_v1.json"
+    },
+    {
+      "id": "higgsfield_saas_drop_v1",
+      "type": "motion_ad",
+      "style_profile": "clean_premium_saas",
+      "use_case": "premium_brand_authority",
+      "description": "Higgsfield-style clean premium SaaS drop. Headline → mask reveal UI → statement → logo + CTA. Minimal, surgical, expensive energy.",
+      "aspect_ratios": ["9:16"],
+      "duration_range": [8, 12],
+      "required_blocks": ["headline", "ui_reveal", "statement", "logo_cta"],
+      "optional_blocks": ["subtle_accent_line"],
+      "overlay_system_ref": "brands/cutmv/engine/overlay_system.json",
+      "rhythm_profile": "premium_clean",
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/higgsfield_saas_drop_v1.json"
+    },
+    {
+      "id": "mixed_media_scribble_v1",
+      "type": "motion_ad",
+      "style_profile": "mixed_media_tiktok_native",
+      "use_case": "tiktok_native_engagement",
+      "description": "Mixed media scribble style. Hook → problem → solution → demo sequence → CTA. TikTok-native feel with scribble overlays, arrows, marker highlights. High engagement.",
+      "aspect_ratios": ["9:16"],
+      "duration_range": [10, 15],
+      "required_blocks": ["hook", "problem", "solution", "demo_sequence", "cta"],
+      "optional_blocks": ["scribble_pack", "animated_arrows", "caption_boxes"],
+      "overlay_system_ref": "brands/cutmv/engine/overlay_system.json",
+      "rhythm_profile": "native_social",
+      "example_spec_path": "brands/cutmv/datasets/motion/annotations/motion_specs/mixed_media_scribble_v1.json"
+    }
+  ]
+}

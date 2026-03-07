@@ -1,0 +1,231 @@
+{
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "scale": 2.25,
+    "profile": "FAST_CLICKY",
+    "idleBehavior": "activeHover"
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "id": "cutmv_premium_v049",
+  "scenes": [
+    {
+      "id": "s1_hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 90,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 49
+      },
+      "contextBadge": "PROOF",
+      "headlineLines": [
+        {
+          "text": "WATCH THE OUTPUTS",
+          "emphasis": false
+        },
+        {
+          "text": "POP OUT.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "Clean deliverables. Every format."
+    },
+    {
+      "id": "s2_outputs",
+      "type": "uiMock",
+      "from": 90,
+      "duration": 210,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 64
+      },
+      "contextBadge": "RESULTS",
+      "uiPreset": "cutmv_output_cards_dark",
+      "uiOptions": {
+        "title": "EXPORTS READY",
+        "cta": "DOWNLOAD ALL"
+      },
+      "elements": [
+        {
+          "id": "outCards",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_output_cards_dark",
+          "motion": {
+            "enter": {
+              "type": "slideUp",
+              "at": 0,
+              "durationFrames": 16
+            },
+            "exit": {
+              "type": "fadeDown",
+              "at": 194,
+              "durationFrames": 14
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 18,
+              "props": {
+                "tapTarget": "output.card.1"
+              }
+            },
+            {
+              "at": 34,
+              "props": {
+                "tapTarget": "output.card.2"
+              }
+            },
+            {
+              "at": 50,
+              "props": {
+                "tapTarget": "output.card.3"
+              }
+            },
+            {
+              "at": 74,
+              "props": {
+                "tapTarget": "output.card.4"
+              }
+            },
+            {
+              "at": 98,
+              "props": {
+                "tapTarget": "button.start"
+              }
+            },
+            {
+              "at": 106,
+              "props": {
+                "status": "processing",
+                "progress": 0.18
+              }
+            },
+            {
+              "at": 140,
+              "props": {
+                "progress": 0.66
+              }
+            },
+            {
+              "at": 176,
+              "props": {
+                "status": "done",
+                "progress": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s3_compare",
+      "type": "impactText",
+      "from": 300,
+      "duration": 60,
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "ugc_fastcuts",
+        "seed": 20,
+        "post": {
+          "blur": 0.7,
+          "vignette": 0.4,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "BEFORE",
+      "headlineLines": [
+        {
+          "text": "EXPORT QUEUE",
+          "emphasis": false
+        },
+        {
+          "text": "HELL.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "Not anymore."
+    },
+    {
+      "id": "s4_endcard",
+      "type": "ctaEndcard",
+      "from": 360,
+      "duration": 90,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 9
+      },
+      "headline": {
+        "text": "TRY CUTMV (BETA)",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED",
+        "style": "solid_green"
+      },
+      "footer": "DONE IN MINUTES — NOT HOURS",
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ]
+}

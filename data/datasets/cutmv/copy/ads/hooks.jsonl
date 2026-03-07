@@ -1,0 +1,7 @@
+{"id":"cmv_hook_0001","brand":"cutmv","text":"TURN MUSIC VIDEOS INTO VIRAL ASSETS — IN SECONDS.","intent":"benefit","angle":"speed","constraints":["ALL_CAPS","CTA_REQUIRED","NO_EXTRA_COLORS"],"source":"seed","status":"draft"}
+{"id":"cmv_hook_0002","brand":"cutmv","text":"AUTO-GENERATE CLIPS, GIFS, THUMBNAILS, AND CANVASES.","intent":"feature","angle":"what-it-does","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_hook_0003","brand":"cutmv","text":"NO EDITING SKILLS NEEDED.","intent":"relief","angle":"simplicity","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_hook_1001","brand":"cutmv","text":"TURN YOUR MUSIC VIDEOS INTO VIRAL ASSETS — IN SECONDS","angle":"speed_transformation","constraints":["ALL_CAPS"],"source":"landing_page.hero","status":"approved_seed"}
+{"id":"cmv_hook_1002","brand":"cutmv","text":"OVER 10,000 VIDEOS PROCESSED TO-DATE","angle":"social_proof","constraints":["ALL_CAPS"],"source":"social_proof_banner","status":"approved_seed"}
+{"id":"cmv_hook_1003","brand":"cutmv","text":"AI-POWERED SMART TIMESTAMP GENERATION","angle":"ai_intelligence","constraints":["ALL_CAPS"],"source":"social_proof_banner","status":"approved_seed"}
+{"id":"cmv_hook_1004","brand":"cutmv","text":"PROFESSIONAL-QUALITY EXPORTS FOR EVERY CREATOR","angle":"quality_positioning","constraints":["ALL_CAPS"],"source":"social_proof_banner","status":"approved_seed"}

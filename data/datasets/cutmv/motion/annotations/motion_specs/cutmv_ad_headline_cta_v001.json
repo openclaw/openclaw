@@ -1,0 +1,63 @@
+{
+  "template_id": "headline_cta_v1",
+  "brand": "cutmv",
+  "duration_sec": 8,
+  "fps": 30,
+  "aspect_ratio": "9:16",
+  "resolution": {
+    "w": 1080,
+    "h": 1920
+  },
+  "structure": [
+    {
+      "type": "background",
+      "enter_sec": 0,
+      "animation": "none",
+      "color": "#000000"
+    },
+    {
+      "type": "headline",
+      "text": "TURN YOUR MUSIC VIDEO INTO CLIPS",
+      "enter_sec": 0.3,
+      "exit_sec": 4.0,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": {
+        "x": "50%",
+        "y": "50%",
+        "anchor": "center"
+      },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size_scale": 1.0,
+        "font_weight": "bold",
+        "text_align": "center",
+        "max_width_pct": 0.8
+      }
+    },
+    {
+      "type": "cta",
+      "text": "TRY CUTMV",
+      "enter_sec": 4.3,
+      "animation": "fade_in",
+      "easing": "easeOutCubic",
+      "position": {
+        "x": "50%",
+        "y": "50%",
+        "anchor": "center"
+      },
+      "style": {
+        "color": "#FFFFFF",
+        "font_size_scale": 1.4,
+        "font_weight": "bold",
+        "text_align": "center"
+      }
+    }
+  ],
+  "metadata": {
+    "brief_id": "cutmv_ad_001",
+    "generated_by": "claude",
+    "approved": false,
+    "copy_ids_used": ["cmv_hook_1001", "cmv_cta_0001"]
+  }
+}

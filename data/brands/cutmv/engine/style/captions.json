@@ -1,0 +1,76 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Caption track schema. Captions are a first-class motion element — timed, styled, and grid-locked.",
+  "caption_styles": {
+    "hormozi_box": {
+      "description": "Bold white text in black rounded box. Pop-in entrance. Hormozi education style.",
+      "text_color": "#FFFFFF",
+      "background_color": "#000000",
+      "background_opacity": 0.9,
+      "padding": { "x": 24, "y": 16 },
+      "border_radius": 12,
+      "font_size": 56,
+      "font_weight": 800,
+      "line_height": 1.1,
+      "text_transform": "uppercase",
+      "entrance": "pop",
+      "entrance_duration_frames": 8,
+      "emphasis_color": "#94F33F",
+      "emphasis_style": "bold_green_word"
+    },
+    "premium_clean": {
+      "description": "No box. Big type. Subtle fade_up. Premium authority.",
+      "text_color": "#FFFFFF",
+      "background_color": "none",
+      "font_size": 64,
+      "font_weight": 700,
+      "line_height": 1.15,
+      "text_transform": "uppercase",
+      "entrance": "fade_up",
+      "entrance_duration_frames": 14,
+      "emphasis_color": "#94F33F",
+      "emphasis_style": "underline_draw"
+    },
+    "scribble_callout": {
+      "description": "White text with hand-drawn underline + arrow overlay. Native creator feel.",
+      "text_color": "#FFFFFF",
+      "background_color": "#000000",
+      "background_opacity": 0.75,
+      "padding": { "x": 20, "y": 12 },
+      "border_radius": 8,
+      "font_size": 48,
+      "font_weight": 700,
+      "line_height": 1.15,
+      "text_transform": "uppercase",
+      "entrance": "snap_pop",
+      "entrance_duration_frames": 6,
+      "emphasis_color": "#94F33F",
+      "emphasis_style": "scribble_underline_plus_arrow"
+    }
+  },
+  "track_schema": {
+    "description": "Caption track JSON format — array of timed segments.",
+    "example": {
+      "version": "1",
+      "fps": 30,
+      "style": "hormozi_box",
+      "segments": [
+        {
+          "start": 0.0,
+          "end": 2.2,
+          "lines": ["STOP EDITING MUSIC VIDEOS MANUALLY."],
+          "emphasis": ["EDITING", "MANUALLY"],
+          "style_override": null
+        },
+        {
+          "start": 2.2,
+          "end": 4.0,
+          "lines": ["CUTMV DOES IT FOR YOU."],
+          "emphasis": ["CUTMV"],
+          "style_override": null
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{"id":"cmv_hero_0001","brand":"cutmv","text":"TURN YOUR MUSIC VIDEO INTO CLIPS, GIFS, THUMBNAILS, AND CANVASES.","intent":"hero_headline","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_hero_0002","brand":"cutmv","text":"POST MORE. FASTER. WITHOUT EDITING.","intent":"hero_headline","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_hero_1001","brand":"cutmv","text":"Turn Your Music Videos into Viral Assets — In Seconds","intent":"hero_headline","source":"landing_page.json.hero.headline","status":"extracted"}
+{"id":"cmv_hero_1002","brand":"cutmv","text":"AI-powered platform that instantly transforms full-length music videos into optimized formats for today's platforms — Spotify Canvases, Reels, Shorts, GIFs, and more.","intent":"hero_subheadline","source":"landing_page.json.hero.subheadline","status":"extracted"}
+{"id":"cmv_hero_1003","brand":"cutmv","text":"Upload your music video below and see the magic happen!","intent":"hero_support","source":"landing_page.json.hero.below_cta_text","status":"extracted"}
+{"id":"cmv_hero_1004","brand":"cutmv","text":"AI-POWERED TRANSFORMATIONS FOR MUSIC VIDEOS","intent":"hero_headline","constraints":["ALL_CAPS"],"source":"cutmv.fulldigitalll.com","status":"extracted"}
+{"id":"cmv_hero_1005","brand":"cutmv","text":"INSTANTLY GENERATE CLIPS, GIFS, THUMBNAILS & SPOTIFY CANVAS","intent":"hero_support","constraints":["ALL_CAPS"],"source":"cutmv.fulldigitalll.com","status":"extracted"}

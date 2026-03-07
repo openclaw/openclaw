@@ -1,0 +1,385 @@
+{
+  "id": "cutmv_premium_v016",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.3,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.16
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.5
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.1,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook_value",
+      "type": "hookText",
+      "from": 0,
+      "duration": 96,
+      "headlineLines": [
+        {
+          "text": "ONE UPLOAD.",
+          "emphasis": false
+        },
+        {
+          "text": "CLIPS + GIFS + THUMBNAILS + CANVAS.",
+          "emphasis": true
+        }
+      ],
+      "transitionOut": {
+        "type": "crossfade",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "ONE UPLOAD.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "CLIPS + GIFS + THUMBNAILS + CANVAS.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 54
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 54
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_ui_pricing",
+      "type": "uiMock",
+      "from": 96,
+      "duration": 183,
+      "uiPreset": "cutmv_pricing_cards_dark",
+      "uiOptions": {
+        "cards": [
+          {
+            "title": "STARTER",
+            "meta": "50 credits/mo"
+          },
+          {
+            "title": "PRO",
+            "meta": "200 credits/mo",
+            "badge": "POPULAR"
+          },
+          {
+            "title": "TEAM",
+            "meta": "Unlimited"
+          }
+        ]
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "FREE CREDITS INCLUDED.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "badge_free",
+          "kind": "badge",
+          "text": "FREE CREDITS",
+          "motion": {
+            "enter": {
+              "preset": "BADGE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "BADGE_OUT",
+              "at": 118
+            }
+          }
+        },
+        {
+          "id": "pricing_head",
+          "kind": "headline",
+          "text": "FREE CREDITS INCLUDED.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 118
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_pricing_cards_dark",
+          "uiOptions": {
+            "cards": [
+              {
+                "title": "STARTER",
+                "meta": "50 credits/mo"
+              },
+              {
+                "title": "PRO",
+                "meta": "200 credits/mo",
+                "badge": "POPULAR"
+              },
+              {
+                "title": "TEAM",
+                "meta": "Unlimited"
+              }
+            ]
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 12
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 114
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "status": "idle",
+                "progress": 0
+              }
+            },
+            {
+              "at": 24,
+              "props": {
+                "tapTarget": "button.start",
+                "tap": {
+                  "x": 410,
+                  "y": 400
+                }
+              }
+            },
+            {
+              "at": 50,
+              "props": {
+                "tapTarget": "button.start",
+                "tap": {
+                  "x": 410,
+                  "y": 400
+                }
+              }
+            },
+            {
+              "at": 76,
+              "props": {
+                "tapTarget": "button.start",
+                "tap": {
+                  "x": 410,
+                  "y": 400
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#10121A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "slowDrift",
+        "vignette": 0.25
+      },
+      "contextBadge": "LIVE DEMO"
+    },
+    {
+      "id": "s3_cta",
+      "type": "ctaEndcard",
+      "from": 279,
+      "duration": 171,
+      "headline": {
+        "text": "TRY CUTMV NOW.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED",
+        "style": "solid_green"
+      },
+      "footer": "CLIPS • GIFS • THUMBNAILS • CANVAS",
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "TRY CUTMV NOW.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 68
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "JOIN BETA NOW",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 70
+            }
+          }
+        },
+        {
+          "id": "foot_cta",
+          "kind": "support",
+          "text": "BETA • FREE CREDITS INCLUDED",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 22
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 72
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

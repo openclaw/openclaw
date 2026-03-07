@@ -1,0 +1,5 @@
+{"id":"cmv_body_0001","brand":"cutmv","text":"CUTMV AUTO CREATES SHORT-FORM CLIPS, GIFS, THUMBNAILS, AND LOOPED CANVASES FROM YOUR MUSIC VIDEO — READY TO POST.","intent":"explain","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_body_0002","brand":"cutmv","text":"BUILT FOR PROJECT MANAGERS, MUSIC MARKETERS, INDEPENDENT ARTISTS, VIDEOGRAPHERS, CONTENT TEAMS, AND LABEL STAFF.","intent":"audience-fit","constraints":["ALL_CAPS"],"source":"user_context","status":"draft"}
+{"id":"cmv_body_1001","brand":"cutmv","text":"Transform full-length music videos into cutdowns, GIFs, thumbnails, and Spotify Canvas — instantly.","intent":"product_summary","source":"landing_page","status":"extracted"}
+{"id":"cmv_body_1002","brand":"cutmv","text":"Process 500MB–10GB files in under 2 minutes with AI-powered optimization.","intent":"speed_and_scale","source":"social_proof_banner","status":"extracted"}
+{"id":"cmv_body_2001","brand":"cutmv","text":"SUBSCRIBE. GET CREDITS. EXPORT CLIPS, GIFS, THUMBNAILS, AND CANVASES — ALL FROM ONE VIDEO.","intent":"pricing_model","constraints":["ALL_CAPS"],"source":"canonical","status":"approved"}

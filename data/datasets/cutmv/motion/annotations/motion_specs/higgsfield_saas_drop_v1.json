@@ -1,0 +1,147 @@
+{
+  "spec_version": "1.0.0",
+  "template_id": "higgsfield_saas_drop_v1",
+  "brand": "cutmv",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration_sec": 10,
+    "total_frames": 300,
+    "aspect_ratio": "9:16",
+    "codec": "h264"
+  },
+  "style_profile": "clean_premium_saas",
+  "design_philosophy": {
+    "principles": [
+      "Minimal and surgical",
+      "Expensive energy — every element earns its place",
+      "Elite controlled pacing",
+      "Mask reveals over hard cuts",
+      "Subtle green accent lines only"
+    ],
+    "use_case": "Premium SaaS product drop — brand authority, clean reveal"
+  },
+  "global_rules": {
+    "aspect_ratio": "9:16",
+    "all_caps": true,
+    "high_contrast": true,
+    "cta_required": true,
+    "background": "#000000",
+    "typography_color": "#FFFFFF",
+    "accent_color": "#94F33F",
+    "accent_usage": "subtle_line_accent_only"
+  },
+  "structure": [
+    {
+      "scene": 1,
+      "id": "headline",
+      "type": "headline",
+      "text": "TURN MUSIC VIDEOS INTO VIRAL ASSETS",
+      "time": { "start_sec": 0, "end_sec": 3 },
+      "frames": { "start": 0, "end": 90 },
+      "animation": {
+        "type": "slow_scale_fade",
+        "fade_in_sec": 0.6,
+        "scale": { "from": 1.0, "to": 1.03, "easing": "easeOutCubic", "duration_sec": 2.5 },
+        "fade_out_sec": 0.4
+      },
+      "background": "solid_black",
+      "font_size": 64,
+      "font_weight": 800,
+      "line_height": 1.15,
+      "position": "center_center",
+      "max_width_pct": 0.7,
+      "z_index": 5,
+      "description": "Slow, premium headline fade. Scale barely perceptible. Pure typography moment."
+    },
+    {
+      "scene": 2,
+      "id": "ui_reveal",
+      "type": "ui_reveal",
+      "asset": {
+        "path": "cutmv/dashboard_ui.jpg",
+        "loader": "staticFile",
+        "crop": "top_center"
+      },
+      "time": { "start_sec": 3, "end_sec": 7 },
+      "frames": { "start": 90, "end": 210 },
+      "animation": {
+        "type": "mask_reveal_vertical",
+        "reveal_direction": "bottom_to_top",
+        "reveal_duration_sec": 0.8,
+        "easing": "easeOutCubic",
+        "fade_out_sec": 0.4
+      },
+      "overlay_effect": "subtle_green_line_accent",
+      "width_pct": 0.85,
+      "max_height_px": 700,
+      "border_radius": 12,
+      "border": "1px solid #222222",
+      "position": "center_center",
+      "z_index": 3,
+      "description": "Vertical mask reveal of dashboard UI. Green accent line traces bottom edge."
+    },
+    {
+      "scene": 3,
+      "id": "statement",
+      "type": "statement",
+      "text": "GENERATED IN SECONDS.",
+      "time": { "start_sec": 7, "end_sec": 8.5 },
+      "frames": { "start": 210, "end": 255 },
+      "animation": {
+        "type": "center_snap_fade",
+        "fade_in_sec": 0.2,
+        "snap_scale": { "from": 1.05, "to": 1.0, "duration_sec": 0.15 },
+        "fade_out_sec": 0.3
+      },
+      "font_size": 52,
+      "font_weight": 700,
+      "position": "center_center",
+      "z_index": 5,
+      "description": "Snap-in statement. Quick scale correction gives weight."
+    },
+    {
+      "scene": 4,
+      "id": "logo_cta",
+      "type": "logo_cta",
+      "logo": {
+        "path": "cutmv/logo.png",
+        "loader": "staticFile",
+        "width_pct": 0.6,
+        "aspect_ratio_lock": true,
+        "object_fit": "contain",
+        "constraints": {
+          "no_distortion": true,
+          "no_transparency": true,
+          "no_blur": true
+        }
+      },
+      "cta_text": "TRY CUTMV",
+      "time": { "start_sec": 8.5, "end_sec": 10 },
+      "frames": { "start": 255, "end": 300 },
+      "animation": {
+        "logo": {
+          "type": "logo_scale_lock",
+          "scale": { "from": 0.8, "to": 1.0, "easing": "easeOutCubic", "duration_sec": 0.5 },
+          "fade_in_sec": 0.4,
+          "final_opacity": 1
+        },
+        "cta": {
+          "fade_in_sec": 0.3,
+          "delay_after_logo_sec": 0.2,
+          "hold_until_end": true
+        }
+      },
+      "logo_z_index": 10,
+      "cta_z_index": 9,
+      "cta_font_size": 64,
+      "cta_font_weight": 700,
+      "description": "Logo scale-locks in. CTA fades below. Holds to end. Elite close."
+    }
+  ],
+  "render": {
+    "output_pattern": "cutmv__motion__higgsfield-saas-drop__reels__1080x1920__dur-10__v001",
+    "composition_id": "HiggsfieldSaasDrop"
+  }
+}

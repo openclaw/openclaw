@@ -1,0 +1,506 @@
+{
+  "id": "cutmv_premium_v002",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_pain",
+      "type": "hookText",
+      "from": 0,
+      "duration": 78,
+      "headlineLines": [
+        {
+          "text": "YOU EDIT FOR HOURS.",
+          "emphasis": false
+        },
+        {
+          "text": "NOBODY WATCHES.",
+          "emphasis": true
+        }
+      ],
+      "transitionOut": {
+        "type": "sweep",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "YOU EDIT FOR HOURS.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 42
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "NOBODY WATCHES.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 44
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 44
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_fix_ui",
+      "type": "uiMock",
+      "from": 78,
+      "duration": 125,
+      "uiPreset": "cutmv_dashboard_outputs_dark",
+      "uiOptions": {
+        "rows": [
+          {
+            "label": "CLIPS",
+            "status": "READY"
+          },
+          {
+            "label": "GIFS",
+            "status": "READY"
+          },
+          {
+            "label": "THUMBNAILS",
+            "status": "READY"
+          },
+          {
+            "label": "CANVAS",
+            "status": "PROCESSING"
+          }
+        ]
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "OUTPUTS READY IN SECONDS.",
+          "underline": true
+        }
+      },
+      "transitionOut": {
+        "type": "wipe",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "top",
+          "kind": "headline",
+          "text": "OUTPUTS READY IN SECONDS.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 76
+            }
+          }
+        },
+        {
+          "id": "u2",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 76
+            }
+          }
+        },
+        {
+          "id": "ui",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_dashboard_outputs_dark",
+          "uiOptions": {
+            "rows": [
+              {
+                "label": "CLIPS",
+                "status": "READY"
+              },
+              {
+                "label": "GIFS",
+                "status": "READY"
+              },
+              {
+                "label": "THUMBNAILS",
+                "status": "READY"
+              },
+              {
+                "label": "CANVAS",
+                "status": "PROCESSING"
+              }
+            ]
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 70
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_dense",
+        "seed": 83,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s3_proof_cards",
+      "type": "uiMock",
+      "from": 203,
+      "duration": 110,
+      "uiPreset": "cutmv_pricing_cards_dark",
+      "uiOptions": {
+        "cards": [
+          {
+            "title": "STARTER",
+            "meta": "50 credits/mo"
+          },
+          {
+            "title": "PRO",
+            "meta": "200 credits/mo",
+            "badge": "POPULAR"
+          },
+          {
+            "title": "TEAM",
+            "meta": "Unlimited"
+          }
+        ]
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "PICK YOUR PACK.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "top2",
+          "kind": "headline",
+          "text": "PICK YOUR PACK.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 64
+            }
+          }
+        },
+        {
+          "id": "ui2",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_pricing_cards_dark",
+          "uiOptions": {
+            "cards": [
+              {
+                "title": "STARTER",
+                "meta": "50 credits/mo"
+              },
+              {
+                "title": "PRO",
+                "meta": "200 credits/mo",
+                "badge": "POPULAR"
+              },
+              {
+                "title": "TEAM",
+                "meta": "Unlimited"
+              }
+            ]
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 60
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_dense",
+        "seed": 90,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s4_cta",
+      "type": "ctaEndcard",
+      "from": 313,
+      "duration": 137,
+      "headline": {
+        "text": "MORE CONTENT.",
+        "emphasis": false
+      },
+      "headline2": {
+        "text": "LESS WORK.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "START NOW",
+        "style": "solid_green"
+      },
+      "footer": "CUTMV.COM",
+      "elements": [
+        {
+          "id": "h_cta1",
+          "kind": "headline",
+          "text": "MORE CONTENT.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 6
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 48
+            }
+          }
+        },
+        {
+          "id": "h_cta2",
+          "kind": "headline",
+          "text": "LESS WORK.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 12
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 50
+            }
+          }
+        },
+        {
+          "id": "btn",
+          "kind": "cta",
+          "text": "GET BETA ACCESS",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 18
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "foot",
+          "kind": "support",
+          "text": "JOIN BETA — HELP SHAPE IT.",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 22
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 52
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

@@ -1,0 +1,484 @@
+{
+  "id": "cutmv_premium_v028",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook_time",
+      "type": "hookText",
+      "from": 0,
+      "duration": 62,
+      "headlineLines": [
+        {
+          "text": "NO TIME?",
+          "emphasis": true
+        }
+      ],
+      "transitionOut": {
+        "type": "sweep",
+        "duration": 10
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "NO TIME?",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 4
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 36
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_hook_skills",
+      "type": "hookText",
+      "from": 62,
+      "duration": 62,
+      "headlineLines": [
+        {
+          "text": "NO SKILLS?",
+          "emphasis": true
+        }
+      ],
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 10
+      },
+      "elements": [
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "NO SKILLS?",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 4
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 36
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "pulse",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s3_ui_configure_slow",
+      "type": "uiMock",
+      "from": 124,
+      "duration": 192,
+      "uiPreset": "cutmv_configure_output_options_dark",
+      "uiOptions": {
+        "title": "CONFIGURE OUTPUTS",
+        "aspectToggles": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "outputs": [
+          "CLIPS",
+          "GIFS",
+          "THUMBNAILS",
+          "CANVAS"
+        ],
+        "primaryButton": "START CREATING NOW"
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "NO PROBLEM.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "badge_watch",
+          "kind": "badge",
+          "text": "WATCH",
+          "motion": {
+            "enter": {
+              "preset": "BADGE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "BADGE_OUT",
+              "at": 150
+            }
+          }
+        },
+        {
+          "id": "head_noproblem",
+          "kind": "headline",
+          "text": "NO PROBLEM.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 150
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_configure_output_options_dark",
+          "uiOptions": {
+            "title": "CONFIGURE OUTPUTS",
+            "aspectToggles": [
+              "9:16",
+              "1:1",
+              "16:9"
+            ],
+            "outputs": [
+              "CLIPS",
+              "GIFS",
+              "THUMBNAILS",
+              "CANVAS"
+            ],
+            "primaryButton": "START CREATING NOW"
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 148
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": false
+                  },
+                  {
+                    "label": "GIFS",
+                    "on": false
+                  },
+                  {
+                    "label": "THUMBNAILS",
+                    "on": false
+                  },
+                  {
+                    "label": "CANVAS",
+                    "on": false
+                  }
+                ],
+                "activeAspect": 0
+              }
+            },
+            {
+              "at": 24,
+              "props": {
+                "tapTarget": "toggle.clips",
+                "tap": {
+                  "x": 762,
+                  "y": 264
+                },
+                "toggles": [
+                  {
+                    "label": "CLIPS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 0
+              }
+            },
+            {
+              "at": 44,
+              "props": {
+                "tapTarget": "toggle.gifs",
+                "tap": {
+                  "x": 762,
+                  "y": 324
+                },
+                "toggles": [
+                  {
+                    "label": "GIFS",
+                    "on": true
+                  }
+                ],
+                "highlightToggleIndex": 1
+              }
+            },
+            {
+              "at": 64,
+              "props": {
+                "tapTarget": "button.start",
+                "pressed": true,
+                "tap": {
+                  "x": 410,
+                  "y": 520
+                }
+              }
+            },
+            {
+              "at": 74,
+              "props": {
+                "pressed": false,
+                "progress": 0,
+                "status": "generating"
+              }
+            },
+            {
+              "at": 90,
+              "props": {
+                "progress": 0.3
+              }
+            },
+            {
+              "at": 110,
+              "props": {
+                "progress": 0.6
+              }
+            },
+            {
+              "at": 130,
+              "props": {
+                "progress": 0.88
+              }
+            },
+            {
+              "at": 140,
+              "props": {
+                "progress": 1,
+                "status": "done",
+                "checkmarks": [
+                  "CLIPS",
+                  "GIFS",
+                  "THUMBNAILS",
+                  "CANVAS"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_clean",
+        "seed": 99,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s4_cta",
+      "type": "ctaEndcard",
+      "from": 316,
+      "duration": 134,
+      "headline": {
+        "text": "YOUR TURN.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "TRY FREE",
+        "style": "solid_green"
+      },
+      "footer": "ZERO SKILLS NEEDED.",
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "YOUR TURN.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 58
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "JOIN BETA NOW",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 60
+            }
+          }
+        },
+        {
+          "id": "foot_cta",
+          "kind": "support",
+          "text": "BETA • FREE CREDITS INCLUDED",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 22
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 62
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

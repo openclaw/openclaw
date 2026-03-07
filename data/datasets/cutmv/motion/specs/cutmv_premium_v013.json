@@ -1,0 +1,468 @@
+{
+  "id": "cutmv_premium_v013",
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo 2025 - white.png",
+    "demoFrameDir": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.3,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.16
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.5
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.08,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "scenes": [
+    {
+      "id": "s1_hook_promise",
+      "type": "hookText",
+      "from": 0,
+      "duration": 81,
+      "headlineLines": [
+        {
+          "text": "TURN ONE VIDEO",
+          "emphasis": false
+        },
+        {
+          "text": "INTO A WEEK OF CONTENT.",
+          "emphasis": true
+        }
+      ],
+      "transitionOut": {
+        "type": "crossfade",
+        "duration": 12
+      },
+      "elements": [
+        {
+          "id": "h1",
+          "kind": "headline",
+          "text": "TURN ONE VIDEO",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "h2",
+          "kind": "headline",
+          "text": "INTO A WEEK OF CONTENT.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 54
+            }
+          }
+        },
+        {
+          "id": "u1",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 14
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 54
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s2_ui_dashboard",
+      "type": "uiMock",
+      "from": 81,
+      "duration": 169,
+      "uiPreset": "cutmv_dashboard_outputs_dark",
+      "uiOptions": {
+        "rows": [
+          {
+            "label": "CLIPS",
+            "status": "PROCESSING"
+          },
+          {
+            "label": "GIFS",
+            "status": "PROCESSING"
+          },
+          {
+            "label": "THUMBNAILS",
+            "status": "PROCESSING"
+          },
+          {
+            "label": "CANVAS",
+            "status": "PROCESSING"
+          }
+        ]
+      },
+      "layout": {
+        "anchor": "center",
+        "headlineTop": {
+          "text": "GENERATED IN SECONDS.",
+          "underline": false
+        }
+      },
+      "transitionOut": {
+        "type": "dipFade",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "dash_head",
+          "kind": "headline",
+          "text": "GENERATED IN SECONDS.",
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 130
+            }
+          }
+        },
+        {
+          "id": "ui_card",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_dashboard_outputs_dark",
+          "uiOptions": {
+            "rows": [
+              {
+                "label": "CLIPS",
+                "status": "PROCESSING"
+              },
+              {
+                "label": "GIFS",
+                "status": "PROCESSING"
+              },
+              {
+                "label": "THUMBNAILS",
+                "status": "PROCESSING"
+              },
+              {
+                "label": "CANVAS",
+                "status": "PROCESSING"
+              }
+            ]
+          },
+          "motion": {
+            "enter": {
+              "preset": "UI_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "UI_OUT",
+              "at": 126
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 0,
+              "props": {
+                "status": "generating",
+                "progress": 0.08
+              }
+            },
+            {
+              "at": 18,
+              "props": {
+                "progress": 0.22
+              }
+            },
+            {
+              "at": 36,
+              "props": {
+                "progress": 0.45
+              }
+            },
+            {
+              "at": 56,
+              "props": {
+                "progress": 0.62
+              }
+            },
+            {
+              "at": 78,
+              "props": {
+                "progress": 0.78
+              }
+            },
+            {
+              "at": 102,
+              "props": {
+                "progress": 0.92
+              }
+            },
+            {
+              "at": 124,
+              "props": {
+                "progress": 1,
+                "status": "done",
+                "checkmarks": [
+                  "CLIPS",
+                  "GIFS",
+                  "THUMBNAILS",
+                  "CANVAS"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "type": "premiere_timeline",
+        "preset": "music_video_dense",
+        "seed": 270,
+        "layout": {
+          "position": "behindProduct",
+          "safeInsetPx": 150
+        },
+        "camera": {
+          "mode": "slowPan",
+          "parallax": true,
+          "driftPx": {
+            "x": 26,
+            "y": 12
+          },
+          "zoom": {
+            "from": 1.02,
+            "to": 1.06
+          }
+        },
+        "scroll": {
+          "mode": "follow_playhead",
+          "speedPxPerFrame": 2,
+          "loop": true
+        },
+        "post": {
+          "blur": 0.65,
+          "vignette": 0.35,
+          "grain": 0.2
+        }
+      },
+      "contextBadge": "IN EDITOR"
+    },
+    {
+      "id": "s3_proof_social",
+      "type": "hookText",
+      "from": 250,
+      "duration": 81,
+      "headlineLines": [
+        {
+          "text": "OPTIMIZED FOR SOCIAL.",
+          "emphasis": true
+        }
+      ],
+      "subhead": "TIKTOK • IG • SHORTS",
+      "transitionOut": {
+        "type": "wipe",
+        "duration": 14
+      },
+      "elements": [
+        {
+          "id": "h3",
+          "kind": "headline",
+          "text": "OPTIMIZED FOR SOCIAL.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 2
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "u2",
+          "kind": "accentUnderline",
+          "motion": {
+            "enter": {
+              "preset": "ACCENT_UNDERLINE_IN",
+              "at": 10
+            },
+            "exit": {
+              "preset": "ACCENT_UNDERLINE_OUT",
+              "at": 52
+            }
+          }
+        },
+        {
+          "id": "sub1",
+          "kind": "support",
+          "text": "TIKTOK • IG • SHORTS",
+          "motion": {
+            "enter": {
+              "preset": "SUBHEAD_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "SUBHEAD_OUT",
+              "at": 54
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#11131A"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.3
+      }
+    },
+    {
+      "id": "s4_cta",
+      "type": "ctaEndcard",
+      "from": 331,
+      "duration": 119,
+      "headline": {
+        "text": "START CREATING NOW.",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "GET STARTED",
+        "style": "solid_green"
+      },
+      "elements": [
+        {
+          "id": "h_cta",
+          "kind": "headline",
+          "text": "START CREATING NOW.",
+          "emphasis": true,
+          "motion": {
+            "enter": {
+              "preset": "HEADLINE_IN",
+              "at": 8
+            },
+            "exit": {
+              "preset": "HEADLINE_OUT",
+              "at": 48
+            }
+          }
+        },
+        {
+          "id": "btn_cta",
+          "kind": "cta",
+          "text": "JOIN THE BETA",
+          "motion": {
+            "enter": {
+              "preset": "CTA_IN",
+              "at": 16
+            },
+            "exit": {
+              "preset": "CTA_OUT",
+              "at": 50
+            }
+          }
+        }
+      ],
+      "environment": {
+        "type": "abstract_blob_noise",
+        "gradient": [
+          "#0B0B0F",
+          "#0D0F16"
+        ],
+        "blobs": 2,
+        "greenAccent": true,
+        "movement": "breathe",
+        "vignette": 0.35
+      },
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ],
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "alwaysVisible": true,
+    "idleBehavior": "activeHover",
+    "scale": 2.25,
+    "shadow": 0.22,
+    "profile": "FAST_CLICKY"
+  },
+  "brandLockup": {
+    "topLogoMode": "proceduralTiles",
+    "topLogoScale": 2.2,
+    "topLogoY": 125
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  }
+}

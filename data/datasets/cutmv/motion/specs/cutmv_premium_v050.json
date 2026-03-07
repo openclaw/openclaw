@@ -1,0 +1,225 @@
+{
+  "brand": "CUTMV",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationInFrames": 450
+  },
+  "assets": {
+    "primaryLogo": "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png"
+  },
+  "style": {
+    "bg": "#0B0B0F",
+    "green": "#94F33F",
+    "backgroundLayers": [
+      {
+        "type": "softGradient",
+        "opacity": 0.35,
+        "animate": "slowDrift"
+      },
+      {
+        "type": "grain",
+        "opacity": 0.18
+      },
+      {
+        "type": "vignette",
+        "opacity": 0.55
+      },
+      {
+        "type": "greenBloom",
+        "opacity": 0.12,
+        "pulse": "subtle"
+      }
+    ]
+  },
+  "cursor": {
+    "enabled": true,
+    "style": "arrow_white",
+    "scale": 2.25,
+    "profile": "FAST_CLICKY",
+    "idleBehavior": "activeHover"
+  },
+  "brandSystem": {
+    "bug": {
+      "enabled": false
+    },
+    "hero": {
+      "enabled": true,
+      "heroMark": "fd_logo_new",
+      "placement": "center",
+      "openFrames": 20,
+      "closeFrames": 26,
+      "size": 140,
+      "scale": 1,
+      "xOffset": 0,
+      "yOffset": 0
+    },
+    "endcard": {
+      "enabled": true,
+      "style": "lockupA",
+      "showLastFrames": 60,
+      "bottomOffset": 72
+    }
+  },
+  "transitionPresets": {},
+  "elementMotionPresets": {},
+  "id": "cutmv_premium_v050",
+  "scenes": [
+    {
+      "id": "s1_hook",
+      "type": "hookText",
+      "from": 0,
+      "duration": 90,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 50
+      },
+      "contextBadge": "BETA",
+      "headlineLines": [
+        {
+          "text": "AUTOMATE",
+          "emphasis": true
+        },
+        {
+          "text": "THE BORING PART.",
+          "emphasis": false
+        }
+      ],
+      "subhead": "Let the outputs run."
+    },
+    {
+      "id": "s2_dashboard",
+      "type": "uiMock",
+      "from": 90,
+      "duration": 210,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 101
+      },
+      "contextBadge": "DASHBOARD",
+      "uiPreset": "cutmv_dashboard_outputs_dark",
+      "uiOptions": {
+        "title": "RENDER QUEUE",
+        "cta": "VIEW EXPORTS"
+      },
+      "elements": [
+        {
+          "id": "dash",
+          "kind": "uiCard",
+          "uiPreset": "cutmv_dashboard_outputs_dark",
+          "motion": {
+            "enter": {
+              "type": "scaleUp",
+              "at": 0,
+              "durationFrames": 16
+            },
+            "exit": {
+              "type": "fadeDown",
+              "at": 194,
+              "durationFrames": 14
+            }
+          },
+          "propsTimeline": [
+            {
+              "at": 12,
+              "props": {
+                "tapTarget": "dashboard.row.1"
+              }
+            },
+            {
+              "at": 26,
+              "props": {
+                "tapTarget": "dashboard.row.2"
+              }
+            },
+            {
+              "at": 40,
+              "props": {
+                "tapTarget": "dashboard.row.3"
+              }
+            },
+            {
+              "at": 60,
+              "props": {
+                "status": "processing",
+                "progress": 0.12
+              }
+            },
+            {
+              "at": 92,
+              "props": {
+                "progress": 0.44
+              }
+            },
+            {
+              "at": 124,
+              "props": {
+                "progress": 0.74
+              }
+            },
+            {
+              "at": 156,
+              "props": {
+                "status": "done",
+                "progress": 1
+              }
+            },
+            {
+              "at": 176,
+              "props": {
+                "tapTarget": "button.start"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s3_value",
+      "type": "impactText",
+      "from": 300,
+      "duration": 60,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 13
+      },
+      "contextBadge": "VALUE",
+      "headlineLines": [
+        {
+          "text": "MORE OUTPUTS.",
+          "emphasis": true
+        },
+        {
+          "text": "LESS WORK.",
+          "emphasis": false
+        }
+      ],
+      "subhead": "That’s the whole point."
+    },
+    {
+      "id": "s4_endcard",
+      "type": "ctaEndcard",
+      "from": 360,
+      "duration": 90,
+      "environment": {
+        "type": "abstract_blob_noise",
+        "seed": 7
+      },
+      "headline": {
+        "text": "TRY CUTMV (BETA)",
+        "emphasis": true
+      },
+      "cta": {
+        "text": "JOIN THE BETA",
+        "style": "solid_green"
+      },
+      "footer": "CREATORS • EDITORS • LABELS",
+      "brandOverlay": {
+        "hero": {
+          "enabled": false
+        }
+      }
+    }
+  ]
+}

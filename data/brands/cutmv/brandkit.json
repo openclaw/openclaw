@@ -1,0 +1,95 @@
+{
+  "brand_id": "cutmv",
+  "display_name": "CUTMV",
+  "relationships": {
+    "parent_brand_id": "fulldigital",
+    "shared_logo_group_id": "fulldigital-dot"
+  },
+  "visual": {
+    "palette": {
+      "primary": "#000000",
+      "neutral": ["#FFFFFF", "#1A1A1A", "#EDEDED"],
+      "accent": ["#94F33F"],
+      "allowed_hex": ["#000000", "#FFFFFF", "#1A1A1A", "#94F33F"],
+      "forbidden_hex": []
+    },
+    "logo_assets": {
+      "primary": "brands/cutmv/datasets/static/brand_assets/logos/cutmv_primary.svg",
+      "mono": "brands/cutmv/datasets/static/brand_assets/logos/cutmv_mono.svg",
+      "mark_only": "brands/cutmv/datasets/static/brand_assets/logos/fulldigital_dot.svg",
+      "clearspace_ratio": 0.12
+    },
+    "icon_style": {
+      "stroke_width_px": 2,
+      "corner_radius_px": 12,
+      "filled_allowed": false
+    }
+  },
+  "typography": {
+    "headline": "SYSTEM-HEADLINE",
+    "body": "SYSTEM-BODY",
+    "rules": {
+      "all_caps_default": true,
+      "max_fonts": 2,
+      "tracking_headline": 0.02
+    }
+  },
+  "voice": {
+    "tone": ["fast", "direct", "creator-focused", "results-driven"],
+    "banned_phrases": ["AI magic", "push-button riches"],
+    "cta_defaults": ["TRY CUTMV", "GO TO DASHBOARD", "GET CLIPS NOW"]
+  },
+  "layout": {
+    "grid": {
+      "columns": 12,
+      "gutter_px": 24,
+      "baseline_px": 4
+    },
+    "safe_margins": {
+      "pct": 0.07
+    },
+    "hierarchy": {
+      "h1_scale": 1.0,
+      "h2_scale": 0.62,
+      "body_scale": 0.38
+    }
+  },
+  "motion": {
+    "timing": {
+      "default_fps": 30,
+      "cta_show_sec": 2.0,
+      "max_duration_sec": 15
+    },
+    "easing": {
+      "primary": "easeOutCubic",
+      "secondary": "easeInOutCubic"
+    },
+    "style": {
+      "stagger_sec": 0.06,
+      "blur_allowed": false,
+      "glow_allowed": true
+    }
+  },
+  "export": {
+    "formats": ["png", "mp4", "svg", "gif"],
+    "default_aspect_ratios": ["1:1", "4:5", "9:16", "16:9"]
+  },
+  "rules": {
+    "must": [
+      "ALL CAPS DEFAULT",
+      "CTA ALWAYS PRESENT",
+      "NO EXTRA COLORS"
+    ],
+    "must_not": [
+      "SMALL HARD-TO-READ TYPE",
+      "BUSY BACKGROUNDS",
+      "MORE THAN 2 FONTS"
+    ],
+    "validators": [
+      "palette",
+      "contrast",
+      "typography_caps",
+      "safe_margins"
+    ]
+  }
+}

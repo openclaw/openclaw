@@ -1,0 +1,174 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Motion presets. Every animation in a MotionSpec must reference a known transition from these presets. Claude cannot invent new animations.",
+  "presets": {
+    "ease_premium_v1": {
+      "description": "Premium clean — slow, deliberate, barely perceptible motion.",
+      "defaultEasing": "easeOutCubic",
+      "transitions": {
+        "fade_up": {
+          "type": "translate_y_fade",
+          "duration_frames": 14,
+          "y_from": 18,
+          "y_to": 0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "scale_in": {
+          "type": "scale_fade",
+          "duration_frames": 16,
+          "scale_from": 0.98,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "slow_scale": {
+          "type": "scale",
+          "duration_frames": 75,
+          "scale_from": 1.0,
+          "scale_to": 1.03
+        },
+        "logo_reveal": {
+          "type": "scale_fade",
+          "duration_frames": 18,
+          "scale_from": 0.8,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "mask_reveal": {
+          "type": "clip_path",
+          "direction": "bottom_to_top",
+          "duration_frames": 24,
+          "easing": "easeOutCubic"
+        },
+        "fade_out": {
+          "type": "opacity",
+          "duration_frames": 12,
+          "opacity_from": 1,
+          "opacity_to": 0
+        },
+        "center_snap": {
+          "type": "scale_fade",
+          "duration_frames": 6,
+          "scale_from": 1.05,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        }
+      }
+    },
+    "snap_edu_v1": {
+      "description": "Hormozi-style fast educational — aggressive snaps, tight timing.",
+      "defaultEasing": "easeOutExpo",
+      "transitions": {
+        "pop": {
+          "type": "scale_fade",
+          "duration_frames": 8,
+          "scale_from": 0.96,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "hard_cut_fade": {
+          "type": "opacity",
+          "duration_frames": 3,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "snap_in": {
+          "type": "translate_x_fade",
+          "duration_frames": 7,
+          "x_from": 24,
+          "x_to": 0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "zoom_snap": {
+          "type": "scale_fade",
+          "duration_frames": 9,
+          "scale_from": 0.85,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "punch_in": {
+          "type": "scale_fade",
+          "duration_frames": 12,
+          "scale_from": 0.95,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "rapid_stagger": {
+          "type": "stagger_scale_fade",
+          "stagger_frames": 3,
+          "per_item_duration_frames": 5,
+          "scale_from": 1.1,
+          "scale_to": 1.0
+        },
+        "bold_scale_up": {
+          "type": "scale_fade",
+          "duration_frames": 12,
+          "scale_from": 0.8,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "whip_sim": {
+          "type": "translate_x_blur",
+          "duration_frames": 6,
+          "x_from": -40,
+          "x_to": 0,
+          "blur_from": 0.8,
+          "blur_to": 0
+        }
+      }
+    },
+    "snap_social_v1": {
+      "description": "TikTok-native — fast enough to feel organic, controlled enough to read.",
+      "defaultEasing": "easeOutCubic",
+      "transitions": {
+        "whip_zoom": {
+          "type": "scale_fade",
+          "duration_frames": 8,
+          "scale_from": 1.3,
+          "scale_to": 1.0,
+          "opacity_from": 0.5,
+          "opacity_to": 1
+        },
+        "slide_in_left": {
+          "type": "translate_x_fade",
+          "duration_frames": 9,
+          "x_from": -60,
+          "x_to": 0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "snap_pop": {
+          "type": "scale_fade",
+          "duration_frames": 6,
+          "scale_from": 0.9,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        },
+        "punch_cut": {
+          "type": "scale",
+          "duration_frames": 5,
+          "scale_from": 1.05,
+          "scale_to": 1.0
+        },
+        "hard_snap": {
+          "type": "scale_fade",
+          "duration_frames": 9,
+          "scale_from": 0.85,
+          "scale_to": 1.0,
+          "opacity_from": 0,
+          "opacity_to": 1
+        }
+      }
+    }
+  }
+}

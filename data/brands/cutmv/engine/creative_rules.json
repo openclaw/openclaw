@@ -1,0 +1,55 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "visual_rules": {
+    "all_caps_default": true,
+    "cta_required": true,
+    "allowed_colors_only": true,
+    "palette": {
+      "primary": "#000000",
+      "neutral": ["#FFFFFF", "#1A1A1A", "#EDEDED"],
+      "accent": ["#94F33F"],
+      "forbidden": []
+    },
+    "max_fonts": 2,
+    "high_contrast_required": true,
+    "safe_margins_pct": 0.07,
+    "logo_clearspace_ratio": 0.12
+  },
+  "motion_rules": {
+    "max_duration_sec": 15,
+    "min_duration_sec": 6,
+    "default_fps": 30,
+    "cta_last_seconds": 2,
+    "easing_primary": "easeOutCubic",
+    "easing_secondary": "easeInOutCubic",
+    "stagger_sec": 0.06,
+    "blur_allowed": false,
+    "glow_allowed": true
+  },
+  "copy_rules": {
+    "no_contradictions_allowed": true,
+    "legal_copy_source": "legal dataset only",
+    "cta_default": "TRY CUTMV",
+    "banned_phrases": ["AI magic", "push-button riches"],
+    "banned_pricing_references": ["$0.99", "$1.99", "$4.99", "per-video pricing", "pay per video"],
+    "pricing_unit": "credits",
+    "subscription_required": true,
+    "tone": ["fast", "direct", "creator-focused", "results-driven"]
+  },
+  "retention_rules": {
+    "uploads_hours": 24,
+    "exports_days": 29,
+    "must_distinguish": true
+  },
+  "validators": [
+    "palette",
+    "contrast",
+    "typography_caps",
+    "safe_margins",
+    "cta_present",
+    "banned_phrases",
+    "no_dollar_pricing",
+    "retention_accuracy"
+  ]
+}

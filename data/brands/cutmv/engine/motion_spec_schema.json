@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cutmv.com/schemas/motion_spec.schema.json",
+  "title": "MotionSpec",
+  "description": "Defines the structure of a motion creative for deterministic Remotion rendering.",
+  "type": "object",
+  "required": ["template_id", "brand", "duration_sec", "fps", "aspect_ratio", "structure"],
+  "properties": {
+    "template_id": {
+      "type": "string",
+      "description": "References a template in template_registry.json"
+    },
+    "brand": {
+      "type": "string",
+      "const": "cutmv"
+    },
+    "duration_sec": {
+      "type": "number",
+      "minimum": 6,
+      "maximum": 15
+    },
+    "fps": {
+      "type": "integer",
+      "enum": [24, 30, 60]
+    },
+    "aspect_ratio": {
+      "type": "string",
+      "enum": ["1:1", "4:5", "9:16", "16:9"]
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["w", "h"],
+      "properties": {
+        "w": { "type": "integer" },
+        "h": { "type": "integer" }
+      }
+    },
+    "structure": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "enter_sec", "animation"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["headline", "subheadline", "body", "bullet_list", "ui_demo", "screenshot", "metric", "cta", "logo", "background"]
+          },
+          "text": {
+            "type": "string",
+            "description": "Text content. Must be ALL_CAPS for headline/subheadline/cta."
+          },
+          "items": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For bullet_list type."
+          },
+          "asset_path": {
+            "type": "string",
+            "description": "Path to image/video asset for ui_demo/screenshot/background."
+          },
+          "value": {
+            "type": "string",
+            "description": "For metric type (e.g. '10,000+')."
+          },
+          "label": {
+            "type": "string",
+            "description": "For metric type (e.g. 'VIDEOS PROCESSED')."
+          },
+          "enter_sec": {
+            "type": "number",
+            "minimum": 0,
+            "description": "When this element enters (seconds from start)."
+          },
+          "exit_sec": {
+            "type": "number",
+            "description": "When this element exits. If omitted, stays until end."
+          },
+          "duration_sec": {
+            "type": "number",
+            "description": "How long this element is visible."
+          },
+          "animation": {
+            "type": "string",
+            "enum": ["fade_in", "fade_out", "slide_up", "slide_down", "slide_left", "slide_right", "scale_fade", "scale_up", "typewriter", "stagger_in", "none"]
+          },
+          "easing": {
+            "type": "string",
+            "default": "easeOutCubic"
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "string" },
+              "y": { "type": "string" },
+              "anchor": { "type": "string", "enum": ["center", "top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"] }
+            }
+          }
+        }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "properties": {
+        "track_path": { "type": "string" },
+        "volume": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "brief_id": { "type": "string" },
+        "generated_by": { "type": "string" },
+        "approved": { "type": "boolean" }
+      }
+    }
+  },
+  "additionalProperties": false
+}

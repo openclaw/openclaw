@@ -1,0 +1,86 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Layout contracts define safe zones, content zones, and spacing rules for each aspect ratio. Every MotionSpec must respect these constraints.",
+  "layouts": {
+    "grid9x16_v1": {
+      "description": "Primary 9:16 vertical layout for Reels/TikTok/Stories.",
+      "canvas": { "width": 1080, "height": 1920 },
+      "safe": {
+        "top": 150,
+        "bottom": 220,
+        "left": 90,
+        "right": 90,
+        "description": "Safe margins account for platform UI overlays (status bar, bottom nav, like/share buttons)."
+      },
+      "usable": {
+        "width": 900,
+        "height": 1550,
+        "description": "Canvas minus safe margins = usable content area."
+      },
+      "zones": {
+        "hook": {
+          "y": 180,
+          "h": 520,
+          "description": "Top zone for headlines and hooks. Above the fold on scroll."
+        },
+        "demo": {
+          "y": 720,
+          "h": 760,
+          "description": "Center zone for UI screenshots, demo clips, product visuals."
+        },
+        "cta": {
+          "y": 1540,
+          "h": 330,
+          "description": "Bottom zone for CTA, logo reveals. Stays above bottom safe margin."
+        }
+      },
+      "maxTextWidthPct": 0.84,
+      "maxTextWidthPx": 907,
+      "vertical_center_bias": true,
+      "grid_notes": "Content should feel centered vertically with breathing room. No element should touch safe margins."
+    },
+    "grid1x1_v1": {
+      "description": "Square layout for feed posts.",
+      "canvas": { "width": 1080, "height": 1080 },
+      "safe": {
+        "top": 60,
+        "bottom": 60,
+        "left": 60,
+        "right": 60
+      },
+      "usable": {
+        "width": 960,
+        "height": 960
+      },
+      "zones": {
+        "hook": { "y": 80, "h": 320 },
+        "demo": { "y": 400, "h": 360 },
+        "cta": { "y": 780, "h": 300 }
+      },
+      "maxTextWidthPct": 0.85,
+      "maxTextWidthPx": 918
+    },
+    "grid4x5_v1": {
+      "description": "4:5 portrait layout for Instagram feed.",
+      "canvas": { "width": 1080, "height": 1350 },
+      "safe": {
+        "top": 80,
+        "bottom": 120,
+        "left": 72,
+        "right": 72
+      },
+      "usable": {
+        "width": 936,
+        "height": 1150
+      },
+      "zones": {
+        "hook": { "y": 120, "h": 360 },
+        "demo": { "y": 500, "h": 520 },
+        "cta": { "y": 1040, "h": 310 }
+      },
+      "maxTextWidthPct": 0.84,
+      "maxTextWidthPx": 907
+    }
+  }
+}

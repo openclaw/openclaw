@@ -1,0 +1,80 @@
+{
+  "brand_id": "cutmv",
+  "version": "1.1.0",
+  "last_updated": "2025-02-11",
+  "resolved_by": "user",
+
+  "business_model": {
+    "subscription_required": true,
+    "model": "subscription allots monthly credits, credits buy exports",
+    "pricing_unit": "credits",
+    "notes": "Subscription IS required. No free tier without subscription. Credits are the sole unit of consumption. NEVER reference dollar pricing ($0.99, $1.99, $4.99, etc.) in any copy — only credit-based pricing."
+  },
+
+  "retention": {
+    "uploads": {
+      "retention_hours": 24,
+      "notes": "Uploaded source videos are retained for 24 hours only."
+    },
+    "exports": {
+      "retention_days": 29,
+      "notes": "Generated exports (clips, GIFs, thumbnails, canvases) are retained for 29 days."
+    },
+    "summary": "Uploads = 24 hours. Exports = 29 days. These are different. Never conflate them."
+  },
+
+  "product": {
+    "name": "CUTMV",
+    "type": "AI-powered video processing platform",
+    "input": "Full-length music videos (MP4, MOV, AVI — 500MB to 10GB)",
+    "outputs": [
+      "Video cutdowns (clips from timestamps, 16:9 and 9:16)",
+      "GIFs (10 × 6-second looping)",
+      "Thumbnails (10 × HD still frames)",
+      "Spotify Canvas (5 × 8-second vertical loops)"
+    ],
+    "processing_claim": "Under 2 minutes"
+  },
+
+  "banned_in_copy": [
+    "$0.99",
+    "$1.99",
+    "$4.99",
+    "per-video pricing",
+    "pay per video",
+    "no subscription",
+    "without subscription",
+    "free",
+    "no cost",
+    "no payment",
+    "7-day",
+    "7 day"
+  ],
+
+  "contradictions_resolved": [
+    {
+      "issue": "FAQ pricing showed dollar amounts ($0.99/$1.99/$4.99) instead of credit system",
+      "severity": "high",
+      "resolution": "All pricing references must use credits only. Never reference dollar amounts in copy.",
+      "action": "Remove or rewrite any copy containing dollar-based pricing. Replace with credit-based language."
+    },
+    {
+      "issue": "Privacy policy stated '24 hours' for generated content, but exports last 29 days",
+      "severity": "high",
+      "resolution": "Uploads are retained 24 hours. Exports are retained 29 days. These are distinct.",
+      "action": "Any copy about retention must distinguish uploads (24h) from exports (29d)."
+    },
+    {
+      "issue": "Terms said 'no subscription required' but subscriptions exist",
+      "severity": "high",
+      "resolution": "Subscription IS required.",
+      "action": "Any copy or legal text saying 'no subscription required' must be corrected."
+    },
+    {
+      "issue": "Conflation of upload retention and export retention as a single number",
+      "severity": "medium",
+      "resolution": "Always specify which retention applies: uploads = 24h, exports = 29d.",
+      "action": "Generic 'your files are deleted after X' must clarify which files."
+    }
+  ]
+}

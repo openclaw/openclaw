@@ -1,0 +1,34 @@
+{
+  "brand": "cutmv",
+  "version": "1.0.0",
+  "description": "Style profiles map template IDs to their layout, typography, motion, and overlay contracts. Every MotionSpec must declare a profile.",
+  "profiles": {
+    "premium_clean": {
+      "description": "Higgsfield-style. Minimal, surgical, expensive energy.",
+      "layout": "grid9x16_v1",
+      "typography": "cutmv_type_v1",
+      "motion": "ease_premium_v1",
+      "overlays": "minimal_accent_v1",
+      "rhythm_profile": "premium_clean",
+      "templates": ["higgsfield_saas_drop_v1", "cutmv_premium_clean_v003"]
+    },
+    "fast_educational": {
+      "description": "Hormozi-style. Fast, punchy, high retention.",
+      "layout": "grid9x16_v1",
+      "typography": "cutmv_type_bold_v1",
+      "motion": "snap_edu_v1",
+      "overlays": "scribble_pack_v1",
+      "rhythm_profile": "educational_fast",
+      "templates": ["hormozi_education_v1"]
+    },
+    "native_social": {
+      "description": "TikTok-native mixed media. Creator aesthetic, scroll-stopping.",
+      "layout": "grid9x16_v1",
+      "typography": "cutmv_type_bold_v1",
+      "motion": "snap_social_v1",
+      "overlays": "scribble_pack_v1",
+      "rhythm_profile": "native_social",
+      "templates": ["mixed_media_scribble_v1"]
+    }
+  }
+}

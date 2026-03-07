@@ -1,0 +1,4 @@
+{"id":"cmv_bullets_0001","brand":"cutmv","items":["AUTO CLIP GENERATION","GIF EXPORTS","THUMBNAIL PICKS","SPOTIFY CANVAS LOOPS"],"intent":"feature_list","constraints":["ALL_CAPS"],"source":"user_context","status":"draft"}
+{"id":"cmv_bullets_0002","brand":"cutmv","items":["MADE FOR MUSIC MARKETING","READY-TO-POST OUTPUTS","FAST TURNAROUNDS","CONSISTENT FORMATS"],"intent":"benefit_list","constraints":["ALL_CAPS"],"source":"seed","status":"draft"}
+{"id":"cmv_bullet_1001","brand":"cutmv","items":["Precise clips from timestamps in 16:9 and 9:16","10 × 6-second looping GIFs","10 × HD thumbnail still frames","5 × 8-second vertical Spotify Canvas loops"],"source":"landing_page.output_types","status":"extracted"}
+{"id":"cmv_bullets_1002","brand":"cutmv","items":["CLIP GENERATION","GIF EXPORTS","THUMBNAIL CREATION","SPOTIFY CANVAS LOOPS"],"intent":"feature_list","constraints":["ALL_CAPS"],"source":"cutmv.fulldigitalll.com","status":"extracted"}
