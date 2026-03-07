@@ -47,5 +47,10 @@ Use this format when adding entries:
 
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
-  repo: `https://github.com/icesword0760/openclaw-wechat`
+  repo: `https://github.com/icesword760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **E-Claw** — Connect OpenClaw to E-Claw, an AI live wallpaper platform for Android. Bot replies appear as animated characters on the user's home screen.
+  npm: `@eclaw/openclaw-channel`
+  repo: `https://github.com/HankHuang0516/openclaw-channel-eclaw`
+  install: `openclaw plugins install @eclaw/openclaw-channel`
