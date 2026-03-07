@@ -89,8 +89,8 @@ describe("registerSettingRoutes", () => {
     registerSettingRoutes(deps);
   });
 
-  it("registers all 11 setting routes", () => {
-    expect(deps.routes.size).toBe(11);
+  it("registers all 12 setting routes", () => {
+    expect(deps.routes.size).toBe(12);
     expect(deps.routes.has("/api/v1/finance/exchanges")).toBe(true);
     expect(deps.routes.has("/api/v1/finance/exchanges/test")).toBe(true);
     expect(deps.routes.has("/api/v1/finance/exchanges/remove")).toBe(true);
