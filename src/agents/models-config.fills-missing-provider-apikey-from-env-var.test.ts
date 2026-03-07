@@ -72,7 +72,9 @@ async function runCustomProviderMergeTest(params: {
 }) {
   const existingProviderKey = params.existingProviderKey ?? "custom";
   const configProviderKey = params.configProviderKey ?? "custom";
-  await writeAgentModelsJson({ providers: { [existingProviderKey]: params.seedProvider } });
+  await writeAgentModelsJson({
+    providers: { [existingProviderKey]: params.seedProvider },
+  });
   await ensureOpenClawModelsJson({
     models: {
       mode: "merge",
@@ -234,7 +236,7 @@ describe("models-config", () => {
       const parsed = await runCustomProviderMergeTest({
         seedProvider: {
           baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
           api: "openai-responses",
           models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
         },
@@ -264,7 +266,11 @@ describe("models-config", () => {
           providers: {
             custom: {
               ...createMergeConfigProvider(),
-              apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" }, // pragma: allowlist secret
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "CUSTOM_PROVIDER_API_KEY",
+              }, // pragma: allowlist secret
             },
           },
         },
@@ -291,7 +297,11 @@ describe("models-config", () => {
               "minimax:default": {
                 type: "api_key",
                 provider: "minimax",
-                keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" }, // pragma: allowlist secret
+                keyRef: {
+                  source: "env",
+                  provider: "default",
+                  id: "MINIMAX_API_KEY",
+                }, // pragma: allowlist secret
               },
             },
           },
@@ -375,7 +385,10 @@ describe("models-config", () => {
   it("refreshes stale explicit moonshot model capabilities from implicit catalog", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 1024, maxTokens: 256 });
+        const cfg = createMoonshotConfig({
+          contextWindow: 1024,
+          maxTokens: 256,
+        });
 
         await ensureOpenClawModelsJson(cfg);
 
@@ -407,43 +420,55 @@ describe("models-config", () => {
   });
 
   it("does not persist resolved env var value as plaintext in models.json", async () => {
-    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
-      await withTempHome(async () => {
-        const cfg: OpenClawConfig = {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "sk-plaintext-should-not-appear", // already resolved by loadConfig
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "gpt-4.1",
-                    name: "GPT-4.1",
-                    input: ["text"],
-                    reasoning: false,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 16384,
-                  },
-                ],
+    await withEnvVar(
+      "OPENAI_API_KEY",
+      "sk-plaintext-should-not-appear", // pragma: allowlist secret
+      async () => {
+        await withTempHome(async () => {
+          const cfg: OpenClawConfig = {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret
+                  api: "openai-completions",
+                  models: [
+                    {
+                      id: "gpt-4.1",
+                      name: "GPT-4.1",
+                      input: ["text"],
+                      reasoning: false,
+                      cost: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                      },
+                      contextWindow: 128000,
+                      maxTokens: 16384,
+                    },
+                  ],
+                },
               },
             },
-          },
-        };
-        await ensureOpenClawModelsJson(cfg);
-        const result = await readGeneratedModelsJson<{
-          providers: Record<string, { apiKey?: string }>;
-        }>();
-        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
-      });
-    });
+          };
+          await ensureOpenClawModelsJson(cfg);
+          const result = await readGeneratedModelsJson<{
+            providers: Record<string, { apiKey?: string }>;
+          }>();
+          expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+        });
+      },
+    );
   });
 
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 350000, maxTokens: 16384 });
+        const cfg = createMoonshotConfig({
+          contextWindow: 350000,
+          maxTokens: 16384,
+        });
 
         await ensureOpenClawModelsJson(cfg);
         const parsed = await readGeneratedModelsJson<{
