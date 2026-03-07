@@ -27,6 +27,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-id <id>", "Use an explicit session id")
     .option("--agent <id>", "Agent id (overrides routing bindings)")
+    .option("--model <id>", "Model override for this turn (e.g. minimax/MiniMax-M2.5-highspeed)")
     .option("--thinking <level>", "Thinking level: off | minimal | low | medium | high")
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
@@ -67,6 +68,10 @@ ${formatHelpExamples([
   [
     'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
+  ],
+  [
+    'openclaw agent --agent main --model minimax/MiniMax-M2.5-highspeed --message "Hello"',
+    "Use a specific model for this turn.",
   ],
 ])}
 
