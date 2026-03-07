@@ -22,8 +22,8 @@ afterEach(() => {
   setActivePluginRegistry(createRegistry());
 });
 
-describe("senderIsOwner defaults to true when no owner allowlist configured (#26319)", () => {
-  it("senderIsOwner is true when no ownerAllowFrom is configured (single-user default)", () => {
+describe("senderIsOwner only reflects explicit owner authorization", () => {
+  it("does not treat direct-message senders as owners when no ownerAllowFrom is configured", () => {
     const cfg = {
       channels: { discord: {} },
     } as OpenClawConfig;
@@ -42,12 +42,11 @@ describe("senderIsOwner defaults to true when no owner allowlist configured (#26
       commandAuthorized: true,
     });
 
-    // Without an explicit ownerAllowFrom list, the sole authorized user should
-    // be treated as owner so ownerOnly tools (cron, gateway) are available.
-    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
-  it("senderIsOwner is false when no ownerAllowFrom is configured in a group chat", () => {
+  it("does not treat group-chat senders as owners when no ownerAllowFrom is configured", () => {
     const cfg = {
       channels: { discord: {} },
     } as OpenClawConfig;
@@ -67,6 +66,7 @@ describe("senderIsOwner defaults to true when no owner allowlist configured (#26
     });
 
     expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
   it("senderIsOwner is false when ownerAllowFrom is configured and sender does not match", () => {
