@@ -1207,16 +1207,12 @@ export function applyExtraParamsToAgent(
   }
 
   // fal routes to OpenRouter — apply the same reasoning-format transformation
-  // that regular OpenRouter uses to avoid flat reasoning_effort rejection.
+  // that regular OpenRouter uses, and rewrite the auth header to `Key <fal_key>`.
   if (provider === "fal-openrouter") {
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const falThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, falThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
-  }
-
-  // fal OpenRouter requires `Authorization: Key <fal_key>` instead of Bearer.
-  if (provider === "fal-openrouter") {
     log.debug(`applying fal Authorization: Key header for ${provider}/${modelId}`);
     agent.streamFn = createFalOpenrouterAuthWrapper(agent.streamFn);
   }
