@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from packages.common.errors import KillSwitchEnabledError, ReadOnlyError, WebhookAuthError
 from packages.common.logging import get_logger, log_error
@@ -89,6 +92,13 @@ app.include_router(admin_today_router, prefix="/admin/today")
 app.include_router(admin_webops_router, prefix="")
 app.include_router(admin_cc_router, prefix="/admin/cc")
 app.include_router(admin_marketing_router, prefix="/admin/marketing")
+
+# Command Center static serving (production)
+# Serves the built frontend at /cc/ when packages/command-center/dist/ exists.
+# In dev, use Vite dev server on port 5174 instead.
+_cc_dist = Path(__file__).resolve().parents[2] / "packages" / "command-center" / "dist"
+if _cc_dist.is_dir():
+    app.mount("/cc", StaticFiles(directory=str(_cc_dist), html=True), name="command-center")
 
 
 @app.exception_handler(WebhookAuthError)
