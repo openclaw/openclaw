@@ -118,10 +118,43 @@ export async function createChildAdapter(params: {
 
   const wait = async () =>
     await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
+      let settled = false;
+
+      const onError = (err: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.off("error", onError);
+        child.off("exit", onExit);
+        child.off("close", onClose);
+        reject(err);
+      };
+
+      const settle = (code: number | null, signal: NodeJS.Signals | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.off("error", onError);
+        child.off("exit", onExit);
+        child.off("close", onClose);
         resolve({ code, signal });
-      });
+      };
+
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        settle(code, signal);
+      };
+
+      const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+        settle(code, signal);
+      };
+
+      // Prefer process liveness (exit) over stdio closure (close): descendants can
+      // keep inherited pipes open after the tracked child PID exits.
+      child.on("error", onError);
+      child.on("exit", onExit);
+      child.on("close", onClose);
     });
 
   const kill = (signal?: NodeJS.Signals) => {
