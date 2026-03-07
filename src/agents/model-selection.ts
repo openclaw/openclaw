@@ -316,6 +316,11 @@ export function resolveConfiguredModelRef(params: {
     if (resolved) {
       return resolved.ref;
     }
+
+    // User specified a model but it could not be resolved — warn before falling back.
+    log.warn(
+      `Model "${trimmed}" could not be resolved. Falling back to default "${params.defaultProvider}/${params.defaultModel}".`,
+    );
   }
   // Before falling back to the hardcoded default, check if the default provider
   // is actually available. If it isn't but other providers are configured, prefer
