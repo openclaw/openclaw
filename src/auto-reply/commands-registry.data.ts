@@ -187,6 +187,25 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/approve",
       acceptsArgs: true,
       category: "management",
+      args: [
+        {
+          name: "id",
+          description: "Approval request ID",
+          type: "string",
+          required: true,
+        },
+        {
+          name: "decision",
+          description: "Decision",
+          type: "string",
+          choices: [
+            { value: "allow-once", label: "✅ Allow once" },
+            { value: "allow-always", label: "✅✅ Allow always" },
+            { value: "deny", label: "❌ Deny" },
+          ],
+        },
+      ],
+      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "context",
