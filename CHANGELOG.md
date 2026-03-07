@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Tools/Diffs guidance loading: move diffs usage guidance from unconditional prompt-hook injection to the plugin companion skill path, reducing unrelated-turn prompt noise while keeping diffs tool behavior unchanged. (#32630) thanks @sircrumpet.
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.
 - Config/Compaction safeguard tuning: expose `agents.defaults.compaction.recentTurnsPreserve` and quality-guard retry knobs through the validated config surface and embedded-runner wiring, with regression coverage for real config loading and schema metadata. (#25557) thanks @rodrigouroz.
+- iOS/App Store Connect release prep: align iOS bundle identifiers under `ai.openclaw.client`, refresh Watch app icons, add Fastlane metadata/screenshot automation, and support Keychain-backed ASC auth for uploads. (#38936) Thanks @ngutman.
 
 ### Breaking
 
