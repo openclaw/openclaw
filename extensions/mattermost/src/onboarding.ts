@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
+  buildSingleChannelSecretPromptState,
   hasConfiguredSecretInput,
   promptSingleChannelSecretInput,
   type ChannelOnboardingAdapter,
@@ -84,12 +85,17 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     const accountConfigured = Boolean(resolvedAccount.botToken && resolvedAccount.baseUrl);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv =
-      allowEnv &&
-      Boolean(process.env.MATTERMOST_BOT_TOKEN?.trim()) &&
-      Boolean(process.env.MATTERMOST_URL?.trim());
     const hasConfigToken = hasConfiguredSecretInput(resolvedAccount.config.botToken);
     const hasConfigValues = hasConfigToken || Boolean(resolvedAccount.config.baseUrl);
+    const tokenPromptState = buildSingleChannelSecretPromptState({
+      accountConfigured,
+      hasConfigToken,
+      allowEnv: allowEnv && !hasConfigValues,
+      envValue:
+        process.env.MATTERMOST_BOT_TOKEN?.trim() && process.env.MATTERMOST_URL?.trim()
+          ? process.env.MATTERMOST_BOT_TOKEN
+          : undefined,
+    });
 
     let botToken: SecretInput | null = null;
     let baseUrl: string | null = null;
@@ -103,9 +109,9 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
       prompter,
       providerHint: "mattermost",
       credentialLabel: "bot token",
-      accountConfigured,
-      canUseEnv: canUseEnv && !hasConfigValues,
-      hasConfigToken,
+      accountConfigured: tokenPromptState.accountConfigured,
+      canUseEnv: tokenPromptState.canUseEnv,
+      hasConfigToken: tokenPromptState.hasConfigToken,
       envPrompt: "MATTERMOST_BOT_TOKEN + MATTERMOST_URL detected. Use env vars?",
       keepPrompt: "Mattermost bot token already configured. Keep it?",
       inputPrompt: "Enter Mattermost bot token",

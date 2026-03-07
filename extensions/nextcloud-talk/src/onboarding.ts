@@ -1,4 +1,5 @@
 import {
+  buildSingleChannelSecretPromptState,
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
@@ -209,11 +210,16 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     const accountConfigured = Boolean(resolvedAccount.secret && resolvedAccount.baseUrl);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv = allowEnv && Boolean(process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim());
     const hasConfigSecret = Boolean(
       hasConfiguredSecretInput(resolvedAccount.config.botSecret) ||
       resolvedAccount.config.botSecretFile,
     );
+    const secretPromptState = buildSingleChannelSecretPromptState({
+      accountConfigured,
+      hasConfigToken: hasConfigSecret,
+      allowEnv,
+      envValue: process.env.NEXTCLOUD_TALK_BOT_SECRET,
+    });
 
     let baseUrl = resolvedAccount.baseUrl;
     if (!baseUrl) {
@@ -244,9 +250,9 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       prompter,
       providerHint: "nextcloud-talk",
       credentialLabel: "bot secret",
-      accountConfigured,
-      canUseEnv: canUseEnv && !hasConfigSecret,
-      hasConfigToken: hasConfigSecret,
+      accountConfigured: secretPromptState.accountConfigured,
+      canUseEnv: secretPromptState.canUseEnv,
+      hasConfigToken: secretPromptState.hasConfigToken,
       envPrompt: "NEXTCLOUD_TALK_BOT_SECRET detected. Use env var?",
       keepPrompt: "Nextcloud Talk bot secret already configured. Keep it?",
       inputPrompt: "Enter Nextcloud Talk bot secret",
@@ -285,9 +291,11 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
         prompter,
         providerHint: "nextcloud-talk-api",
         credentialLabel: "API password",
-        accountConfigured: Boolean(existingApiUser && existingApiPasswordConfigured),
-        canUseEnv: false,
-        hasConfigToken: existingApiPasswordConfigured,
+        ...buildSingleChannelSecretPromptState({
+          accountConfigured: Boolean(existingApiUser && existingApiPasswordConfigured),
+          hasConfigToken: existingApiPasswordConfigured,
+          allowEnv: false,
+        }),
         envPrompt: "",
         keepPrompt: "Nextcloud Talk API password already configured. Keep it?",
         inputPrompt: "Enter Nextcloud Talk API password",
