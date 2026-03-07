@@ -293,6 +293,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // or sending it to a model provider when saving is explicitly blocked.
     const blockPreSet = context.blockSessionSave === true;
 
+    // Known limitation: if an earlier hook pre-sets sessionSaveContent and
+    // a later hook *clears* it (expecting a revert to the default
+    // transcript), the transcript is not available — it was never loaded
+    // because hasCustomContent was true at this point.  The post-hook
+    // cannot fall back to the default entry without re-reading the session
+    // file and re-running slug generation.  In practice, hooks that want
+    // to override earlier custom content should set their own
+    // sessionSaveContent rather than clearing it.
     if (sessionFile && !hasCustomContent && !blockPreSet) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
