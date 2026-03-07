@@ -7,7 +7,7 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
-  listNodes: vi.fn(async () => []),
+  listNodes: vi.fn(async () => [] as Array<{ nodeId: string; commands?: string[] }>),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
 }));
 
