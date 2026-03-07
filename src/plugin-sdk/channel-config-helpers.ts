@@ -1,4 +1,5 @@
 import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
+import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -23,6 +24,35 @@ export function resolveOptionalConfigString(
   }
   const normalized = String(value).trim();
   return normalized || undefined;
+}
+
+export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
+  resolveAccount: (params: { cfg: OpenClawConfig; accountId?: string | null }) => ResolvedAccount;
+  resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  formatAllowFrom: (allowFrom: Array<string | number>) => string[];
+  resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
+}): Pick<
+  ChannelConfigAdapter<ResolvedAccount>,
+  "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
+> {
+  const base = {
+    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+      mapAllowFromEntries(params.resolveAllowFrom(params.resolveAccount({ cfg, accountId }))),
+    formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+      params.formatAllowFrom(allowFrom),
+  };
+
+  if (!params.resolveDefaultTo) {
+    return base;
+  }
+
+  return {
+    ...base,
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveOptionalConfigString(
+        params.resolveDefaultTo?.(params.resolveAccount({ cfg, accountId })),
+      ),
+  };
 }
 
 export function resolveWhatsAppConfigAllowFrom(params: {

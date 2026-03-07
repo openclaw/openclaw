@@ -1,8 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
+  createScopedAccountConfigAccessors,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -49,6 +48,18 @@ const signalMessageActions: ChannelMessageActionAdapter = {
 };
 
 const meta = getChatChannelMeta("signal");
+
+const signalConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
+      .filter(Boolean),
+  resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
+});
 
 function buildSignalSetupPatch(input: {
   signalNumber?: string;
@@ -144,16 +155,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveSignalAccount({ cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-        .filter(Boolean),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(resolveSignalAccount({ cfg, accountId }).config.defaultTo),
+    ...signalConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
