@@ -581,6 +581,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      // Native addon resolver packages locate .node binaries relative to
+      // module.filename/__dirname. When jiti transpiles these modules it sets
+      // module.filename to its own path, so the lookup fails. Listing the
+      // resolvers here delegates them to Node's native require, preserving
+      // correct path resolution for any addon that depends on them.
+      // See: https://github.com/openclaw/openclaw/issues/21676
+      nativeModules: ["bindings", "node-gyp-build"],
       ...(Object.keys(aliasMap).length > 0
         ? {
             alias: aliasMap,
