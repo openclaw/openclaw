@@ -368,7 +368,11 @@ function parseMergeForwardContent(params: {
     msg_type?: string;
     body?: { content?: string };
     sender?: { id?: string };
-    mentions?: Array<{ key?: string; id?: string | { open_id?: string; user_id?: string }; name?: string }>;
+    mentions?: Array<{
+      key?: string;
+      id?: string | { open_id?: string; user_id?: string };
+      name?: string;
+    }>;
     upper_message_id?: string;
     create_time?: string;
   }>;
