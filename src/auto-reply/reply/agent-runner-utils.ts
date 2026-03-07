@@ -116,8 +116,10 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+  const callCount = usage.callCount;
+  const callsSuffix = typeof callCount === "number" && callCount > 1 ? ` (${callCount} calls)` : "";
+  const costSuffix = costLabel ? ` · est ${costLabel}` : "";
+  return `Usage: ${inputLabel} in / ${outputLabel} out${callsSuffix}${costSuffix}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
