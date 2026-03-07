@@ -27,10 +27,14 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
 
 /**
  * Tokenize text for Jaccard similarity computation.
- * Extracts alphanumeric tokens and normalizes to lowercase.
+ * Extracts alphanumeric tokens (Unicode-aware) and normalizes to lowercase.
+ *
+ * \p{L} = letters, \p{M} = combining marks (Thai tone marks, Devanagari
+ * virama, Arabic diacritics — without this, scripts that compose characters
+ * from base + mark sequences get split mid-character), \p{N} = numbers.
  */
 export function tokenize(text: string): Set<string> {
-  const tokens = text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+  const tokens = text.toLowerCase().normalize("NFC").match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
   return new Set(tokens);
 }
 
