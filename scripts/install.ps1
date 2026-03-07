@@ -14,11 +14,22 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Pause before exiting on error so users can read the message.
-# Only pauses in interactive windows (not CI, not piped output).
+# Guards: not a CI environment, running in a real ConsoleHost, and stdin/stdout
+# are not redirected (piped). The try/catch ensures Read-Host errors never
+# mask the original failure that brought us here.
 function Wait-BeforeExit {
-    if ([Environment]::UserInteractive -and !$env:CI) {
-        Microsoft.PowerShell.Utility\Write-Host ""
-        Read-Host "Press Enter to close this window"
+    $isCI = (Test-Path env:CI) -or (Test-Path env:GITHUB_ACTIONS) -or
+            (Test-Path env:TF_BUILD) -or (Test-Path env:BUILD_BUILDID)
+    $canPrompt = ($Host.Name -eq 'ConsoleHost') -and
+                 -not [Console]::IsInputRedirected -and
+                 -not [Console]::IsOutputRedirected
+    if (-not $isCI -and $canPrompt) {
+        try {
+            Microsoft.PowerShell.Utility\Write-Host ""
+            [void](Read-Host 'Press Enter to close this window')
+        } catch {
+            # silently skip — never obscure the original error
+        }
     }
 }
 
