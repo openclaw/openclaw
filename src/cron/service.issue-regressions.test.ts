@@ -79,7 +79,7 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
-  it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
+  it("repairs isolated every jobs missing timestamps and keeps cron.list decodable", async () => {
     const store = makeStorePath();
     await writeCronStoreSnapshot(store.storePath, [
       {
@@ -109,13 +109,26 @@ describe("Cron issue regressions", () => {
     const status = await cron.status();
     const jobs = await cron.list({ includeDisabled: true });
     const isolated = jobs.find((job) => job.id === "legacy-isolated");
+    expect(typeof isolated?.createdAtMs).toBe("number");
+    expect(Number.isFinite(isolated?.createdAtMs)).toBe(true);
+    expect(typeof isolated?.updatedAtMs).toBe("number");
+    expect(Number.isFinite(isolated?.updatedAtMs)).toBe(true);
     expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
     expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
 
     const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: Array<{ id: string; state?: { nextRunAtMs?: number | null } }>;
+      jobs: Array<{
+        id: string;
+        createdAtMs?: number | null;
+        updatedAtMs?: number | null;
+        state?: { nextRunAtMs?: number | null };
+      }>;
     };
     const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
+    expect(typeof persistedIsolated?.createdAtMs).toBe("number");
+    expect(Number.isFinite(persistedIsolated?.createdAtMs)).toBe(true);
+    expect(typeof persistedIsolated?.updatedAtMs).toBe("number");
+    expect(Number.isFinite(persistedIsolated?.updatedAtMs)).toBe(true);
     expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
     expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
 
