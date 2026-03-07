@@ -6,6 +6,7 @@ packages:
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"
+  - "@tloncorp/api"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
   - "@whiskeysockets/baileys"
