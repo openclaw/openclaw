@@ -1,0 +1,261 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(0, 0%, 96%);  /* Light gray background like Full Digital */
+  --foreground: hsl(0, 0%, 9%);   /* Near black text */
+  --muted: hsl(0, 0%, 90%);
+  --muted-foreground: hsl(0, 0%, 45%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(0, 0%, 9%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(0, 0%, 9%);
+  --border: hsl(0, 0%, 85%);
+  --input: hsl(0, 0%, 85%);
+  --primary: hsl(85, 70%, 55%);    /* Full Digital bright green */
+  --primary-foreground: hsl(0, 0%, 9%);
+  --secondary: hsl(0, 0%, 94%);
+  --secondary-foreground: hsl(0, 0%, 9%);
+  --accent: hsl(85, 70%, 55%);     /* Same bright green for accents */
+  --accent-foreground: hsl(0, 0%, 9%);
+  --destructive: hsl(0, 84.2%, 60.2%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(85, 70%, 55%);       /* Green focus rings */
+  --radius: 0.5rem;
+  
+  /* Full Digital inspired brand colors */
+  --brand-green: hsl(85, 70%, 55%);      /* Full Digital bright green */
+  --brand-green-dark: hsl(85, 80%, 45%); /* Darker variant */
+  --brand-green-light: hsl(85, 60%, 65%); /* Lighter variant */
+  --brand-black: hsl(0, 0%, 9%);          /* Deep black for headers */
+}
+
+.dark {
+  --background: hsl(0, 0%, 9%);    /* Deep black background */
+  --foreground: hsl(0, 0%, 98%);   /* White text */
+  --muted: hsl(0, 0%, 15%);
+  --muted-foreground: hsl(0, 0%, 65%);
+  --popover: hsl(0, 0%, 9%);
+  --popover-foreground: hsl(0, 0%, 98%);
+  --card: hsl(0, 0%, 9%);
+  --card-foreground: hsl(0, 0%, 98%);
+  --border: hsl(0, 0%, 20%);
+  --input: hsl(0, 0%, 20%);
+  --primary: hsl(85, 70%, 55%);    /* Same bright green in dark mode */
+  --primary-foreground: hsl(0, 0%, 9%);
+  --secondary: hsl(0, 0%, 15%);
+  --secondary-foreground: hsl(0, 0%, 98%);
+  --accent: hsl(85, 70%, 55%);
+  --accent-foreground: hsl(0, 0%, 9%);
+  --destructive: hsl(0, 62.8%, 30.6%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(85, 70%, 55%);
+  --radius: 0.5rem;
+  
+  /* Full Digital brand colors for dark mode */
+  --brand-green: hsl(85, 70%, 55%);
+  --brand-green-dark: hsl(85, 80%, 45%);
+  --brand-green-light: hsl(85, 60%, 65%);
+  --brand-black: hsl(0, 0%, 9%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+
+    /* Mobile-first optimizations */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Mobile viewport fixes */
+  html, body {
+    overflow-x: hidden;
+    width: 100%;
+    max-width: 100vw;
+  }
+
+  /* Increase touch target sizes on mobile */
+  @media (max-width: 768px) {
+    button, a, input, select, textarea {
+      min-height: 44px; /* iOS recommended touch target */
+    }
+
+    /* Larger text for better readability */
+    body {
+      font-size: 16px; /* Prevents iOS zoom on focus */
+    }
+
+    /* Better spacing on mobile */
+    .p-6 {
+      @apply p-4;
+    }
+
+    .px-6 {
+      @apply px-4;
+    }
+
+    .py-6 {
+      @apply py-4;
+    }
+  }
+}
+
+/* Mobile overflow fixes */
+.break-all {
+  word-break: break-all;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.break-words {
+  word-break: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+/* Prevent horizontal overflow on mobile */
+* {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Ensure containers don't overflow */
+.container, .max-w-2xl, .max-w-4xl {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* Font improvements */
+.font-mono {
+  word-break: break-all;
+  overflow-wrap: break-word;
+}
+
+/* Processing ID specific fixes */
+.processing-id {
+  word-break: break-all;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  white-space: pre-wrap;
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-scroll {
+    animation: scroll 30s linear infinite;
+  }
+
+  @keyframes scroll {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(-50%);
+    }
+  }
+
+  .text-brand-green {
+    color: var(--brand-green);
+  }
+
+  .bg-brand-green {
+    background-color: var(--brand-green);
+  }
+
+  .bg-brand-black {
+    background-color: var(--brand-black);
+  }
+
+  .hover\:bg-brand-green-dark:hover {
+    background-color: var(--brand-green-dark);
+  }
+
+  .border-brand-green {
+    border-color: var(--brand-green);
+  }
+
+  .hover\:border-brand-green:hover {
+    border-color: var(--brand-green);
+  }
+
+  .focus\:ring-brand-green:focus {
+    --tw-ring-color: var(--brand-green);
+  }
+
+  /* Mobile-specific utilities */
+  .touch-manipulation {
+    touch-action: manipulation;
+  }
+
+  .mobile-scroll {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Safe area insets for notched devices */
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-left {
+    padding-left: env(safe-area-inset-left);
+  }
+
+  .safe-right {
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* Mobile responsive text */
+  @media (max-width: 640px) {
+    .text-responsive-xl {
+      font-size: 1.5rem;
+      line-height: 2rem;
+    }
+
+    .text-responsive-2xl {
+      font-size: 1.75rem;
+      line-height: 2.25rem;
+    }
+
+    .text-responsive-3xl {
+      font-size: 2rem;
+      line-height: 2.5rem;
+    }
+
+    .text-responsive-4xl {
+      font-size: 2.25rem;
+      line-height: 2.75rem;
+    }
+
+    .text-responsive-5xl {
+      font-size: 2.5rem;
+      line-height: 3rem;
+    }
+  }
+}

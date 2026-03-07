@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- Mobile web app capable -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <!-- Favicon Package -->
+    <link rel="apple-touch-icon" sizes="57x57" href="/apple-icon-57x57.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="/apple-icon-60x60.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="/apple-icon-72x72.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="/apple-icon-76x76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="/apple-icon-114x114.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="/apple-icon-120x120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="/apple-icon-144x144.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="/apple-icon-152x152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-icon-180x180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/android-icon-192x192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="msapplication-TileColor" content="#8cc63f">
+    <meta name="msapplication-TileImage" content="/ms-icon-144x144.png">
+    <meta name="theme-color" content="#8cc63f">
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    
+    <!-- SEO Meta Tags -->
+    <title>CUTMV - AI-Powered Video Creation Platform | Full Digital</title>
+    <meta name="description" content="Transform your music videos into professional clips, GIFs, thumbnails, and Spotify Canvas with CUTMV's AI-powered platform. Commercial-quality exports for creators.">
+    <meta name="keywords" content="video editing, music video clips, AI video processing, Spotify Canvas, video thumbnails, GIF maker, Full Digital">
+    <meta name="author" content="Full Digital">
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://cutmv.fulldigitalll.com/">
+    <meta property="og:title" content="CUTMV - AI-Powered Video Creation Platform">
+    <meta property="og:description" content="Transform your music videos into professional clips, GIFs, thumbnails, and Spotify Canvas with CUTMV's AI-powered platform.">
+    <meta property="og:image" content="https://cutmv.fulldigitalll.com/favicon.ico">
+    
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://cutmv.fulldigitalll.com/">
+    <meta property="twitter:title" content="CUTMV - AI-Powered Video Creation Platform">
+    <meta property="twitter:description" content="Transform your music videos into professional clips, GIFs, thumbnails, and Spotify Canvas with CUTMV's AI-powered platform.">
+    <meta property="twitter:image" content="https://cutmv.fulldigitalll.com/favicon.ico">
+    
+    <!-- PostHog Analytics -->
+    <script>
+      // Only load PostHog analytics when cookies are accepted
+      window.addEventListener('load', function() {
+        // Simple cookie consent check
+        if (document.cookie.indexOf('analytics_accepted=true') > -1 || document.cookie.indexOf('posthog_consent=true') > -1) {
+          !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init identify capture register register_once alias unalias reset opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug disable time_event track_pageview track_links track_forms track_scroll".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+          posthog.init('phc_P3MX0PVdYOQxL08mrGdVrdTEagJIjFL09ADnaGBYU8S', {
+              api_host: 'https://us.i.posthog.com',
+              person_profiles: 'identified_only'
+          });
+          console.log('📊 PostHog analytics initialized');
+        } else {
+          console.log('📊 PostHog analytics disabled - waiting for cookie consent');
+          // Create a stub to prevent errors
+          window.posthog = {
+            init: function() {},
+            identify: function() {},
+            capture: function() {},
+            reset: function() {}
+          };
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- This is a replit script which adds a banner on the top of the page when opened in development mode outside the replit environment -->
+    <script type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js"></script>
+  </body>
+</html>
