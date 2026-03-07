@@ -8,6 +8,7 @@ import {
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
+  mapAllowFromEntries,
   readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   resolveAckReaction,
@@ -510,7 +511,7 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configuredAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
+  const configuredAllowFrom = mapAllowFromEntries(account.config.allowFrom);
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "bluebubbles",
     accountId: account.accountId,

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.js";
 import { inspectDiscordAccount } from "../../discord/account-inspect.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { inspectSlackAccount } from "../../slack/account-inspect.js";
 import { inspectTelegramAccount } from "../../telegram/account-inspect.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
@@ -161,7 +162,7 @@ export async function listTelegramDirectoryPeersFromConfig(
 ): Promise<ChannelDirectoryEntry[]> {
   const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
   const raw = [
-    ...(account.config.allowFrom ?? []).map((entry) => String(entry)),
+    ...mapAllowFromEntries(account.config.allowFrom),
     ...Object.keys(account.config.dms ?? {}),
   ];
   const ids = Array.from(
