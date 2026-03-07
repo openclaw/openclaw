@@ -2,6 +2,7 @@ import {
   buildSingleChannelSecretPromptState,
   formatDocsLink,
   hasConfiguredSecretInput,
+  mapAllowFromEntries,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
@@ -29,7 +30,7 @@ function setNextcloudTalkDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConf
     channel: "nextcloud-talk",
     dmPolicy,
     getAllowFrom: (inputCfg) =>
-      (inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? []).map((entry) => String(entry)),
+      mapAllowFromEntries(inputCfg.channels?.["nextcloud-talk"]?.allowFrom),
   }) as CoreConfig;
 }
 

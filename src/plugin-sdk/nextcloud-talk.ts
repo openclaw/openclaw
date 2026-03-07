@@ -36,6 +36,7 @@ export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export type { OpenClawConfig } from "../config/config.js";
+export { mapAllowFromEntries } from "./channel-config-helpers.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
