@@ -208,35 +208,45 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 
-function hasExplicitBillingSignalIn402Message(raw: string): boolean {
-  const lower = raw.toLowerCase();
+const BILLING_402_HINTS = [
+  "payment required",
+  "insufficient credits",
+  "insufficient quota",
+  "credit balance",
+  "insufficient balance",
+  "plans & billing",
+  "add more credits",
+  "top up",
+] as const;
+
+const RETRYABLE_402_RETRY_HINTS = ["try again", "retry", "temporary", "cooldown"] as const;
+const RETRYABLE_402_LIMIT_HINTS = ["usage limit", "rate limit", "organization usage"] as const;
+const RETRYABLE_402_SPEND_HINTS = ["spend limit", "spending limit"] as const;
+const RETRYABLE_402_SCOPE_HINTS = ["organization", "workspace"] as const;
+const RETRYABLE_402_SCOPE_LIMIT_HINTS = ["limit", "exceeded"] as const;
+
+function includesAnyHint(text: string, hints: readonly string[]): boolean {
+  const lower = text.toLowerCase();
+  return hints.some((hint) => lower.includes(hint));
+}
+
+function hasExplicit402BillingSignal(text: string): boolean {
+  return includesAnyHint(text, BILLING_402_HINTS);
+}
+
+function hasRetryable402UsageSignal(text: string): boolean {
   return (
-    lower.includes("payment required") ||
-    lower.includes("insufficient credits") ||
-    lower.includes("insufficient quota") ||
-    lower.includes("credit balance") ||
-    lower.includes("insufficient balance") ||
-    lower.includes("plans & billing") ||
-    lower.includes("add more credits") ||
-    lower.includes("top up")
+    includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
+    includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)
   );
 }
 
-function isTemporary402LimitMessage(raw: string): boolean {
-  if (hasExplicitBillingSignalIn402Message(raw)) {
+function shouldTreat402AsRateLimit(raw: string): boolean {
+  if (hasExplicit402BillingSignal(raw)) {
     return false;
   }
 
-  const lower = raw.toLowerCase();
-  const hasTemporaryRetrySignal =
-    (lower.includes("try again") ||
-      lower.includes("retry") ||
-      lower.includes("temporary") ||
-      lower.includes("cooldown")) &&
-    (lower.includes("usage limit") ||
-      lower.includes("rate limit") ||
-      lower.includes("organization usage"));
-  if (hasTemporaryRetrySignal) {
+  if (hasRetryable402UsageSignal(raw)) {
     return true;
   }
 
@@ -245,11 +255,10 @@ function isTemporary402LimitMessage(raw: string): boolean {
   }
 
   return (
-    lower.includes("spend limit") ||
-    lower.includes("spending limit") ||
-    lower.includes("organization usage") ||
-    ((lower.includes("organization") || lower.includes("workspace")) &&
-      (lower.includes("limit") || lower.includes("exceeded")))
+    includesAnyHint(raw, RETRYABLE_402_SPEND_HINTS) ||
+    includesAnyHint(raw, RETRYABLE_402_LIMIT_HINTS) ||
+    (includesAnyHint(raw, RETRYABLE_402_SCOPE_HINTS) &&
+      includesAnyHint(raw, RETRYABLE_402_SCOPE_LIMIT_HINTS))
   );
 }
 
@@ -308,7 +317,7 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 402) {
     // Some providers surface temporary usage caps as HTTP 402. Keep those
     // retryable, but let explicit insufficient-credit signals stay billing.
-    if (message && isTemporary402LimitMessage(message)) {
+    if (message && shouldTreat402AsRateLimit(message)) {
       return "rate_limit";
     }
     return "billing";
