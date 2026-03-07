@@ -85,6 +85,8 @@ export type SpawnSubagentContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   requesterAgentIdOverride?: string;
+  /** Explicit workspace directory for subagent to inherit (optional). */
+  workspaceDir?: string;
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -697,6 +699,16 @@ export async function spawnSubagentDirect(
     .filter((line): line is string => Boolean(line))
     .join("\n\n");
 
+  // Resolve workspace directory for subagent to inherit from requester.
+  const requesterWorkspaceAgentId = requesterInternalKey
+    ? parseAgentSessionKey(requesterInternalKey)?.agentId
+    : undefined;
+  const workspaceDir =
+    ctx.workspaceDir?.trim() ??
+    (requesterWorkspaceAgentId
+      ? resolveAgentWorkspaceDir(cfg, normalizeAgentId(requesterWorkspaceAgentId))
+      : undefined);
+
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
@@ -720,6 +732,7 @@ export async function spawnSubagentDirect(
         groupId: ctx.agentGroupId ?? undefined,
         groupChannel: ctx.agentGroupChannel ?? undefined,
         groupSpace: ctx.agentGroupSpace ?? undefined,
+        workspaceDir,
       },
       timeoutMs: 10_000,
     });
