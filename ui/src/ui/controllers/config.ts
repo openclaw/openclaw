@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type {
+  ConfigSchemaResponse,
+  ConfigSnapshot,
+  ConfigUiHints,
+  UpdateAvailable,
+} from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
@@ -21,6 +26,7 @@ export type ConfigState = {
   configSaving: boolean;
   configApplying: boolean;
   updateRunning: boolean;
+  updateAvailable?: UpdateAvailable | null;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown;
   configSchemaVersion: string | null;
@@ -184,9 +190,16 @@ export async function runUpdate(state: ConfigState) {
   state.updateRunning = true;
   state.lastError = null;
   try {
-    await state.client.request("update.run", {
+    const res = await state.client.request("update.run", {
       sessionKey: state.applySessionKey,
     });
+    // Only clear the banner when the update truly applied (status "ok").
+    // update.run also resolves for "skipped" (already up-to-date, git dirty)
+    // and "error" (package-manager failure), so check the inner status.
+    const typed = res as { result?: { status?: string } } | undefined;
+    if (typed?.result?.status === "ok" && "updateAvailable" in state) {
+      state.updateAvailable = null;
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {
