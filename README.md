@@ -138,6 +138,10 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=openclaw/openclaw&type=date&legend=top-left)](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left)
 
+## Tech stack used
+
+![Stack Fingerprint](https://stackfingerprint.vercel.app/api/card?repo=openclaw/openclaw&theme=ember&layout=classic&size=md&icons=color&pills=round)
+
 ## Everything we built so far
 
 ### Core platform
