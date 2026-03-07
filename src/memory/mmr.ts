@@ -34,7 +34,7 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
  * from base + mark sequences get split mid-character), \p{N} = numbers.
  */
 export function tokenize(text: string): Set<string> {
-  const tokens = text.toLowerCase().normalize("NFC").match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
+  const tokens = text.normalize("NFC").toLowerCase().match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
   return new Set(tokens);
 }
 
