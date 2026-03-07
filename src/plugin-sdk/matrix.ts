@@ -36,6 +36,7 @@ export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";

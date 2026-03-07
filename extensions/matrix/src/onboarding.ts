@@ -7,6 +7,7 @@ import {
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   promptChannelAccessConfig,
+  setTopLevelChannelGroupPolicy,
   type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
@@ -143,17 +144,12 @@ async function promptMatrixAllowFrom(params: {
 }
 
 function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist" | "disabled") {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...cfg.channels?.matrix,
-        enabled: true,
-        groupPolicy,
-      },
-    },
-  };
+  return setTopLevelChannelGroupPolicy({
+    cfg,
+    channel: "matrix",
+    groupPolicy,
+    enabled: true,
+  }) as CoreConfig;
 }
 
 function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[]) {
