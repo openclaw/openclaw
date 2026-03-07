@@ -85,15 +85,17 @@ class ScreenRecordManager(private val context: Context) {
         }
       projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
 
-      val metrics = context.resources.displayMetrics
-      val width = metrics.widthPixels
-      val height = metrics.heightPixels
-      val densityDpi = metrics.densityDpi
-
-      val file = File.createTempFile("openclaw-screen-", ".mp4")
-      val recorder = createMediaRecorder()
+      var recorder: MediaRecorder? = null
       var virtualDisplay: android.hardware.display.VirtualDisplay? = null
+      var file: File? = null
       try {
+        val metrics = context.resources.displayMetrics
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        val densityDpi = metrics.densityDpi
+
+        file = File.createTempFile("openclaw-screen-", ".mp4")
+        recorder = createMediaRecorder()
         if (includeAudio) {
           recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
         }
@@ -130,20 +132,20 @@ class ScreenRecordManager(private val context: Context) {
         delay(durationMs.toLong())
       } finally {
         try {
-          recorder.stop()
+          recorder?.stop()
         } catch (_: Throwable) {
           // ignore
         }
-        recorder.reset()
-        recorder.release()
+        recorder?.reset()
+        recorder?.release()
         virtualDisplay?.release()
         projection.unregisterCallback(projectionCallback)
         projection.stop()
         screenRecordActiveSetter?.invoke(false)
       }
 
-      val bytes = withContext(Dispatchers.IO) { file.readBytes() }
-      file.delete()
+      val bytes = withContext(Dispatchers.IO) { file?.readBytes() ?: ByteArray(0) }
+      file?.delete()
       val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
       Payload(
         """{"format":"mp4","base64":"$base64","durationMs":$durationMs,"fps":$fpsInt,"screenIndex":0,"hasAudio":$includeAudio}""",
