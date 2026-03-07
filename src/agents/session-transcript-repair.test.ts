@@ -445,6 +445,54 @@ describe("sanitizeToolCallInputs", () => {
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
     expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
   });
+
+  it.each([
+    {
+      name: "strips 'functions.' prefix from tool names",
+      content: [{ type: "toolCall", id: "call_1", name: "functions.read", arguments: {} }],
+      expectedNames: ["read"],
+    },
+    {
+      name: "strips 'functions.' prefix with trailing space",
+      content: [{ type: "toolCall", id: "call_1", name: "functions. read", arguments: {} }],
+      expectedNames: ["read"],
+    },
+    {
+      name: "strips 'functions ' prefix (space instead of dot)",
+      content: [{ type: "toolCall", id: "call_1", name: "functions read", arguments: {} }],
+      expectedNames: ["read"],
+    },
+    {
+      name: "strips 'functions ' prefix with multiple spaces",
+      content: [{ type: "toolCall", id: "call_1", name: "functions  read", arguments: {} }],
+      expectedNames: ["read"],
+    },
+    {
+      name: "handles mixed case 'Functions.' prefix",
+      content: [{ type: "toolCall", id: "call_1", name: "Functions.exec", arguments: {} }],
+      expectedNames: ["exec"],
+    },
+    {
+      name: "handles 'FUNCTIONS ' uppercase prefix",
+      content: [{ type: "toolCall", id: "call_1", name: "FUNCTIONS exec", arguments: {} }],
+      expectedNames: ["exec"],
+    },
+    {
+      name: "strips prefix and matches against allowlist",
+      content: [
+        { type: "toolCall", id: "call_1", name: "functions.read", arguments: {} },
+        { type: "toolCall", id: "call_2", name: "functions.write", arguments: {} },
+      ],
+      options: { allowedToolNames: ["read"] },
+      expectedNames: ["read"],
+    },
+  ])("$name", ({ content, options, expectedNames }) => {
+    const toolCalls = sanitizeAssistantToolCalls(content, options);
+    const names = toolCalls
+      .map((toolCall) => (toolCall as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === "string");
+    expect(names).toEqual(expectedNames);
+  });
 });
 
 describe("stripToolResultDetails", () => {
