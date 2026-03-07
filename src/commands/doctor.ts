@@ -100,6 +100,7 @@ export async function doctorCommand(
   noteStartupOptimizationHints();
 
   const configResult = await loadAndMaybeMigrateDoctorConfig({
+    runtime,
     options,
     confirm: (p) => prompter.confirm(p),
   });
