@@ -208,7 +208,11 @@ function fireAfterLlmCallGate(
         toolCalls.push({
           id: (part.id as string) ?? "",
           name: (part.name as string) ?? "",
-          arguments: (part.arguments as Record<string, unknown>) ?? {},
+          // Some providers use `input` (Anthropic tool_use) instead of `arguments`
+          arguments:
+            (part.arguments as Record<string, unknown>) ??
+            (part.input as Record<string, unknown>) ??
+            {},
         });
       }
     }
