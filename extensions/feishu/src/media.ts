@@ -449,6 +449,7 @@ export async function sendMediaFeishu(params: {
 
   let buffer: Buffer;
   let name: string;
+  let loadedKind: "video" | "audio" | "image" | "document" | "unknown" | undefined;
 
   if (mediaBuffer) {
     buffer = mediaBuffer;
@@ -461,6 +462,7 @@ export async function sendMediaFeishu(params: {
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
+    loadedKind = loaded.kind;
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
@@ -481,8 +483,18 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
-    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+    // Use kind from loadWebMedia to determine correct Feishu msg_type
+    // This handles cases where file extension is not recognized (e.g., streams)
+    const msgType =
+      loadedKind === "video"
+        ? "media"
+        : loadedKind === "audio"
+          ? "audio"
+          : fileType === "opus"
+            ? "audio"
+            : fileType === "mp4"
+              ? "media"
+              : "file";
     return sendFileFeishu({
       cfg,
       to,
