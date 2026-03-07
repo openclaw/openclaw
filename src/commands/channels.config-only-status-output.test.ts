@@ -1,31 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { formatConfigChannelsStatusLines } from "./channels/status.js";
-
-function makeDirectPlugin(params: {
-  id: string;
-  label: string;
-  docsPath: string;
-  config: ChannelPlugin["config"];
-}): ChannelPlugin {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: params.config,
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
-}
 
 function makeUnavailableTokenPlugin(): ChannelPlugin {
   return makeDirectPlugin({
