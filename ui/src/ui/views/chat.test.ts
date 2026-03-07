@@ -547,6 +547,72 @@ describe("chat view", () => {
     expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
+  it("navigates history up when cursor is at start of draft", () => {
+    const container = document.createElement("div");
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up" as const,
+      decision: "handled:enter-history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 5,
+    }));
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryKeydown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not navigate history up when cursor is not at start", () => {
+    const container = document.createElement("div");
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowup-not-at-start" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 2,
+      selectionEnd: 2,
+      valueLength: 5,
+    }));
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryKeydown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 2;
+    textarea.selectionEnd = 2;
+    const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("patches the current session model from the chat header picker", async () => {
     vi.stubGlobal(
       "fetch",
@@ -766,5 +832,42 @@ describe("chat view", () => {
       "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
     );
     expect(labels).not.toContain("Subagent: cron-config-check");
+  });
+
+  it("passes ArrowDown to history key handler", () => {
+    const container = document.createElement("div");
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "down" as const,
+      decision: "handled:history-down" as const,
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+      selectionStart: 5,
+      selectionEnd: 5,
+      valueLength: 5,
+    }));
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryKeydown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
   });
 });

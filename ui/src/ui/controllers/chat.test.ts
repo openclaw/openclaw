@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
+import {
+  handleChatDraftChange,
+  navigateChatInputHistory,
+  resetChatInputHistoryNavigation,
+  type ChatInputHistoryState,
+} from "../chat/input-history.ts";
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
@@ -598,6 +605,127 @@ describe("abortChatRun", () => {
       runId: "run-1",
     });
     expect(state.lastError).toContain("device identity required");
+  });
+});
+
+function textMessage(role: string, text: string) {
+  return {
+    role,
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  };
+}
+
+function createChatHistoryState(
+  overrides: Partial<ChatInputHistoryState> = {},
+): ChatInputHistoryState {
+  return {
+    chatLoading: false,
+    chatMessage: "",
+    chatMessages: [],
+    sessionKey: "main",
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    ...overrides,
+  };
+}
+
+describe("chat input history navigation", () => {
+  it("builds from user messages in the render window only", () => {
+    const windowMessages = Array.from({ length: CHAT_HISTORY_RENDER_LIMIT }, (_, i) =>
+      textMessage("assistant", `assistant-${i}`),
+    );
+    windowMessages[0] = textMessage("user", "inside-old");
+    windowMessages[CHAT_HISTORY_RENDER_LIMIT - 1] = textMessage("user", "inside-new");
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [
+        textMessage("user", "outside-window"),
+        textMessage("assistant", "x"),
+        ...windowMessages,
+      ],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("inside-new");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("inside-old");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(false);
+  });
+
+  it("restores draft when navigating down past latest history entry", () => {
+    const host = createChatHistoryState({
+      chatMessage: "in-progress",
+      chatMessages: [
+        textMessage("user", "older"),
+        textMessage("assistant", "a"),
+        textMessage("user", "newer"),
+      ],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("newer");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("older");
+
+    expect(navigateChatInputHistory(host, "down")).toBe(true);
+    expect(host.chatMessage).toBe("newer");
+    expect(navigateChatInputHistory(host, "down")).toBe(true);
+    expect(host.chatMessage).toBe("in-progress");
+    expect(navigateChatInputHistory(host, "down")).toBe(false);
+  });
+
+  it("resets navigation snapshot when draft changes manually", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "one"), textMessage("user", "two")],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("two");
+
+    handleChatDraftChange(host, "typed fresh");
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatInputHistoryIndex).toBe(-1);
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("two");
+  });
+
+  it("rebuilds history snapshot after session changes", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft-main",
+      chatMessages: [textMessage("user", "main-user")],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("main-user");
+
+    host.sessionKey = "other";
+    host.chatMessage = "draft-other";
+    host.chatMessages = [textMessage("user", "other-user")];
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("other-user");
+  });
+
+  it("clears internal navigation state on explicit reset", () => {
+    const host = createChatHistoryState({
+      chatInputHistorySessionKey: "main",
+      chatInputHistoryItems: ["x"],
+      chatInputHistoryIndex: 0,
+      chatDraftBeforeHistory: "draft",
+    });
+
+    resetChatInputHistoryNavigation(host);
+    expect(host.chatInputHistorySessionKey).toBeNull();
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatInputHistoryIndex).toBe(-1);
+    expect(host.chatDraftBeforeHistory).toBeNull();
   });
 });
 

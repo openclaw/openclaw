@@ -1,49 +1,232 @@
-const MAX = 50;
+import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
+import { extractText } from "./message-extract.ts";
 
-export class InputHistory {
-  private items: string[] = [];
-  private cursor = -1;
+export type ChatInputHistoryState = {
+  sessionKey: string;
+  chatLoading: boolean;
+  chatMessage: string;
+  chatMessages: unknown[];
+  chatInputHistorySessionKey: string | null;
+  chatInputHistoryItems: string[] | null;
+  chatInputHistoryIndex: number;
+  chatDraftBeforeHistory: string | null;
+};
 
-  push(text: string): void {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return;
+export type ChatInputHistoryKeyInput = {
+  key: "ArrowUp" | "ArrowDown";
+  selectionStart: number;
+  selectionEnd: number;
+  valueLength: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  isComposing: boolean;
+  keyCode: number;
+};
+
+export type ChatInputHistoryKeyResult = {
+  handled: boolean;
+  preventDefault: boolean;
+  restoreCaret: "up" | "down" | null;
+  decision:
+    | "blocked:history-loading"
+    | "blocked:modifier-or-composition"
+    | "blocked:selection-range"
+    | "blocked:arrowup-not-at-start"
+    | "blocked:arrowdown-editing-mode"
+    | "blocked:history-boundary"
+    | "handled:enter-history-up"
+    | "handled:history-up"
+    | "handled:history-down";
+  historyNavigationActiveBefore: boolean;
+  historyNavigationActiveAfter: boolean;
+  selectionStart: number;
+  selectionEnd: number;
+  valueLength: number;
+};
+
+function collectUserInputHistory(messages: unknown[]): string[] {
+  if (messages.length === 0) {
+    return [];
+  }
+  // Keep input recall aligned with what chat UI renders: only consider the visible history window.
+  const start = Math.max(0, messages.length - CHAT_HISTORY_RENDER_LIMIT);
+  const items: string[] = [];
+  for (let i = messages.length - 1; i >= start; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
     }
-    if (this.items[this.items.length - 1] === trimmed) {
-      return;
+    const entry = message as { role?: unknown };
+    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+    if (role !== "user") {
+      continue;
     }
-    this.items.push(trimmed);
-    if (this.items.length > MAX) {
-      this.items.shift();
+    const text = extractText(message);
+    if (!text || !text.trim()) {
+      continue;
     }
-    this.cursor = -1;
+    items.push(text);
+  }
+  return items;
+}
+
+export function resetChatInputHistoryNavigation(state: ChatInputHistoryState) {
+  state.chatInputHistorySessionKey = null;
+  state.chatInputHistoryItems = null;
+  state.chatInputHistoryIndex = -1;
+  state.chatDraftBeforeHistory = null;
+}
+
+export function handleChatDraftChange(state: ChatInputHistoryState, next: string) {
+  state.chatMessage = next;
+  resetChatInputHistoryNavigation(state);
+}
+
+function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
+  if (
+    Array.isArray(state.chatInputHistoryItems) &&
+    state.chatInputHistorySessionKey === state.sessionKey
+  ) {
+    return state.chatInputHistoryItems;
+  }
+  // Snapshot once per navigation round so incoming chat events don't shift arrow-key traversal order.
+  const items = collectUserInputHistory(state.chatMessages);
+  state.chatInputHistoryItems = items;
+  state.chatInputHistorySessionKey = state.sessionKey;
+  state.chatInputHistoryIndex = -1;
+  state.chatDraftBeforeHistory = state.chatMessage;
+  return items;
+}
+
+export function navigateChatInputHistory(
+  state: ChatInputHistoryState,
+  direction: "up" | "down",
+): boolean {
+  const items = ensureChatInputHistorySnapshot(state);
+  if (items.length === 0) {
+    return false;
   }
 
-  up(): string | null {
-    if (this.items.length === 0) {
-      return null;
+  if (direction === "up") {
+    if (state.chatInputHistoryIndex >= items.length - 1) {
+      return false;
     }
-    if (this.cursor < 0) {
-      this.cursor = this.items.length - 1;
-    } else if (this.cursor > 0) {
-      this.cursor--;
-    }
-    return this.items[this.cursor] ?? null;
+    state.chatInputHistoryIndex += 1;
+    state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
+    return true;
   }
 
-  down(): string | null {
-    if (this.cursor < 0) {
-      return null;
-    }
-    this.cursor++;
-    if (this.cursor >= this.items.length) {
-      this.cursor = -1;
-      return null;
-    }
-    return this.items[this.cursor] ?? null;
+  if (state.chatInputHistoryIndex === -1) {
+    return false;
+  }
+  if (state.chatInputHistoryIndex === 0) {
+    state.chatInputHistoryIndex = -1;
+    state.chatMessage = state.chatDraftBeforeHistory ?? "";
+    return true;
+  }
+  state.chatInputHistoryIndex -= 1;
+  state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
+  return true;
+}
+
+export function handleChatInputHistoryKey(
+  state: ChatInputHistoryState,
+  input: ChatInputHistoryKeyInput,
+): ChatInputHistoryKeyResult {
+  const historyNavigationActiveBefore = state.chatInputHistoryIndex !== -1;
+  const baseResult = {
+    historyNavigationActiveBefore,
+    historyNavigationActiveAfter: historyNavigationActiveBefore,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    valueLength: input.valueLength,
+  };
+
+  if (state.chatLoading) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:history-loading",
+    };
   }
 
-  reset(): void {
-    this.cursor = -1;
+  if (
+    input.altKey ||
+    input.ctrlKey ||
+    input.metaKey ||
+    input.shiftKey ||
+    input.isComposing ||
+    input.keyCode === 229
+  ) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:modifier-or-composition",
+    };
   }
+
+  if (input.selectionStart !== input.selectionEnd) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:selection-range",
+    };
+  }
+
+  if (historyNavigationActiveBefore) {
+    const direction = input.key === "ArrowUp" ? "up" : "down";
+    const navigated = navigateChatInputHistory(state, direction);
+    const historyNavigationActiveAfter = state.chatInputHistoryIndex !== -1;
+    return {
+      ...baseResult,
+      handled: navigated,
+      preventDefault: navigated,
+      restoreCaret: navigated ? direction : null,
+      decision: navigated
+        ? direction === "up"
+          ? "handled:history-up"
+          : "handled:history-down"
+        : "blocked:history-boundary",
+      historyNavigationActiveAfter,
+    };
+  }
+
+  if (input.key === "ArrowDown") {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowdown-editing-mode",
+    };
+  }
+
+  if (input.selectionStart !== 0) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowup-not-at-start",
+    };
+  }
+
+  const navigated = navigateChatInputHistory(state, "up");
+  const historyNavigationActiveAfter = state.chatInputHistoryIndex !== -1;
+  return {
+    ...baseResult,
+    handled: navigated,
+    preventDefault: navigated,
+    restoreCaret: navigated ? "up" : null,
+    decision: navigated ? "handled:enter-history-up" : "blocked:history-boundary",
+    historyNavigationActiveAfter,
+  };
 }
