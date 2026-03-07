@@ -34,11 +34,9 @@ export async function createChildAdapter(params: {
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
-  // On Windows, `detached: true` creates a new process group and can prevent
-  // stdout/stderr pipes from connecting when running under a Scheduled Task
-  // (headless, no console). Default to `detached: false` on Windows; on
-  // POSIX systems keep `detached: true` so the child survives parent exit.
-  const useDetached = process.platform !== "win32";
+  // Keep children attached to the parent process group so service managers
+  // (systemd/launchd) can reliably terminate the full tree on restart.
+  const useDetached = false;
 
   const options: SpawnOptions = {
     cwd: params.cwd,
@@ -57,14 +55,7 @@ export async function createChildAdapter(params: {
   const spawned = await spawnWithFallback({
     argv: resolvedArgv,
     options,
-    fallbacks: useDetached
-      ? [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ]
-      : [],
+    fallbacks: [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
@@ -126,6 +117,18 @@ export async function createChildAdapter(params: {
 
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
+    if (signal === "SIGTERM") {
+      if (pid) {
+        killProcessTree(pid, { graceMs: 10_000 });
+      } else {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // ignore kill errors
+        }
+      }
+      return;
+    }
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
         killProcessTree(pid);
