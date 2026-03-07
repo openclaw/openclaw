@@ -21,6 +21,8 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 });
 
 vi.mock("../../agents/minimax-vlm.js", () => ({
+  isMinimaxVlmProvider: (provider: string) =>
+    provider === "minimax" || provider === "minimax-portal",
   minimaxUnderstandImage: minimaxUnderstandImageMock,
 }));
 

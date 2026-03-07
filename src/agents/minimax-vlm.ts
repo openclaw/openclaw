@@ -6,6 +6,10 @@ type MinimaxBaseResp = {
   status_msg?: string;
 };
 
+export function isMinimaxVlmProvider(provider: string): boolean {
+  return provider === "minimax" || provider === "minimax-portal";
+}
+
 function coerceApiHost(params: {
   apiHost?: string;
   modelBaseUrl?: string;

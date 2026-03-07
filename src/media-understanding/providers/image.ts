@@ -1,6 +1,6 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
-import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
+import { isMinimaxVlmProvider, minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
@@ -40,7 +40,7 @@ export async function describeImageWithModel(
   authStorage.setRuntimeApiKey(model.provider, apiKey);
 
   const base64 = params.buffer.toString("base64");
-  if (model.provider === "minimax" || model.provider === "minimax-portal") {
+  if (isMinimaxVlmProvider(model.provider)) {
     const text = await minimaxUnderstandImage({
       apiKey,
       prompt: params.prompt ?? "Describe the image.",

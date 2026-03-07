@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
-import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import { isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -110,7 +110,7 @@ export function resolveImageModelConfigForTool(params: {
   let preferred: string | null = null;
 
   // MiniMax users: always try the canonical vision model first when auth exists.
-  if ((primary.provider === "minimax" || primary.provider === "minimax-portal") && providerOk) {
+  if (isMinimaxVlmProvider(primary.provider) && providerOk) {
     preferred = `${primary.provider}/MiniMax-VL-01`;
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
@@ -229,7 +229,7 @@ async function runImagePrompt(params: {
       });
 
       // MiniMax VLM only supports a single image; use the first one.
-      if (model.provider === "minimax" || model.provider === "minimax-portal") {
+      if (isMinimaxVlmProvider(model.provider)) {
         const first = params.images[0];
         const imageDataUrl = `data:${first.mimeType};base64,${first.base64}`;
         const text = await minimaxUnderstandImage({
