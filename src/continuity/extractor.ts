@@ -66,7 +66,13 @@ function firstSentence(text: string): string {
 
 function matchContinuity(text: string, role: "user" | "assistant"): ContinuityExtractionMatch[] {
   const normalized = sanitizeText(text, role);
-  if (!normalized || looksLikePromptInjection(normalized)) {
+  if (!normalized) {
+    return [];
+  }
+  // For user messages, inspect raw normalized text before tag stripping so
+  // <system>/<developer> styled injection payloads do not bypass filtering.
+  const injectionProbe = role === "user" ? normalizeSpaces(text) : normalized;
+  if (looksLikePromptInjection(injectionProbe)) {
     return [];
   }
   const matches: ContinuityExtractionMatch[] = [];
