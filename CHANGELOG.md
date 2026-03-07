@@ -303,6 +303,7 @@ Docs: https://docs.openclaw.ai
 - Nodes/system.run PowerShell wrapper parsing: treat `pwsh`/`powershell` `-EncodedCommand` forms as shell-wrapper payloads so allowlist mode still requires approval instead of falling back to plain argv analysis. Thanks @tdjackey for reporting.
 - Control UI/auth error reporting: map generic browser `Fetch failed` websocket close errors back to actionable gateway auth messages (`gateway token mismatch`, `authentication failed`, `retry later`) so dashboard disconnects stop hiding credential problems. Landed from contributor PR #28608 by @KimGLee. Thanks @KimGLee.
 - Media/mime unknown-kind handling: return `undefined` (not `"unknown"`) for missing/unrecognized MIME kinds and use document-size fallback caps for unknown remote media, preventing phantom `<media:unknown>` Signal events from being treated as real messages. (#39199) Thanks @nicolasgrasset.
+- Nodes/system.run allow-always persistence: honor shell comment semantics during allowlist analysis so `#`-tailed payloads that never execute are not persisted as trusted follow-up commands. Thanks @tdjackey for reporting.
 
 ## 2026.3.2
 
