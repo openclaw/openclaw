@@ -42,6 +42,7 @@ function createTestContext() {
     },
     textLimit: 4000,
     typingReaction: "",
+    assistantStatus: "is typing...",
     ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,
     removeAckAfterReply: false,
