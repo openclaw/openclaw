@@ -457,6 +457,7 @@ export async function runMemoryFlushIfNeeded(params: {
     params.followupRun.run.sessionId,
     entry ?? params.sessionEntry,
     params.storePath,
+    params.agentId,
   );
   let contextHashBeforeFlush: string | undefined;
   if (sessionFilePath) {
@@ -606,41 +607,43 @@ async function resolveSessionFilePathForFlush(
   sessionId: string | undefined,
   entry: SessionEntry | undefined,
   storePath: string | undefined,
+  agentId?: string,
 ): Promise<string | undefined> {
   if (!sessionId) {
     return undefined;
   }
-  // Mirror resolveSessionLogPath: check both sessionFile and transcriptPath.
+  // Always normalize through resolveSessionFilePath to handle stale absolute
+  // paths and relative entries consistently (mirrors resolveSessionLogPath).
+  const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
   const transcriptPath = (
     entry as (SessionEntry & { transcriptPath?: string }) | undefined
   )?.transcriptPath?.trim();
   const sessionFile = entry?.sessionFile?.trim() || transcriptPath;
-  if (sessionFile) {
-    try {
-      await fs.promises.access(sessionFile);
-      return sessionFile;
-    } catch {
-      // fall through
-    }
-  }
-  if (!storePath) {
-    return undefined;
-  }
   try {
     const resolved = resolveSessionFilePath(
       sessionId,
-      entry,
-      resolveSessionFilePathOptions({ storePath }),
+      sessionFile ? { sessionFile } : entry,
+      pathOpts,
     );
     try {
       await fs.promises.access(resolved);
       return resolved;
     } catch {
-      return undefined;
+      // fall through — resolved path doesn't exist
     }
   } catch {
-    return undefined;
+    // resolveSessionFilePath threw — try raw sessionFile as last resort
   }
+  // Fallback: try the raw sessionFile if normalization didn't produce a valid path
+  if (sessionFile) {
+    try {
+      await fs.promises.access(sessionFile);
+      return sessionFile;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 /**
