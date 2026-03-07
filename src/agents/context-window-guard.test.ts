@@ -146,4 +146,93 @@ describe("context-window-guard", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
   });
+
+  it("uses Codex modelAutoCompactTokenLimit as effective context window", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {
+              params: {
+                modelContextWindow: 1_000_000,
+                modelAutoCompactTokenLimit: 950_000,
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("modelsConfig");
+    expect(info.tokens).toBe(950_000);
+  });
+
+  it("clamps Codex compact limit to hard cap", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {
+              params: {
+                modelContextWindow: 800_000,
+                modelAutoCompactTokenLimit: 950_000,
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.tokens).toBe(800_000);
+  });
+
+  it("falls back to model.contextWindow when Codex config params are absent", () => {
+    const info = resolveContextWindowInfo({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelContextWindow: 1_000_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("model");
+    expect(info.tokens).toBe(1_000_000);
+  });
+
+  it("ignores Codex config params for non-codex providers", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              params: {
+                modelContextWindow: 1_000_000,
+                modelAutoCompactTokenLimit: 950_000,
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("model");
+    expect(info.tokens).toBe(200_000);
+  });
 });

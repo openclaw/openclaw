@@ -304,65 +304,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
-  it("does not inject Codex context window params into the API payload", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
-      applyModelId: "gpt-5.4",
-      model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {
-                params: {
-                  modelContextWindow: 1_000_000,
-                  modelAutoCompactTokenLimit: 950_000,
-                },
-              },
-            },
-          },
-        },
-      },
-      payload: {},
-    });
-
-    expect(payload).not.toHaveProperty("model_context_window");
-    expect(payload).not.toHaveProperty("model_auto_compact_token_limit");
-  });
-
-  it("ignores invalid Codex big-context values", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai-codex",
-      applyModelId: "gpt-5.4",
-      model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {
-                params: {
-                  modelContextWindow: 0,
-                  modelAutoCompactTokenLimit: "nope",
-                },
-              },
-            },
-          },
-        },
-      },
-      payload: {},
-    });
-
-    expect(payload).not.toHaveProperty("model_context_window");
-    expect(payload).not.toHaveProperty("model_auto_compact_token_limit");
-  });
 
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
     const payloads: Record<string, unknown>[] = [];

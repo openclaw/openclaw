@@ -365,27 +365,6 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
     });
 }
 
-function createCodexContextWindowWrapper(
-  baseStreamFn: StreamFn | undefined,
-  extraParams: Record<string, unknown> | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const hardCap = parsePositiveInteger(extraParams?.modelContextWindow);
-    const compactLimitRaw = parsePositiveInteger(extraParams?.modelAutoCompactTokenLimit);
-    const compactLimit =
-      compactLimitRaw && hardCap ? Math.min(compactLimitRaw, hardCap) : compactLimitRaw;
-    if (!hardCap && !compactLimit) {
-      return underlying(model, context, options);
-    }
-    // These params only affect OpenClaw's internal context tracking
-    // (status display, pruning, compaction timing) via context.ts.
-    // The Codex API rejects them as request params, so we don't
-    // inject anything into the payload.
-    return underlying(model, context, options);
-  };
-}
-
 function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -1113,10 +1092,6 @@ export function applyExtraParamsToAgent(
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
-  }
-
-  if (provider === "openai-codex") {
-    agent.streamFn = createCodexContextWindowWrapper(agent.streamFn, merged);
   }
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
