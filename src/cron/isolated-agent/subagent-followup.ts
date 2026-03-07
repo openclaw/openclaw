@@ -1,12 +1,14 @@
-import {
-  countActiveDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../../agents/subagent-registry.js";
+import { listDescendantRunsForRequester } from "../../agents/subagent-registry.js";
 import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-const CRON_SUBAGENT_WAIT_POLL_MS = 500;
-const CRON_SUBAGENT_WAIT_MIN_MS = 30_000;
-const CRON_SUBAGENT_FINAL_REPLY_GRACE_MS = 5_000;
+import { callGateway } from "../../gateway/call.js";
+
+const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
+
+const CRON_SUBAGENT_WAIT_MIN_MS = FAST_TEST_MODE ? 10 : 30_000;
+const CRON_SUBAGENT_FINAL_REPLY_GRACE_MS = FAST_TEST_MODE ? 50 : 5_000;
+const CRON_SUBAGENT_GRACE_POLL_MS = FAST_TEST_MODE ? 8 : 200;
+
 const SUBAGENT_FOLLOWUP_HINTS = [
   "subagent spawned",
   "spawned a subagent",
@@ -14,6 +16,7 @@ const SUBAGENT_FOLLOWUP_HINTS = [
   "both subagents are running",
   "wait for them to report back",
 ] as const;
+
 const INTERIM_CRON_HINTS = [
   "on it",
   "pulling everything together",
@@ -103,6 +106,12 @@ export async function readDescendantSubagentFallbackReply(params: {
   return replies.join("\n\n");
 }
 
+/**
+ * Waits for descendant subagents to complete using a push-based approach:
+ * each active descendant run is awaited via `agent.wait` (gateway RPC) instead
+ * of a busy-poll loop.  After all active runs settle, a short grace period
+ * polls the cron agent's session for a post-orchestration synthesis message.
+ */
 export async function waitForDescendantSubagentSummary(params: {
   sessionKey: string;
   initialReply?: string;
@@ -111,22 +120,53 @@ export async function waitForDescendantSubagentSummary(params: {
 }): Promise<string | undefined> {
   const initialReply = params.initialReply?.trim();
   const deadline = Date.now() + Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
-  let sawActiveDescendants = params.observedActiveDescendants === true;
-  let drainedAtMs: number | undefined;
-  while (Date.now() < deadline) {
-    const activeDescendants = countActiveDescendantRuns(params.sessionKey);
-    if (activeDescendants > 0) {
-      sawActiveDescendants = true;
-      drainedAtMs = undefined;
-      await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
-      continue;
-    }
-    if (!sawActiveDescendants) {
-      return initialReply;
-    }
-    if (!drainedAtMs) {
-      drainedAtMs = Date.now();
-    }
+
+  // Snapshot the currently active descendant run IDs.
+  const getActiveRuns = () =>
+    listDescendantRunsForRequester(params.sessionKey).filter(
+      (entry) => typeof entry.endedAt !== "number",
+    );
+
+  const initialActiveRuns = getActiveRuns();
+  const sawActiveDescendants =
+    params.observedActiveDescendants === true || initialActiveRuns.length > 0;
+
+  if (!sawActiveDescendants) {
+    // No active descendants and none were observed before the call – nothing to wait for.
+    return initialReply;
+  }
+
+  // --- Push-based wait for all active descendants ---
+  // We iterate in case first-level descendants spawn their own subagents while
+  // we wait, so new active runs can appear between rounds.
+  let pendingRunIds = new Set<string>(initialActiveRuns.map((e) => e.runId));
+
+  while (pendingRunIds.size > 0 && Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    // Wait for all currently pending runs concurrently.  If any fails or times
+    // out, allSettled absorbs the error so we proceed to the next iteration.
+    await Promise.allSettled(
+      [...pendingRunIds].map((runId) =>
+        callGateway<{ status?: string }>({
+          method: "agent.wait",
+          params: { runId, timeoutMs: remainingMs },
+          timeoutMs: remainingMs + 2_000,
+        }).catch(() => undefined),
+      ),
+    );
+
+    // Refresh: check for newly created active descendants (e.g. spawned by
+    // the runs that just finished) and keep looping if any exist.
+    pendingRunIds = new Set<string>(getActiveRuns().map((e) => e.runId));
+  }
+
+  // --- Grace period: wait for the cron agent's synthesis ---
+  // After the subagent announces fire and the cron agent processes them, it
+  // produces a new assistant message.  Poll briefly (bounded by
+  // CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) to capture that synthesis.
+  const gracePeriodDeadline = Math.min(Date.now() + CRON_SUBAGENT_FINAL_REPLY_GRACE_MS, deadline);
+
+  while (Date.now() < gracePeriodDeadline) {
     const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
     if (
       latest &&
@@ -135,11 +175,10 @@ export async function waitForDescendantSubagentSummary(params: {
     ) {
       return latest;
     }
-    if (Date.now() - drainedAtMs >= CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) {
-      return undefined;
-    }
-    await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
+    await new Promise<void>((resolve) => setTimeout(resolve, CRON_SUBAGENT_GRACE_POLL_MS));
   }
+
+  // Final read after grace period expires.
   const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
   if (
     latest &&
@@ -148,5 +187,6 @@ export async function waitForDescendantSubagentSummary(params: {
   ) {
     return latest;
   }
+
   return undefined;
 }
