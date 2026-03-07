@@ -95,7 +95,6 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(resolveProxyFetchFromEnv("http://127.0.0.1:9001/v1/models")).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
-
   it("returns proxy fetch for private-network targets that are not in no_proxy", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", "");

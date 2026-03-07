@@ -68,8 +68,9 @@ describe("runCapability proxy fetch passthrough", () => {
     expect(seenFetchFn).not.toBe(globalThis.fetch);
   });
 
-  it("does not pass fetchFn to audio providers for private-network targets", async () => {
+  it("does not pass fetchFn to audio providers when baseUrl is covered by NO_PROXY", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "172.31.0.14");
 
     let seenFetchFn: typeof fetch | undefined;
     await withAudioFixture("openclaw-audio-private-no-proxy", async ({ ctx, media, cache }) => {
