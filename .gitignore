@@ -121,3 +121,20 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# Full Digital / CUTMV infrastructure (Python)
+fd/.venv/
+fd/data/*.db
+fd/data/*.sqlite
+fd/.env
+
+# Remotion engine outputs (build artifacts, not source)
+packages/remotion-engine/out/
+packages/remotion-engine/node_modules/
+
+# Brand AI large assets (frame dumps, rendered outputs)
+data/datasets/*/motion/frames/
+data/datasets/*/motion/renders/
+*.mp4
+*.mov
+*.gif
