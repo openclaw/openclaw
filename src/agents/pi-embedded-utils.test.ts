@@ -562,6 +562,11 @@ describe("stripDowngradedToolCallText", () => {
         expected: "Intro.",
       },
       {
+        name: "multiple legacy tool_call XML blocks",
+        text: `Start\n<tool_call><function=read><parameter=path>/tmp/a</parameter></tool_call>\nMiddle\n<tool_call><function=exec><parameter=command>ls</parameter></tool_call>\nEnd`,
+        expected: "Start\nMiddle\nEnd",
+      },
+      {
         name: "no markers",
         text: "Just a normal response with no markers.",
         expected: "Just a normal response with no markers.",
