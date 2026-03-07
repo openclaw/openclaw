@@ -1709,6 +1709,79 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies to topic root in p2p thread message (thread_id present)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-thread-user" } },
+      message: {
+        message_id: "om_dm_thread_reply",
+        root_id: "om_dm_thread_root",
+        thread_id: "omt_dm_thread",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello in p2p thread" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_dm_thread_root",
+        skipReplyToInMessages: false,
+        rootId: "om_dm_thread_root",
+        replyInThread: true,
+        threadReply: true,
+      }),
+    );
+  });
+
+  it("replies to triggering message in p2p plain reply (root_id only, no thread_id)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-reply-user" } },
+      message: {
+        message_id: "om_dm_plain_reply",
+        root_id: "om_dm_original_msg",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "just a quote reply in p2p" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_dm_plain_reply",
+        skipReplyToInMessages: true,
+        rootId: "om_dm_original_msg",
+        replyInThread: false,
+        threadReply: false,
+      }),
+    );
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
