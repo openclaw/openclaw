@@ -67,9 +67,15 @@ export async function resolveImageModelAutoSwitch(params: {
   cfg: OpenClawConfig;
   hasResolvedHeartbeatModelOverride: boolean;
   hasSessionModelOverride: boolean;
+  hasChannelModelOverride: boolean;
+  aliasIndex: ReturnType<typeof import("../../agents/model-selection.js").buildModelAliasIndex>;
 }): Promise<{ provider: string; model: string }> {
-  // Skip auto-switch if model was explicitly overridden via heartbeat or session
-  if (params.hasResolvedHeartbeatModelOverride || params.hasSessionModelOverride) {
+  // Skip auto-switch if model was explicitly overridden via heartbeat, session, or channel
+  if (
+    params.hasResolvedHeartbeatModelOverride ||
+    params.hasSessionModelOverride ||
+    params.hasChannelModelOverride
+  ) {
     return { provider: params.provider, model: params.model };
   }
 
@@ -98,7 +104,7 @@ export async function resolveImageModelAutoSwitch(params: {
   const imageModelResolved = resolveModelRefFromString({
     raw: imageModelPrimary.trim(),
     defaultProvider: params.provider,
-    aliasIndex: {},
+    aliasIndex: params.aliasIndex,
   });
   if (!imageModelResolved) {
     return { provider: params.provider, model: params.model };
@@ -274,6 +280,7 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
+  let hasChannelModelOverride = false;
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
@@ -283,6 +290,7 @@ export async function getReplyFromConfig(
     if (resolved) {
       provider = resolved.ref.provider;
       model = resolved.ref.model;
+      hasChannelModelOverride = true;
     }
   }
 
@@ -295,6 +303,8 @@ export async function getReplyFromConfig(
     cfg,
     hasResolvedHeartbeatModelOverride,
     hasSessionModelOverride,
+    hasChannelModelOverride,
+    aliasIndex,
   });
   provider = imageModelSwitch.provider;
   model = imageModelSwitch.model;

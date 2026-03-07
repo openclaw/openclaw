@@ -32,6 +32,7 @@ describe("resolveImageModelAutoSwitch", () => {
   } as never;
 
   const baseCfg = {} as OpenClawConfig;
+  const emptyAliasIndex = { byKey: new Map(), byAlias: new Map() };
 
   it("returns original provider/model when no images are present", async () => {
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
@@ -44,6 +45,8 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg: baseCfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "deepseek", model: "deepseek-r1" });
@@ -60,6 +63,8 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg: baseCfg,
       hasResolvedHeartbeatModelOverride: true,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "deepseek", model: "deepseek-r1" });
@@ -77,6 +82,27 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg: baseCfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: true,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
+    });
+
+    expect(result).toEqual({ provider: "deepseek", model: "deepseek-r1" });
+    expect(findModelInCatalog).not.toHaveBeenCalled();
+  });
+
+  it("returns original provider/model when channel model override is active", async () => {
+    const ctxWithImage = { ...baseCtx, MediaPath: "/tmp/image.png" };
+    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+
+    const result = await resolveImageModelAutoSwitch({
+      provider: "deepseek",
+      model: "deepseek-r1",
+      ctx: ctxWithImage,
+      cfg: baseCfg,
+      hasResolvedHeartbeatModelOverride: false,
+      hasSessionModelOverride: false,
+      hasChannelModelOverride: true,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "deepseek", model: "deepseek-r1" });
@@ -98,6 +124,8 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg: baseCfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-1" });
@@ -118,6 +146,8 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg: baseCfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "deepseek", model: "deepseek-r1" });
@@ -154,6 +184,8 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-1" });
@@ -188,6 +220,8 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
     });
 
     expect(result).toEqual({ provider: "deepseek", model: "deepseek-r1" });
@@ -224,6 +258,55 @@ describe("resolveImageModelAutoSwitch", () => {
       cfg,
       hasResolvedHeartbeatModelOverride: false,
       hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex: emptyAliasIndex,
+    });
+
+    expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-1" });
+  });
+
+  it("resolves bare model names using aliasIndex", async () => {
+    const ctxWithImage = { ...baseCtx, MediaPath: "/tmp/image.png" };
+    const textOnlyModel = { provider: "deepseek", id: "deepseek-r1", input: ["text"] };
+    const visionModel = { provider: "anthropic", id: "claude-opus-4-1", name: "Claude Opus", input: ["text", "image"] };
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "claude-opus" },
+          models: {
+            "anthropic/claude-opus-4-1": { alias: "claude-opus" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const aliasIndex = {
+      byKey: new Map([["anthropic/claude-opus-4-1", ["claude-opus"]]]),
+      byAlias: new Map([["claude-opus", { provider: "anthropic", model: "claude-opus-4-1" }]]),
+    };
+
+    vi.mocked(loadModelCatalog).mockResolvedValue([textOnlyModel, visionModel] as never);
+    vi.mocked(findModelInCatalog)
+      .mockReturnValueOnce(textOnlyModel as never)
+      .mockReturnValueOnce(visionModel as never);
+    vi.mocked(modelSupportsVision)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    vi.mocked(resolveAgentModelPrimaryValue).mockReturnValue("claude-opus");
+    vi.mocked(resolveModelRefFromString).mockReturnValue({
+      ref: { provider: "anthropic", model: "claude-opus-4-1" },
+      alias: "claude-opus",
+    } as never);
+
+    const result = await resolveImageModelAutoSwitch({
+      provider: "deepseek",
+      model: "deepseek-r1",
+      ctx: ctxWithImage,
+      cfg,
+      hasResolvedHeartbeatModelOverride: false,
+      hasSessionModelOverride: false,
+      hasChannelModelOverride: false,
+      aliasIndex,
     });
 
     expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-1" });
