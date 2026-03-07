@@ -169,6 +169,12 @@ export interface InternalHookEvent {
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */
   messages: string[];
+  /** Deferred actions to run after all handlers complete.
+   *  Handlers push async callbacks here; triggerInternalHook drains them
+   *  sequentially after the main handler loop. This eliminates FIFO
+   *  registration-order dependencies: a handler that runs early can defer
+   *  work that depends on context set by later handlers. */
+  postHookActions: Array<() => Promise<void> | void>;
 }
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
@@ -285,6 +291,21 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
       log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
     }
   }
+
+  // Drain post-hook actions — these run after all handlers have had
+  // a chance to mutate event.context, eliminating FIFO ordering issues.
+  // Actions execute in push order; errors are caught per-action so one
+  // failure doesn't block others.
+  if (event.postHookActions.length > 0) {
+    for (const action of event.postHookActions) {
+      try {
+        await action();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error(`Post-hook action error [${event.type}:${event.action}]: ${message}`);
+      }
+    }
+  }
 }
 
 /**
@@ -308,6 +329,7 @@ export function createInternalHookEvent(
     context,
     timestamp: new Date(),
     messages: [],
+    postHookActions: [],
   };
 }
 
