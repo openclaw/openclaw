@@ -311,7 +311,7 @@ function createOpenAIResponsesContextManagementWrapper(
     const stripStore =
       !forceStore &&
       OPENAI_RESPONSES_APIS.has(String(model.api ?? "")) &&
-      model.compat?.supportsStore === false;
+      (model as { compat?: { supportsStore?: boolean } }).compat?.supportsStore === false;
     if (!forceStore && !useServerCompaction && !stripStore) {
       return underlying(model, context, options);
     }
