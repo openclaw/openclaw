@@ -10,11 +10,17 @@ function normalizeDarwinTmpPath(filePath: string): string {
 
 function canonicalizeComparableDir(dirPath: string): string {
   const normalized = normalizeDarwinTmpPath(path.resolve(dirPath));
+  let resolved = normalized;
   try {
-    return normalizeDarwinTmpPath(fs.realpathSync.native(normalized));
+    resolved = normalizeDarwinTmpPath(fs.realpathSync.native(normalized));
   } catch {
-    return normalized;
+    resolved = normalized;
   }
+  if (process.platform !== "win32") {
+    return resolved;
+  }
+  // Normalize separators + casing so Windows short/long aliases compare consistently.
+  return resolved.replaceAll("/", "\\").toLowerCase();
 }
 
 export function expectSingleNpmInstallIgnoreScriptsCall(params: {

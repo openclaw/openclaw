@@ -41,6 +41,67 @@ backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
 handle "nothing recorded yet" and continue their workflow without wrapping the
 tool call in try/catch logic.
 
+## Continuity memory (beta)
+
+OpenClaw also ships an opt-in `continuity` context-engine plugin for
+cross-channel continuity. Unlike daily memory writes, continuity is:
+
+- captured automatically from completed turns
+- reviewed before promotion by default
+- injected back into future prompts as a small `<continuity>` block
+
+Enable it by selecting the continuity context engine:
+
+```json5
+{
+  plugins: {
+    slots: {
+      contextEngine: "continuity",
+    },
+    entries: {
+      continuity: {
+        config: {
+          capture: {
+            mainDirect: "auto",
+            pairedDirect: "review",
+            group: "off",
+            channel: "off",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Approved continuity is materialized as Markdown under:
+
+- `memory/continuity/facts.md`
+- `memory/continuity/preferences.md`
+- `memory/continuity/decisions.md`
+- `memory/continuity/open-loops.md`
+
+Pending items stay in agent-local state until reviewed, so they do not enter
+workspace memory automatically.
+
+Default trust posture:
+
+- main direct chat: auto-approve durable items
+- paired direct chats: send durable items to review
+- groups and channels: capture off
+- recall: direct chats only
+
+Review and manage continuity from the Control UI [Continuity tab](/web/control-ui)
+or the CLI:
+
+```bash
+openclaw continuity status
+openclaw continuity review
+openclaw continuity approve <id>
+openclaw continuity reject <id>
+openclaw continuity rm <id>
+```
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.

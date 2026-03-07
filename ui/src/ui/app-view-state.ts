@@ -17,6 +17,12 @@ import type {
   ChannelsStatusSnapshot,
   ConfigSnapshot,
   ConfigUiHints,
+  ContinuityExplainResult,
+  ContinuityKind,
+  ContinuityRecord,
+  ContinuityReviewState,
+  ContinuitySourceClass,
+  ContinuityStatus,
   HealthSnapshot,
   LogEntry,
   LogLevel,
@@ -155,6 +161,17 @@ export type AppViewState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsHideCron: boolean;
+  continuityLoading: boolean;
+  continuityError: string | null;
+  continuityStatus: ContinuityStatus | null;
+  continuityRecords: ContinuityRecord[];
+  continuityAgentId: string;
+  continuityStateFilter: ContinuityReviewState | "all";
+  continuityKindFilter: ContinuityKind | "all";
+  continuitySourceFilter: ContinuitySourceClass | "all";
+  continuityLimit: string;
+  continuityBusyId: string | null;
+  continuityExplainById: Record<string, ContinuityExplainResult | null>;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;

@@ -295,6 +295,13 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -325,6 +332,9 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
 
@@ -334,7 +344,14 @@ jobs:
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE="${PR_BASE_SHA:-}"
+          BASE_REF="origin/${PR_BASE_REF:-}"
+          if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
+            MERGE_BASE="$(git merge-base "$BASE_REF" HEAD || true)"
+            if [ -n "$MERGE_BASE" ]; then
+              BASE="$MERGE_BASE"
+            fi
+          fi
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do

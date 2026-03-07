@@ -76,6 +76,12 @@ import type {
   LogLevel,
   PresenceEntry,
   ChannelsStatusSnapshot,
+  ContinuityExplainResult,
+  ContinuityKind,
+  ContinuityRecord,
+  ContinuityReviewState,
+  ContinuitySourceClass,
+  ContinuityStatus,
   SessionsListResult,
   SkillStatusReport,
   ToolsCatalogResult,
@@ -249,6 +255,17 @@ export class OpenClawApp extends LitElement {
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
   @state() sessionsHideCron = true;
+  @state() continuityLoading = false;
+  @state() continuityError: string | null = null;
+  @state() continuityStatus: ContinuityStatus | null = null;
+  @state() continuityRecords: ContinuityRecord[] = [];
+  @state() continuityAgentId = "";
+  @state() continuityStateFilter: ContinuityReviewState | "all" = "all";
+  @state() continuityKindFilter: ContinuityKind | "all" = "all";
+  @state() continuitySourceFilter: ContinuitySourceClass | "all" = "all";
+  @state() continuityLimit = "100";
+  @state() continuityBusyId: string | null = null;
+  @state() continuityExplainById: Record<string, ContinuityExplainResult | null> = {};
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

@@ -34,6 +34,7 @@ const pluginSdkSubpaths = [
   "lobster",
   "matrix",
   "mattermost",
+  "continuity",
   "memory-core",
   "memory-lancedb",
   "minimax-portal-auth",
@@ -86,6 +87,7 @@ export default defineConfig({
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/controllers/continuity.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [

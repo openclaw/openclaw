@@ -7,6 +7,11 @@ describe("normalizePluginsConfig", () => {
     expect(result.slots.memory).toBe("memory-core");
   });
 
+  it("uses default context-engine slot when not specified", () => {
+    const result = normalizePluginsConfig({});
+    expect(result.slots.contextEngine).toBe("legacy");
+  });
+
   it("respects explicit memory slot value", () => {
     const result = normalizePluginsConfig({
       slots: { memory: "custom-memory" },
@@ -109,5 +114,21 @@ describe("resolveEffectiveEnableState", () => {
       },
     });
     expect(state).toEqual({ enabled: false, reason: "disabled in config" });
+  });
+
+  it("enables the selected context-engine plugin even when bundled by default", () => {
+    const normalized = normalizePluginsConfig({
+      enabled: true,
+      slots: {
+        contextEngine: "continuity",
+      },
+    });
+    const state = resolveEffectiveEnableState({
+      id: "continuity",
+      origin: "bundled",
+      config: normalized,
+      rootConfig: {},
+    });
+    expect(state).toEqual({ enabled: true });
   });
 });
