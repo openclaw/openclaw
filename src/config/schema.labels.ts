@@ -278,6 +278,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
+  "media.ttlHours": "Media Retention TTL (hours)",
   audio: "Audio",
   "audio.transcription": "Audio Transcription",
   "audio.transcription.command": "Audio Transcription Command",
