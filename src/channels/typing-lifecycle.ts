@@ -14,28 +14,39 @@ export function createTypingKeepaliveLoop(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let tickInFlight = false;
   let stopped = false;
+  let generation = 0; // Track active generation to prevent stale ticks from scheduling
 
   const tick = async () => {
     if (tickInFlight) {
       return;
     }
+    const currentGeneration = generation;
     tickInFlight = true;
     try {
       await params.onTick();
     } finally {
-      tickInFlight = false;
+      // Only clear tickInFlight if we're still in the same generation
+      // This prevents stale ticks from causing issues after stop/start
+      if (generation === currentGeneration) {
+        tickInFlight = false;
+      }
     }
   };
 
   // Use setTimeout chain instead of setInterval for cleaner cleanup semantics.
   // Each tick schedules the next only after completion, avoiding timer pile-up.
   const scheduleNext = () => {
-    if (stopped || params.intervalMs <= 0) {
+    if (stopped || params.intervalMs <= 0 || timer) {
       return;
     }
     timer = setTimeout(() => {
+      // Capture current generation at schedule time
+      const scheduledGeneration = generation;
+      timer = undefined;
       void tick().finally(() => {
-        if (!stopped) {
+        // Only schedule next if we haven't been stopped AND
+        // the generation hasn't changed (prevents stale ticks from scheduling)
+        if (!stopped && generation === scheduledGeneration) {
           scheduleNext();
         }
       });
@@ -47,16 +58,18 @@ export function createTypingKeepaliveLoop(params: {
       return;
     }
     stopped = false;
+    generation++; // Increment generation to invalidate any stale ticks
     scheduleNext();
   };
 
   const stop = () => {
     stopped = true;
+    generation++; // Increment to invalidate any in-flight ticks
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
-    tickInFlight = false;
+    // Do NOT reset tickInFlight here - let the in-flight tick's finally block handle it
   };
 
   const isRunning = () => timer !== undefined;
