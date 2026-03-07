@@ -468,6 +468,8 @@ async function sendSubagentAnnounceDirectly(params: {
         completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
           ? String(completionDirectOrigin.threadId)
           : undefined;
+      // Completion direct sends can hit transient gateway latency on busy hosts.
+      // Use a longer timeout to avoid false negatives after the send already landed.
       await callGateway({
         method: "send",
         params: {
@@ -479,7 +481,7 @@ async function sendSubagentAnnounceDirectly(params: {
           message: params.completionMessage,
           idempotencyKey: params.directIdempotencyKey,
         },
-        timeoutMs: 15_000,
+        timeoutMs: 60_000,
       });
 
       return {
@@ -493,6 +495,8 @@ async function sendSubagentAnnounceDirectly(params: {
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
+    // Cron/subagent announce delivery often targets a busy main session and may
+    // take >15s to return a final response even when delivery succeeds.
     await callGateway({
       method: "agent",
       params: {
@@ -506,7 +510,7 @@ async function sendSubagentAnnounceDirectly(params: {
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,
-      timeoutMs: 15_000,
+      timeoutMs: 60_000,
     });
 
     return {

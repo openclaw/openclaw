@@ -94,3 +94,6 @@ skills/walking-thoughts/config/kimi_config.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# test logs
+*.log
