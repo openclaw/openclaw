@@ -738,6 +738,7 @@ async function deliverOutboundPayloadsCore(
           success: results.length > beforeCount,
           content: payloadSummary.text,
           messageId,
+          metadata: results.at(-1)?.meta,
         });
         continue;
       }
@@ -764,12 +765,14 @@ async function deliverOutboundPayloadsCore(
           success: results.length > beforeCount,
           content: payloadSummary.text,
           messageId,
+          metadata: results.at(-1)?.meta,
         });
         continue;
       }
 
       let first = true;
       let lastMessageId: string | undefined;
+      let lastMeta: Record<string, unknown> | undefined;
       for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
@@ -778,16 +781,19 @@ async function deliverOutboundPayloadsCore(
           const delivery = await sendSignalMedia(caption, url);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          lastMeta = delivery.meta;
         } else {
           const delivery = await handler.sendMedia(caption, url, sendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
+          lastMeta = delivery.meta;
         }
       }
       emitMessageSent({
         success: true,
         content: payloadSummary.text,
         messageId: lastMessageId,
+        metadata: lastMeta,
       });
     } catch (err) {
       emitMessageSent({
