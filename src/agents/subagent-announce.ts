@@ -1420,8 +1420,11 @@ export async function runSubagentAnnounceFlow(params: {
     const cfg2 = loadConfig();
     const outputDir = resolveSubagentOutputDir(cfg2);
     const OUTPUT_THRESHOLD = 3_000;
+    // Only save to file when delivering to a human-facing channel. Subagent-to-subagent
+    // announces are internal (deliver: false) and have no channel size limit, so the
+    // parent orchestrator should always receive the full findings.
     const savedFilePath =
-      findings.length > OUTPUT_THRESHOLD
+      !requesterIsSubagent && findings.length > OUTPUT_THRESHOLD
         ? saveOutputToTempFile({
             findings,
             label: params.label ?? params.task?.slice(0, 40) ?? "agent",
