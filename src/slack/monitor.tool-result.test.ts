@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -308,7 +307,7 @@ describe("monitorSlackProvider tool results", () => {
     await runDefaultMessageAndExpectSentText("final reply");
   });
 
-  it("preserves RawBody without injecting processed room history", async () => {
+  it("includes recent channel history in Body when requireMention is false", async () => {
     setHistoryCaptureConfig({ "*": { requireMention: false } });
     const capturedCtx = captureReplyContexts<{
       Body?: string;
@@ -322,9 +321,11 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(2);
     const latestCtx = capturedCtx.at(-1) ?? {};
-    expect(latestCtx.Body).not.toContain(HISTORY_CONTEXT_MARKER);
-    expect(latestCtx.Body).not.toContain(CURRENT_MESSAGE_MARKER);
-    expect(latestCtx.Body).not.toContain("first");
+    // With requireMention=false, history is retained as a sliding window
+    // so the second message sees the first as context in Body.
+    expect(latestCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
+    expect(latestCtx.Body).toContain("first");
+    // RawBody and CommandBody remain unaffected by history injection.
     expect(latestCtx.RawBody).toBe("second");
     expect(latestCtx.CommandBody).toBe("second");
   });
