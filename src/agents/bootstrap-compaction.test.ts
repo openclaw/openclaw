@@ -24,6 +24,15 @@ const STRUCTURED_SUMMARY = `## Key Rules
 ## Critical References
 - /path/to/file.ts`;
 
+/**
+ * Input content that is longer than STRUCTURED_SUMMARY so the output-length
+ * guard (compacted.length < charsBefore) in compactBootstrapFile doesn't
+ * reject the compaction as counter-productive.
+ */
+const LONG_CONTENT =
+  "A".repeat(200) +
+  " — memory content that is intentionally longer than the structured summary output.";
+
 /** Creates a mock llmFn that returns the given text. */
 function makeLlmFn(response: string): CompactionLlmFn & ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue(response) as CompactionLlmFn & ReturnType<typeof vi.fn>;
@@ -155,7 +164,7 @@ describe("compactBootstrapFile", () => {
     const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
 
     const { compacted, result } = await compactBootstrapFile({
-      content: "Some long memory content that needs compaction.",
+      content: LONG_CONTENT,
       filePath: "/workspace/MEMORY.md",
       config: {},
       llmFn,
@@ -165,7 +174,7 @@ describe("compactBootstrapFile", () => {
     expect(compacted).toBe(STRUCTURED_SUMMARY);
     expect(result.success).toBe(true);
     expect(result.path).toBe("/workspace/MEMORY.md");
-    expect(result.charsBefore).toBe("Some long memory content that needs compaction.".length);
+    expect(result.charsBefore).toBe(LONG_CONTENT.length);
     expect(result.charsAfter).toBe(STRUCTURED_SUMMARY.length);
     expect(llmFn).toHaveBeenCalledOnce();
   });
@@ -174,14 +183,14 @@ describe("compactBootstrapFile", () => {
     const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
 
     await compactBootstrapFile({
-      content: "Memory content to compact",
+      content: LONG_CONTENT,
       filePath: "/workspace/MEMORY.md",
       config: {},
       llmFn,
       modelRef: "test/model",
     });
 
-    expect(llmFn).toHaveBeenCalledWith("Memory content to compact", undefined);
+    expect(llmFn).toHaveBeenCalledWith(LONG_CONTENT, undefined);
   });
 
   it("returns original content with success=false on llmFn error", async () => {
@@ -246,7 +255,7 @@ describe("compactBootstrapFile", () => {
     const signal = AbortSignal.abort();
 
     await compactBootstrapFile({
-      content: "Memory content",
+      content: LONG_CONTENT,
       filePath: "/workspace/MEMORY.md",
       config: {},
       llmFn,
@@ -254,7 +263,7 @@ describe("compactBootstrapFile", () => {
       signal,
     });
 
-    expect(llmFn).toHaveBeenCalledWith("Memory content", signal);
+    expect(llmFn).toHaveBeenCalledWith(LONG_CONTENT, signal);
   });
 });
 
@@ -268,7 +277,7 @@ describe("compactBootstrapFile - content-hash cache", () => {
   it("returns cached result without calling LLM on second call with same content", async () => {
     const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
 
-    const content = "Memory content for caching test";
+    const content = LONG_CONTENT;
 
     // First call — should hit the LLM
     const first = await compactBootstrapFile({
@@ -320,7 +329,7 @@ describe("compactBootstrapFile - content-hash cache", () => {
   it("cache is keyed by file path — different paths do not share cache", async () => {
     const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
 
-    const content = "Same content for both files";
+    const content = LONG_CONTENT;
 
     await compactBootstrapFile({
       content,
@@ -407,7 +416,7 @@ describe("compactBootstrapFile - content-hash cache", () => {
   it("hits cache when both content and modelRef are identical", async () => {
     const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
 
-    const content = "Content for model-aware cache test";
+    const content = LONG_CONTENT;
     const modelRef = "anthropic/claude-haiku-4-5-20251001";
 
     await compactBootstrapFile({
@@ -576,7 +585,7 @@ describe("compactBootstrapFiles", () => {
   it("returns CompactionResult with correct charsBefore and charsAfter on success", async () => {
     const llmFn = makeLlmFn(STRUCTURED_SUMMARY);
 
-    const originalContent = "Original content";
+    const originalContent = LONG_CONTENT;
     const contextFiles = [{ path: "/workspace/MEMORY.md", content: originalContent }];
 
     const { results } = await compactBootstrapFiles({
