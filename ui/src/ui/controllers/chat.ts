@@ -68,7 +68,7 @@ export async function loadChatHistory(state: ChatState) {
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear streaming tool messages — history includes tool results inline,
-    // so keeping them would cause duplicates or wrong ordering.
+    // so keeping them would cause duplicates.
     (state as unknown as { chatToolMessages: unknown[] }).chatToolMessages = [];
   } catch (err) {
     state.lastError = String(err);

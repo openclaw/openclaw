@@ -1031,7 +1031,6 @@ export function renderApp(state: AppViewState) {
                 toolMessages: state.chatToolMessages,
                 stream: state.chatStream,
                 streamStartedAt: state.chatStreamStartedAt,
-                streamSegments: state.chatStreamSegments,
                 draft: state.chatMessage,
                 queue: state.chatQueue,
                 connected: state.connected,
