@@ -180,7 +180,44 @@ export async function seedSessionHistoryFromPrevious(params: {
   }
 
   // Write session header + seeded turns to the new session file.
+  // Clean assistant messages: strip any self-talk tags that may have
+  // been captured in previous sessions running older builds.
   await fs.promises.mkdir(path.dirname(params.newSessionFile), { recursive: true });
+  const cleanedKept = kept.map((m) => {
+    if (m.role !== "assistant") {
+      return m.line;
+    }
+    try {
+      const entry = JSON.parse(m.line) as JsonlEntry;
+      if (entry.message?.content) {
+        let changed = false;
+        const content = (
+          Array.isArray(entry.message.content)
+            ? entry.message.content
+            : [{ type: "text", text: String(entry.message.content) }]
+        ) as Array<{ type: string; text?: string }>;
+        for (const block of content) {
+          if (block.type === "text" && block.text) {
+            const stripped = block.text
+              .replace(/\n*<\/?(?:user|assistant)>[\s\S]*$/g, "")
+              .replace(/<\/s>\s*$/g, "")
+              .trimEnd();
+            if (stripped !== block.text) {
+              block.text = stripped;
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          entry.message.content = content;
+          return JSON.stringify(entry);
+        }
+      }
+    } catch {
+      // Fall through to original line
+    }
+    return m.line;
+  });
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -189,7 +226,7 @@ export async function seedSessionHistoryFromPrevious(params: {
     cwd: process.cwd(),
     seededFrom: params.previousSessionFile,
   };
-  const lines = [JSON.stringify(header), ...kept.map((m) => m.line)];
+  const lines = [JSON.stringify(header), ...cleanedKept];
   await fs.promises.writeFile(params.newSessionFile, `${lines.join("\n")}\n`, "utf-8");
 
   return { seeded: true, turnCount: kept.length };
