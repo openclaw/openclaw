@@ -7,6 +7,7 @@ describe("classifyContinuitySource", () => {
     expect(classifyContinuitySource()).toBe("main_direct");
     expect(classifyContinuitySource("main")).toBe("main_direct");
     expect(classifyContinuitySource("telegram:direct:alice")).toBe("paired_direct");
+    expect(classifyContinuitySource("agent:alpha:direct:bob")).toBe("paired_direct");
     expect(classifyContinuitySource("discord:group:team-room")).toBe("group");
     expect(classifyContinuitySource("slack:channel:eng-updates")).toBe("channel");
     expect(classifyContinuitySource("agent:alpha:discord:direct:bob")).toBe("paired_direct");
@@ -39,6 +40,23 @@ describe("isContinuityScopeAllowed", () => {
     expect(isContinuityScopeAllowed(scope, "agent:alpha:discord:direct:bob")).toBe(true);
     expect(isContinuityScopeAllowed(scope, "agent:alpha:discord:work:direct:bob")).toBe(true);
     expect(isContinuityScopeAllowed(scope, "agent:alpha:discord:group:bob")).toBe(false);
+  });
+
+  it("treats per-peer direct session keys as direct for scope matching", () => {
+    const scope = {
+      default: "deny",
+      rules: [
+        {
+          action: "allow",
+          match: {
+            chatType: "direct",
+          },
+        },
+      ],
+    } satisfies SessionSendPolicyConfig;
+
+    expect(isContinuityScopeAllowed(scope, "agent:alpha:direct:bob")).toBe(true);
+    expect(isContinuityScopeAllowed(scope, "agent:alpha:dm:bob")).toBe(true);
   });
 
   it("supports raw-key matching and legacy raw keyPrefix rules", () => {

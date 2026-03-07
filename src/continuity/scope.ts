@@ -8,6 +8,8 @@ type ParsedContinuityScope = {
   normalizedKey?: string;
 };
 
+const CONTINUITY_CHAT_TYPE_MARKERS = new Set(["group", "channel", "direct", "dm"]);
+
 export function isContinuitySubagentSession(sessionKey?: string): boolean {
   const normalized = normalizeSessionRest(sessionKey);
   return Boolean(normalized?.startsWith("subagent:"));
@@ -85,11 +87,9 @@ function parseContinuitySessionScope(key?: string): ParsedContinuityScope {
     return {};
   }
   const parts = normalized.split(":").filter(Boolean);
-  const chatTypeIndex = parts.findIndex(
-    (part) => part === "group" || part === "channel" || part === "direct" || part === "dm",
-  );
+  const chatTypeIndex = parts.findIndex((part) => CONTINUITY_CHAT_TYPE_MARKERS.has(part));
   const channel = resolveChannel(parts);
-  if (chatTypeIndex > 0) {
+  if (chatTypeIndex >= 0) {
     const marker = parts[chatTypeIndex];
     const chatType = marker === "group" ? "group" : marker === "channel" ? "channel" : "direct";
     return {
@@ -97,15 +97,6 @@ function parseContinuitySessionScope(key?: string): ParsedContinuityScope {
       channel,
       chatType,
     };
-  }
-  if (normalized.includes(":group:")) {
-    return { normalizedKey: normalized, channel, chatType: "group" };
-  }
-  if (normalized.includes(":channel:")) {
-    return { normalizedKey: normalized, channel, chatType: "channel" };
-  }
-  if (normalized.includes(":direct:") || normalized.includes(":dm:")) {
-    return { normalizedKey: normalized, channel, chatType: "direct" };
   }
   return { normalizedKey: normalized, channel };
 }
@@ -137,6 +128,9 @@ function normalizeSessionRest(key?: string): string | undefined {
 function resolveChannel(parts: string[]): string | undefined {
   const channel = parts[0]?.toLowerCase();
   if (!channel || channel === "main") {
+    return undefined;
+  }
+  if (CONTINUITY_CHAT_TYPE_MARKERS.has(channel)) {
     return undefined;
   }
   return channel;
