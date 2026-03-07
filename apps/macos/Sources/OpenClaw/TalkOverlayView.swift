@@ -3,17 +3,17 @@ import SwiftUI
 
 struct TalkOverlayView: View {
     var controller: TalkOverlayController
-    @State private var appState = AppStateStore.shared
     @State private var hoveringWindow = false
 
     var body: some View {
+        let model = self.controller.model
+        let isPaused = model.isPaused
         ZStack(alignment: .topTrailing) {
-            let isPaused = self.controller.model.isPaused
             Color.clear
             TalkOrbView(
-                phase: self.controller.model.phase,
-                level: self.controller.model.level,
-                accent: self.seamColor,
+                phase: model.phase,
+                level: model.level,
+                accent: Self.seamColor(fromHex: model.seamColorHex),
                 isPaused: isPaused)
                 .frame(width: TalkOverlayController.orbSize, height: TalkOverlayController.orbSize)
                 .padding(.top, TalkOverlayController.orbPadding)
@@ -37,6 +37,7 @@ struct TalkOverlayView: View {
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .contentShape(Circle())
                     .offset(x: -2, y: -2)
                     .opacity(self.hoveringWindow ? 1 : 0)
@@ -52,8 +53,8 @@ struct TalkOverlayView: View {
 
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
-    private var seamColor: Color {
-        ColorHexSupport.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor
+    private static func seamColor(fromHex hex: String?) -> Color {
+        ColorHexSupport.color(fromHex: hex) ?? Self.defaultSeamColor
     }
 }
 
@@ -88,9 +89,7 @@ private final class OrbInteractionNSView: NSView {
     private var didDrag = false
     private var suppressSingleClick = false
 
-    override var acceptsFirstResponder: Bool {
-        true
-    }
+    override var acceptsFirstResponder: Bool { false }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true

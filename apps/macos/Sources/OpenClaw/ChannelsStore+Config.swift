@@ -44,7 +44,9 @@ extension ChannelsStore {
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?["ui"]?.dictionaryValue
         let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+        let seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+        AppStateStore.shared.seamColorHex = seamColorHex
+        TalkOverlayController.shared.updateSeamColor(seamColorHex)
     }
 
     func channelConfigSchema(for channelId: String) -> ConfigSchemaNode? {
