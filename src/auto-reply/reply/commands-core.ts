@@ -235,7 +235,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     }
 
     // Trigger learning before reset/new commands (after ACP target resolution)
-    if (targetSessionEntry?.sessionId) {
+    if (targetSessionEntry?.sessionId && targetSessionEntry.sessionFile) {
       const learnResult = await runLearnForSession({
         sessionId: targetSessionEntry.sessionId,
         sessionKey: targetSessionKey,

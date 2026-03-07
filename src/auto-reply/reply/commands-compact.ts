@@ -72,29 +72,32 @@ export const handleCompactCommand: CommandHandler = async (params) => {
 
   const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
 
-  const learnResult = await runLearnForSession({
-    sessionId,
-    sessionKey: params.sessionKey,
-    messageChannel: params.command.channel,
-    groupId: params.sessionEntry.groupId,
-    groupChannel: params.sessionEntry.groupChannel,
-    groupSpace: params.sessionEntry.space,
-    spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: params.sessionEntry.sessionFile,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    config: params.cfg,
-    skillsSnapshot: params.sessionEntry.skillsSnapshot,
-    provider: params.provider,
-    model: params.model,
-    thinkLevel,
-    customFocus: "What insights and lessons should be remembered before context compaction?",
-    senderIsOwner: params.command.senderIsOwner,
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
-  });
-  if (learnResult.ok) {
+  const learnResult = params.sessionEntry.sessionFile
+    ? await runLearnForSession({
+        sessionId,
+        sessionKey: params.sessionKey,
+        messageChannel: params.command.channel,
+        groupId: params.sessionEntry.groupId,
+        groupChannel: params.sessionEntry.groupChannel,
+        groupSpace: params.sessionEntry.space,
+        spawnedBy: params.sessionEntry.spawnedBy,
+        sessionFile: params.sessionEntry.sessionFile,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: params.cfg,
+        skillsSnapshot: params.sessionEntry.skillsSnapshot,
+        provider: params.provider,
+        model: params.model,
+        thinkLevel,
+        customFocus: "What insights and lessons should be remembered before context compaction?",
+        senderIsOwner: params.command.senderIsOwner,
+        ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+      })
+    : null;
+
+  if (learnResult?.ok) {
     logVerbose(`Pre-compaction learning completed for session ${params.sessionKey}`);
-  } else {
+  } else if (learnResult) {
     logVerbose(
       `Pre-compaction learning failed for session ${params.sessionKey}: ${learnResult.message ?? "unknown error"}`,
     );

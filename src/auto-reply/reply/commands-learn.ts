@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import type { SkillSnapshot } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import type { ThinkLevel } from "./directives.js";
 
 const LEARN_SYSTEM_PROMPT = [
   "Learning turn.",
@@ -68,10 +70,10 @@ export async function runLearnForSession(params: {
   workspaceDir: string;
   agentDir?: string;
   config: OpenClawConfig;
-  skillsSnapshot?: Record<string, unknown>;
+  skillsSnapshot?: SkillSnapshot;
   provider: string;
   model: string;
-  thinkLevel?: string;
+  thinkLevel?: ThinkLevel;
   customFocus?: string;
   senderIsOwner: boolean;
   ownerNumbers?: string[];
@@ -85,6 +87,7 @@ export async function runLearnForSession(params: {
 
   try {
     await runEmbeddedPiAgent({
+      runId: crypto.randomUUID(),
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: resolvedSessionFile,
@@ -150,6 +153,13 @@ export const handleLearnCommand = async (
     params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
   );
 
+  if (!params.sessionEntry.sessionFile) {
+    return {
+      shouldContinue: false,
+      reply: { text: "Learning unavailable (missing session file)." },
+    };
+  }
+
   const result = await runLearnForSession({
     sessionId,
     sessionKey: params.sessionKey,
@@ -158,14 +168,7 @@ export const handleLearnCommand = async (
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(
-      sessionId,
-      params.sessionEntry,
-      resolveSessionFilePathOptions({
-        agentId: params.agentId,
-        storePath: params.storePath,
-      }),
-    ),
+    sessionFile: params.sessionEntry.sessionFile,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     config: params.cfg,
