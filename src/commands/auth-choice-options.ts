@@ -300,6 +300,51 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   { value: "custom-api-key", label: "Custom Provider" },
 ];
 
+// Reverse lookup: AuthChoice → AuthChoiceGroupId (built once on first call)
+let _choiceToGroupId: Map<AuthChoice, AuthChoiceGroupId> | undefined;
+function getChoiceToGroupIdMap(): Map<AuthChoice, AuthChoiceGroupId> {
+  if (!_choiceToGroupId) {
+    _choiceToGroupId = new Map();
+    for (const group of AUTH_CHOICE_GROUP_DEFS) {
+      for (const choice of group.choices) {
+        _choiceToGroupId.set(choice, group.value);
+      }
+    }
+  }
+  return _choiceToGroupId;
+}
+
+/** Returns the canonical provider group ID for an AuthChoice, or undefined if unknown. */
+export function resolveAuthChoiceToGroupId(authChoice: AuthChoice): AuthChoiceGroupId | undefined {
+  return getChoiceToGroupIdMap().get(authChoice);
+}
+
+/**
+ * Auth choices that require interactive input beyond {apiKey, useEnvVar}.
+ * These cannot be driven by agents.auth.set's non-interactive prompter.
+ */
+export const AGENTS_AUTH_SET_UNSUPPORTED_CHOICES = new Set<AuthChoice>([
+  // OAuth / device / portal flows
+  "oauth",
+  "setup-token",
+  "claude-cli",
+  "codex-cli",
+  "token",
+  "openai-codex",
+  "chutes",
+  "minimax-portal",
+  "github-copilot",
+  "google-gemini-cli",
+  "copilot-proxy",
+  "qwen-portal",
+  // Multi-field flows (need URL, IDs, or extra params)
+  "vllm",
+  "cloudflare-ai-gateway-api-key",
+  "custom-api-key",
+  // No-op
+  "skip",
+]) satisfies ReadonlySet<AuthChoice>;
+
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;

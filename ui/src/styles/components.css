@@ -1772,6 +1772,7 @@
   100% {
     border-color: var(--border);
   }
+
   50% {
     border-color: var(--accent);
   }
@@ -1828,6 +1829,7 @@
     opacity: 0.4;
     transform: translateY(0);
   }
+
   40% {
     opacity: 1;
     transform: translateY(-3px);
@@ -2220,19 +2222,32 @@
 }
 
 .agents-sidebar {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   align-self: start;
+  /* Cap at viewport height so the list scrolls internally rather than the page */
+  max-height: calc(100dvh - var(--shell-topbar-height) - 60px);
 }
 
 .agents-main {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
+}
+
+.agents-main > *:last-child {
+  flex: 1;
+  min-height: 0;
 }
 
 .agent-list {
   display: grid;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .agent-row {
@@ -2609,4 +2624,103 @@
   .agent-tools-list {
     grid-template-columns: 1fr;
   }
+}
+
+/* ===========================================
+   Add Agent Modal
+   =========================================== */
+
+.agent-add-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.agent-add-card {
+  width: calc(100vw - 48px);
+  max-width: 520px;
+  box-sizing: border-box;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  animation: scale-in 0.2s var(--ease-out);
+  display: grid;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.agent-add-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-add-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.agent-add-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition: color var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+
+.agent-add-close:hover {
+  color: var(--text);
+}
+
+.agent-add-body {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-add-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.agent-add-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.agent-add-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.agent-add-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.agent-add-error {
+  font-size: 13px;
+  color: var(--danger);
 }
