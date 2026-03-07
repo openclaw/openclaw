@@ -1,4 +1,8 @@
 import {
+  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  buildOpenGroupPolicyWarning,
+} from "openclaw/plugin-sdk";
+import {
   applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -200,11 +204,21 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       if (groupPolicy === "open") {
         if (channelAllowlistConfigured) {
           warnings.push(
-            `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
+            buildOpenGroupPolicyConfigureRouteAllowlistWarning({
+              surface: "Slack channels",
+              openScope: "any channel not explicitly denied",
+              groupPolicyPath: "channels.slack.groupPolicy",
+              routeAllowlistPath: "channels.slack.channels",
+            }),
           );
         } else {
           warnings.push(
-            `- Slack channels: groupPolicy="open" with no channel allowlist; any channel can trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
+            buildOpenGroupPolicyWarning({
+              surface: "Slack channels",
+              openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
+              remediation:
+                'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
+            }),
           );
         }
       }

@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyWarning } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -184,7 +185,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         return [];
       }
       return [
-        '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
+        buildOpenGroupPolicyWarning({
+          surface: "Matrix rooms",
+          openBehavior: "allows any room to trigger (mention-gated)",
+          remediation:
+            'Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms',
+        }),
       ];
     },
   },

@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -155,7 +156,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         return [];
       }
       return [
-        `- iMessage groups: groupPolicy="open" allows any member to trigger the bot. Set channels.imessage.groupPolicy="allowlist" + channels.imessage.groupAllowFrom to restrict senders.`,
+        buildOpenGroupPolicyRestrictSendersWarning({
+          surface: "iMessage groups",
+          openScope: "any member",
+          groupPolicyPath: "channels.imessage.groupPolicy",
+          groupAllowFromPath: "channels.imessage.groupAllowFrom",
+          mentionGated: false,
+        }),
       ];
     },
   },
