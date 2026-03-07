@@ -82,7 +82,12 @@ describe("registerSkillsCli", () => {
     await program.parseAsync(args, { from: "user" });
   }
 
-  const progressMock = { setLabel: vi.fn(), setPercent: vi.fn(), tick: vi.fn(), done: vi.fn() };
+  const progressMock = {
+    setLabel: vi.fn(),
+    setPercent: vi.fn(),
+    tick: vi.fn(),
+    done: vi.fn(),
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -157,7 +162,13 @@ describe("registerSkillsCli", () => {
       skills: [
         {
           name: "peekaboo",
-          install: [{ id: "brew-peekaboo", kind: "brew", label: "brew install peekaboo" }],
+          install: [
+            {
+              id: "brew-peekaboo",
+              kind: "brew",
+              label: "brew install peekaboo",
+            },
+          ],
         },
         {
           name: "no-install",
@@ -168,7 +179,12 @@ describe("registerSkillsCli", () => {
 
     it("installs skill successfully and prints success", async () => {
       buildWorkspaceSkillStatusMock.mockReturnValue(reportWithSkill);
-      installSkillMock.mockResolvedValue({ ok: true, message: "", stdout: "", stderr: "" });
+      installSkillMock.mockResolvedValue({
+        ok: true,
+        message: "",
+        stdout: "",
+        stderr: "",
+      });
 
       await runCli(["skills", "install", "peekaboo"]);
 
@@ -180,7 +196,9 @@ describe("registerSkillsCli", () => {
         config: { gateway: {} },
       });
       expect(progressMock.done).toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Installed peekaboo"));
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Installed peekaboo"),
+      );
       expect(runtime.exit).not.toHaveBeenCalled();
     });
 
@@ -214,7 +232,9 @@ describe("registerSkillsCli", () => {
 
       await runCli(["skills", "install", "peekaboo"]);
 
-      expect(runtime.error).toHaveBeenCalledWith("Install failed: peekaboo (exit 127)");
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Install failed: peekaboo (exit 127)",
+      );
       expect(runtime.log).toHaveBeenCalledWith("command not found: brew");
       expect(runtime.exit).toHaveBeenCalledWith(1);
     });
@@ -224,7 +244,9 @@ describe("registerSkillsCli", () => {
 
       await runCli(["skills", "install", "nonexistent"]);
 
-      expect(runtime.error).toHaveBeenCalledWith("Skill not found: nonexistent");
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Skill not found: nonexistent",
+      );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(installSkillMock).not.toHaveBeenCalled();
     });
@@ -243,9 +265,20 @@ describe("registerSkillsCli", () => {
 
     it("forwards --install-id option", async () => {
       buildWorkspaceSkillStatusMock.mockReturnValue(reportWithSkill);
-      installSkillMock.mockResolvedValue({ ok: true, message: "", stdout: "", stderr: "" });
+      installSkillMock.mockResolvedValue({
+        ok: true,
+        message: "",
+        stdout: "",
+        stderr: "",
+      });
 
-      await runCli(["skills", "install", "peekaboo", "--install-id", "custom-id"]);
+      await runCli([
+        "skills",
+        "install",
+        "peekaboo",
+        "--install-id",
+        "custom-id",
+      ]);
 
       expect(installSkillMock).toHaveBeenCalledWith(
         expect.objectContaining({ installId: "custom-id" }),
@@ -254,7 +287,12 @@ describe("registerSkillsCli", () => {
 
     it("forwards --timeout option", async () => {
       buildWorkspaceSkillStatusMock.mockReturnValue(reportWithSkill);
-      installSkillMock.mockResolvedValue({ ok: true, message: "", stdout: "", stderr: "" });
+      installSkillMock.mockResolvedValue({
+        ok: true,
+        message: "",
+        stdout: "",
+        stderr: "",
+      });
 
       await runCli(["skills", "install", "peekaboo", "--timeout", "60000"]);
 
