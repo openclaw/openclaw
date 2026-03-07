@@ -954,8 +954,13 @@ export async function resolveImplicitProviders(params: {
   const kimiCodingKey =
     resolveEnvApiKeyVarName("kimi-coding") ??
     resolveApiKeyFromProfiles({ provider: "kimi-coding", store: authStore });
-  if (kimiCodingKey) {
-    providers["kimi-coding"] = { ...buildKimiCodingProvider(), apiKey: kimiCodingKey };
+  const explicitKimiCoding = params.explicitProviders?.["kimi-coding"];
+  if (kimiCodingKey || explicitKimiCoding) {
+    providers["kimi-coding"] = {
+      ...buildKimiCodingProvider(),
+      ...explicitKimiCoding,
+      apiKey: kimiCodingKey ?? explicitKimiCoding?.apiKey,
+    };
   }
 
   const syntheticKey =
