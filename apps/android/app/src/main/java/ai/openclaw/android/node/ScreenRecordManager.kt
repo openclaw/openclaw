@@ -60,17 +60,17 @@ class ScreenRecordManager(private val context: Context) {
 
       if (includeAudio) ensureMicPermission()
 
-      NodeForegroundService.ensureCaptureTypes(
-        context = context,
-        requiresMic = includeAudio,
-        requiresMediaProjection = true,
-      )
-
       val capture =
         requester.requestCapture()
           ?: throw IllegalStateException(
             "SCREEN_PERMISSION_REQUIRED: grant Screen Recording permission",
           )
+
+      NodeForegroundService.ensureCaptureTypes(
+        context = context,
+        requiresMic = includeAudio,
+        requiresMediaProjection = true,
+      )
 
       val mgr =
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
