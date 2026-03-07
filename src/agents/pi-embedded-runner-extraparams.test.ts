@@ -304,7 +304,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
-
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
