@@ -1844,6 +1844,70 @@ describe("handleFeishuMessage command authorization", () => {
     });
   });
 
+  it("uses the owner-matching user_id for main-session pinning when allowFrom is not open_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["user:cli-owner"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-owner-open-id",
+          user_id: "cli-owner",
+        },
+      },
+      message: {
+        message_id: "msg-dm-user-id-owner",
+        chat_id: "oc-dm-user-id-owner",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from owner via user id" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        OriginatingTo: "user:ou-owner-open-id",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-owner-open-id",
+        accountId: "default",
+        mainDmOwnerPin: {
+          ownerRecipient: "cli-owner",
+          senderRecipient: "cli-owner",
+          onSkip: expect.any(Function),
+        },
+      },
+      onRecordError: expect.any(Function),
+    });
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

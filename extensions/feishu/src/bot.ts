@@ -247,6 +247,39 @@ function resolvePinnedFeishuMainDmOwner(params: {
   return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
 }
 
+function resolveNormalizedFeishuSenderCandidates(
+  senderIds: Array<string | null | undefined>,
+): string[] {
+  return Array.from(
+    new Set(
+      senderIds
+        .map((entry) => {
+          const trimmed = String(entry ?? "").trim();
+          if (!trimmed) {
+            return "";
+          }
+          const normalized = normalizeFeishuTarget(trimmed) ?? trimmed;
+          return normalized.trim().toLowerCase();
+        })
+        .filter(Boolean),
+    ),
+  );
+}
+
+function resolveFeishuPinnedSenderRecipient(params: {
+  ownerRecipient: string | null;
+  senderIds: Array<string | null | undefined>;
+}): string | null {
+  const normalizedCandidates = resolveNormalizedFeishuSenderCandidates(params.senderIds);
+  if (normalizedCandidates.length === 0) {
+    return null;
+  }
+  if (params.ownerRecipient && normalizedCandidates.includes(params.ownerRecipient)) {
+    return params.ownerRecipient;
+  }
+  return normalizedCandidates[0];
+}
+
 type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
 type ResolvedFeishuGroupSession = {
@@ -1550,11 +1583,10 @@ export async function handleFeishuMessage(params: {
           dmScope: cfg.session?.dmScope,
           allowFrom: configAllowFrom,
         });
-        const normalizedSenderRecipient = (
-          normalizeFeishuTarget(ctx.senderOpenId) ?? ctx.senderOpenId
-        )
-          .trim()
-          .toLowerCase();
+        const normalizedSenderRecipient = resolveFeishuPinnedSenderRecipient({
+          ownerRecipient: pinnedMainDmOwner,
+          senderIds: [ctx.senderOpenId, senderUserId],
+        });
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
         });
