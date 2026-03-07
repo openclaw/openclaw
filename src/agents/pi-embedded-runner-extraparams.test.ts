@@ -321,7 +321,7 @@ describe("applyExtraParamsToAgent", () => {
   it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { reasoning_effort: "medium" };
       options?.onPayload?.(payload);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
@@ -1072,7 +1072,7 @@ describe("applyExtraParamsToAgent", () => {
 
     // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
     void agent.streamFn?.(model, context, {
-      apiKey: "sk-ant-api03-test",
+      apiKey: "sk-ant-api03-test", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
     });
 
@@ -1130,7 +1130,7 @@ describe("applyExtraParamsToAgent", () => {
 
     // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
     void agent.streamFn?.(model, context, {
-      apiKey: "sk-ant-oat01-test-oauth-token",
+      apiKey: "sk-ant-oat01-test-oauth-token", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
     });
 
@@ -1151,7 +1151,7 @@ describe("applyExtraParamsToAgent", () => {
       cfg,
       modelId: "claude-sonnet-4-5",
       options: {
-        apiKey: "sk-ant-api03-test",
+        apiKey: "sk-ant-api03-test", // pragma: allowlist secret
         headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
       },
     });
@@ -1387,7 +1387,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
-  it("does not force store for models that declare supportsStore=false", () => {
+  it("strips store from payload for models that declare supportsStore=false", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-4o",
@@ -1405,7 +1405,28 @@ describe("applyExtraParamsToAgent", () => {
         compat: { supportsStore: false },
       } as unknown as Model<"openai-responses">,
     });
-    expect(payload.store).toBe(false);
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("strips store from payload for non-OpenAI responses providers with supportsStore=false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai-responses",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        id: "gemini-2.5-pro",
+        name: "gemini-2.5-pro",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 65_536,
+        compat: { supportsStore: false },
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("store");
   });
 
   it("auto-injects OpenAI Responses context_management compaction for direct OpenAI models", () => {

@@ -1,10 +1,14 @@
 import {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   getChatChannelMeta,
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryUserEntriesFromAllowFrom,
   migrateBaseNameToDefaultAccount,
   missingTargetError,
   normalizeAccountId,
@@ -242,34 +246,23 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         cfg: cfg,
         accountId,
       });
-      const q = query?.trim().toLowerCase() || "";
-      const allowFrom = account.config.dm?.allowFrom ?? [];
-      const peers = Array.from(
-        new Set(
-          allowFrom
-            .map((entry) => String(entry).trim())
-            .filter((entry) => Boolean(entry) && entry !== "*")
-            .map((entry) => normalizeGoogleChatTarget(entry) ?? entry),
-        ),
-      )
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "user", id }) as const);
-      return peers;
+      return listDirectoryUserEntriesFromAllowFrom({
+        allowFrom: account.config.dm?.allowFrom,
+        query,
+        limit,
+        normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
+      });
     },
     listGroups: async ({ cfg, accountId, query, limit }) => {
       const account = resolveGoogleChatAccount({
         cfg: cfg,
         accountId,
       });
-      const groups = account.config.groups ?? {};
-      const q = query?.trim().toLowerCase() || "";
-      const entries = Object.keys(groups)
-        .filter((key) => key && key !== "*")
-        .filter((key) => (q ? key.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "group", id }) as const);
-      return entries;
+      return listDirectoryGroupEntriesFromMapKeys({
+        groups: account.config.groups,
+        query,
+        limit,
+      });
     },
   },
   resolver: {
@@ -345,37 +338,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         ...(webhookPath ? { webhookPath } : {}),
         ...(webhookUrl ? { webhookUrl } : {}),
       };
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            googlechat: {
-              ...next.channels?.["googlechat"],
-              enabled: true,
-              ...configPatch,
-            },
-          },
-        } as OpenClawConfig;
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          googlechat: {
-            ...next.channels?.["googlechat"],
-            enabled: true,
-            accounts: {
-              ...next.channels?.["googlechat"]?.accounts,
-              [accountId]: {
-                ...next.channels?.["googlechat"]?.accounts?.[accountId],
-                enabled: true,
-                ...configPatch,
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
+      return applySetupAccountConfigPatch({
+        cfg: next,
+        channelKey: "googlechat",
+        accountId,
+        patch: configPatch,
+      });
     },
   },
   outbound: {
@@ -537,25 +505,25 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ account }) => probeGoogleChat(account),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.credentialSource !== "none",
-      credentialSource: account.credentialSource,
-      audienceType: account.config.audienceType,
-      audience: account.config.audience,
-      webhookPath: account.config.webhookPath,
-      webhookUrl: account.config.webhookUrl,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
-      dmPolicy: account.config.dm?.policy ?? "pairing",
-      probe,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) => {
+      const base = buildComputedAccountStatusSnapshot({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.credentialSource !== "none",
+        runtime,
+        probe,
+      });
+      return {
+        ...base,
+        credentialSource: account.credentialSource,
+        audienceType: account.config.audienceType,
+        audience: account.config.audience,
+        webhookPath: account.config.webhookPath,
+        webhookUrl: account.config.webhookUrl,
+        dmPolicy: account.config.dm?.policy ?? "pairing",
+      };
+    },
   },
   gateway: {
     startAccount: async (ctx) => {

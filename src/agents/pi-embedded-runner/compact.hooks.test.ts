@@ -173,6 +173,7 @@ vi.mock("../date-time.js", () => ({
 vi.mock("../defaults.js", () => ({
   DEFAULT_MODEL: "fake-model",
   DEFAULT_PROVIDER: "openai",
+  DEFAULT_CONTEXT_TOKENS: 128_000,
 }));
 
 vi.mock("../utils.js", () => ({

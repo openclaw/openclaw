@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
+  assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -125,7 +126,7 @@ describe("gateway auth", () => {
       resolveGatewayAuth({
         authConfig: {
           token: "config-token",
-          password: "config-password",
+          password: "config-password", // pragma: allowlist secret
         },
         env: {
           OPENCLAW_GATEWAY_TOKEN: "env-token",
@@ -134,7 +135,7 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       token: "config-token",
-      password: "config-password",
+      password: "config-password", // pragma: allowlist secret
     });
   });
 
@@ -174,7 +175,7 @@ describe("gateway auth", () => {
   it("marks mode source as override when runtime mode override is provided", () => {
     expect(
       resolveGatewayAuth({
-        authConfig: { mode: "password", password: "config-password" },
+        authConfig: { mode: "password", password: "config-password" }, // pragma: allowlist secret
         authOverride: { mode: "token" },
         env: {} as NodeJS.ProcessEnv,
       }),
@@ -182,7 +183,7 @@ describe("gateway auth", () => {
       mode: "token",
       modeSource: "override",
       token: undefined,
-      password: "config-password",
+      password: "config-password", // pragma: allowlist secret
     });
   });
 
@@ -366,6 +367,78 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_mismatch");
     expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
     expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
+  });
+  it("does not record rate-limit failure for missing token (misconfigured client, not brute-force)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: null,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not record rate-limit failure for missing password (misconfigured client, not brute-force)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: null,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_missing");
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("still records rate-limit failure for wrong token (brute-force attempt)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
+
+  it("still records rate-limit failure for wrong password (brute-force attempt)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
+  it("throws specific error when password is a provider reference object", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "password",
+        password: { source: "exec", provider: "op", id: "pw" } as never,
+      },
+    });
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "password",
+        password: { source: "exec", provider: "op", id: "pw" } as never,
+      }),
+    ).toThrow(/provider reference object/);
+  });
+
+  it("throws generic error when password mode has no password at all", () => {
+    const auth = resolveGatewayAuth({ authConfig: { mode: "password" } });
+    expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
+      "gateway auth mode is password, but no password was configured",
+    );
   });
 });
 

@@ -1,26 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
+import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
-const createRegistry = () =>
-  createTestRegistry([
-    {
-      pluginId: "discord",
-      plugin: createOutboundTestPlugin({ id: "discord", outbound: { deliveryMode: "direct" } }),
-      source: "test",
-    },
-  ]);
-
-beforeEach(() => {
-  setActivePluginRegistry(createRegistry());
-});
-
-afterEach(() => {
-  setActivePluginRegistry(createRegistry());
-});
+installDiscordRegistryHooks();
 
 describe("senderIsOwner only reflects explicit owner authorization", () => {
   it("does not treat direct-message senders as owners when no ownerAllowFrom is configured", () => {
