@@ -469,9 +469,33 @@ export async function sendMediaFeishu(params: {
   const ext = path.extname(name).toLowerCase();
   const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
 
+  // Determine if it's audio based on extension or MIME type
+  const isAudio = [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac"].includes(ext) || 
+    (buffer.length > 2 && buffer[0] === 0xFF && buffer[1] === 0xFB) || // MP3 header
+    (buffer.length > 4 && buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) || // ID3/MP3
+    (buffer.length > 4 && buffer[0] === 0x4F && buffer[1] === 0x67 && buffer[2] === 0x67); // OGG header
+
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
+  } else if (isAudio) {
+    // For audio files, force use opus type for Feishu API
+    const { fileKey } = await uploadFileFeishu({
+      cfg,
+      file: buffer,
+      fileName: name.endsWith(".opus") ? name : name.replace(/\.[^.]+$/, ".opus"),
+      fileType: "opus",
+      accountId,
+    });
+    return sendFileFeishu({
+      cfg,
+      to,
+      fileKey,
+      msgType: "audio",
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
   } else {
     const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
