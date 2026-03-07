@@ -87,17 +87,17 @@ Per-agent override: `agents.list[].tools.byProvider`.
 
 This is applied **after** the base tool profile and **before** allow/deny lists,
 so it can only narrow the tool set.
-Provider keys accept either `provider` (e.g. `google-antigravity`) or
+Provider keys accept either `provider` (e.g. `google-gemini-cli`) or
 `provider/model` (e.g. `openai/gpt-5.2`).
 
-Example (keep global coding profile, but minimal tools for Google Antigravity):
+Example (keep global coding profile, but minimal tools for Google Gemini CLI):
 
 ```json5
 {
   tools: {
     profile: "coding",
     byProvider: {
-      "google-antigravity": { profile: "minimal" },
+      "google-gemini-cli": { profile: "minimal" },
     },
   },
 }
@@ -126,7 +126,7 @@ Example (agent-specific override for a single provider):
         id: "support",
         tools: {
           byProvider: {
-            "google-antigravity": { allow: ["message", "sessions_list"] },
+            "google-gemini-cli": { allow: ["message", "sessions_list"] },
           },
         },
       },

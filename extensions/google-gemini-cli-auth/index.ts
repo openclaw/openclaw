@@ -25,7 +25,7 @@ const geminiCliPlugin = {
     api.registerProvider({
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
-      docsPath: "/providers/models",
+      docsPath: "/providers/google",
       aliases: ["gemini-cli"],
       envVars: ENV_VARS,
       auth: [
