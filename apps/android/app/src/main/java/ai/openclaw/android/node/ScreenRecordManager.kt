@@ -71,7 +71,6 @@ class ScreenRecordManager(private val context: Context) {
           ?: throw IllegalStateException(
             "SCREEN_PERMISSION_REQUIRED: grant Screen Recording permission",
           )
-      screenRecordActiveSetter?.invoke(true)
 
       val mgr =
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -126,6 +125,7 @@ class ScreenRecordManager(private val context: Context) {
             null,
           )
 
+        screenRecordActiveSetter?.invoke(true)
         recorder.start()
         delay(durationMs.toLong())
       } finally {
