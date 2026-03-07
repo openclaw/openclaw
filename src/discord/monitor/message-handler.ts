@@ -5,6 +5,7 @@ import {
 } from "../../channels/inbound-debounce-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { LRUCache } from "../../utils/lru.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordInboundWorker } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -48,6 +49,8 @@ export function createDiscordMessageHandler(
     abortSignal: params.abortSignal,
     runTimeoutMs: params.workerRunTimeoutMs,
   });
+
+  const processedMessageIds = new LRUCache<string, number>(2000);
 
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
@@ -172,6 +175,14 @@ export function createDiscordMessageHandler(
       const msgAuthorId = data.message?.author?.id ?? data.author?.id;
       if (params.botUserId && msgAuthorId === params.botUserId) {
         return;
+      }
+
+      const msgId = data.message?.id;
+      if (msgId && processedMessageIds.has(msgId)) {
+        return;
+      }
+      if (msgId) {
+        processedMessageIds.set(msgId, Date.now());
       }
 
       await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });

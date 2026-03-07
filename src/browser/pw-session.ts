@@ -420,6 +420,7 @@ async function findPageByTargetId(
       const baseUrl = cdpUrl
         .replace(/\/+$/, "")
         .replace(/^ws:/, "http:")
+        .replace(/^wss:/, "https:")
         .replace(/\/cdp$/, "");
       const listUrl = `${baseUrl}/json/list`;
       const response = await fetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
