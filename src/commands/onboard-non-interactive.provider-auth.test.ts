@@ -184,7 +184,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "minimax-api",
-        minimaxApiKey: "sk-minimax-test",
+        minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
@@ -203,7 +203,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-minimax-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "minimax-api-key-cn",
-        minimaxApiKey: "sk-minimax-test",
+        minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
@@ -222,7 +222,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-api-key",
-        zaiApiKey: "zai-test-key",
+        zaiApiKey: "zai-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
@@ -237,7 +237,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-coding-cn",
-        zaiApiKey: "zai-test-key",
+        zaiApiKey: "zai-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(
@@ -264,7 +264,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers Mistral auth choice from --mistral-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-mistral-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        mistralApiKey: "mistral-test-key",
+        mistralApiKey: "mistral-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["mistral:default"]?.provider).toBe("mistral");
@@ -282,7 +282,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-volcengine-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "volcengine-api-key",
-        volcengineApiKey: "volcengine-test-key",
+        volcengineApiKey: "volcengine-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.agents?.defaults?.model?.primary).toBe("volcengine-plan/ark-code-latest");
@@ -292,7 +292,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers BytePlus auth choice from --byteplus-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-byteplus-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        byteplusApiKey: "byteplus-test-key",
+        byteplusApiKey: "byteplus-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.agents?.defaults?.model?.primary).toBe("byteplus-plan/ark-code-latest");
@@ -303,7 +303,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-ai-gateway-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "ai-gateway-api-key",
-        aiGatewayApiKey: "gateway-test-key",
+        aiGatewayApiKey: "gateway-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
@@ -350,7 +350,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "openai-api-key",
-        openaiApiKey: "sk-openai-test",
+        openaiApiKey: "sk-openai-test", // pragma: allowlist secret
       });
 
       expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
@@ -410,10 +410,10 @@ describe("onboard (non-interactive): provider auth", () => {
     "fails fast for $name when --secret-input-mode ref uses explicit key without env and does not leak the key",
     async ({ prefix, authChoice, optionKey, flagName, envVar }) => {
       await withOnboardEnv(prefix, async ({ runtime }) => {
-        const providedSecret = `${envVar.toLowerCase()}-should-not-leak`;
+        const providedSecret = `${envVar.toLowerCase()}-should-not-leak`; // pragma: allowlist secret
         const options: Record<string, unknown> = {
           authChoice,
-          secretInputMode: "ref",
+          secretInputMode: "ref", // pragma: allowlist secret
           [optionKey]: providedSecret,
           skipSkills: true,
         };
@@ -447,12 +447,12 @@ describe("onboard (non-interactive): provider auth", () => {
       await withEnvAsync(
         {
           OPENCODE_API_KEY: undefined,
-          OPENCODE_ZEN_API_KEY: "opencode-zen-env-key",
+          OPENCODE_ZEN_API_KEY: "opencode-zen-env-key", // pragma: allowlist secret
         },
         async () => {
           await runNonInteractiveOnboardingWithDefaults(runtime, {
             authChoice: "opencode-zen",
-            secretInputMode: "ref",
+            secretInputMode: "ref", // pragma: allowlist secret
             skipSkills: true,
           });
 
@@ -487,7 +487,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "litellm-api-key",
-        litellmApiKey: "litellm-test-key",
+        litellmApiKey: "litellm-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
@@ -519,7 +519,7 @@ describe("onboard (non-interactive): provider auth", () => {
       await runNonInteractiveOnboardingWithDefaults(runtime, {
         cloudflareAiGatewayAccountId: "cf-account-id",
         cloudflareAiGatewayGatewayId: "cf-gateway-id",
-        cloudflareAiGatewayApiKey: "cf-gateway-test-key",
+        cloudflareAiGatewayApiKey: "cf-gateway-test-key", // pragma: allowlist secret
         skipSkills: true,
         ...options,
       });
@@ -543,7 +543,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers Together auth choice from --together-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-together-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        togetherApiKey: "together-test-key",
+        togetherApiKey: "together-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["together:default"]?.provider).toBe("together");
@@ -560,7 +560,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-qianfan-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        qianfanApiKey: "qianfan-test-key",
+        qianfanApiKey: "qianfan-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["qianfan:default"]?.provider).toBe("qianfan");
@@ -579,7 +579,7 @@ describe("onboard (non-interactive): provider auth", () => {
       await runNonInteractiveOnboardingWithDefaults(runtime, {
         authChoice: "custom-api-key",
         customBaseUrl: "https://llm.example.com/v1",
-        customApiKey: "custom-test-key",
+        customApiKey: "custom-test-key", // pragma: allowlist secret
         customModelId: "foo-large",
         customCompatibility: "anthropic",
         skipSkills: true,
@@ -603,7 +603,7 @@ describe("onboard (non-interactive): provider auth", () => {
         await runNonInteractiveOnboardingWithDefaults(runtime, {
           customBaseUrl: "https://models.custom.local/v1",
           customModelId: "local-large",
-          customApiKey: "custom-test-key",
+          customApiKey: "custom-test-key", // pragma: allowlist secret
           skipSkills: true,
         });
 
@@ -624,7 +624,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-env-fallback-",
       async ({ configPath, runtime }) => {
-        process.env.CUSTOM_API_KEY = "custom-env-key";
+        process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
         await runCustomLocalNonInteractive(runtime);
         expect(await readCustomLocalProviderApiKey(configPath)).toBe("custom-env-key");
       },
@@ -635,9 +635,9 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-env-ref-",
       async ({ configPath, runtime }) => {
-        process.env.CUSTOM_API_KEY = "custom-env-key";
+        process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
         await runCustomLocalNonInteractive(runtime, {
-          secretInputMode: "ref",
+          secretInputMode: "ref", // pragma: allowlist secret
         });
         expect(await readCustomLocalProviderApiKeyInput(configPath)).toEqual({
           source: "env",
@@ -650,12 +650,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("fails fast for custom provider ref mode when --custom-api-key is set but CUSTOM_API_KEY env is missing", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-ref-flag-", async ({ runtime }) => {
-      const providedSecret = "custom-inline-key-should-not-leak";
+      const providedSecret = "custom-inline-key-should-not-leak"; // pragma: allowlist secret
       await withEnvAsync({ CUSTOM_API_KEY: undefined }, async () => {
         let thrown: Error | undefined;
         try {
           await runCustomLocalNonInteractive(runtime, {
-            secretInputMode: "ref",
+            secretInputMode: "ref", // pragma: allowlist secret
             customApiKey: providedSecret,
           });
         } catch (error) {
@@ -731,7 +731,7 @@ describe("onboard (non-interactive): provider auth", () => {
       async ({ runtime }) => {
         await expect(
           runNonInteractiveOnboardingWithDefaults(runtime, {
-            customApiKey: "custom-test-key",
+            customApiKey: "custom-test-key", // pragma: allowlist secret
             skipSkills: true,
           }),
         ).rejects.toThrow('Auth choice "custom-api-key" requires a base URL and model ID.');
