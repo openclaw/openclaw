@@ -26,6 +26,38 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
+function resolveStoreLookupKeys(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  rawSessionKey?: string;
+}): string[] {
+  const lookupKeys: string[] = [];
+  const seen = new Set<string>();
+  const pushKey = (key?: string) => {
+    const normalized = key?.trim();
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    lookupKeys.push(normalized);
+  };
+
+  pushKey(params.sessionKey);
+  pushKey(params.rawSessionKey);
+
+  const mainSessionKey = resolveMainSessionKey(params.cfg);
+  if (params.sessionKey === mainSessionKey) {
+    pushKey("main");
+    pushKey(normalizeMainKey(params.cfg.session?.mainKey));
+    const parsed = parseAgentSessionKey(params.sessionKey);
+    if (parsed) {
+      pushKey(`agent:${parsed.agentId}:main`);
+    }
+  }
+
+  return lookupKeys;
+}
+
 function resolveStoreSessionKey(
   store: Record<string, SessionEntry>,
   sessionKeys: string[],
@@ -123,7 +155,14 @@ export function readAcpSessionEntry(params: {
     storeReadFailed = true;
     store = {};
   }
-  const storeSessionKey = resolveStoreSessionKey(store, [sessionKey, rawSessionKey]);
+  const storeSessionKey = resolveStoreSessionKey(
+    store,
+    resolveStoreLookupKeys({
+      cfg,
+      sessionKey,
+      rawSessionKey,
+    }),
+  );
   const entry = store[storeSessionKey];
   return {
     cfg,
@@ -193,7 +232,13 @@ export async function upsertAcpSessionMeta(params: {
   return await updateSessionStore(
     storePath,
     (store) => {
-      const storeSessionKey = resolveStoreSessionKey(store, [sessionKey]);
+      const storeSessionKey = resolveStoreSessionKey(
+        store,
+        resolveStoreLookupKeys({
+          cfg,
+          sessionKey,
+        }),
+      );
       const currentEntry = store[storeSessionKey];
       const nextMeta = params.mutate(currentEntry?.acp, currentEntry);
       if (nextMeta === undefined) {
