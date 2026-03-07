@@ -17,25 +17,38 @@ import {
 } from "./types.js";
 
 const summaryWriteChains = new Map<string, Promise<void>>();
+const auditWriteChains = new Map<string, Promise<void>>();
 
-async function withSummaryWriteLock<T>(filePath: string, op: () => Promise<T>): Promise<T> {
-  const previous = summaryWriteChains.get(filePath) ?? Promise.resolve();
+async function withFileWriteLock<T>(
+  chains: Map<string, Promise<void>>,
+  filePath: string,
+  op: () => Promise<T>,
+): Promise<T> {
+  const previous = chains.get(filePath) ?? Promise.resolve();
   let releaseCurrent: (() => void) | undefined;
   const current = new Promise<void>((resolve) => {
     releaseCurrent = resolve;
   });
   const nextChain = previous.then(() => current);
-  summaryWriteChains.set(filePath, nextChain);
+  chains.set(filePath, nextChain);
 
   await previous;
   try {
     return await op();
   } finally {
     releaseCurrent?.();
-    if (summaryWriteChains.get(filePath) === nextChain) {
-      summaryWriteChains.delete(filePath);
+    if (chains.get(filePath) === nextChain) {
+      chains.delete(filePath);
     }
   }
+}
+
+async function withSummaryWriteLock<T>(filePath: string, op: () => Promise<T>): Promise<T> {
+  return withFileWriteLock(summaryWriteChains, filePath, op);
+}
+
+async function withAuditWriteLock<T>(filePath: string, op: () => Promise<T>): Promise<T> {
+  return withFileWriteLock(auditWriteChains, filePath, op);
 }
 
 function encodeMessageId(messageId: string): string {
@@ -252,10 +265,11 @@ export async function appendSessionMemoryAuditEntry(params: {
   sessionId: string;
   entry: SessionMemoryAuditEntry;
 }): Promise<void> {
-  await appendJsonLine(
-    resolveSessionMemoryAuditFile(params.agentId, params.sessionId),
-    sessionMemoryAuditEntrySchema.parse(params.entry),
-  );
+  const filePath = resolveSessionMemoryAuditFile(params.agentId, params.sessionId);
+  const parsed = sessionMemoryAuditEntrySchema.parse(params.entry);
+  await withAuditWriteLock(filePath, async () => {
+    await appendJsonLine(filePath, parsed);
+  });
 }
 
 export async function sweepExpiredSessionMemoryRawEntries(params: {
@@ -370,21 +384,23 @@ export async function sweepOldAuditEntries(params: {
   retentionDays: number;
 }): Promise<void> {
   const filePath = resolveSessionMemoryAuditFile(params.agentId, params.sessionId);
-  const raw = await safeReadUtf8(filePath);
-  if (!raw) return;
-  const entries = parseJsonLines(raw, (value) => sessionMemoryAuditEntrySchema.parse(value));
-  const cutoffMs = Date.now() - params.retentionDays * 24 * 60 * 60 * 1000;
-  const kept = entries.filter((e) => {
-    const ts = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
-    return !Number.isFinite(ts) || ts >= cutoffMs;
+  await withAuditWriteLock(filePath, async () => {
+    const raw = await safeReadUtf8(filePath);
+    if (!raw) return;
+    const entries = parseJsonLines(raw, (value) => sessionMemoryAuditEntrySchema.parse(value));
+    const cutoffMs = Date.now() - params.retentionDays * 24 * 60 * 60 * 1000;
+    const kept = entries.filter((e) => {
+      const ts = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
+      return !Number.isFinite(ts) || ts >= cutoffMs;
+    });
+    if (kept.length === entries.length) return; // nothing to sweep
+    if (kept.length === 0) {
+      await fs.rm(filePath, { force: true });
+      return;
+    }
+    await ensureParentDir(filePath);
+    await fs.writeFile(filePath, kept.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
   });
-  if (kept.length === entries.length) return; // nothing to sweep
-  if (kept.length === 0) {
-    await fs.rm(filePath, { force: true });
-    return;
-  }
-  await ensureParentDir(filePath);
-  await fs.writeFile(filePath, kept.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
 }
 
 export async function deleteSessionMemoryArtifacts(params: {
@@ -408,4 +424,3 @@ export async function deleteSessionMemoryArtifacts(params: {
     }),
   ]);
 }
-

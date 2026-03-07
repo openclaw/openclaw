@@ -874,6 +874,109 @@ describe("log channel", () => {
 
     expect(entries.map((entry) => entry.alertId)).toEqual(["fresh-alert"]);
   });
+
+  it("serializes prune+append when concurrent alert writes run", async () => {
+    const { appendAlertLogEntry } = await import("./log.js");
+    const logFile = path.join(tempDir, "agents", AGENT_ID, "alerts", "alerts.jsonl");
+    await fs.mkdir(path.dirname(logFile), { recursive: true });
+    const oldTs = new Date(NOW - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const keepTs = new Date(NOW - 2 * 24 * 60 * 60 * 1000).toISOString();
+    await fs.writeFile(
+      logFile,
+      [
+        JSON.stringify({
+          alertId: "old-alert",
+          ruleId: "writeFailSpike",
+          severity: "medium",
+          agentId: AGENT_ID,
+          sessionId: SESSION_ID,
+          timestamp: oldTs,
+          summary: "expired",
+          details: { triggeringEvents: [], recentContext: [] },
+          metadata: { ruleConfig: {} },
+        }),
+        JSON.stringify({
+          alertId: "keep-seed",
+          ruleId: "syntacticFailBurst",
+          severity: "high",
+          agentId: AGENT_ID,
+          sessionId: SESSION_ID,
+          timestamp: keepTs,
+          summary: "keep",
+          details: { triggeringEvents: [], recentContext: [] },
+          metadata: { ruleConfig: {} },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const originalWriteFile = fs.writeFile.bind(fs) as typeof fs.writeFile;
+    let releasePruneWrite: (() => void) | null = null;
+    const pruneWriteStarted = new Promise<void>((resolve) => {
+      releasePruneWrite = resolve;
+    });
+    let delayedOnce = false;
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+      const [filePath, data] = args;
+      if (
+        !delayedOnce &&
+        typeof filePath === "string" &&
+        filePath === logFile &&
+        typeof data === "string" &&
+        data.includes('"alertId":"keep-seed"')
+      ) {
+        delayedOnce = true;
+        releasePruneWrite?.();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return await originalWriteFile(...args);
+    });
+
+    const appendA = appendAlertLogEntry(
+      {
+        alertId: "a-alert",
+        ruleId: "writeFailSpike",
+        severity: "medium",
+        agentId: AGENT_ID,
+        sessionId: SESSION_ID,
+        timestamp: new Date(NOW).toISOString(),
+        summary: "A",
+        details: { triggeringEvents: [], recentContext: [] },
+        metadata: { ruleConfig: {} },
+      },
+      AGENT_ID,
+      { retentionDays: 30, now: NOW },
+    );
+    await pruneWriteStarted;
+    const appendB = appendAlertLogEntry(
+      {
+        alertId: "b-alert",
+        ruleId: "syntacticFailBurst",
+        severity: "high",
+        agentId: AGENT_ID,
+        sessionId: SESSION_ID,
+        timestamp: new Date(NOW + 1_000).toISOString(),
+        summary: "B",
+        details: { triggeringEvents: [], recentContext: [] },
+        metadata: { ruleConfig: {} },
+      },
+      AGENT_ID,
+      { retentionDays: 30, now: NOW },
+    );
+    await Promise.all([appendA, appendB]);
+
+    const contents = await fs.readFile(logFile, "utf8");
+    const alertIds = contents
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { alertId: string }).alertId);
+
+    expect(alertIds).toContain("keep-seed");
+    expect(alertIds).toContain("a-alert");
+    expect(alertIds).toContain("b-alert");
+    expect(alertIds).not.toContain("old-alert");
+  });
 });
 
 // ---------------------------------------------------------------------------
