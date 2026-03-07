@@ -16,6 +16,7 @@ vi.mock("openclaw/plugin-sdk/synology-chat", () => ({
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
+  sendToChannel: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("./webhook-handler.js", () => ({
@@ -70,7 +71,7 @@ describe("createSynologyChatPlugin", () => {
   describe("capabilities", () => {
     it("supports direct chat with media", () => {
       const plugin = createSynologyChatPlugin();
-      expect(plugin.capabilities.chatTypes).toEqual(["direct"]);
+      expect(plugin.capabilities.chatTypes).toEqual(["direct", "group"]);
       expect(plugin.capabilities.media).toBe(true);
       expect(plugin.capabilities.threads).toBe(false);
     });
@@ -221,9 +222,59 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: false,
+        channelTokens: {},
+        channelWebhooks: {},
+        groupPolicy: "disabled" as const,
+        groupAllowFrom: [],
       };
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings).toHaveLength(0);
+    });
+
+    it("warns when groupPolicy is open", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = {
+        accountId: "default",
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        nasHost: "h",
+        webhookPath: "/w",
+        dmPolicy: "allowlist" as const,
+        allowedUserIds: ["user1"],
+        rateLimitPerMinute: 30,
+        botName: "Bot",
+        allowInsecureSsl: false,
+        channelTokens: {},
+        channelWebhooks: {},
+        groupPolicy: "open" as const,
+        groupAllowFrom: [],
+      };
+      const warnings = plugin.security.collectWarnings({ account });
+      expect(warnings.some((w: string) => w.includes("groupPolicy"))).toBe(true);
+    });
+
+    it("warns when channelTokens configured but no channelWebhooks", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = {
+        accountId: "default",
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        nasHost: "h",
+        webhookPath: "/w",
+        dmPolicy: "allowlist" as const,
+        allowedUserIds: ["user1"],
+        rateLimitPerMinute: 30,
+        botName: "Bot",
+        allowInsecureSsl: false,
+        channelTokens: { "42": "tok" },
+        channelWebhooks: {},
+        groupPolicy: "open" as const,
+        groupAllowFrom: [],
+      };
+      const warnings = plugin.security.collectWarnings({ account });
+      expect(warnings.some((w: string) => w.includes("channelWebhooks"))).toBe(true);
     });
   });
 

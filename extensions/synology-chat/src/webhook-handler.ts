@@ -1,6 +1,7 @@
 /**
  * Inbound webhook handler for Synology Chat outgoing webhooks.
  * Parses form-urlencoded/JSON body, validates security, delivers to agent.
+ * Supports both DM (bot token) and group/channel (channel outgoing webhook tokens).
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -10,7 +11,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/synology-chat";
-import { sendMessage, resolveChatUserId } from "./client.js";
+import { sendMessage, sendToChannel, resolveChatUserId } from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
@@ -215,6 +216,29 @@ function respondNoContent(res: ServerResponse) {
   res.end();
 }
 
+/**
+ * Match a token against the bot token and all channel tokens.
+ * Returns which token matched and the associated channel ID (if any).
+ */
+export function matchToken(
+  receivedToken: string,
+  account: ResolvedSynologyChatAccount,
+): { type: "dm" } | { type: "group"; channelId: string } | null {
+  // Check bot token first (DM)
+  if (validateToken(receivedToken, account.token)) {
+    return { type: "dm" };
+  }
+
+  // Check channel outgoing webhook tokens
+  for (const [channelId, channelToken] of Object.entries(account.channelTokens ?? {})) {
+    if (validateToken(receivedToken, channelToken)) {
+      return { type: "group", channelId };
+    }
+  }
+
+  return null;
+}
+
 export interface WebhookHandlerDeps {
   account: ResolvedSynologyChatAccount;
   deliver: (msg: {
@@ -227,6 +251,8 @@ export interface WebhookHandlerDeps {
     accountId: string;
     /** Chat API user_id for sending replies (may differ from webhook user_id) */
     chatUserId?: string;
+    /** Channel ID for group messages (used for reply routing) */
+    channelId?: string;
   }) => Promise<string | null>;
   log?: {
     info: (...args: unknown[]) => void;
@@ -240,8 +266,8 @@ export interface WebhookHandlerDeps {
  *
  * This handler:
  * 1. Parses form-urlencoded/JSON payload
- * 2. Validates token (constant-time)
- * 3. Checks user allowlist
+ * 2. Validates token (constant-time) — bot token for DMs, channel tokens for groups
+ * 3. Checks access policy (DM policy or group policy)
  * 4. Checks rate limit
  * 5. Sanitizes input
  * 6. Immediately ACKs request (204)
@@ -280,30 +306,56 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       return;
     }
 
-    // Token validation
-    if (!validateToken(payload.token, account.token)) {
+    // Token validation — detect DM vs group based on which token matches
+    const tokenMatch = matchToken(payload.token, account);
+    if (!tokenMatch) {
       log?.warn(`Invalid token from ${req.socket?.remoteAddress}`);
       respondJson(res, 401, { error: "Invalid token" });
       return;
     }
 
-    // DM policy authorization
-    const auth = authorizeUserForDm(payload.user_id, account.dmPolicy, account.allowedUserIds);
-    if (!auth.allowed) {
-      if (auth.reason === "disabled") {
-        respondJson(res, 403, { error: "DMs are disabled" });
+    const isGroup = tokenMatch.type === "group";
+    const channelId = isGroup ? tokenMatch.channelId : undefined;
+
+    // Access control: DM policy for DMs, group policy for channels
+    if (isGroup) {
+      if (account.groupPolicy === "disabled") {
+        respondJson(res, 403, { error: "Group messaging is disabled" });
         return;
       }
-      if (auth.reason === "allowlist-empty") {
-        log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
-        respondJson(res, 403, {
-          error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
-        });
+      if (account.groupPolicy === "allowlist") {
+        if (account.groupAllowFrom.length === 0) {
+          log?.warn("Group allowlist is empty while groupPolicy=allowlist; rejecting message");
+          respondJson(res, 403, {
+            error: "Group allowlist is empty. Configure groupAllowFrom or use groupPolicy=open.",
+          });
+          return;
+        }
+        if (!account.groupAllowFrom.includes(payload.user_id)) {
+          log?.warn(`Unauthorized group user: ${payload.user_id}`);
+          respondJson(res, 403, { error: "User not authorized for group messaging" });
+          return;
+        }
+      }
+      // groupPolicy === "open" — allow through
+    } else {
+      const auth = authorizeUserForDm(payload.user_id, account.dmPolicy, account.allowedUserIds);
+      if (!auth.allowed) {
+        if (auth.reason === "disabled") {
+          respondJson(res, 403, { error: "DMs are disabled" });
+          return;
+        }
+        if (auth.reason === "allowlist-empty") {
+          log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
+          respondJson(res, 403, {
+            error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+          });
+          return;
+        }
+        log?.warn(`Unauthorized user: ${payload.user_id}`);
+        respondJson(res, 403, { error: "User not authorized" });
         return;
       }
-      log?.warn(`Unauthorized user: ${payload.user_id}`);
-      respondJson(res, 403, { error: "User not authorized" });
-      return;
     }
 
     // Rate limit
@@ -326,8 +378,12 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       return;
     }
 
+    const chatType = isGroup ? "group" : "direct";
     const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
-    log?.info(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+    const channelLabel = isGroup ? ` in channel ${payload.channel_name ?? channelId}` : "";
+    log?.info(
+      `${chatType} message from ${payload.username} (${payload.user_id})${channelLabel}: ${preview}`,
+    );
 
     // ACK immediately so Synology Chat won't remain in "Processing..."
     respondNoContent(res);
@@ -337,34 +393,39 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
 
     // Deliver to agent asynchronously (with 120s timeout to match nginx proxy_read_timeout)
     try {
-      // Resolve the Chat-internal user_id for sending replies.
-      // Synology Chat outgoing webhooks use a per-integration user_id that may
-      // differ from the global Chat API user_id required by method=chatbot.
-      // We resolve via the user_list API, matching by nickname/username.
-      const chatUserId = await resolveChatUserId(
-        account.incomingUrl,
-        payload.username,
-        account.allowInsecureSsl,
-        log,
-      );
-      if (chatUserId !== undefined) {
-        replyUserId = String(chatUserId);
-      } else {
-        log?.warn(
-          `Could not resolve Chat API user_id for "${payload.username}" — falling back to webhook user_id ${payload.user_id}. Reply delivery may fail.`,
+      // Resolve the Chat-internal user_id for sending replies (DM only).
+      // For group messages, replies go to the channel, not to a specific user.
+      if (!isGroup) {
+        const chatUserId = await resolveChatUserId(
+          account.incomingUrl,
+          payload.username,
+          account.allowInsecureSsl,
+          log,
         );
+        if (chatUserId !== undefined) {
+          replyUserId = String(chatUserId);
+        } else {
+          log?.warn(
+            `Could not resolve Chat API user_id for "${payload.username}" — falling back to webhook user_id ${payload.user_id}. Reply delivery may fail.`,
+          );
+        }
       }
 
-      const sessionKey = `synology-chat-${payload.user_id}`;
+      // Session key: DM = per-user, group = per-channel
+      const sessionKey = isGroup
+        ? `synology-chat:group:${channelId}`
+        : `synology-chat-${payload.user_id}`;
+
       const deliverPromise = deliver({
         body: cleanText,
         from: payload.user_id,
         senderName: payload.username,
         provider: "synology-chat",
-        chatType: "direct",
+        chatType,
         sessionKey,
         accountId: account.accountId,
-        chatUserId: replyUserId,
+        chatUserId: isGroup ? undefined : replyUserId,
+        channelId,
       });
 
       const timeoutPromise = new Promise<null>((_, reject) =>
@@ -373,21 +434,43 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
 
       const reply = await Promise.race([deliverPromise, timeoutPromise]);
 
-      // Send reply back to Synology Chat using the resolved Chat user_id
+      // Send reply back
       if (reply) {
-        await sendMessage(account.incomingUrl, reply, replyUserId, account.allowInsecureSsl);
+        if (isGroup && channelId) {
+          const channelWebhookUrl = account.channelWebhooks[channelId];
+          if (channelWebhookUrl) {
+            await sendToChannel(channelWebhookUrl, reply, account.allowInsecureSsl);
+          } else {
+            log?.warn(
+              `No incoming webhook configured for channel ${channelId} — cannot send group reply`,
+            );
+          }
+        } else {
+          await sendMessage(account.incomingUrl, reply, replyUserId, account.allowInsecureSsl);
+        }
         const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
         log?.info(`Reply sent to ${payload.username} (${replyUserId}): ${replyPreview}`);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
       log?.error(`Failed to process message from ${payload.username}: ${errMsg}`);
-      await sendMessage(
-        account.incomingUrl,
-        "Sorry, an error occurred while processing your message.",
-        replyUserId,
-        account.allowInsecureSsl,
-      );
+      if (isGroup && channelId) {
+        const channelWebhookUrl = account.channelWebhooks[channelId];
+        if (channelWebhookUrl) {
+          await sendToChannel(
+            channelWebhookUrl,
+            "Sorry, an error occurred while processing your message.",
+            account.allowInsecureSsl,
+          );
+        }
+      } else {
+        await sendMessage(
+          account.incomingUrl,
+          "Sorry, an error occurred while processing your message.",
+          replyUserId,
+          account.allowInsecureSsl,
+        );
+      }
     }
   };
 }
