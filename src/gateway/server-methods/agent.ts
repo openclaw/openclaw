@@ -211,6 +211,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
+      workspaceDir?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
@@ -645,6 +646,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
         inputProvenance,
+        // Internal-only: allow workspace override for spawned subagent runs.
+        workspaceDir: spawnedByValue ? request.workspaceDir : undefined,
         senderIsOwner,
       },
       defaultRuntime,
