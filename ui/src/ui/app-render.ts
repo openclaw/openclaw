@@ -639,7 +639,30 @@ export function renderApp(state: AppViewState) {
                     void state.loadCron();
                   }
                 },
-                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
+                onLoadFiles: async (agentId) => {
+                  const activeBefore = state.agentFileActive;
+                  const refreshed = await loadAgentFiles(state, agentId);
+                  if (!refreshed) {
+                    return;
+                  }
+                  const currentAgentId =
+                    state.agentsSelectedId ??
+                    state.agentsList?.defaultId ??
+                    state.agentsList?.agents?.[0]?.id ??
+                    null;
+                  if (currentAgentId !== agentId) {
+                    return;
+                  }
+                  const list =
+                    state.agentFilesList?.agentId === agentId ? state.agentFilesList.files : null;
+                  const active = state.agentFileActive ?? activeBefore;
+                  if (active && list?.some((file) => file.name === active)) {
+                    await loadAgentFileContent(state, agentId, active, {
+                      force: true,
+                      preserveDraft: false,
+                    });
+                  }
+                },
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   if (!resolvedAgentId) {
