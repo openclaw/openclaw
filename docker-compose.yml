@@ -19,6 +19,7 @@ services:
       - OPENCLAW_BROWSER_WS=ws://127.0.0.1:9222/devtools/browser/a57a2fc5-32eb-4929-934a-0c73b4689e45
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - /home/jpow/.ssh:/home/node/.ssh:ro
     command:
       [
         "node",

@@ -1,0 +1,16 @@
+[Unit]
+Description=CDP relay — openclaw_default bridge (172.18.0.1:9222) → Chrome (127.0.0.1:9222)
+After=chrome-debug.service
+BindsTo=chrome-debug.service
+
+[Service]
+Type=simple
+User=jpow
+# Wait for Chrome to bind its debug port before socat starts
+ExecStartPre=/bin/sh -c 'until curl -sf http://127.0.0.1:9222/json/version >/dev/null 2>&1; do sleep 1; done'
+ExecStart=/usr/bin/socat TCP-LISTEN:9222,bind=172.18.0.1,fork,reuseaddr TCP:127.0.0.1:9222
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
