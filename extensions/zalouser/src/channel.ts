@@ -10,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/zalouser";
 import {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   buildChannelSendResult,
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -329,35 +330,12 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
               channelKey: "zalouser",
             })
           : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            zalouser: {
-              ...next.channels?.zalouser,
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig;
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          zalouser: {
-            ...next.channels?.zalouser,
-            enabled: true,
-            accounts: {
-              ...next.channels?.zalouser?.accounts,
-              [accountId]: {
-                ...next.channels?.zalouser?.accounts?.[accountId],
-                enabled: true,
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
+      return applySetupAccountConfigPatch({
+        cfg: next,
+        channelKey: "zalouser",
+        accountId,
+        patch: {},
+      });
     },
   },
   messaging: {
