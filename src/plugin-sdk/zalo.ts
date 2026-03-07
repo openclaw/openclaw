@@ -67,6 +67,7 @@ export { evaluateSenderGroupAccess } from "./group-access.js";
 export type { SenderGroupAccessDecision } from "./group-access.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { buildChannelSendResult } from "./channel-send-result.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
