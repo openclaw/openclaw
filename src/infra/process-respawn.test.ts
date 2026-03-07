@@ -110,6 +110,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("spawns detached child with current exec argv", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
+    setPlatform("linux");
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
     spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
@@ -163,6 +164,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("returns failed when spawn throws", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
+    setPlatform("linux");
 
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");
