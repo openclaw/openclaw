@@ -664,7 +664,7 @@ async function agentCommandInternal(
           sessionsDir: resolveSessionFilePathOptions({
             agentId: sessionAgentId,
             storePath,
-          }).sessionsDir,
+          })?.sessionsDir,
           fallbackSessionFile,
         });
         sessionEntry = resolvedSessionFile.sessionEntry;
