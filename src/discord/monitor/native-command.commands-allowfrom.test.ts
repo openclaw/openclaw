@@ -128,8 +128,96 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     );
   });
 
+  it("authorizes guild slash commands from the global commands.allowFrom list when provider-specific allowFrom is missing", async () => {
+    const cfg = createConfig();
+    cfg.commands = {
+      allowFrom: {
+        "*": ["user:123456789012345678"],
+      },
+    };
+    const command = createCommand(cfg);
+    const interaction = createInteraction();
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(interaction.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: "You are not authorized to use this command." }),
+    );
+  });
+
+  it("authorizes guild slash commands when commands.useAccessGroups is false and commands.allowFrom.discord matches the sender", async () => {
+    const cfg = createConfig();
+    cfg.commands = {
+      ...cfg.commands,
+      useAccessGroups: false,
+    };
+    const command = createCommand(cfg);
+    const interaction = createInteraction();
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expect(interaction.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: "You are not authorized to use this command." }),
+    );
+  });
+
   it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {
     const cfg = createConfig();
+    const command = createCommand(cfg);
+    const interaction = createInteraction({ userId: "999999999999999999" });
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "You are not authorized to use this command.",
+        ephemeral: true,
+      }),
+    );
+  });
+
+  it("rejects guild slash commands when commands.useAccessGroups is false and commands.allowFrom.discord does not match the sender", async () => {
+    const cfg = createConfig();
+    cfg.commands = {
+      ...cfg.commands,
+      useAccessGroups: false,
+    };
     const command = createCommand(cfg);
     const interaction = createInteraction({ userId: "999999999999999999" });
 
