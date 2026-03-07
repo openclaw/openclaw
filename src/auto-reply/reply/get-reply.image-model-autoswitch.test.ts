@@ -16,7 +16,11 @@ vi.mock("../../config/model-input.js", () => ({
   resolveAgentModelPrimaryValue: vi.fn(),
 }));
 
-import { findModelInCatalog, loadModelCatalog, modelSupportsVision } from "../../agents/model-catalog.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../../agents/model-catalog.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveImageModelAutoSwitch } from "./get-reply.js";
@@ -170,8 +174,8 @@ describe("resolveImageModelAutoSwitch", () => {
       .mockReturnValueOnce(textOnlyModel as never)
       .mockReturnValueOnce(visionModel as never);
     vi.mocked(modelSupportsVision)
-      .mockReturnValueOnce(false)  // current model doesn't support vision
-      .mockReturnValueOnce(true);   // imageModel does support vision
+      .mockReturnValueOnce(false) // current model doesn't support vision
+      .mockReturnValueOnce(true); // imageModel does support vision
     vi.mocked(resolveAgentModelPrimaryValue).mockReturnValue("anthropic/claude-opus-4-1");
     vi.mocked(resolveModelRefFromString).mockReturnValue({
       ref: { provider: "anthropic", model: "claude-opus-4-1" },
@@ -243,9 +247,7 @@ describe("resolveImageModelAutoSwitch", () => {
     vi.mocked(findModelInCatalog)
       .mockReturnValueOnce(textOnlyModel as never)
       .mockReturnValueOnce(visionModel as never);
-    vi.mocked(modelSupportsVision)
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
+    vi.mocked(modelSupportsVision).mockReturnValueOnce(false).mockReturnValueOnce(true);
     vi.mocked(resolveAgentModelPrimaryValue).mockReturnValue("anthropic/claude-opus-4-1");
     vi.mocked(resolveModelRefFromString).mockReturnValue({
       ref: { provider: "anthropic", model: "claude-opus-4-1" },
@@ -268,7 +270,12 @@ describe("resolveImageModelAutoSwitch", () => {
   it("resolves bare model names using aliasIndex", async () => {
     const ctxWithImage = { ...baseCtx, MediaPath: "/tmp/image.png" };
     const textOnlyModel = { provider: "deepseek", id: "deepseek-r1", input: ["text"] };
-    const visionModel = { provider: "anthropic", id: "claude-opus-4-1", name: "Claude Opus", input: ["text", "image"] };
+    const visionModel = {
+      provider: "anthropic",
+      id: "claude-opus-4-1",
+      name: "Claude Opus",
+      input: ["text", "image"],
+    };
     const cfg = {
       agents: {
         defaults: {
@@ -289,9 +296,7 @@ describe("resolveImageModelAutoSwitch", () => {
     vi.mocked(findModelInCatalog)
       .mockReturnValueOnce(textOnlyModel as never)
       .mockReturnValueOnce(visionModel as never);
-    vi.mocked(modelSupportsVision)
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
+    vi.mocked(modelSupportsVision).mockReturnValueOnce(false).mockReturnValueOnce(true);
     vi.mocked(resolveAgentModelPrimaryValue).mockReturnValue("claude-opus");
     vi.mocked(resolveModelRefFromString).mockReturnValue({
       ref: { provider: "anthropic", model: "claude-opus-4-1" },
