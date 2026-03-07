@@ -751,7 +751,7 @@ async function createDoc(
   client: Lark.Client,
   title: string,
   folderToken?: string,
-  options?: { grantToRequester?: boolean; requesterOpenId?: string },
+  options?: { grantToRequester?: boolean; requesterOpenId?: string; shareChatId?: string },
 ) {
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
@@ -793,6 +793,28 @@ async function createDoc(
     }
   }
 
+  // Grant edit permission to a group chat (openchat) if requested
+  const shareChatId = options?.shareChatId?.trim();
+  let chatPermissionAdded = false;
+  let chatPermissionError: string | undefined;
+
+  if (shareChatId) {
+    try {
+      await client.drive.permissionMember.create({
+        path: { token: docToken },
+        params: { type: "docx", need_notification: false },
+        data: {
+          member_type: "openchat",
+          member_id: shareChatId,
+          perm: "edit",
+        },
+      });
+      chatPermissionAdded = true;
+    } catch (err) {
+      chatPermissionError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   return {
     document_id: docToken,
     title: doc?.title,
@@ -805,6 +827,11 @@ async function createDoc(
         requester_permission_skipped_reason: requesterPermissionSkippedReason,
       }),
       ...(requesterPermissionError && { requester_permission_error: requesterPermissionError }),
+    }),
+    ...(shareChatId && {
+      chat_permission_added: chatPermissionAdded,
+      share_chat_id: shareChatId,
+      ...(chatPermissionError && { chat_permission_error: chatPermissionError }),
     }),
   };
 }
@@ -1313,6 +1340,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     await createDoc(client, p.title, p.folder_token, {
                       grantToRequester: p.grant_to_requester,
                       requesterOpenId: trustedRequesterOpenId,
+                      shareChatId: p.share_chat_id,
                     }),
                   );
                 case "list_blocks":

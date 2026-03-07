@@ -49,6 +49,12 @@ export const FeishuDocSchema = Type.Union([
           "Grant edit permission to the trusted requesting Feishu user from runtime context (default: true).",
       }),
     ),
+    share_chat_id: Type.Optional(
+      Type.String({
+        description:
+          "Grant edit permission to all members of this group chat (openchat). The chat_id (e.g. oc_xxx). Link sharing stays closed — only chat members can edit.",
+      }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("list_blocks"),
