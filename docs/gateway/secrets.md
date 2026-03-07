@@ -223,14 +223,68 @@ Optional per-id errors:
 
 ### Generic batch resolver pattern
 
-For secrets managers that support bulk reads, prefer a small external wrapper that:
+For secrets managers that support bulk reads, a small external wrapper script can resolve all requested ids in a single upstream call, which avoids per-secret configuration overhead when multiple credentials live in the same secrets manager.
 
-- accepts OpenClaw protocol input (`ids[]`) on stdin
-- performs one upstream fetch per request
-- maps requested ids into `values`, with per-id misses in `errors`
-- writes protocol v1 JSON to stdout
+The wrapper reads an OpenClaw protocol v1 request from stdin, performs one upstream fetch, and writes a protocol v1 JSON response to stdout.
 
-Example provider config for a user-managed external wrapper:
+#### Skeleton implementation
+
+The following Node.js template covers the full protocol contract. Copy it, fill in the `TODO` block with your secrets manager's CLI or SDK call, install it at an absolute path, and point `secrets.providers` at it.
+
+```js
+#!/usr/bin/env node
+// OpenClaw SecretRef exec resolver — protocol v1 skeleton.
+// Replace the TODO section with your secrets manager call,
+// install to an absolute path (e.g. /usr/local/bin/my-resolver),
+// and configure secrets.providers to point at it.
+
+import { execFileSync } from "node:child_process";
+
+async function main() {
+  // 1. Read the full request from stdin.
+  let input = "";
+  for await (const chunk of process.stdin) input += chunk;
+  const req = JSON.parse(input);
+
+  // 2. Reject unsupported protocol versions.
+  if (req.protocolVersion !== 1) {
+    process.stderr.write(`unsupported protocol version: ${req.protocolVersion}\n`);
+    process.exit(1);
+  }
+
+  const ids = req.ids ?? [];
+
+  // Return early for empty batches — avoids an unnecessary upstream call.
+  if (ids.length === 0) {
+    process.stdout.write(JSON.stringify({ protocolVersion: 1, values: {} }));
+    return;
+  }
+
+  // 3. TODO: call your secrets manager once and build a { key -> value } map.
+  //    Use execFileSync (no shell) or your manager's SDK here.
+  //    Example shape when done:
+  //      keyMap = { MY_API_KEY: "sk-...", DB_PASSWORD: "s3cr3t" }
+  const keyMap = {};
+
+  // 4. Map requested ids to values/errors.
+  const values = {};
+  const errors = {};
+  for (const id of ids) {
+    if (id in keyMap) values[id] = keyMap[id];
+    else errors[id] = { message: `secret "${id}" not found` };
+  }
+
+  // 5. Write protocol v1 response to stdout.
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+}
+
+main().catch((err) => {
+  process.stderr.write(`resolver error: ${err.message}\n`);
+  process.exit(1);
+});
+```
+
+Provider config (adjust `passEnv` to include whatever env vars your resolver reads):
 
 ```json5
 {
@@ -238,9 +292,9 @@ Example provider config for a user-managed external wrapper:
     providers: {
       batch_exec: {
         source: "exec",
-        command: "/usr/local/bin/openclaw-secret-batch-resolver",
+        command: "/usr/local/bin/my-resolver", // absolute path to your script
         args: [],
-        passEnv: ["PATH"],
+        passEnv: ["PATH"], // add env vars your resolver needs (tokens, IDs, etc.)
         jsonOnly: true,
       },
     },
@@ -248,10 +302,33 @@ Example provider config for a user-managed external wrapper:
 }
 ```
 
-External vendor patterns that fit this contract:
+#### Vendor patterns that fit this contract
 
-- 1Password Environments: wrapper can call `op environment read $OP_ENVIRONMENT_ID` once per batch and map keys to ids. Use an `op` version that includes `environment read` (`2.33-beta.02` introduced it; prefer current stable when available).
-- Bitwarden Secrets: wrapper can call `bws secret list` once per batch and map secret keys to ids. This fetches all secrets available to the token, so use a project-scoped service account/token with least-privilege access.
+**1Password Environments**
+
+Call `op environment read $OP_ENVIRONMENT_ID` once per batch. The output is a `KEY=value` file; split on the first `=` per line and build the key map. Pass through to your resolver:
+
+- `OP_ENVIRONMENT_ID` — the environment to read
+- `OP_SERVICE_ACCOUNT_TOKEN` — preferred auth (service account)
+- `OP_ACCOUNT_NAME` — fallback for desktop/interactive auth
+- `PATH` — so `op` resolves from PATH, or set a custom env var to its absolute path
+
+`op environment read` requires 1Password CLI `2.33-beta.02` or newer; use the current stable release when available.
+
+Example SecretRef using this provider:
+
+```json5
+{ source: "exec", provider: "batch_exec", id: "OPENAI_API_KEY" }
+```
+
+**Bitwarden Secrets**
+
+Call `bws secret list --output json` once per batch. The response is a JSON array; each element has `key` and `value` fields — build the key map from those. Pass through to your resolver:
+
+- `BWS_ACCESS_TOKEN` — machine service account token
+- `PATH` — so `bws` resolves from PATH, or set a custom env var to its absolute path
+
+`bws secret list` fetches all secrets available to the token. Use a project-scoped service account with least-privilege access to limit exposure.
 
 ### HashiCorp Vault CLI
 
