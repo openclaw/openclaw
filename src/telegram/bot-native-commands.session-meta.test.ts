@@ -12,6 +12,20 @@ type ResolveConfiguredAcpBindingRecordFn =
   typeof import("../acp/persistent-bindings.js").resolveConfiguredAcpBindingRecord;
 type EnsureConfiguredAcpBindingSessionFn =
   typeof import("../acp/persistent-bindings.js").ensureConfiguredAcpBindingSession;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("../auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherParams =
+  Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
+type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
+type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
+
+const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
+  queuedFinal: false,
+  counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
+};
 
 const persistentBindingMocks = vi.hoisted(() => ({
   resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredAcpBindingRecordFn>(() => null),
@@ -25,10 +39,12 @@ const sessionMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(),
 }));
 const replyMocks = vi.hoisted(() => ({
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => undefined),
+  dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+    async () => dispatchReplyResult,
+  ),
 }));
 const deliveryMocks = vi.hoisted(() => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
+  deliverReplies: vi.fn<DeliverRepliesFn>(async () => ({ delivered: true })),
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn<
@@ -266,7 +282,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher
+      .mockClear()
+      .mockResolvedValue(dispatchReplyResult);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
@@ -309,25 +327,24 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   it("injects canonical approval buttons for native command replies", async () => {
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
-      async ({
-        dispatcherOptions,
-      }: {
-        dispatcherOptions: { deliver: (payload: unknown) => unknown };
-      }) => {
-        await dispatcherOptions.deliver({
-          text: "Mode: foreground\nRun: /approve 7f423fdc allow-once (or allow-always / deny).",
-        });
+      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
+        await dispatcherOptions.deliver(
+          {
+            text: "Mode: foreground\nRun: /approve 7f423fdc allow-once (or allow-always / deny).",
+          },
+          { kind: "final" },
+        );
+        return dispatchReplyResult;
       },
     );
 
     const { handler } = registerAndResolveStatusHandler({ cfg: {} });
     await handler(buildStatusCommandContext());
 
-    const deliveredPayload = (
-      deliveryMocks.deliverReplies.mock.calls[0]?.[0] as {
-        replies?: Array<Record<string, unknown>>;
-      }
-    )?.replies?.[0];
+    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+      | DeliverRepliesParams
+      | undefined;
+    const deliveredPayload = deliveredCall?.replies?.[0];
     expect(deliveredPayload).toBeTruthy();
     expect(deliveredPayload?.["channelData"]).toEqual({
       telegram: {
