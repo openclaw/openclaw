@@ -295,6 +295,7 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
     "imessage",
     "slack",
     "msteams",
+    "feishu",
   ]) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes, policyFlips });
   }

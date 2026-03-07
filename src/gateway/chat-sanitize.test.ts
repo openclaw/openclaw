@@ -11,6 +11,15 @@ describe("stripEnvelopeFromMessage", () => {
     expect(result.content).toBe("yolo");
   });
 
+  test("removes Feishu envelope headers from user messages", () => {
+    const input = {
+      role: "user",
+      content: "[Feishu 2026-01-24 13:36] ping",
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("ping");
+  });
+
   test("removes message_id hint lines from text content arrays", () => {
     const input = {
       role: "user",

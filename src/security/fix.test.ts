@@ -106,6 +106,7 @@ describe("security fix", () => {
         discord: { groupPolicy: "open" },
         signal: { groupPolicy: "open" },
         imessage: { groupPolicy: "open" },
+        feishu: { groupPolicy: "open" },
       },
       logging: { redactSensitive: "off" },
     });
@@ -124,6 +125,7 @@ describe("security fix", () => {
         "channels.discord.groupPolicy=open -> allowlist",
         "channels.signal.groupPolicy=open -> allowlist",
         "channels.imessage.groupPolicy=open -> allowlist",
+        "channels.feishu.groupPolicy=open -> allowlist",
         'logging.redactSensitive=off -> "tools"',
       ]),
     );
@@ -137,6 +139,7 @@ describe("security fix", () => {
     expect(channels.discord.groupPolicy).toBe("allowlist");
     expect(channels.signal.groupPolicy).toBe("allowlist");
     expect(channels.imessage.groupPolicy).toBe("allowlist");
+    expect(channels.feishu.groupPolicy).toBe("allowlist");
 
     expect(channels.whatsapp.groupAllowFrom).toEqual(["+15551234567"]);
   });
