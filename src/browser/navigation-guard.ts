@@ -1,4 +1,6 @@
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
+  isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
@@ -53,6 +55,16 @@ export async function assertBrowserNavigationAllowed(
     }
     throw new InvalidBrowserNavigationUrlError(
       `Navigation blocked: unsupported protocol "${parsed.protocol}"`,
+    );
+  }
+
+  // Browser network stacks may apply env proxy routing at connect-time, which
+  // can bypass strict destination-binding intent from pre-navigation DNS checks.
+  // In strict mode, fail closed unless private-network navigation is explicitly
+  // enabled by policy.
+  if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
+    throw new InvalidBrowserNavigationUrlError(
+      "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
     );
   }
 

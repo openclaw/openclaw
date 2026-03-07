@@ -208,7 +208,8 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
 - Native command auto-mode is **off** for Slack (`commands.native: "auto"` does not enable Slack native commands).
 - Enable native Slack command handlers with `channels.slack.commands.native: true` (or global `commands.native: true`).
-- When native commands are enabled, register matching slash commands in Slack (`/<command>` names).
+- When native commands are enabled, register matching slash commands in Slack (`/<command>` names), with one exception:
+  - register `/agentstatus` for the status command (Slack reserves `/status`)
 - If native commands are not enabled, you can run a single configured slash command via `channels.slack.slashCommand`.
 - Native arg menus now adapt their rendering strategy:
   - up to 5 options: button blocks
@@ -320,7 +321,21 @@ Resolution order:
 Notes:
 
 - Slack expects shortcodes (for example `"eyes"`).
-- Use `""` to disable the reaction for a channel or account.
+- Use `""` to disable the reaction for the Slack account or globally.
+
+## Typing reaction fallback
+
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is a useful fallback when Slack native assistant typing is unavailable, especially in DMs.
+
+Resolution order:
+
+- `channels.slack.accounts.<accountId>.typingReaction`
+- `channels.slack.typingReaction`
+
+Notes:
+
+- Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
+- The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
 ## Manifest and scope checklist
 
@@ -358,7 +373,11 @@ Notes:
         "channels:read",
         "groups:history",
         "im:history",
+        "im:read",
+        "im:write",
         "mpim:history",
+        "mpim:read",
+        "mpim:write",
         "users:read",
         "app_mentions:read",
         "assistant:write",

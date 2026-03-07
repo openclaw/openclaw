@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -56,7 +58,7 @@ export type TalkProviderConfig = {
   /** Default provider output format (for example pcm_44100). */
   outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
-  apiKey?: string;
+  apiKey?: SecretInput;
   /** Provider-specific extensions. */
   [key: string]: unknown;
 };
@@ -77,7 +79,7 @@ export type TalkConfig = {
   voiceAliases?: Record<string, string>;
   modelId?: string;
   outputFormat?: string;
-  apiKey?: string;
+  apiKey?: SecretInput;
 };
 
 export type GatewayControlUiConfig = {
@@ -134,10 +136,10 @@ export type GatewayTrustedProxyConfig = {
 export type GatewayAuthConfig = {
   /** Authentication mode for Gateway connections. Defaults to token when unset. */
   mode?: GatewayAuthMode;
-  /** Shared token for token mode (stored locally for CLI auth). */
-  token?: string;
+  /** Shared token for token mode (plaintext or SecretRef). */
+  token?: SecretInput;
   /** Shared password for password mode (consider env instead). */
-  password?: string;
+  password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
   /** Rate-limit configuration for failed authentication attempts. */
@@ -175,9 +177,9 @@ export type GatewayRemoteConfig = {
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
   /** Token for remote auth (when the gateway requires token auth). */
-  token?: string;
+  token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
-  password?: string;
+  password?: SecretInput;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */
@@ -201,6 +203,41 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
+  /**
+   * Max request body size in bytes for `/v1/chat/completions`.
+   * Default: 20MB.
+   */
+  maxBodyBytes?: number;
+  /**
+   * Max number of `image_url` parts processed from the latest user message.
+   * Default: 8.
+   */
+  maxImageParts?: number;
+  /**
+   * Max cumulative decoded image bytes for all `image_url` parts in one request.
+   * Default: 20MB.
+   */
+  maxTotalImageBytes?: number;
+  /** Image input controls for `image_url` parts. */
+  images?: GatewayHttpChatCompletionsImagesConfig;
+};
+
+export type GatewayHttpChatCompletionsImagesConfig = {
+  /** Allow URL fetches for `image_url` parts. Default: false. */
+  allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
+  /** Allowed MIME types (case-insensitive). */
+  allowedMimes?: string[];
+  /** Max bytes per image. Default: 10MB. */
+  maxBytes?: number;
+  /** Max redirects when fetching a URL. Default: 3. */
+  maxRedirects?: number;
+  /** Fetch timeout in ms. Default: 10s. */
+  timeoutMs?: number;
 };
 
 export type GatewayHttpResponsesConfig = {
