@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/feishu";
+import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
@@ -44,8 +44,8 @@ export type FeishuMessageContext = {
   senderOpenId: string;
   senderName?: string;
   chatType: "p2p" | "group" | "private";
+  groupName?: string;
   mentionedBot: boolean;
-  hasAnyMention?: boolean;
   rootId?: string;
   parentId?: string;
   threadId?: string;
@@ -53,6 +53,8 @@ export type FeishuMessageContext = {
   contentType: string;
   /** Mention forward targets (excluding the bot itself) */
   mentionTargets?: MentionTarget[];
+  /** Extracted message body (after removing @ placeholders) */
+  mentionMessageBody?: string;
 };
 
 export type FeishuSendResult = {

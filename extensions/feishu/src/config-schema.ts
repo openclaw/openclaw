@@ -4,10 +4,7 @@ export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-const GroupPolicySchema = z.union([
-  z.enum(["open", "allowlist", "disabled"]),
-  z.literal("allowall").transform(() => "open" as const),
-]);
+const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
   z.string().url().startsWith("https://"),
@@ -165,7 +162,6 @@ const FeishuSharedConfigShape = {
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
-  httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
@@ -174,6 +170,8 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  resolveGroupNames: z.boolean().optional(),
+  resolveDmDisplayNames: z.boolean().optional(),
 };
 
 /**
@@ -218,9 +216,11 @@ export const FeishuConfigSchema = z
     topicSessionMode: TopicSessionModeSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
-    // Optimization flags
+    // Optimization / display flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
+    resolveGroupNames: z.boolean().optional().default(true),
+    resolveDmDisplayNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
