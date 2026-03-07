@@ -31,7 +31,7 @@ import {
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
-import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 import {
   listNodes,
@@ -512,11 +512,7 @@ export function createBrowserTool(opts?: {
                 type,
                 profile,
               });
-          return await imageResultFromFile({
-            label: "browser:screenshot",
-            path: result.path,
-            details: result,
-          });
+          return jsonResult(result);
         }
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
