@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -219,6 +220,44 @@ describe("agentCommand ACP runtime routing", () => {
         }),
       );
       expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reads ACP metadata from legacy main alias keys before canonical migration", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const now = Date.now();
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            main: {
+              sessionId: "acp-main-legacy",
+              updatedAt: now,
+              acp: {
+                backend: "acpx",
+                agent: "main",
+                runtimeSessionName: "legacy-main",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: now,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const cfg = createAcpEnabledConfig(home, storePath);
+
+      const entry = readAcpSessionEntry({
+        cfg,
+        sessionKey: "main",
+      });
+
+      expect(entry?.sessionKey).toBe("agent:main:main");
+      expect(entry?.storeSessionKey).toBe("main");
+      expect(entry?.acp?.backend).toBe("acpx");
     });
   });
 

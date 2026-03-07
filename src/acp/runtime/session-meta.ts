@@ -26,24 +26,35 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
-function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey: string): string {
-  const normalized = sessionKey.trim();
-  if (!normalized) {
-    return "";
+function resolveStoreSessionKey(
+  store: Record<string, SessionEntry>,
+  sessionKeys: string[],
+): string {
+  const lookupKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const key of sessionKeys) {
+    const normalized = key.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    lookupKeys.push(normalized);
   }
-  if (store[normalized]) {
-    return normalized;
-  }
-  const lower = normalized.toLowerCase();
-  if (store[lower]) {
-    return lower;
-  }
-  for (const key of Object.keys(store)) {
-    if (key.toLowerCase() === lower) {
-      return key;
+  for (const lookupKey of lookupKeys) {
+    if (store[lookupKey]) {
+      return lookupKey;
+    }
+    const lower = lookupKey.toLowerCase();
+    if (store[lower]) {
+      return lower;
+    }
+    for (const key of Object.keys(store)) {
+      if (key.toLowerCase() === lower) {
+        return key;
+      }
     }
   }
-  return lower;
+  return lookupKeys[0]?.toLowerCase() ?? "";
 }
 
 function canonicalizeAcpSessionKey(params: { cfg: OpenClawConfig; sessionKey: string }): string {
@@ -88,9 +99,11 @@ export function resolveSessionStorePathForAcp(params: {
 
 export function readAcpSessionEntry(params: {
   sessionKey: string;
+  rawSessionKey?: string;
   cfg?: OpenClawConfig;
 }): AcpSessionStoreEntry | null {
   const cfg = params.cfg ?? loadConfig();
+  const rawSessionKey = params.rawSessionKey ?? params.sessionKey;
   const sessionKey = canonicalizeAcpSessionKey({
     cfg,
     sessionKey: params.sessionKey,
@@ -110,7 +123,7 @@ export function readAcpSessionEntry(params: {
     storeReadFailed = true;
     store = {};
   }
-  const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
+  const storeSessionKey = resolveStoreSessionKey(store, [sessionKey, rawSessionKey]);
   const entry = store[storeSessionKey];
   return {
     cfg,
@@ -180,7 +193,7 @@ export async function upsertAcpSessionMeta(params: {
   return await updateSessionStore(
     storePath,
     (store) => {
-      const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
+      const storeSessionKey = resolveStoreSessionKey(store, [sessionKey]);
       const currentEntry = store[storeSessionKey];
       const nextMeta = params.mutate(currentEntry?.acp, currentEntry);
       if (nextMeta === undefined) {

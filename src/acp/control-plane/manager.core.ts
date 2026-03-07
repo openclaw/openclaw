@@ -84,7 +84,12 @@ export class AcpSessionManager {
 
   constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {}
 
-  resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
+  resolveSession(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    rawSessionKey?: string;
+  }): AcpSessionResolution {
+    const rawSessionKey = params.rawSessionKey ?? params.sessionKey;
     const sessionKey = canonicalizeAcpSessionKey(params);
     if (!sessionKey) {
       return {
@@ -95,6 +100,7 @@ export class AcpSessionManager {
     const acp = this.deps.readSessionEntry({
       cfg: params.cfg,
       sessionKey,
+      rawSessionKey,
     })?.acp;
     if (acp) {
       return {
@@ -334,6 +340,7 @@ export class AcpSessionManager {
         const resolution = this.resolveSession({
           cfg: params.cfg,
           sessionKey,
+          rawSessionKey: params.sessionKey,
         });
         if (resolution.kind === "none") {
           throw new AcpRuntimeError(
@@ -416,6 +423,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: params.cfg,
         sessionKey,
+        rawSessionKey: params.sessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(
@@ -481,6 +489,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: params.cfg,
         sessionKey,
+        rawSessionKey: params.sessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(
@@ -560,6 +569,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: params.cfg,
         sessionKey,
+        rawSessionKey: params.sessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(
@@ -596,6 +606,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: params.cfg,
         sessionKey,
+        rawSessionKey: params.sessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(
@@ -643,6 +654,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: input.cfg,
         sessionKey,
+        rawSessionKey: input.sessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(
@@ -815,6 +827,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: params.cfg,
         sessionKey,
+        rawSessionKey: params.sessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(
@@ -876,6 +889,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: input.cfg,
         sessionKey,
+        rawSessionKey: input.sessionKey,
       });
       if (resolution.kind === "none") {
         if (input.requireAcpSession ?? true) {

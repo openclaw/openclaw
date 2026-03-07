@@ -205,6 +205,7 @@ describe("AcpSessionManager", () => {
     expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
+        rawSessionKey: "main",
         sessionKey: "agent:main:main",
       }),
     );
