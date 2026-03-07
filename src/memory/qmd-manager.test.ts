@@ -1626,7 +1626,12 @@ describe("QmdMemoryManager", () => {
 
   it("retries mcporter search with bare command on Windows EINVAL cmd-shim failures", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousPath = process.env.PATH;
     try {
+      const shimDir = await fs.mkdtemp(path.join(tmpRoot, "mcporter-shim-"));
+      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\n");
+      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+
       cfg = {
         ...cfg,
         memory: {
@@ -1682,6 +1687,7 @@ describe("QmdMemoryManager", () => {
       await manager.close();
     } finally {
       platformSpy.mockRestore();
+      process.env.PATH = previousPath;
     }
   });
 
