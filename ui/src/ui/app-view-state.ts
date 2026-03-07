@@ -66,6 +66,12 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  // voice/audio toggles are tracked on the view state so props can be passed down
+  voiceInputEnabled: boolean;
+  audioOutputEnabled: boolean;
+  microphoneAvailable: boolean | null;
+  toggleVoiceInput?: () => void;
+  toggleAudioOutput?: () => void;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -139,6 +145,7 @@ export type AppViewState = {
   agentFileDrafts: Record<string, string>;
   agentFileActive: string | null;
   agentFileSaving: boolean;
+  agentFileWordWrap: boolean;
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;

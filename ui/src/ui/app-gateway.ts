@@ -76,6 +76,9 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  // local UI state for voice/audio toggles; gateway events will inspect these
+  voiceInputEnabled?: boolean;
+  audioOutputEnabled?: boolean;
 };
 
 type SessionDefaultsSnapshot = {
@@ -285,6 +288,24 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
   handleTerminalChatEvent(host, payload, state);
+
+  // when audio output is enabled, speak the assistant's latest message after a final/aborted state
+  if (host.audioOutputEnabled && state && (state === "final" || state === "aborted")) {
+    // look at the last message in chatMessages
+    const msgs = (host as unknown as OpenClawApp).chatMessages;
+    if (msgs.length > 0) {
+      const last = msgs[msgs.length - 1];
+      void import("./chat/message-extract.ts").then(({ extractText }) => {
+        const text = extractText(last);
+        if (text) {
+          void import("./services/voice.ts").then((m) => {
+            m.playTTS(text);
+          });
+        }
+      });
+    }
+  }
+
   if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);
   }

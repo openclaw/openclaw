@@ -2384,15 +2384,25 @@
   min-width: 200px;
 }
 
+.agent-files-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 70vh;
+}
+
 .agent-files-grid {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 16px;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
 }
 
 .agent-files-list {
   display: grid;
   gap: 8px;
+  align-content: start;
 }
 
 .agent-file-row {
@@ -2434,6 +2444,26 @@
   border-radius: var(--radius-lg);
   padding: 16px;
   background: var(--card);
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-files-editor .field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.agent-files-editor .field textarea {
+  flex: 1;
+  min-height: 120px;
+  resize: vertical;
+}
+
+.agent-file-textarea--wrap {
+  white-space: pre-wrap !important;
+  overflow-wrap: break-word;
 }
 
 .agent-file-header {

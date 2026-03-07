@@ -119,6 +119,94 @@ export class OpenClawApp extends LitElement {
       void i18n.setLocale(this.settings.locale);
     }
   }
+
+  // toggle handlers used by chat UI
+  // The speech portion currently appended to the textarea; replaced on each interim update.
+  // Tracking only the suffix (not the full base) means user edits elsewhere are preserved.
+  private _lastVoiceSuffix = "";
+  // Cached after startRecording so resetTranscript() can be called synchronously on edits/sends.
+  private _voiceModule: { resetTranscript: () => void } | null = null;
+
+  private _replaceVoiceSuffix(next: string) {
+    const cur = this.chatMessage;
+    if (this._lastVoiceSuffix && !cur.endsWith(this._lastVoiceSuffix)) {
+      // User edited/deleted the suffix — accumulated transcript is stale.
+      // Reset so the next interim starts fresh from the current field contents.
+      this._lastVoiceSuffix = "";
+      this._voiceModule?.resetTranscript();
+      return;
+    }
+    const base = this._lastVoiceSuffix
+      ? cur.slice(0, cur.length - this._lastVoiceSuffix.length)
+      : cur;
+    const sep = base && next ? " " : "";
+    this._lastVoiceSuffix = next ? sep + next : "";
+    this.chatMessage = base + this._lastVoiceSuffix;
+  }
+
+  toggleVoiceInput() {
+    if (!this.voiceInputEnabled) {
+      // stop any ongoing TTS so it doesn't bleed into the microphone
+      void import("./services/voice.ts").then((m) => m.stopTTS());
+      // start recording
+      this.voiceInputEnabled = true;
+      this._lastVoiceSuffix = "";
+      void import("./services/voice.ts").then((m) => {
+        this._voiceModule = m;
+        // Silence any ongoing TTS so it doesn't bleed into the microphone
+        m.stopTTS();
+        m.startRecording(
+          (interim) => {
+            this._replaceVoiceSuffix(interim);
+          },
+          (errorCode) => {
+            // Recognition ended naturally (error or browser timeout) — clear suffix and reset
+            if (this.voiceInputEnabled) {
+              if (errorCode) {
+                console.warn("voice recognition ended:", errorCode);
+              }
+              this._replaceVoiceSuffix("");
+              this._lastVoiceSuffix = "";
+              this.voiceInputEnabled = false;
+              this._voiceModule = null;
+            }
+          },
+        ).catch((err) => {
+          console.error("voice start failed", err);
+          this._replaceVoiceSuffix("");
+          this._lastVoiceSuffix = "";
+          this.voiceInputEnabled = false;
+          this._voiceModule = null;
+        });
+      });
+    } else {
+      // stop recording — commit final transcript
+      void import("./services/voice.ts").then(async (m) => {
+        try {
+          const transcript = await m.stopRecording();
+          this._replaceVoiceSuffix(transcript);
+        } catch (err) {
+          console.error("voice stop failed", err);
+          this._replaceVoiceSuffix("");
+        } finally {
+          this._lastVoiceSuffix = "";
+          this.voiceInputEnabled = false;
+          this._voiceModule = null;
+        }
+      });
+    }
+  }
+
+  toggleAudioOutput() {
+    this.audioOutputEnabled = !this.audioOutputEnabled;
+    if (this.audioOutputEnabled) {
+      // Prime speechSynthesis on the user gesture so later automated TTS isn't blocked
+      void import("./services/voice.ts").then((m) => m.primeSpeechSynthesis());
+    } else {
+      // Stop any in-progress playback immediately when the user turns audio off
+      void import("./services/voice.ts").then((m) => m.stopTTS());
+    }
+  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -178,6 +266,12 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
 
+  // voice/audio toggles (ephemeral, not persisted)
+  @state() voiceInputEnabled = false;
+  @state() audioOutputEnabled = false;
+  // null = not yet checked; true/false = result of capability check on page load
+  @state() microphoneAvailable: boolean | null = null;
+
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
   @state() configRawOriginal = "";
@@ -232,6 +326,7 @@ export class OpenClawApp extends LitElement {
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  @state() agentFileWordWrap = false;
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() agentIdentityById: Record<string, AgentIdentityResult> = {};
@@ -407,6 +502,11 @@ export class OpenClawApp extends LitElement {
 
   protected firstUpdated() {
     handleFirstUpdated(this as unknown as Parameters<typeof handleFirstUpdated>[0]);
+    void import("./services/voice.ts").then((m) =>
+      m.checkMicrophoneAvailable().then((available) => {
+        this.microphoneAvailable = available;
+      }),
+    );
   }
 
   disconnectedCallback() {
@@ -501,6 +601,12 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+    // If recording is still active, reset the accumulated transcript so continued
+    // speech doesn't re-surface already-sent words in the input field.
+    if (this.voiceInputEnabled) {
+      this._lastVoiceSuffix = "";
+      this._voiceModule?.resetTranscript();
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {

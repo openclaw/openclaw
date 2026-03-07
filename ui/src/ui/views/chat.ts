@@ -65,6 +65,11 @@ export type ChatProps = {
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  // Voice input and audio output
+  voiceInputEnabled?: boolean;
+  audioOutputEnabled?: boolean;
+  // null = not yet checked (show as enabled); false = no mic or permission denied
+  microphoneAvailable?: boolean | null;
   // Scroll control
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
@@ -76,6 +81,8 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onToggleVoiceInput?: () => void;
+  onToggleAudioOutput?: () => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -458,6 +465,22 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <button
+              class="btn btn--icon ${props.voiceInputEnabled ? "active" : ""}"
+              title="${props.microphoneAvailable === false ? "Microphone not available" : props.voiceInputEnabled ? "Voice input enabled" : "Enable voice input"}"
+              ?disabled=${!props.connected || props.microphoneAvailable === false}
+              @click=${props.onToggleVoiceInput}
+            >
+              ${props.voiceInputEnabled ? icons.microphone : icons.microphoneOff}
+            </button>
+            <button
+              class="btn btn--icon ${props.audioOutputEnabled ? "active" : ""}"
+              title="${props.audioOutputEnabled ? "Audio output enabled" : "Enable audio output"}"
+              ?disabled=${!props.connected}
+              @click=${props.onToggleAudioOutput}
+            >
+              ${props.audioOutputEnabled ? icons.volume2 : icons.volumeX}
+            </button>
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
