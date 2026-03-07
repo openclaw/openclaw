@@ -661,6 +661,44 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send keeps configured main delivery inheritance when connect metadata omits client details", async () => {
+    createTranscriptFixture("openclaw-chat-send-config-main-connect-no-client-");
+    mockState.mainSessionKey = "work";
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "whatsapp:+8613800138000",
+        accountId: "default",
+      },
+      lastChannel: "whatsapp",
+      lastTo: "whatsapp:+8613800138000",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-config-main-connect-no-client",
+      client: {
+        connect: {},
+      } as unknown,
+      sessionKey: "agent:main:work",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+8613800138000",
+        AccountId: "default",
+      }),
+    );
+  });
+
   it("chat.send does not inherit external delivery context for non-channel custom sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-custom-no-cross-route-");
     mockState.finalText = "ok";
