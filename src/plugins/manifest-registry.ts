@@ -216,6 +216,30 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+
+      // Different physical directories but same plugin id: when origins differ,
+      // silently prefer the higher-precedence copy (config > workspace > global
+      // > bundled). This is the common case where a user installs a plugin
+      // globally (~/.openclaw/extensions/) that also ships bundled in
+      // node_modules — the user copy should win without noise.
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      if (existingRank !== candidateRank) {
+        if (candidateRank < existingRank) {
+          records[existing.recordIndex] = buildRecord({
+            manifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        // Either way, the higher-precedence copy wins; skip without warning.
+        continue;
+      }
+
+      // Same origin level + different physical dirs = genuine ambiguity.
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
