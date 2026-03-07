@@ -837,6 +837,67 @@ export async function deleteMessageTelegram(
   return { ok: true };
 }
 
+type TelegramListPinsOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  cfg?: ReturnType<typeof loadConfig>;
+};
+
+function extractTelegramPinnedMessages(chat: unknown): unknown[] {
+  if (!chat || typeof chat !== "object") {
+    return [];
+  }
+  const chatRecord = chat as {
+    pinned_message?: unknown;
+    pinned_messages?: unknown;
+  };
+  if (Array.isArray(chatRecord.pinned_messages)) {
+    // NOTE: Telegram Bot API does not currently return `pinned_messages` from getChat.
+    // This branch is a forward-compatibility stub only.
+    return chatRecord.pinned_messages.filter((message) => message != null);
+  }
+  return chatRecord.pinned_message == null ? [] : [chatRecord.pinned_message];
+}
+
+export async function listPinsTelegram(
+  chatIdInput: string | number,
+  opts: TelegramListPinsOpts = {},
+): Promise<unknown[]> {
+  const rawTarget = String(chatIdInput);
+  const { cfg, account, api } = resolveTelegramApiContext({
+    ...opts,
+    cfg: opts.cfg,
+  });
+  if (typeof api.getChat !== "function") {
+    throw new Error("Telegram pinned-message reads are unavailable in this bot API.");
+  }
+  const target = parseTelegramTarget(rawTarget);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: rawTarget,
+  });
+  const chat = await requestWithChatNotFound(() => api.getChat(chatId), "getChat");
+  return extractTelegramPinnedMessages(chat);
+}
+
 type TelegramEditOpts = {
   token?: string;
   accountId?: string;

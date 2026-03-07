@@ -538,6 +538,7 @@ describe("telegramMessageActions", () => {
     const actions = telegramMessageActions.listActions?.({ cfg: telegramCfg() }) ?? [];
 
     expect(actions).toContain("poll");
+    expect(actions).toContain("list-pins");
   });
 
   it("omits poll when sendMessage is disabled", () => {
@@ -568,6 +569,21 @@ describe("telegramMessageActions", () => {
     const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
 
     expect(actions).not.toContain("poll");
+  });
+
+  it("omits list-pins when pin reads are disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { pins: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("list-pins");
   });
 
   it("omits poll when sendMessage and poll are split across accounts", () => {
@@ -695,6 +711,18 @@ describe("telegramMessageActions", () => {
           messageId: 42,
           content: "Updated",
           buttons: [],
+          accountId: undefined,
+        },
+      },
+      {
+        name: "list-pins maps to listPins",
+        action: "list-pins" as const,
+        params: {
+          to: "telegram:group:-1001234567890:topic:271",
+        },
+        expectedPayload: {
+          action: "listPins",
+          chatId: "telegram:group:-1001234567890:topic:271",
           accountId: undefined,
         },
       },
