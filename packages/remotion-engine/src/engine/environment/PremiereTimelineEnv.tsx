@@ -14,9 +14,9 @@
  */
 import React, { useMemo } from "react";
 import { useCurrentFrame } from "remotion";
-import type { PremiereTimelineEnvSpec, PremierePresetName } from "./types";
-import { createPRNG, randRange, randPick } from "./prng";
 import { clamp, easeInOutCubic } from "../motion/easings";
+import { createPRNG, randRange, randPick } from "./prng";
+import type { PremiereTimelineEnvSpec, PremierePresetName } from "./types";
 
 // ── Preset defaults ──
 
@@ -75,29 +75,39 @@ const PRESETS: Record<PremierePresetName, PresetDefaults> = {
 // ── Clip color palettes (muted, NLE-style) ──
 
 const VIDEO_COLORS = [
-  "rgba(82, 110, 170, 0.65)",   // muted blue
-  "rgba(120, 85, 155, 0.60)",   // muted purple
-  "rgba(72, 130, 140, 0.60)",   // teal
-  "rgba(95, 95, 120, 0.55)",    // grey-blue
-  "rgba(65, 105, 85, 0.55)",    // dark green
-  "rgba(140, 100, 80, 0.50)",   // warm brown
+  "rgba(82, 110, 170, 0.65)", // muted blue
+  "rgba(120, 85, 155, 0.60)", // muted purple
+  "rgba(72, 130, 140, 0.60)", // teal
+  "rgba(95, 95, 120, 0.55)", // grey-blue
+  "rgba(65, 105, 85, 0.55)", // dark green
+  "rgba(140, 100, 80, 0.50)", // warm brown
 ];
 
 const AUDIO_COLORS = [
-  "rgba(80, 155, 80, 0.55)",    // green audio
-  "rgba(60, 130, 60, 0.50)",    // darker green
-  "rgba(100, 170, 100, 0.45)",  // light green
+  "rgba(80, 155, 80, 0.55)", // green audio
+  "rgba(60, 130, 60, 0.50)", // darker green
+  "rgba(100, 170, 100, 0.45)", // light green
 ];
 
 const CLIP_LABELS_VIDEO = [
-  "MV_TAKE_01", "MV_TAKE_02", "MV_TAKE_03", "BROLL_01", "BROLL_02",
-  "CUT_01", "CUT_02", "CUT_03", "INSERT_A", "INSERT_B",
-  "WIDE_01", "CLOSE_01", "PERF_01", "PERF_02", "PERF_03",
+  "MV_TAKE_01",
+  "MV_TAKE_02",
+  "MV_TAKE_03",
+  "BROLL_01",
+  "BROLL_02",
+  "CUT_01",
+  "CUT_02",
+  "CUT_03",
+  "INSERT_A",
+  "INSERT_B",
+  "WIDE_01",
+  "CLOSE_01",
+  "PERF_01",
+  "PERF_02",
+  "PERF_03",
 ];
 
-const CLIP_LABELS_AUDIO = [
-  "MASTER", "VOCAL", "BEAT", "SFX_01", "SFX_02", "MUSIC_BED", "VO_01",
-];
+const CLIP_LABELS_AUDIO = ["MASTER", "VOCAL", "BEAT", "SFX_01", "SFX_02", "MUSIC_BED", "VO_01"];
 
 // ── Clip data structure ──
 
@@ -125,14 +135,18 @@ function generateClips(
   const clips: ClipData[] = [];
 
   const avgClipW =
-    density === "high" ? { min: 40, max: 100 } :
-    density === "med" ? { min: 80, max: 180 } :
-    { min: 150, max: 320 };
+    density === "high"
+      ? { min: 40, max: 100 }
+      : density === "med"
+        ? { min: 80, max: 180 }
+        : { min: 150, max: 320 };
 
   const gapW =
-    density === "high" ? { min: 2, max: 6 } :
-    density === "med" ? { min: 4, max: 12 } :
-    { min: 6, max: 20 };
+    density === "high"
+      ? { min: 2, max: 6 }
+      : density === "med"
+        ? { min: 4, max: 12 }
+        : { min: 6, max: 20 };
 
   // Generate video tracks
   for (let t = 0; t < videoTracks; t++) {
@@ -151,9 +165,7 @@ function generateClips(
         isAudio: false,
         color: randPick(rng, VIDEO_COLORS),
         label: showLabels ? randPick(rng, CLIP_LABELS_VIDEO) : undefined,
-        waveformBars: Array.from({ length: barCount }, () =>
-          0.15 + rng() * 0.65
-        ),
+        waveformBars: Array.from({ length: barCount }, () => 0.15 + rng() * 0.65),
       });
 
       x += w + randRange(rng, gapW.min, gapW.max);
@@ -182,9 +194,7 @@ function generateClips(
         isAudio: true,
         color: randPick(rng, AUDIO_COLORS),
         label: showLabels ? randPick(rng, CLIP_LABELS_AUDIO) : undefined,
-        waveformBars: Array.from({ length: barCount }, () =>
-          0.1 + rng() * 0.7
-        ),
+        waveformBars: Array.from({ length: barCount }, () => 0.1 + rng() * 0.7),
       });
 
       x += w + randRange(rng, gapW.min, gapW.max);
@@ -211,7 +221,17 @@ const TimeRuler: React.FC<{
   markerEvery: number;
   markerColor: string;
   pxPerSecond: number;
-}> = ({ scrollX, width, rulerH, sidebarW, green, markersEnabled, markerEvery, markerColor, pxPerSecond }) => {
+}> = ({
+  scrollX,
+  width,
+  rulerH,
+  sidebarW,
+  green: _green,
+  markersEnabled,
+  markerEvery,
+  markerColor,
+  pxPerSecond,
+}) => {
   const ticks: React.ReactNode[] = [];
   const startSec = Math.floor(scrollX / pxPerSecond);
   const endSec = Math.ceil((scrollX + width) / pxPerSecond) + 1;
@@ -231,7 +251,7 @@ const TimeRuler: React.FC<{
           height: 16,
           background: "rgba(255,255,255,0.25)",
         }}
-      />
+      />,
     );
 
     // Timecode label every 2s
@@ -252,7 +272,7 @@ const TimeRuler: React.FC<{
           }}
         >
           {mm}:{ss}:00
-        </div>
+        </div>,
       );
     }
 
@@ -270,7 +290,7 @@ const TimeRuler: React.FC<{
             height: 8,
             background: "rgba(255,255,255,0.12)",
           }}
-        />
+        />,
       );
     }
 
@@ -288,7 +308,7 @@ const TimeRuler: React.FC<{
             borderRadius: 3,
             background: markerColor,
           }}
-        />
+        />,
       );
     }
   }
@@ -319,7 +339,7 @@ const TrackSidebar: React.FC<{
   gapH: number;
   rulerH: number;
   green: string;
-}> = ({ videoTracks, audioTracks, sidebarW, rowH, gapH, rulerH, green }) => {
+}> = ({ videoTracks, audioTracks, sidebarW, rowH, gapH, rulerH, green: _green }) => {
   const labels: React.ReactNode[] = [];
   const totalTracks = videoTracks + audioTracks;
 
@@ -338,14 +358,12 @@ const TrackSidebar: React.FC<{
           fontSize: 11,
           fontFamily: "monospace",
           fontWeight: 700,
-          color: isAudio
-            ? "rgba(100,180,100,0.6)"
-            : "rgba(150,170,210,0.6)",
+          color: isAudio ? "rgba(100,180,100,0.6)" : "rgba(150,170,210,0.6)",
           whiteSpace: "nowrap",
         }}
       >
         {label}
-      </div>
+      </div>,
     );
 
     // Decorative solo/mute dots
@@ -373,7 +391,7 @@ const TrackSidebar: React.FC<{
           borderRadius: 3,
           background: "rgba(255,255,255,0.08)",
         }}
-      />
+      />,
     );
   }
 
@@ -405,13 +423,25 @@ const ClipBlock: React.FC<{
   clipStyle: "square" | "rounded";
   waveformOpacity: number;
   waveformStyle: "bars" | "line";
-}> = ({ clip, scrollX, sidebarW, rowH, gapH, rulerH, clipStyle, waveformOpacity, waveformStyle }) => {
+}> = ({
+  clip,
+  scrollX,
+  sidebarW,
+  rowH,
+  gapH,
+  rulerH,
+  clipStyle,
+  waveformOpacity,
+  waveformStyle,
+}) => {
   const x = clip.x - scrollX + sidebarW;
   const y = rulerH + clip.trackIndex * (rowH + gapH) + 2;
   const h = rowH - 4;
 
   // Skip if off-screen
-  if (x + clip.w < -50 || x > 1200) return null;
+  if (x + clip.w < -50 || x > 1200) {
+    return null;
+  }
 
   const borderRadius = clipStyle === "rounded" ? 4 : 0;
 
@@ -471,9 +501,7 @@ const ClipBlock: React.FC<{
                 flex: 1,
                 height: `${barH * 100}%`,
                 background:
-                  waveformStyle === "bars"
-                    ? "rgba(255,255,255,0.35)"
-                    : "rgba(255,255,255,0.20)",
+                  waveformStyle === "bars" ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.20)",
                 borderRadius: waveformStyle === "bars" ? 1 : 0,
                 minWidth: 1,
                 maxWidth: 4,
@@ -507,7 +535,7 @@ const Playhead: React.FC<{
   glow: string;
   widthPx: number;
   headSize: number;
-}> = ({ x, rulerH, totalH, color, glow, widthPx, headSize }) => {
+}> = ({ x, rulerH, totalH: _totalH, color, glow, widthPx, headSize }) => {
   return (
     <>
       {/* Glow */}
@@ -574,10 +602,7 @@ const TrackLanes: React.FC<{
             right: 0,
             top: rulerH + i * (rowH + gapH),
             height: rowH,
-            background:
-              i % 2 === 0
-                ? "rgba(255,255,255,0.015)"
-                : "transparent",
+            background: i % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent",
             borderBottom: "1px solid rgba(255,255,255,0.03)",
           }}
         />
@@ -604,7 +629,7 @@ export const PremiereTimelineEnvRenderer: React.FC<{
   width: number;
   height: number;
   green: string;
-}> = ({ env, width, height, green }) => {
+}> = ({ env, width, height: _height, green }) => {
   const frame = useCurrentFrame();
   const preset = PRESETS[env.preset ?? "music_video_dense"];
 
@@ -655,21 +680,18 @@ export const PremiereTimelineEnvRenderer: React.FC<{
   const zoomTo = env.camera?.zoom?.to ?? 1.05;
 
   // ── Generate clips (memoized by seed) ──
-  const clips = useMemo(
-    () => {
-      const rng = createPRNG(seed);
-      return generateClips(
-        rng,
-        videoTracks,
-        audioTracks,
-        totalTimelineWidth,
-        density,
-        showLabels,
-        waveformsEnabled,
-      );
-    },
-    [seed, videoTracks, audioTracks, totalTimelineWidth, density, showLabels, waveformsEnabled],
-  );
+  const clips = useMemo(() => {
+    const rng = createPRNG(seed);
+    return generateClips(
+      rng,
+      videoTracks,
+      audioTracks,
+      totalTimelineWidth,
+      density,
+      showLabels,
+      waveformsEnabled,
+    );
+  }, [seed, videoTracks, audioTracks, totalTimelineWidth, density, showLabels, waveformsEnabled]);
 
   // ── Scroll offset ──
   let scrollX = frame * scrollSpeed;
@@ -686,13 +708,17 @@ export const PremiereTimelineEnvRenderer: React.FC<{
   // ── Camera transform ──
   const cameraT = clamp(frame / 300, 0, 1);
   const camDriftX =
-    cameraMode === "slowPan" ? Math.sin(frame / 180) * driftPxX :
-    cameraMode === "breathingZoom" ? Math.sin(frame / 200) * (driftPxX * 0.3) :
-    0;
+    cameraMode === "slowPan"
+      ? Math.sin(frame / 180) * driftPxX
+      : cameraMode === "breathingZoom"
+        ? Math.sin(frame / 200) * (driftPxX * 0.3)
+        : 0;
   const camDriftY =
-    cameraMode === "slowPan" ? Math.cos(frame / 220) * driftPxY :
-    cameraMode === "slowPanVertical" ? Math.sin(frame / 160) * driftPxY :
-    0;
+    cameraMode === "slowPan"
+      ? Math.cos(frame / 220) * driftPxY
+      : cameraMode === "slowPanVertical"
+        ? Math.sin(frame / 160) * driftPxY
+        : 0;
   const camZoom = zoomFrom + (zoomTo - zoomFrom) * easeInOutCubic(cameraT);
 
   // ── Total content height ──

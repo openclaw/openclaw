@@ -28,9 +28,9 @@ import {
   spring,
 } from "remotion";
 import { Captions } from "./components/Captions";
-import { CutmvUIFrame } from "./components/ui/CutmvUIFrame";
 import { CutmvDashboardMock } from "./components/ui/CutmvDashboardMock";
 import { CutmvOutputList } from "./components/ui/CutmvOutputList";
+import { CutmvUIFrame } from "./components/ui/CutmvUIFrame";
 
 const GREEN = "#94F33F";
 const SAFE = { top: 150, bottom: 230, left: 90, right: 90 };
@@ -78,9 +78,7 @@ const CAPTION_SEGMENTS = [
 // Scene 1 — Hook Headline (0–2.0s / frames 0–60)
 // fade_up: translateY 18→0, opacity 0→1, 14 frames
 // ═══════════════════════════════════════════════
-const SceneHook: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-}) => {
+const SceneHook: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const fadeY = interpolate(frame, [0, 14], [18, 0], {
     extrapolateRight: "clamp",
   });
@@ -130,10 +128,7 @@ const SceneHook: React.FC<{ frame: number; fps: number }> = ({
 // Code-based: CutmvUIFrame + CutmvDashboardMock + CutmvOutputList
 // scale_in: 0.98→1.0, 16 frames
 // ═══════════════════════════════════════════════
-const SceneUI: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneUI: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // Header text fade_up
   const headerY = interpolate(frame, [0, 14], [18, 0], {
     extrapolateRight: "clamp",
@@ -232,9 +227,7 @@ const SceneUI: React.FC<{ frame: number; fps: number }> = ({
 // "GENERATED IN SECONDS." + green underline draw left→right
 // slow_scale: 1.0→1.03 over 75 frames
 // ═══════════════════════════════════════════════
-const SceneStatement: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-}) => {
+const SceneStatement: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const opacity = interpolate(frame, [0, 14], [0, 1], {
     extrapolateRight: "clamp",
   });
@@ -303,10 +296,7 @@ const SceneStatement: React.FC<{ frame: number; fps: number }> = ({
 // FD logo: 22% width, delayed
 // CTA: "TRY CUTMV" in green
 // ═══════════════════════════════════════════════
-const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneCTA: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   // Logo reveal
   const logoEnter = spring({
     fps,
@@ -346,10 +336,7 @@ const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
           zIndex: 10,
         }}
       >
-        <Img
-          src={staticFile("cutmv/logo.png")}
-          style={{ width: "60%", objectFit: "contain" }}
-        />
+        <Img src={staticFile("cutmv/logo.png")} style={{ width: "60%", objectFit: "contain" }} />
       </div>
 
       {/* FD Logo — smaller beneath */}
@@ -419,18 +406,9 @@ export const CutmvPremiumAd: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {current && (
-        <current.Component
-          frame={frame - Math.floor(current.start * fps)}
-          fps={fps}
-        />
-      )}
+      {current && <current.Component frame={frame - Math.floor(current.start * fps)} fps={fps} />}
 
-      <Captions
-        segments={CAPTION_SEGMENTS}
-        safe={SAFE}
-        y={1540}
-      />
+      <Captions segments={CAPTION_SEGMENTS} safe={SAFE} y={1540} />
     </AbsoluteFill>
   );
 };

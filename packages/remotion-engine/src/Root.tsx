@@ -1,21 +1,19 @@
 import "./index.css";
 import { Composition } from "remotion";
+import specRaw from "../../../data/datasets/cutmv/motion/specs/cutmv_premium_v001.json";
 import { MyComposition } from "./Composition";
-import { CutmvAd } from "./CutmvAd";
-import { CutmvPremiumAd } from "./CutmvPremiumAd";
-import { HormoziEducation } from "./comps/HormoziEducation";
-import { HiggsfieldSaasProd } from "./comps/HiggsfieldSaasProd";
-import { MixedMediaScribble } from "./comps/MixedMediaScribble";
-import { CutmvPremiumAdV5 } from "./comps/CutmvPremiumAdV5";
-
 // ── Engine-driven compositions (auto-generated from specs folder) ──
 import { GeneratedCompositions } from "./Compositions.generated";
-import { LogoOnlyTest } from "./LogoOnlyTest";
-
 // ── Legacy base engine spec ──
 import { CutmvPremiumAdEngine } from "./compositions/CutmvPremiumAdEngine";
+import { CutmvPremiumAdV5 } from "./comps/CutmvPremiumAdV5";
+import { HiggsfieldSaasProd } from "./comps/HiggsfieldSaasProd";
+import { HormoziEducation } from "./comps/HormoziEducation";
+import { MixedMediaScribble } from "./comps/MixedMediaScribble";
+import { CutmvAd } from "./CutmvAd";
+import { CutmvPremiumAd } from "./CutmvPremiumAd";
 import { parseMotionSpec } from "./engine/parser/parseMotionSpec";
-import specRaw from "../../data/datasets/cutmv/motion/specs/cutmv_premium_v001.json";
+import { LogoOnlyTest } from "./LogoOnlyTest";
 const spec = parseMotionSpec(specRaw as Record<string, unknown>);
 
 export const RemotionRoot: React.FC = () => {

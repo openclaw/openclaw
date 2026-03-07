@@ -1,27 +1,23 @@
 import React from "react";
-import { AbsoluteFill, Sequence, useCurrentFrame } from "remotion";
-import { MotionSpec, SceneSpec, ElementDef } from "./parser/MotionSpecTypes";
-import { SafeZone } from "./layout/SafeZone";
+import { AbsoluteFill, Img, Sequence, useCurrentFrame } from "remotion";
 import { NoOverlapStack } from "./layout/NoOverlapStack";
-import { CutmvUIFrame } from "./ui/CutmvUIFrame";
-import { ConfigureOutputCard } from "./ui/ConfigureOutputCard";
-import { OutputCardStack } from "./ui/OutputCardStack";
+import { SafeZone } from "./layout/SafeZone";
 import { ElementAnimator } from "./motion/ElementAnimator";
-import { renderUIPreset } from "./scenes/UIMockScene";
-import { InteractiveConfigPanel } from "./ui/InteractiveConfigPanel";
-import { TapRipple } from "./ui/TapRipple";
-import { resolveTimeline, findTapStartFrame } from "./ui/resolveTimeline";
-import { tapTargetToCardCoords } from "./ui/maps/tapTargetToCoords";
-
+import { MotionSpec, SceneSpec, ElementDef } from "./parser/MotionSpecTypes";
+import { CtaEndcardRenderer } from "./scenes/CtaEndcardScene";
+import { FeatureGridRenderer } from "./scenes/FeatureGridScene";
 // Scene renderers (backward compat for scenes without elements[])
 import { FeatureListRenderer } from "./scenes/FeatureListScene";
-import { FeatureGridRenderer } from "./scenes/FeatureGridScene";
 import { StepSceneRenderer } from "./scenes/StepScene";
-import { CtaEndcardRenderer } from "./scenes/CtaEndcardScene";
-import {
-  UIMockRenderer,
-  UIMockMontageRenderer,
-} from "./scenes/UIMockScene";
+import { renderUIPreset } from "./scenes/UIMockScene";
+import { UIMockRenderer, UIMockMontageRenderer } from "./scenes/UIMockScene";
+import { ConfigureOutputCard } from "./ui/ConfigureOutputCard";
+import { CutmvUIFrame } from "./ui/CutmvUIFrame";
+import { InteractiveConfigPanel } from "./ui/InteractiveConfigPanel";
+import { tapTargetToCardCoords } from "./ui/maps/tapTargetToCoords";
+import { OutputCardStack } from "./ui/OutputCardStack";
+import { resolveTimeline, findTapStartFrame } from "./ui/resolveTimeline";
+import { TapRipple } from "./ui/TapRipple";
 
 // ── Headline with dedup + subhead support (backward compat) ──
 const Headline: React.FC<{
@@ -36,9 +32,7 @@ const Headline: React.FC<{
   };
 
   // Dedup: remove duplicate lines
-  const unique = lines.filter(
-    (l, idx) => lines.findIndex((x) => x.text === l.text) === idx,
-  );
+  const unique = lines.filter((l, idx) => lines.findIndex((x) => x.text === l.text) === idx);
 
   const subT = Math.max(0, Math.min(1, (frame - unique.length * 8 - 4) / 12));
   const subEase = 1 - Math.pow(1 - subT, 3);
@@ -58,9 +52,7 @@ const Headline: React.FC<{
             width: "100%",
           }}
         >
-          <span style={{ color: l.color === "green" ? green : "white" }}>
-            {l.text}
-          </span>
+          <span style={{ color: l.color === "green" ? green : "white" }}>{l.text}</span>
           {l.underline ? (
             <div
               style={{
@@ -100,7 +92,7 @@ const InteractiveUICardElement: React.FC<{
   const frame = useCurrentFrame();
   const timeline = el.propsTimeline!;
   const resolved = resolveTimeline(frame, timeline);
-  const options = (el.uiOptions ?? {}) as Record<string, unknown>;
+  const options = el.uiOptions ?? {};
 
   const toggleLabels = (options.outputs as string[]) ?? ["CLIPS", "GIFS", "THUMBNAILS", "CANVAS"];
   const aspectPills = (options.aspectToggles as string[]) ?? ["9:16", "1:1", "16:9"];
@@ -148,12 +140,7 @@ const InteractiveUICardElement: React.FC<{
       </CutmvUIFrame>
       {/* Ripple at tap location (stays at card level for correct clipping) */}
       {rippleX !== undefined && rippleY !== undefined && rippleStartFrame >= 0 ? (
-        <TapRipple
-          x={rippleX}
-          y={rippleY}
-          startFrame={rippleStartFrame}
-          currentFrame={frame}
-        />
+        <TapRipple x={rippleX} y={rippleY} startFrame={rippleStartFrame} currentFrame={frame} />
       ) : null}
     </div>
   );
@@ -258,12 +245,7 @@ function renderElement(
       );
 
     case "logo":
-      return (
-        <img
-          src={primaryLogo}
-          style={{ height: 92, objectFit: "contain" }}
-        />
-      );
+      return <Img src={primaryLogo} style={{ height: 92, objectFit: "contain" }} />;
 
     case "support":
       return (
@@ -308,17 +290,12 @@ function renderElement(
       );
 
     default:
-      return el.text ? (
-        <div style={{ color: "white", fontSize: 30 }}>{el.text}</div>
-      ) : null;
+      return el.text ? <div style={{ color: "white", fontSize: 30 }}>{el.text}</div> : null;
   }
 }
 
 // ── Element-based scene rendering (new path) ──
-function renderElementScene(
-  scene: SceneSpec,
-  spec: MotionSpec,
-): React.ReactNode {
+function renderElementScene(scene: SceneSpec, spec: MotionSpec): React.ReactNode {
   const green = spec.style.green;
   const black = spec.style.black;
   const logo = spec.assets.primaryLogo;
@@ -337,11 +314,7 @@ function renderElementScene(
         }}
       >
         {elements.map((el) => (
-          <ElementAnimator
-            key={el.id}
-            motion={el.motion}
-            presets={spec.elementMotionPresets}
-          >
+          <ElementAnimator key={el.id} motion={el.motion} presets={spec.elementMotionPresets}>
             {renderElement(el, green, black, logo)}
           </ElementAnimator>
         ))}
@@ -371,11 +344,7 @@ function renderScene(scene: SceneSpec, spec: MotionSpec): React.ReactNode {
             justifyContent: "center",
           }}
         >
-          <Headline
-            lines={scene.headlineLines}
-            green={green}
-            subhead={scene.subhead}
-          />
+          <Headline lines={scene.headlineLines} green={green} subhead={scene.subhead} />
         </div>
       </SafeZone>
     );
@@ -412,15 +381,29 @@ function renderScene(scene: SceneSpec, spec: MotionSpec): React.ReactNode {
     }
   }
 
-  if (scene.type === "uiMock") return <UIMockRenderer scene={scene} green={green} />;
-  if (scene.type === "uiMockMontage") return <UIMockMontageRenderer scene={scene} green={green} />;
-  if (scene.type === "featureList") return <FeatureListRenderer scene={scene} green={green} />;
-  if (scene.type === "featureGrid") return <FeatureGridRenderer scene={scene} green={green} />;
-  if (scene.type === "stepScene") return <StepSceneRenderer scene={scene} green={green} />;
-  if (scene.type === "ctaEndcard") return <CtaEndcardRenderer scene={scene} green={green} black={spec.style.black} />;
+  if (scene.type === "uiMock") {
+    return <UIMockRenderer scene={scene} green={green} />;
+  }
+  if (scene.type === "uiMockMontage") {
+    return <UIMockMontageRenderer scene={scene} green={green} />;
+  }
+  if (scene.type === "featureList") {
+    return <FeatureListRenderer scene={scene} green={green} />;
+  }
+  if (scene.type === "featureGrid") {
+    return <FeatureGridRenderer scene={scene} green={green} />;
+  }
+  if (scene.type === "stepScene") {
+    return <StepSceneRenderer scene={scene} green={green} />;
+  }
+  if (scene.type === "ctaEndcard") {
+    return <CtaEndcardRenderer scene={scene} green={green} black={spec.style.black} />;
+  }
 
   // Blank scene — renders nothing (used for logoOnly outro window)
-  if (scene.type === "blank") return null;
+  if (scene.type === "blank") {
+    return null;
+  }
 
   if (scene.type === "ctaEnd") {
     return (
@@ -433,7 +416,17 @@ function renderScene(scene: SceneSpec, spec: MotionSpec): React.ReactNode {
             <div style={{ fontSize: 80, fontWeight: 1000, color: "white", textAlign: "center" }}>
               {scene.cta.secondary}
             </div>
-            <div style={{ marginTop: 8, display: "inline-block", padding: "18px 26px", borderRadius: 18, background: spec.style.green, color: spec.style.black, fontWeight: 1000 }}>
+            <div
+              style={{
+                marginTop: 8,
+                display: "inline-block",
+                padding: "18px 26px",
+                borderRadius: 18,
+                background: spec.style.green,
+                color: spec.style.black,
+                fontWeight: 1000,
+              }}
+            >
               {scene.cta.button}
             </div>
           </NoOverlapStack>

@@ -79,10 +79,7 @@ const CAPTION_SEGMENTS = [
 // Scene 1 — HARD HOOK (0–2.5s / frames 0–75)
 // Animation: pop (scale 0.96→1.0, 8 frames)
 // ═══════════════════════════════════════════════
-const SceneHook: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneHook: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const scale = interpolate(frame, [0, 8], [0.96, 1], {
     extrapolateRight: "clamp",
   });
@@ -129,9 +126,7 @@ const SceneHook: React.FC<{ frame: number; fps: number }> = ({
 // Animation: snap_in (translateX 26→0, 7 frames)
 // Text dominant. No UI.
 // ═══════════════════════════════════════════════
-const SceneProblem: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-}) => {
+const SceneProblem: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // Line 1: snap_in
   const slideX1 = interpolate(frame, [0, 7], [26, 0], {
     extrapolateRight: "clamp",
@@ -222,10 +217,7 @@ const SceneProblem: React.FC<{ frame: number; fps: number }> = ({
 // Animation: punch_in (scale 0.95→1.0, 12 frames)
 // ONE UI screen + 1 benefit line overlay
 // ═══════════════════════════════════════════════
-const SceneProduct: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneProduct: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // Headline punch_in
   const headScale = interpolate(frame, [0, 12], [0.95, 1], {
     extrapolateRight: "clamp",
@@ -339,9 +331,7 @@ const SceneProduct: React.FC<{ frame: number; fps: number }> = ({
 // Animation: rapid_stagger (stagger 3 frames, scale 1.1→1.0)
 // Demo frame burst + overlay text
 // ═══════════════════════════════════════════════
-const SceneDemo: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-}) => {
+const SceneDemo: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const demoFrames = [
     "cutmv/demo_frame_001.png",
     "cutmv/demo_frame_002.png",
@@ -459,10 +449,7 @@ const SceneDemo: React.FC<{ frame: number; fps: number }> = ({
 // Animation: bold_scale_up (scale 0.8→1.0, 12 frames)
 // Logo centered 60%, FD logo smaller beneath, CTA, settle by 0.8s
 // ═══════════════════════════════════════════════
-const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneCTA: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // Logo bold_scale_up — settles within ~12 frames (0.4s)
   const logoScale = interpolate(frame, [0, 12], [0.8, 1], {
     extrapolateRight: "clamp",
@@ -501,10 +488,7 @@ const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
           zIndex: 10,
         }}
       >
-        <Img
-          src={staticFile("cutmv/logo.png")}
-          style={{ width: "60%", objectFit: "contain" }}
-        />
+        <Img src={staticFile("cutmv/logo.png")} style={{ width: "60%", objectFit: "contain" }} />
       </div>
 
       {/* FD Logo — smaller beneath */}
@@ -575,18 +559,9 @@ export const HiggsfieldSaasProd: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {current && (
-        <current.Component
-          frame={frame - Math.floor(current.start * fps)}
-          fps={fps}
-        />
-      )}
+      {current && <current.Component frame={frame - Math.floor(current.start * fps)} fps={fps} />}
 
-      <Captions
-        segments={CAPTION_SEGMENTS}
-        safe={SAFE}
-        y={1540}
-      />
+      <Captions segments={CAPTION_SEGMENTS} safe={SAFE} y={1540} />
     </AbsoluteFill>
   );
 };

@@ -60,10 +60,7 @@ const CAPTION_SEGMENTS = [
 ];
 
 // ── Scene 1: Scroll-Stop Hook ──
-const SceneHook: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneHook: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // whip_zoom: scale from 1.3 → 1.0
   const scale = interpolate(frame, [0, 8], [1.3, 1], {
     extrapolateRight: "clamp",
@@ -103,10 +100,7 @@ const SceneHook: React.FC<{ frame: number; fps: number }> = ({
 };
 
 // ── Scene 2: Demo Frames Showcase ──
-const SceneDemo: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneDemo: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const frames = [
     "cutmv/demo_frame_001.png",
     "cutmv/demo_frame_002.png",
@@ -190,10 +184,7 @@ const SceneDemo: React.FC<{ frame: number; fps: number }> = ({
 };
 
 // ── Scene 3: Feature Callouts ──
-const SceneFeatures: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneFeatures: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const features = [
     "CLIPS FROM ANY VIDEO",
     "GIF EXPORTS IN 1 TAP",
@@ -225,12 +216,10 @@ const SceneFeatures: React.FC<{ frame: number; fps: number }> = ({
         });
 
         // Green underline draw
-        const underlineW = interpolate(
-          staggerFrame,
-          [4, 14],
-          [0, 100],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
-        );
+        const underlineW = interpolate(staggerFrame, [4, 14], [0, 100], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        });
 
         return (
           <div
@@ -272,10 +261,7 @@ const SceneFeatures: React.FC<{ frame: number; fps: number }> = ({
 };
 
 // ── Scene 4: Logo + CTA ──
-const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneCTA: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   // hard_snap entrance
   const scale = interpolate(frame, [0, 9], [0.85, 1], {
     extrapolateRight: "clamp",
@@ -308,10 +294,7 @@ const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
           zIndex: 10,
         }}
       >
-        <Img
-          src={staticFile("cutmv/logo.png")}
-          style={{ width: "60%", objectFit: "contain" }}
-        />
+        <Img src={staticFile("cutmv/logo.png")} style={{ width: "60%", objectFit: "contain" }} />
       </div>
 
       <div
@@ -359,18 +342,9 @@ export const MixedMediaScribble: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {current && (
-        <current.Component
-          frame={frame - Math.floor(current.start * fps)}
-          fps={fps}
-        />
-      )}
+      {current && <current.Component frame={frame - Math.floor(current.start * fps)} fps={fps} />}
 
-      <Captions
-        segments={CAPTION_SEGMENTS}
-        safe={SAFE}
-        y={1540}
-      />
+      <Captions segments={CAPTION_SEGMENTS} safe={SAFE} y={1540} />
     </AbsoluteFill>
   );
 };

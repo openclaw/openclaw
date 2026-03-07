@@ -63,10 +63,7 @@ const CAPTION_SEGMENTS = [
 ];
 
 // ── Scene 1: Hook ──
-const SceneHook: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneHook: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   const enter = spring({
     fps,
     frame,
@@ -106,10 +103,7 @@ const SceneHook: React.FC<{ frame: number; fps: number }> = ({
 };
 
 // ── Scene 2: Problem ──
-const SceneProblem: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneProblem: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   const localFrame = frame;
   const slideX = interpolate(localFrame, [0, 7], [26, 0], {
     extrapolateRight: "clamp",
@@ -150,10 +144,7 @@ const SceneProblem: React.FC<{ frame: number; fps: number }> = ({
 };
 
 // ── Scene 3: Solution + UI ──
-const SceneSolution: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneSolution: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   const enter = spring({
     fps,
     frame,
@@ -228,10 +219,7 @@ const SceneSolution: React.FC<{ frame: number; fps: number }> = ({
 };
 
 // ── Scene 4: Logo + CTA ──
-const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneCTA: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   const enter = spring({
     fps,
     frame,
@@ -264,10 +252,7 @@ const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
           transform: `scale(${scale})`,
         }}
       >
-        <Img
-          src={staticFile("cutmv/logo.png")}
-          style={{ width: "60%", objectFit: "contain" }}
-        />
+        <Img src={staticFile("cutmv/logo.png")} style={{ width: "60%", objectFit: "contain" }} />
       </div>
 
       {/* CTA */}
@@ -316,18 +301,9 @@ export const HormoziEducation: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {current && (
-        <current.Component
-          frame={frame - Math.floor(current.start * fps)}
-          fps={fps}
-        />
-      )}
+      {current && <current.Component frame={frame - Math.floor(current.start * fps)} fps={fps} />}
 
-      <Captions
-        segments={CAPTION_SEGMENTS}
-        safe={SAFE}
-        y={1540}
-      />
+      <Captions segments={CAPTION_SEGMENTS} safe={SAFE} y={1540} />
     </AbsoluteFill>
   );
 };

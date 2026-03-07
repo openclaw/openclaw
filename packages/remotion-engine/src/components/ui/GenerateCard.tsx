@@ -9,6 +9,7 @@
  *   - White card with subtle shadow, tiltable
  */
 
+/* eslint-disable @remotion/non-pure-animation -- CSS transitions are intentional for studio preview polish */
 import React from "react";
 
 const GREEN = "#94F33F";
@@ -24,10 +25,7 @@ interface GenerateCardProps {
 }
 
 // ── Toggle Switch ──
-const ToggleSwitch: React.FC<{ on: boolean; glow?: number }> = ({
-  on,
-  glow = 0,
-}) => (
+const ToggleSwitch: React.FC<{ on: boolean; glow?: number }> = ({ on, glow = 0 }) => (
   <div
     style={{
       width: 48,

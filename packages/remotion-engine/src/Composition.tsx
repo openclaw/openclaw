@@ -1,7 +1,7 @@
-import { useCurrentFrame, useVideoConfig, interpolate, spring } from "remotion";
 import React from "react";
+import { useCurrentFrame, useVideoConfig, interpolate, spring } from "remotion";
 
-const Cat: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
+const Cat: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // Body bounce
   const bounce = interpolate(Math.sin(frame * 0.3), [-1, 1], [-15, 15]);
   // Side sway
@@ -12,23 +12,11 @@ const Cat: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   // Arm wave (left)
   const leftArmAngle = interpolate(Math.sin(frame * 0.4), [-1, 1], [-45, 30]);
   // Arm wave (right) — offset phase
-  const rightArmAngle = interpolate(
-    Math.sin(frame * 0.4 + Math.PI),
-    [-1, 1],
-    [-45, 30],
-  );
+  const rightArmAngle = interpolate(Math.sin(frame * 0.4 + Math.PI), [-1, 1], [-45, 30]);
 
   // Leg kick
-  const leftLegAngle = interpolate(
-    Math.sin(frame * 0.35),
-    [-1, 1],
-    [-15, 15],
-  );
-  const rightLegAngle = interpolate(
-    Math.sin(frame * 0.35 + Math.PI),
-    [-1, 1],
-    [-15, 15],
-  );
+  const leftLegAngle = interpolate(Math.sin(frame * 0.35), [-1, 1], [-15, 15]);
+  const rightLegAngle = interpolate(Math.sin(frame * 0.35 + Math.PI), [-1, 1], [-15, 15]);
 
   // Tail wag
   const tailWag = interpolate(Math.sin(frame * 0.5), [-1, 1], [-30, 30]);
@@ -41,9 +29,7 @@ const Cat: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   const earWiggle = interpolate(Math.sin(frame * 0.6), [-1, 1], [-5, 5]);
 
   return (
-    <g
-      transform={`translate(${640 + sway}, ${330 + bounce}) rotate(${tilt})`}
-    >
+    <g transform={`translate(${640 + sway}, ${330 + bounce}) rotate(${tilt})`}>
       {/* Tail */}
       <g transform={`translate(-55, 30) rotate(${tailWag}, 0, 0)`}>
         <path
@@ -57,27 +43,13 @@ const Cat: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
 
       {/* Left leg */}
       <g transform={`translate(-30, 70) rotate(${leftLegAngle}, 0, 0)`}>
-        <rect
-          x="-8"
-          y="0"
-          width="16"
-          height="50"
-          rx="8"
-          fill="#FF8C42"
-        />
+        <rect x="-8" y="0" width="16" height="50" rx="8" fill="#FF8C42" />
         <ellipse cx="0" cy="50" rx="12" ry="8" fill="#E07030" />
       </g>
 
       {/* Right leg */}
       <g transform={`translate(30, 70) rotate(${rightLegAngle}, 0, 0)`}>
-        <rect
-          x="-8"
-          y="0"
-          width="16"
-          height="50"
-          rx="8"
-          fill="#FF8C42"
-        />
+        <rect x="-8" y="0" width="16" height="50" rx="8" fill="#FF8C42" />
         <ellipse cx="0" cy="50" rx="12" ry="8" fill="#E07030" />
       </g>
 
@@ -88,27 +60,13 @@ const Cat: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
 
       {/* Left arm */}
       <g transform={`translate(-50, 0) rotate(${leftArmAngle}, 8, 0)`}>
-        <rect
-          x="0"
-          y="0"
-          width="16"
-          height="45"
-          rx="8"
-          fill="#FF8C42"
-        />
+        <rect x="0" y="0" width="16" height="45" rx="8" fill="#FF8C42" />
         <ellipse cx="8" cy="45" rx="10" ry="7" fill="#E07030" />
       </g>
 
       {/* Right arm */}
       <g transform={`translate(34, 0) rotate(${rightArmAngle}, 8, 0)`}>
-        <rect
-          x="0"
-          y="0"
-          width="16"
-          height="45"
-          rx="8"
-          fill="#FF8C42"
-        />
+        <rect x="0" y="0" width="16" height="45" rx="8" fill="#FF8C42" />
         <ellipse cx="8" cy="45" rx="10" ry="7" fill="#E07030" />
       </g>
 
@@ -148,62 +106,15 @@ const Cat: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
         <polygon points="0,5 -4,9 4,9" fill="#FF6B8A" />
 
         {/* Mouth */}
-        <path
-          d="M-8,12 Q0,20 8,12"
-          stroke="#2D2D2D"
-          strokeWidth="2"
-          fill="none"
-        />
+        <path d="M-8,12 Q0,20 8,12" stroke="#2D2D2D" strokeWidth="2" fill="none" />
 
         {/* Whiskers */}
-        <line
-          x1="-15"
-          y1="10"
-          x2="-45"
-          y2="5"
-          stroke="#2D2D2D"
-          strokeWidth="1.5"
-        />
-        <line
-          x1="-15"
-          y1="14"
-          x2="-45"
-          y2="14"
-          stroke="#2D2D2D"
-          strokeWidth="1.5"
-        />
-        <line
-          x1="-15"
-          y1="18"
-          x2="-45"
-          y2="23"
-          stroke="#2D2D2D"
-          strokeWidth="1.5"
-        />
-        <line
-          x1="15"
-          y1="10"
-          x2="45"
-          y2="5"
-          stroke="#2D2D2D"
-          strokeWidth="1.5"
-        />
-        <line
-          x1="15"
-          y1="14"
-          x2="45"
-          y2="14"
-          stroke="#2D2D2D"
-          strokeWidth="1.5"
-        />
-        <line
-          x1="15"
-          y1="18"
-          x2="45"
-          y2="23"
-          stroke="#2D2D2D"
-          strokeWidth="1.5"
-        />
+        <line x1="-15" y1="10" x2="-45" y2="5" stroke="#2D2D2D" strokeWidth="1.5" />
+        <line x1="-15" y1="14" x2="-45" y2="14" stroke="#2D2D2D" strokeWidth="1.5" />
+        <line x1="-15" y1="18" x2="-45" y2="23" stroke="#2D2D2D" strokeWidth="1.5" />
+        <line x1="15" y1="10" x2="45" y2="5" stroke="#2D2D2D" strokeWidth="1.5" />
+        <line x1="15" y1="14" x2="45" y2="14" stroke="#2D2D2D" strokeWidth="1.5" />
+        <line x1="15" y1="18" x2="45" y2="23" stroke="#2D2D2D" strokeWidth="1.5" />
       </g>
     </g>
   );
@@ -253,11 +164,7 @@ const DiscoBall: React.FC<{ frame: number }> = ({ frame }) => {
         cy={80 + Math.sin(angle) * dist}
         r={3}
         fill="white"
-        opacity={interpolate(
-          Math.sin(frame * 0.3 + i),
-          [-1, 1],
-          [0.2, 1],
-        )}
+        opacity={interpolate(Math.sin(frame * 0.3 + i), [-1, 1], [0.2, 1])}
       />,
     );
   }
@@ -265,14 +172,7 @@ const DiscoBall: React.FC<{ frame: number }> = ({ frame }) => {
   return (
     <g>
       {/* String */}
-      <line
-        x1={640 + swingX}
-        y1={0}
-        x2={640 + swingX}
-        y2={55}
-        stroke="#888"
-        strokeWidth="2"
-      />
+      <line x1={640 + swingX} y1={0} x2={640 + swingX} y2={55} stroke="#888" strokeWidth="2" />
       {/* Ball */}
       <circle
         cx={640 + swingX}
@@ -308,16 +208,8 @@ const MusicNotes: React.FC<{ frame: number }> = ({ frame }) => {
       {notes.map((note, i) => {
         const x = 200 + i * 250;
         const baseY = 300;
-        const yOffset = interpolate(
-          (frame + i * 20) % 60,
-          [0, 60],
-          [0, -150],
-        );
-        const opacity = interpolate(
-          (frame + i * 20) % 60,
-          [0, 40, 60],
-          [1, 1, 0],
-        );
+        const yOffset = interpolate((frame + i * 20) % 60, [0, 60], [0, -150]);
+        const opacity = interpolate((frame + i * 20) % 60, [0, 40, 60], [1, 1, 0]);
         const xWobble = Math.sin((frame + i * 15) * 0.1) * 20;
 
         return (
@@ -340,16 +232,8 @@ const MusicNotes: React.FC<{ frame: number }> = ({ frame }) => {
 };
 
 const SpotLights: React.FC<{ frame: number }> = ({ frame }) => {
-  const leftAngle = interpolate(
-    Math.sin(frame * 0.1),
-    [-1, 1],
-    [-20, 20],
-  );
-  const rightAngle = interpolate(
-    Math.sin(frame * 0.1 + 2),
-    [-1, 1],
-    [-20, 20],
-  );
+  const leftAngle = interpolate(Math.sin(frame * 0.1), [-1, 1], [-20, 20]);
+  const rightAngle = interpolate(Math.sin(frame * 0.1 + 2), [-1, 1], [-20, 20]);
 
   return (
     <g opacity={0.15}>
@@ -378,11 +262,7 @@ export const MyComposition = () => {
   const catScale = interpolate(introProgress, [0, 1], [0, 1]);
 
   // Background color pulse
-  const bgLightness = interpolate(
-    Math.sin(frame * 0.1),
-    [-1, 1],
-    [8, 18],
-  );
+  const bgLightness = interpolate(Math.sin(frame * 0.1), [-1, 1], [8, 18]);
 
   // Title
   const titleOpacity = interpolate(frame, [0, 15, 45, 60], [0, 1, 1, 0], {
@@ -401,24 +281,15 @@ export const MyComposition = () => {
         position: "relative",
       }}
     >
-      <svg
-        viewBox="0 0 1280 720"
-        style={{ width: "100%", height: "100%", display: "block" }}
-      >
+      <svg viewBox="0 0 1280 720" style={{ width: "100%", height: "100%", display: "block" }}>
         <defs>
           <radialGradient id="discoBallGradient" cx="40%" cy="35%">
             <stop offset="0%" stopColor="#eee" />
             <stop offset="100%" stopColor="#888" />
           </radialGradient>
           <radialGradient id="bgGlow" cx="50%" cy="50%">
-            <stop
-              offset="0%"
-              stopColor={`hsl(270, 50%, ${bgLightness + 10}%)`}
-            />
-            <stop
-              offset="100%"
-              stopColor={`hsl(270, 60%, ${bgLightness}%)`}
-            />
+            <stop offset="0%" stopColor={`hsl(270, 50%, ${bgLightness + 10}%)`} />
+            <stop offset="100%" stopColor={`hsl(270, 60%, ${bgLightness}%)`} />
           </radialGradient>
         </defs>
 

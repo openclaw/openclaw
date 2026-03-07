@@ -18,7 +18,7 @@ export const AbstractBlobNoiseEnvRenderer: React.FC<{
   width: number;
   height: number;
   green: string;
-}> = ({ env, width, height, green }) => {
+}> = ({ env, width: _width, height: _height, green }) => {
   const frame = useCurrentFrame();
 
   const grad = env.gradient ?? ["#0B0B0F", "#11131A"];
@@ -46,9 +46,7 @@ export const AbstractBlobNoiseEnvRenderer: React.FC<{
       ? 25 + 30 * (i / Math.max(1, blobCount - 1)) + Math.cos(frame * speed * 0.8 + phase) * 10
       : 25 + 30 * (i / Math.max(1, blobCount - 1));
 
-    const scale = isPulse
-      ? 1 + Math.sin(frame * 0.03 + phase) * 0.06
-      : 1;
+    const scale = isPulse ? 1 + Math.sin(frame * 0.03 + phase) * 0.06 : 1;
 
     const opacity = 0.12 + i * 0.04;
 

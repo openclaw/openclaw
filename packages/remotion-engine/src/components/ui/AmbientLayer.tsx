@@ -29,6 +29,7 @@ const GrainLayer: React.FC = () => {
         position: "absolute",
         inset: 0,
         opacity: 0.04,
+        // eslint-disable-next-line @remotion/no-background-image -- inline SVG data URI, not an external asset
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
         backgroundPosition: `${offsetX}px ${offsetY}px`,
         backgroundSize: "200px 200px",
@@ -48,11 +49,7 @@ const GreenGlow: React.FC<{
 }> = ({ x = "50%", y = "45%", size = 600, opacity = 0.12 }) => {
   const frame = useCurrentFrame();
   // Subtle breathing animation
-  const breathe = interpolate(
-    Math.sin(frame * 0.04),
-    [-1, 1],
-    [0.9, 1.1],
-  );
+  const breathe = interpolate(Math.sin(frame * 0.04), [-1, 1], [0.9, 1.1]);
 
   return (
     <div
@@ -81,8 +78,7 @@ const Vignette: React.FC = () => (
     style={{
       position: "absolute",
       inset: 0,
-      background:
-        "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%)",
+      background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%)",
       zIndex: 2,
       pointerEvents: "none",
     }}
@@ -96,12 +92,12 @@ const Particles: React.FC = () => {
 
   // 8 subtle floating dots
   const particles = Array.from({ length: 8 }, (_, i) => {
-    const baseX = 100 + (i * 137) % 880;
-    const baseY = 200 + (i * 211) % 1520;
+    const baseX = 100 + ((i * 137) % 880);
+    const baseY = 200 + ((i * 211) % 1520);
     const speed = 0.3 + (i % 3) * 0.15;
     const size = 2 + (i % 3);
 
-    const y = baseY - (frame * speed) % 400;
+    const y = baseY - ((frame * speed) % 400);
     const x = baseX + Math.sin(frame * 0.02 + i) * 20;
     const opacity = interpolate(
       y,

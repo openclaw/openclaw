@@ -87,10 +87,7 @@ const CAPTION_SEGMENTS = [
 // Camera push-in: slow scale 1.0→1.04
 // Green words animate with underline reveal
 // ═══════════════════════════════════════════════
-const SceneHook: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneHook: React.FC<{ frame: number; fps: number }> = ({ frame }) => {
   // Slow camera push-in
   const pushIn = interpolate(frame, [0, 60], [1.0, 1.04], {
     extrapolateRight: "clamp",
@@ -185,10 +182,7 @@ const SceneHook: React.FC<{ frame: number; fps: number }> = ({
 // Floating GenerateCard (tilted, glow pulse)
 // Ref: frames 1677, 1733
 // ═══════════════════════════════════════════════
-const SceneUIRecreation: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneUIRecreation: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   // ── ConfigureOutputCard entrance — slide up + scale ──
   const cardEnter = spring({
     fps,
@@ -214,11 +208,7 @@ const SceneUIRecreation: React.FC<{ frame: number; fps: number }> = ({
   const gcOpacity = interpolate(gcEnter, [0, 1], [0, 1]);
 
   // Toggle glow pulse
-  const glowPulse = interpolate(
-    Math.sin(frame * 0.08),
-    [-1, 1],
-    [0.3, 1],
-  );
+  const glowPulse = interpolate(Math.sin(frame * 0.08), [-1, 1], [0.3, 1]);
 
   // ── Headline fade ──
   const headOpacity = interpolate(frame, [0, 12], [0, 1], {
@@ -335,10 +325,7 @@ const SceneUIRecreation: React.FC<{ frame: number; fps: number }> = ({
 // 3D layered card stack with depth + rim light + green glow
 // Ref: frames 1752, 1823
 // ═══════════════════════════════════════════════
-const SceneCardStack: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneCardStack: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   const cards = [
     {
       title: "Generate Professional\nSpotify Canvas",
@@ -486,10 +473,7 @@ const SceneCardStack: React.FC<{ frame: number; fps: number }> = ({
 // Logo centered + "MORE CONTENT. LESS WORK."
 // Ref: frames 1854, 1863
 // ═══════════════════════════════════════════════
-const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
-}) => {
+const SceneCTA: React.FC<{ frame: number; fps: number }> = ({ frame, fps }) => {
   // Green gradient flood entrance
   const floodOpacity = interpolate(frame, [0, 18], [0, 1], {
     extrapolateRight: "clamp",
@@ -520,8 +504,7 @@ const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
         style={{
           position: "absolute",
           inset: 0,
-          background:
-            "linear-gradient(180deg, #0d4a00 0%, #1a6b00 40%, #2d8a0e 70%, #4aaf1a 100%)",
+          background: "linear-gradient(180deg, #0d4a00 0%, #1a6b00 40%, #2d8a0e 70%, #4aaf1a 100%)",
           opacity: floodOpacity,
           zIndex: 3,
         }}
@@ -542,10 +525,7 @@ const SceneCTA: React.FC<{ frame: number; fps: number }> = ({
           zIndex: 10,
         }}
       >
-        <Img
-          src={staticFile("cutmv/logo.png")}
-          style={{ width: "60%", objectFit: "contain" }}
-        />
+        <Img src={staticFile("cutmv/logo.png")} style={{ width: "60%", objectFit: "contain" }} />
       </div>
 
       {/* "MORE CONTENT. LESS WORK." */}
@@ -649,19 +629,10 @@ export const CutmvPremiumAdV5: React.FC = () => {
       )}
 
       {/* Active scene */}
-      {current && (
-        <current.Component
-          frame={frame - Math.floor(current.start * fps)}
-          fps={fps}
-        />
-      )}
+      {current && <current.Component frame={frame - Math.floor(current.start * fps)} fps={fps} />}
 
       {/* Captions — always on top */}
-      <Captions
-        segments={CAPTION_SEGMENTS}
-        safe={SAFE}
-        y={1540}
-      />
+      <Captions segments={CAPTION_SEGMENTS} safe={SAFE} y={1540} />
     </AbsoluteFill>
   );
 };
