@@ -281,7 +281,7 @@ export function buildAgentSystemPrompt(params: {
     "ls",
     "exec",
     "process",
-    "web_search",
+    "oc_web_search",
     "web_fetch",
     "browser",
     "canvas",

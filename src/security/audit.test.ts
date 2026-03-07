@@ -951,7 +951,7 @@ description: test skill
           browser: { enabled: true },
         },
         expectedSeverity: "critical",
-        detailIncludes: ["mistral-8b", "web_search", "web_fetch", "browser"],
+        detailIncludes: ["mistral-8b", "oc_web_search", "web_fetch", "browser"],
       },
       {
         name: "small model with sandbox all and web/browser disabled",

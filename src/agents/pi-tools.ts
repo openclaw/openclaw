@@ -66,7 +66,7 @@ function isOpenAIProvider(provider?: string) {
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
-const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["web_search"]);
+const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["oc_web_search"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();

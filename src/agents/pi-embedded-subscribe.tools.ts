@@ -156,7 +156,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "subagents",
   "tts",
   "web_fetch",
-  "web_search",
+  "oc_web_search",
   "write",
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;

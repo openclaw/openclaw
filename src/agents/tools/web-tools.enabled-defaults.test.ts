@@ -136,7 +136,7 @@ describe("web tools defaults", () => {
 
   it("enables web_search by default", () => {
     const tool = createWebSearchTool({ config: {}, sandboxed: false });
-    expect(tool?.name).toBe("web_search");
+    expect(tool?.name).toBe("oc_web_search");
   });
 });
 
@@ -282,7 +282,7 @@ describe("web_search perplexity Search API", () => {
     expect(body.query).toBe("test");
     expect(result?.details).toMatchObject({
       provider: "perplexity",
-      externalContent: { untrusted: true, source: "web_search", wrapped: true },
+      externalContent: { untrusted: true, source: "oc_web_search", wrapped: true },
       results: expect.arrayContaining([
         expect.objectContaining({
           title: expect.stringContaining("Test"),
@@ -540,7 +540,7 @@ describe("web_search external content wrapping", () => {
     expect(details.results?.[0]?.description).toContain("Ignore previous instructions");
     expect(details.externalContent).toMatchObject({
       untrusted: true,
-      source: "web_search",
+      source: "oc_web_search",
       wrapped: true,
     });
   });

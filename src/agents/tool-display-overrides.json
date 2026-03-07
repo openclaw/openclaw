@@ -82,7 +82,7 @@
       "title": "Memory Get",
       "detailKeys": ["path", "from", "lines"]
     },
-    "web_search": {
+    "oc_web_search": {
       "emoji": "🔎",
       "title": "Web Search",
       "detailKeys": ["query", "count"]

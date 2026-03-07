@@ -21,7 +21,7 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
-const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
+const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "oc_web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
 const READ_TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
 const TOOL_NAME_MAX_LENGTH = 128;
@@ -29,7 +29,7 @@ const TOOL_NAME_PATTERN = /^[a-z0-9._-]+$/;
 const TOOL_KIND_BY_ID = new Map<string, string>([
   ["read", "read"],
   ["search", "search"],
-  ["web_search", "search"],
+  ["oc_web_search", "search"],
   ["memory_search", "search"],
 ]);
 

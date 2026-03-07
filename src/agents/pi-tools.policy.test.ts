@@ -22,7 +22,7 @@ describe("pi-tools.policy", () => {
 
   it("supports wildcard allow/deny patterns", () => {
     expect(isToolAllowedByPolicyName("web_fetch", { allow: ["web_*"] })).toBe(true);
-    expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
+    expect(isToolAllowedByPolicyName("oc_web_search", { deny: ["web_*"] })).toBe(false);
   });
 
   it("keeps apply_patch when exec is allowlisted", () => {

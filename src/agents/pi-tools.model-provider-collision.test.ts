@@ -4,7 +4,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 
 const baseTools = [
   { name: "read" },
-  { name: "web_search" },
+  { name: "oc_web_search" },
   { name: "exec" },
 ] as unknown as AnyAgentTool[];
 
@@ -19,7 +19,7 @@ describe("applyModelProviderToolPolicy", () => {
       modelId: "gpt-4o-mini",
     });
 
-    expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "oc_web_search", "exec"]);
   });
 
   it("removes web_search for OpenRouter xAI model ids", () => {

@@ -79,7 +79,7 @@ export const CODING_TOOL_TOKENS: string[] = [
 ];
 
 export const WEB_TOOL_TOKENS: string[] = [
-  "web_search",
+  "oc_web_search",
   "web-search",
   "web_fetch",
   "web-fetch",

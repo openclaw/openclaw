@@ -1224,8 +1224,8 @@ export function collectSmallModelRiskFindings(params: {
     });
     const exposed: string[] = [];
     if (isWebSearchEnabled(params.cfg, params.env)) {
-      if (isToolAllowedByPolicies("web_search", policies)) {
-        exposed.push("web_search");
+      if (isToolAllowedByPolicies("oc_web_search", policies)) {
+        exposed.push("oc_web_search");
       }
     }
     if (isWebFetchEnabled(params.cfg)) {

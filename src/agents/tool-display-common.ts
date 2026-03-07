@@ -1170,7 +1170,7 @@ export function resolveToolVerbAndDetail(params: {
 }): { verb?: string; detail?: string } {
   const actionSpec = resolveActionSpec(params.spec, params.action);
   const fallbackVerb =
-    params.toolKey === "web_search"
+    params.toolKey === "oc_web_search"
       ? "search"
       : params.toolKey === "web_fetch"
         ? "fetch"
@@ -1190,7 +1190,7 @@ export function resolveToolVerbAndDetail(params: {
   ) {
     detail = resolveWriteDetail(params.toolKey, params.args);
   }
-  if (!detail && params.toolKey === "web_search") {
+  if (!detail && params.toolKey === "oc_web_search") {
     detail = resolveWebSearchDetail(params.args);
   }
   if (!detail && params.toolKey === "web_fetch") {

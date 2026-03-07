@@ -80,7 +80,7 @@ describe("tool display details", () => {
   it("formats web_search query with quotes", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
-        name: "web_search",
+        name: "oc_web_search",
         args: { query: "OpenClaw docs", count: 3 },
       }),
     );

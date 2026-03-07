@@ -87,7 +87,7 @@ export type ExternalContentSource =
   | "api"
   | "browser"
   | "channel_metadata"
-  | "web_search"
+  | "oc_web_search"
   | "web_fetch"
   | "unknown";
 
@@ -333,7 +333,7 @@ export function getHookType(sessionKey: string): ExternalContentSource {
  */
 export function wrapWebContent(
   content: string,
-  source: "web_search" | "web_fetch" = "web_search",
+  source: "oc_web_search" | "web_fetch" = "oc_web_search",
 ): string {
   const includeWarning = source === "web_fetch";
   // Marker sanitization happens in wrapExternalContent

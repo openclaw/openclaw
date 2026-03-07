@@ -994,9 +994,9 @@ async function runPerplexitySearchApi(params: {
         const url = entry.url ?? "";
         const snippet = entry.snippet ?? "";
         return {
-          title: title ? wrapWebContent(title, "web_search") : "",
+          title: title ? wrapWebContent(title, "oc_web_search") : "",
           url,
-          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          description: snippet ? wrapWebContent(snippet, "oc_web_search") : "",
           published: entry.date ?? undefined,
           siteName: resolveSiteName(url) || undefined,
         };
@@ -1024,7 +1024,7 @@ async function runGrokSearch(params: {
         content: params.query,
       },
     ],
-    tools: [{ type: "web_search" }],
+    tools: [{ type: "oc_web_search" }],
   };
 
   // Note: xAI's /v1/responses endpoint does not support the `include`
@@ -1277,7 +1277,7 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       externalContent: {
         untrusted: true,
-        source: "web_search",
+        source: "oc_web_search",
         provider: params.provider,
         wrapped: true,
       },
@@ -1303,7 +1303,7 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       externalContent: {
         untrusted: true,
-        source: "web_search",
+        source: "oc_web_search",
         provider: params.provider,
         wrapped: true,
       },
@@ -1331,7 +1331,7 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       externalContent: {
         untrusted: true,
-        source: "web_search",
+        source: "oc_web_search",
         provider: params.provider,
         wrapped: true,
       },
@@ -1357,7 +1357,7 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start, // Includes redirect URL resolution time
       externalContent: {
         untrusted: true,
-        source: "web_search",
+        source: "oc_web_search",
         provider: params.provider,
         wrapped: true,
       },
@@ -1424,9 +1424,9 @@ async function runWebSearch(params: {
         const url = entry.url ?? "";
         const rawSiteName = resolveSiteName(url);
         return {
-          title: title ? wrapWebContent(title, "web_search") : "",
+          title: title ? wrapWebContent(title, "oc_web_search") : "",
           url, // Keep raw for tool chaining
-          description: description ? wrapWebContent(description, "web_search") : "",
+          description: description ? wrapWebContent(description, "oc_web_search") : "",
           published: entry.age || undefined,
           siteName: rawSiteName || undefined,
         };
@@ -1441,7 +1441,7 @@ async function runWebSearch(params: {
     tookMs: Date.now() - start,
     externalContent: {
       untrusted: true,
-      source: "web_search",
+      source: "oc_web_search",
       provider: params.provider,
       wrapped: true,
     },
