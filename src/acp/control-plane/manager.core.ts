@@ -518,6 +518,7 @@ export class AcpSessionManager {
       const { runtime, handle, meta } = await this.ensureRuntimeHandle({
         cfg: params.cfg,
         sessionKey,
+        storeSessionKey: resolution.storeSessionKey,
         meta: resolution.meta,
       });
       const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);

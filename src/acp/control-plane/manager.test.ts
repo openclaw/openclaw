@@ -1035,6 +1035,89 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("preserves legacy store keys when updating config options", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:helper:desk",
+      backend: "acpx",
+      runtimeSessionName: "canonical-helper-runtime",
+    });
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      agent: "helper",
+      runtimeSessionName: "legacy-helper-main",
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        return null;
+      }
+      return {
+        sessionKey: "agent:helper:desk",
+        storeSessionKey: "agent:helper:main",
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey?: string;
+        rawSessionKey?: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        throw new Error("expected config-option writes to preserve the legacy helper alias");
+      }
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-helper-main",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "desk" },
+      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+    } as OpenClawConfig;
+
+    await manager.setSessionConfigOption({
+      cfg,
+      sessionKey: "agent:helper:main",
+      key: "model",
+      value: "openai/gpt-5.3-codex",
+    });
+
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(
+      hoisted.upsertAcpSessionMetaMock.mock.calls.every(
+        ([firstArg]) =>
+          (firstArg as { rawSessionKey?: string }).rawSessionKey === "agent:helper:main",
+      ),
+    ).toBe(true);
+  });
+
   it("reapplies persisted controls on next turn after runtime option updates", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
