@@ -3,9 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import { resolveAccountWithDefaultFallback } from "../plugin-sdk/account-resolution.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import {
+  mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccountConfig,
+} from "./accounts.js";
 
 export type TelegramCredentialStatus = "available" | "configured_unavailable" | "missing";
 
@@ -19,31 +22,6 @@ export type InspectedTelegramAccount = {
   configured: boolean;
   config: TelegramAccountConfig;
 };
-
-function resolveTelegramAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): TelegramAccountConfig | undefined {
-  const normalized = normalizeAccountId(accountId);
-  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
-}
-
-function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    groups: channelGroups,
-    ...base
-  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
-  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
-  const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
-  return { ...base, ...account, groups };
-}
 
 function inspectTokenFile(pathValue: unknown): {
   token: string;
