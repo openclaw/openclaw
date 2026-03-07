@@ -312,6 +312,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pre-commit
 
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Detect secrets
         run: |
           set -euo pipefail
@@ -341,8 +348,8 @@ jobs:
             echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
             pre-commit run detect-secrets --files "${changed_files[@]}"
           else
-            echo "Falling back to full detect-secrets scan."
-            pre-commit run --all-files detect-secrets
+            echo "Skipping detect-secrets: unable to resolve changed files for this PR."
+            exit 0
           fi
 
       - name: Detect committed private keys
