@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **ClawNexus** — Finds OpenClaw instances on your network and gives them names. Runs as a daemon alongside OpenClaw, no config changes needed.
+  npm: `clawnexus`
+  repo: `https://github.com/SilverstreamsAI/ClawNexus`
+  install: `npm install -g clawnexus`
