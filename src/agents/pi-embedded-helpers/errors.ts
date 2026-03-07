@@ -885,9 +885,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
   }
-  if (isBillingErrorMessage(raw)) {
-    return "billing";
-  }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
   }
