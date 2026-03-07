@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   buildBaseAccountStatusSnapshot,
@@ -179,7 +180,13 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         return [];
       }
       return [
-        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,
+        buildOpenGroupPolicyRestrictSendersWarning({
+          surface: "Signal groups",
+          openScope: "any member",
+          groupPolicyPath: "channels.signal.groupPolicy",
+          groupAllowFromPath: "channels.signal.groupAllowFrom",
+          mentionGated: false,
+        }),
       ];
     },
   },
