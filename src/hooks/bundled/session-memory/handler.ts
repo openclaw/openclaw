@@ -317,10 +317,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
+    // If no slug, use timestamp with a random suffix to avoid collisions.
+    // Second-resolution (HHMMSS) alone can collide when automated or
+    // multi-channel setups emit rapid /new or /reset commands within the
+    // same second — both writes target the same filename and the later
+    // one silently overwrites the earlier memory entry.
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 6); // HHMMSS — seconds prevent same-minute overwrites
+      const rand = Math.random().toString(36).slice(2, 6); // 4-char alphanumeric
+      slug = `${timeSlug.slice(0, 6)}-${rand}`;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
