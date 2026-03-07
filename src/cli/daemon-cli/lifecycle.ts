@@ -79,10 +79,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   return await runServiceRestart({
     serviceNoun: "Gateway",
     service,
+    restartPort,
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    postRestartCheck: async ({ warnings, fail, stdout }) => {
+    postRestartCheck: async ({ warnings, fail, stdout, restartPort: postRestartPort }) => {
       let health = await waitForGatewayHealthyRestart({
         service,
         port: restartPort,
@@ -91,7 +92,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
-      if (!health.healthy && health.staleGatewayPids.length > 0) {
+      // On Windows, skip stale retry: schtasks status is delayed so the new process
+      // is often misclassified as "stale", leading to a second restart and EADDRINUSE.
+      if (
+        !health.healthy &&
+        health.staleGatewayPids.length > 0 &&
+        process.platform !== "win32"
+      ) {
         const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
         warnings.push(staleMsg);
         if (!json) {
@@ -100,7 +107,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
-        await service.restart({ env: process.env, stdout });
+        await service.restart({ env: process.env, stdout, port: postRestartPort });
         health = await waitForGatewayHealthyRestart({
           service,
           port: restartPort,

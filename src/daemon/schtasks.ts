@@ -6,7 +6,8 @@ import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from 
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-import { execSchtasks } from "./schtasks-exec.js";
+import { DEFAULT_GATEWAY_PORT, resolveGatewayPort } from "../../config/paths.js";
+import { execSchtasks, waitForGatewayPortFreeWindows } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -313,10 +314,16 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 export async function restartScheduledTask({
   stdout,
   env,
+  port,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
   await execSchtasks(["/End", "/TN", taskName]);
+
+  const gatewayPort =
+    port ?? resolveGatewayPort(undefined, env ?? process.env) ?? DEFAULT_GATEWAY_PORT;
+  await waitForGatewayPortFreeWindows(gatewayPort);
+
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());

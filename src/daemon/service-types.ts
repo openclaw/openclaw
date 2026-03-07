@@ -17,6 +17,7 @@ export type GatewayServiceManageArgs = {
 export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  port?: number;
 };
 
 export type GatewayServiceEnvArgs = {
