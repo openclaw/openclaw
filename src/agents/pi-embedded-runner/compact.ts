@@ -271,8 +271,23 @@ export async function compactEmbeddedPiSessionDirect(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
-  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  // Resolve compaction model: prefer config override, then fall back to caller-supplied model
+  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model;
+  let provider: string;
+  let modelId: string;
+  if (compactionModelOverride) {
+    const slashIdx = compactionModelOverride.indexOf("/");
+    if (slashIdx > 0) {
+      provider = compactionModelOverride.slice(0, slashIdx);
+      modelId = compactionModelOverride.slice(slashIdx + 1);
+    } else {
+      provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      modelId = compactionModelOverride;
+    }
+  } else {
+    provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+    modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  }
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +

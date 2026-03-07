@@ -667,7 +667,7 @@ describe("buildAfterTurnLegacyCompactionParams", () => {
     });
   });
 
-  it("uses compaction.model override when set, splitting provider from model id", () => {
+  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
     const legacy = buildAfterTurnLegacyCompactionParams({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -697,9 +697,11 @@ describe("buildAfterTurnLegacyCompactionParams", () => {
       agentDir: "/tmp/agent",
     });
 
+    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
+    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
     expect(legacy).toMatchObject({
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-5",
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
     });
   });
 
