@@ -583,6 +583,8 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    lancedbPluginMemoryContext:
+      promptBuildResult?.lancedbPluginMemoryContext ?? legacyResult?.lancedbPluginMemoryContext,
   };
 }
 
@@ -1080,6 +1082,22 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
+
+      // Mutable ref for injecting plugin memory context into the *next* user message
+      // that gets persisted to the session transcript. This is set by the
+      // before_prompt_build hook result and consumed by the appendMessage wrapper below.
+      let pendingPluginMemoryContext: { prependTag: string; stripRegex: string } | undefined;
+      {
+        const innerAppend = sessionManager.appendMessage.bind(sessionManager);
+        sessionManager.appendMessage = ((msg: unknown) => {
+          const message = msg as Record<string, unknown>;
+          if (pendingPluginMemoryContext && message.role === "user") {
+            message.lancedbPluginMemoryContext = pendingPluginMemoryContext;
+            pendingPluginMemoryContext = undefined;
+          }
+          return innerAppend(msg as Parameters<typeof innerAppend>[0]);
+        }) as typeof sessionManager.appendMessage;
+      }
 
       if (hadSessionFile && params.contextEngine?.bootstrap) {
         try {
@@ -1636,6 +1654,13 @@ export async function runEmbeddedAttempt(
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
+        // Stage lancedbPluginMemoryContext so it gets injected into the next
+        // user message that the agent loop persists (via the appendMessage
+        // wrapper installed above). This ensures the flag lands on the *new*
+        // prompt message rather than a stale historical one.
+        if (hookResult?.lancedbPluginMemoryContext) {
+          pendingPluginMemoryContext = hookResult.lancedbPluginMemoryContext;
+        }
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;

@@ -23,7 +23,7 @@ function stripPluginMemoryContext(text: string, message: Record<string, unknown>
     try {
       const regex = new RegExp(ctx.stripRegex, "i");
       result = result.replace(regex, "").trim();
-    } catch (e) {
+    } catch {
       // Invalid regex, skip
     }
   }

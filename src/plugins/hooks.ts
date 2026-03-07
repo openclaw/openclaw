@@ -145,6 +145,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       left: acc?.prependContext,
       right: next.prependContext,
     }),
+    lancedbPluginMemoryContext: next.lancedbPluginMemoryContext ?? acc?.lancedbPluginMemoryContext,
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,

@@ -424,6 +424,13 @@ export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
   /**
+   * Memory plugin context for UI to strip injected memory tags from display.
+   */
+  lancedbPluginMemoryContext?: {
+    prependTag: string;
+    stripRegex: string;
+  };
+  /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
@@ -438,6 +445,7 @@ export type PluginHookBeforePromptBuildResult = {
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
+  "lancedbPluginMemoryContext",
   "prependSystemContext",
   "appendSystemContext",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
