@@ -69,7 +69,10 @@ const buildAccountDetails = (params: {
   if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
     details.push(`app:${snapshot.appTokenSource}`);
   }
-  if (snapshot.signingSecretSource && snapshot.signingSecretSource !== "none") {
+  if (
+    snapshot.signingSecretSource &&
+    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
+  ) {
     details.push(`signing:${snapshot.signingSecretSource}`);
   }
   if (hasConfiguredUnavailableCredentialStatus(params.entry.account)) {

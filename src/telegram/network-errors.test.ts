@@ -49,6 +49,15 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
+  it("treats grammY failed-after envelope errors as recoverable in send context", () => {
+    expect(
+      isRecoverableTelegramNetworkError(
+        new Error("Network request for 'sendMessage' failed after 2 attempts."),
+        { context: "send" },
+      ),
+    ).toBe(true);
+  });
+
   it("returns false for unrelated errors", () => {
     expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
   });
