@@ -509,12 +509,12 @@ describe("classifyFailoverReason", () => {
   it("classifies documented provider error messages", () => {
     expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");
-    expect(classifyFailoverReason(ANTHROPIC_OVERLOADED_PAYLOAD)).toBe("rate_limit");
+    expect(classifyFailoverReason(ANTHROPIC_OVERLOADED_PAYLOAD)).toBe("overloaded");
     expect(classifyFailoverReason(OPENROUTER_CREDITS_MESSAGE)).toBe("billing");
     expect(classifyFailoverReason(TOGETHER_PAYMENT_REQUIRED_MESSAGE)).toBe("billing");
-    expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("timeout");
+    expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
-    expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("timeout");
+    expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("overloaded");
   });
 
   it("classifies internal and compatibility error messages", () => {
@@ -535,6 +535,14 @@ describe("classifyFailoverReason", () => {
     ).toBe("rate_limit");
     expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
     expect(classifyFailoverReason("invalid request format")).toBe("format");
+    expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    // Billing with "limit exhausted" must stay billing, not rate_limit (avoids key-disable regression)
+    expect(
+      classifyFailoverReason("HTTP 402 payment required. Your limit exhausted for this plan."),
+    ).toBe("billing");
+    expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
+      "billing",
+    );
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
@@ -564,25 +572,40 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
-  it("classifies provider high-demand / service-unavailable messages as rate_limit", () => {
+  it("classifies provider high-demand / service-unavailable messages as overloaded", () => {
     expect(
       classifyFailoverReason(
         "This model is currently experiencing high demand. Please try again later.",
       ),
-    ).toBe("rate_limit");
-    // "service unavailable" combined with overload/capacity indicator → rate_limit
+    ).toBe("overloaded");
+    // "service unavailable" combined with overload/capacity indicator → overloaded
     // (exercises the new regex — none of the standalone patterns match here)
-    expect(classifyFailoverReason("service unavailable due to capacity limits")).toBe("rate_limit");
+    expect(classifyFailoverReason("service unavailable due to capacity limits")).toBe("overloaded");
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
-    ).toBe("rate_limit");
+    ).toBe("overloaded");
   });
   it("classifies bare 'service unavailable' as timeout instead of rate_limit (#32828)", () => {
     // A generic "service unavailable" from a proxy/CDN should stay retryable,
     // but it should not be treated as provider overload / rate limit.
     expect(classifyFailoverReason("LLM error: service unavailable")).toBe("timeout");
+    expect(classifyFailoverReason("503 Internal Database Error")).toBe("timeout");
+    // Raw 529 text without explicit overload keywords still classifies as overloaded.
+    expect(classifyFailoverReason("529 API is busy")).toBe("overloaded");
+    expect(classifyFailoverReason("529 Please try again")).toBe("overloaded");
+  });
+  it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit (#33785)", () => {
+    expect(
+      classifyFailoverReason(
+        "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)",
+      ),
+    ).toBe("rate_limit");
+    // Independent coverage for broader periodic limit patterns.
+    expect(classifyFailoverReason("LLM error: weekly/monthly limit reached")).toBe("rate_limit");
+    expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
+    expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
