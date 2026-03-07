@@ -98,32 +98,51 @@ function withLoopbackBrowserAuth(
   });
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return `${err.name}: ${err.message}`;
+  }
+  return String(err);
+}
+
+function looksLikeTimeoutError(err: unknown): boolean {
+  const msgLower = errorMessage(err).toLowerCase();
+  return (
+    msgLower.includes("timed out") ||
+    msgLower.includes("timeout") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort") ||
+    msgLower.includes("aborterror")
+  );
+}
+
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const isLocal = !isAbsoluteHttp(url);
-  // Human-facing hint for logs/diagnostics.
-  const operatorHint = isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
-    : "If this is a sandboxed session, ensure the sandbox browser is running.";
   // Model-facing suffix: explicitly tell the LLM NOT to retry.
   // Without this, models see "try again" and enter an infinite tool-call loop.
   const modelHint =
     "Do NOT retry the browser tool — it will keep failing. " +
     "Use an alternative approach or inform the user that the browser is currently unavailable.";
-  const msg = String(err);
-  const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
-  if (looksLikeTimeout) {
+
+  if (looksLikeTimeoutError(err)) {
+    if (isLocal) {
+      return new Error(
+        `Browser action timed out after ${timeoutMs}ms while the local browser control service remained reachable. Try a fresh snapshot and retry with a stable ref, or increase timeoutMs if the action is expected to take longer. ${modelHint}`,
+      );
+    }
+
     return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). If this is a sandboxed session, ensure the sandbox browser is running. ${modelHint}`,
     );
   }
+
+  // Human-facing hint for logs/diagnostics.
+  const operatorHint = isLocal
+    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
+    : "If this is a sandboxed session, ensure the sandbox browser is running.";
+
   return new Error(
-    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
+    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${errorMessage(err)})`,
   );
 }
 
