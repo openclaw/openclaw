@@ -81,6 +81,7 @@ describe("normalizeProviders", () => {
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
         openai: {
+          baseUrl: "https://api.openai.com/v1",
           apiKey: "sk-test-secret-value-12345", // simulates resolved ${OPENAI_API_KEY}
           api: "openai-completions",
           models: [
