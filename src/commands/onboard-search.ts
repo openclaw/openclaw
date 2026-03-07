@@ -115,7 +115,8 @@ function resolveSearchSecretInput(
   key: string,
   secretInputMode?: SecretInputMode,
 ): SecretInput {
-  if (secretInputMode === "ref") {
+  const useSecretRefMode = secretInputMode === "ref"; // pragma: allowlist secret
+  if (useSecretRefMode) {
     return buildSearchEnvRef(provider);
   }
   return key;
@@ -254,7 +255,8 @@ export async function setupSearch(
     return preserveDisabledState(config, result);
   }
 
-  if (opts?.secretInputMode === "ref") {
+  const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
+  if (useSecretRefMode) {
     if (keyConfigured) {
       return preserveDisabledState(config, applyProviderOnly(config, choice));
     }

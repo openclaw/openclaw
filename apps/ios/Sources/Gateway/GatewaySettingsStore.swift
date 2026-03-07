@@ -26,7 +26,7 @@ enum GatewaySettingsStore {
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
     private static let lastGatewayConnectionAccount = "lastConnection"
-    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey."
+    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
