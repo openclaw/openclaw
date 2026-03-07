@@ -162,6 +162,25 @@ describe("evaluateChannelHealth", () => {
     );
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
+
+  it("does not flag stale sockets without an active connected socket", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "slack",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {
