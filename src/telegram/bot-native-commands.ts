@@ -71,6 +71,7 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -713,8 +714,27 @@ export const registerTelegramNativeCommands = ({
             dispatcherOptions: {
               ...prefixOptions,
               deliver: async (payload, _info) => {
+                // Strip reasoning text that leaks via <think> tags (e.g. Gemini Flash).
+                // bot-message-dispatch has full lane-based reasoning handling;
+                // this simpler path just drops reasoning content.
+                let filteredPayload = payload;
+                if (typeof payload.text === "string" && payload.text.length > 0) {
+                  const split = splitTelegramReasoningText(payload.text);
+                  const hasMedia =
+                    Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+                  if (split.reasoningText && !split.answerText) {
+                    if (hasMedia) {
+                      // Reasoning-only text but has media — deliver media with empty text.
+                      filteredPayload = { ...payload, text: "" };
+                    } else {
+                      return;
+                    }
+                  } else if (split.reasoningText && split.answerText) {
+                    filteredPayload = { ...payload, text: split.answerText };
+                  }
+                }
                 const result = await deliverReplies({
-                  replies: [payload],
+                  replies: [filteredPayload],
                   ...deliveryBaseOptions,
                 });
                 if (result.delivered) {
