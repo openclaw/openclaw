@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
-import type { SkillEntry } from "./skills/types.js";
+import type { SkillEligibilityContext, SkillEntry } from "./skills/types.js";
 import { resolveSkillsPromptForRun } from "./skills/workspace.js";
 
 describe("resolveSkillsPromptForRun", () => {
@@ -199,6 +199,37 @@ describe("resolveSkillsPromptForRun", () => {
 
     expect(prompt).toContain("/workspace/skills/github/SKILL.md");
     expect(prompt).not.toContain("/workspace/skills/weather/SKILL.md");
+  });
+
+  it("preserves remote eligibility note when preferring entries", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/workspace/skills/demo-skill/SKILL.md",
+        baseDir: "/workspace/skills/demo-skill",
+        source: "workspace",
+        disableModelInvocation: false,
+      }),
+      frontmatter: {},
+    };
+    const eligibility: SkillEligibilityContext = {
+      remote: {
+        platforms: ["darwin"],
+        hasBin: () => true,
+        hasAnyBin: () => true,
+        note: "Remote macOS node available. Run macOS-only skills via nodes.run.",
+      },
+    };
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+      entries: [entry],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+      eligibility,
+    });
+    expect(prompt).toContain("Remote macOS node available");
+    expect(prompt).toContain("/workspace/skills/demo-skill/SKILL.md");
   });
 });
 

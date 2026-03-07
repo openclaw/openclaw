@@ -21,6 +21,7 @@ import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { getRemoteSkillEligibility } from "../../../infra/skills-remote.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -620,12 +621,17 @@ export async function runEmbeddedAttempt(
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
   try {
+    const remoteSkillEligibility = getRemoteSkillEligibility();
+    const skillEligibility = remoteSkillEligibility
+      ? { remote: remoteSkillEligibility }
+      : undefined;
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       agentId: sessionAgentId,
       skillsSnapshot: params.skillsSnapshot,
       forceLoadEntries: preferWorkspaceSkillsPrompt,
+      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
     });
     restoreSkillEnv =
       params.skillsSnapshot && !preferWorkspaceSkillsPrompt
@@ -645,6 +651,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
       preferEntries: preferWorkspaceSkillsPrompt,
+      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

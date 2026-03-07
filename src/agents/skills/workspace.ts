@@ -818,6 +818,7 @@ export function resolveSkillsPromptForRun(params: {
   workspaceDir: string;
   agentId?: string;
   preferEntries?: boolean;
+  eligibility?: SkillEligibilityContext;
 }): string {
   const skillFilter = params.skillsSnapshot?.skillFilter;
   if (params.preferEntries) {
@@ -826,6 +827,7 @@ export function resolveSkillsPromptForRun(params: {
       config: params.config,
       agentId: params.agentId,
       ...(skillFilter === undefined ? {} : { skillFilter }),
+      ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
     });
     return prompt.trim() ? prompt : "";
   }
@@ -839,6 +841,7 @@ export function resolveSkillsPromptForRun(params: {
       config: params.config,
       agentId: params.agentId,
       ...(skillFilter === undefined ? {} : { skillFilter }),
+      ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
     });
     return prompt.trim() ? prompt : "";
   }

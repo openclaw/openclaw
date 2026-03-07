@@ -21,6 +21,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -464,12 +465,17 @@ export async function compactEmbeddedPiSessionDirect(
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
   try {
+    const remoteSkillEligibility = getRemoteSkillEligibility();
+    const skillEligibility = remoteSkillEligibility
+      ? { remote: remoteSkillEligibility }
+      : undefined;
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       agentId: effectiveSkillAgentId,
       skillsSnapshot: params.skillsSnapshot,
       forceLoadEntries: preferWorkspaceSkillsPrompt,
+      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
     });
     restoreSkillEnv =
       params.skillsSnapshot && !preferWorkspaceSkillsPrompt
@@ -488,6 +494,7 @@ export async function compactEmbeddedPiSessionDirect(
       workspaceDir: effectiveWorkspace,
       agentId: effectiveSkillAgentId,
       preferEntries: preferWorkspaceSkillsPrompt,
+      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

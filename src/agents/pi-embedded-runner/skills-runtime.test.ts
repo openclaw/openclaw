@@ -199,4 +199,36 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       skillFilter: ["github"],
     });
   });
+
+  it("threads eligibility through live skill loading", () => {
+    const eligibility = {
+      remote: {
+        platforms: ["darwin"],
+        hasBin: () => true,
+        hasAnyBin: () => true,
+        note: "Remote macOS node available.",
+      },
+    };
+
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/workspace",
+      config: {},
+      agentId: "writer",
+      skillsSnapshot: {
+        prompt: "host prompt",
+        skills: [{ name: "remote-only" }],
+        skillFilter: ["remote-only"],
+        resolvedSkills: [],
+      },
+      forceLoadEntries: true,
+      eligibility,
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/workspace", {
+      config: {},
+      agentId: "writer",
+      skillFilter: ["remote-only"],
+      eligibility,
+    });
+  });
 });
