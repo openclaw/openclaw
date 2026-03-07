@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
   ReplyToMode,
+  UnpairedResponseMode,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
@@ -98,6 +99,8 @@ export type SlackAccountConfig = {
   configWrites?: boolean;
   /** If false, do not start this Slack account. Default: true. */
   enabled?: boolean;
+  /** How OpenClaw responds to unknown DM senders in pairing mode. */
+  unpairedResponse?: UnpairedResponseMode;
   botToken?: string;
   appToken?: string;
   userToken?: string;

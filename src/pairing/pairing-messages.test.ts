@@ -50,6 +50,7 @@ describe("buildPairingReply", () => {
   for (const testCase of cases) {
     it(`formats pairing reply for ${testCase.channel}`, () => {
       const text = buildPairingReply(testCase);
+      expect(text).not.toBeNull();
       expect(text).toContain(testCase.idLine);
       expect(text).toContain(`Pairing code: ${testCase.code}`);
       // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
@@ -59,4 +60,29 @@ describe("buildPairingReply", () => {
       expect(text).toMatch(commandRe);
     });
   }
+
+  it("omits branding in code-only mode", () => {
+    const text = buildPairingReply({
+      channel: "discord",
+      idLine: "Your Discord user id: 1",
+      code: "ABC123",
+      mode: "code-only",
+    });
+
+    expect(text).not.toBeNull();
+    expect(text).not.toContain("OpenClaw: access not configured.");
+    expect(text).toContain("Your Discord user id: 1");
+    expect(text).toContain("Pairing code: ABC123");
+  });
+
+  it("returns null in silent mode", () => {
+    const text = buildPairingReply({
+      channel: "discord",
+      idLine: "Your Discord user id: 1",
+      code: "ABC123",
+      mode: "silent",
+    });
+
+    expect(text).toBeNull();
+  });
 });

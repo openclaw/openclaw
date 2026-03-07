@@ -1108,16 +1108,19 @@ export async function handleFeishuMessage(params: {
         if (created) {
           log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
           try {
-            await sendMessageFeishu({
-              cfg,
-              to: `chat:${ctx.chatId}`,
-              text: core.channel.pairing.buildPairingReply({
-                channel: "feishu",
-                idLine: `Your Feishu user id: ${ctx.senderOpenId}`,
-                code,
-              }),
-              accountId: account.accountId,
+            const replyText = core.channel.pairing.buildPairingReply({
+              channel: "feishu",
+              idLine: `Your Feishu user id: ${ctx.senderOpenId}`,
+              code,
             });
+            if (replyText) {
+              await sendMessageFeishu({
+                cfg,
+                to: `chat:${ctx.chatId}`,
+                text: replyText,
+                accountId: account.accountId,
+              });
+            }
           } catch (err) {
             log(
               `feishu[${account.accountId}]: pairing reply failed for ${ctx.senderOpenId}: ${String(err)}`,

@@ -270,15 +270,14 @@ async function processMessage(
           if (created) {
             logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
             try {
-              await sendMessageZalouser(
-                chatId,
-                core.channel.pairing.buildPairingReply({
-                  channel: "zalouser",
-                  idLine: `Your Zalo user id: ${senderId}`,
-                  code,
-                }),
-                { profile: account.profile },
-              );
+              const replyText = core.channel.pairing.buildPairingReply({
+                channel: "zalouser",
+                idLine: `Your Zalo user id: ${senderId}`,
+                code,
+              });
+              if (replyText) {
+                await sendMessageZalouser(chatId, replyText, { profile: account.profile });
+              }
               statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
               logVerbose(

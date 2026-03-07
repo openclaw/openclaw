@@ -530,6 +530,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         senderDisplay,
         senderName: envelope.sourceName ?? undefined,
         accountId: deps.accountId,
+        unpairedResponse: deps.unpairedResponse,
         sendPairingReply: async (text) => {
           await sendMessageSignal(`signal:${senderRecipient}`, text, {
             baseUrl: deps.baseUrl,

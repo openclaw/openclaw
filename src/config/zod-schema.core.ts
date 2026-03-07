@@ -315,6 +315,8 @@ export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 
+export const UnpairedResponseSchema = z.enum(["silent", "code-only", "branded"]);
+
 export const BlockStreamingCoalesceSchema = z
   .object({
     minChars: z.number().int().positive().optional(),

@@ -1,3 +1,4 @@
+import type { UnpairedResponseMode } from "../config/types.base.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
 type PairingMeta = Record<string, string | undefined>;
@@ -12,7 +13,8 @@ export type PairingChallengeParams = {
     meta?: PairingMeta;
   }) => Promise<{ code: string; created: boolean }>;
   sendPairingReply: (text: string) => Promise<void>;
-  buildReplyText?: (params: { code: string; senderIdLine: string }) => string;
+  responseMode?: UnpairedResponseMode;
+  buildReplyText?: (params: { code: string; senderIdLine: string }) => string | null;
   onCreated?: (params: { code: string }) => void;
   onReplyError?: (err: unknown) => void;
 };
@@ -38,7 +40,11 @@ export async function issuePairingChallenge(
       channel: params.channel,
       idLine: params.senderIdLine,
       code,
+      mode: params.responseMode,
     });
+  if (replyText == null) {
+    return { created: true, code };
+  }
   try {
     await params.sendPairingReply(replyText);
   } catch (err) {

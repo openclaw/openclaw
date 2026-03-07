@@ -249,7 +249,11 @@ async function sendLinePairingReply(params: {
     channel: "line",
     idLine: `Your ${idLabel}: ${senderId}`,
     code,
+    mode: context.account.config.unpairedResponse,
   });
+  if (!text) {
+    return;
+  }
   try {
     if (replyToken) {
       await replyMessageLine(replyToken, [{ type: "text", text }], {

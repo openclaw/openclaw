@@ -1444,6 +1444,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  "channels.telegram.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
   "channels.telegram.streaming":
     'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":
@@ -1478,17 +1480,27 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+  "channels.whatsapp.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
   "channels.whatsapp.debounceMs":
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
   "channels.signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
+  "channels.signal.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
   "channels.imessage.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+  "channels.imessage.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
   "channels.bluebubbles.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+  "channels.bluebubbles.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
   "channels.discord.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
+  "channels.discord.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
   "channels.discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
   "channels.discord.retry.attempts":
@@ -1554,4 +1566,6 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+  "channels.slack.unpairedResponse":
+    'Response style for unknown direct-message senders in pairing mode: "silent", "code-only", or "branded" (default).',
 };

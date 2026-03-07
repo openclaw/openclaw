@@ -209,6 +209,7 @@ export async function preflightDiscordMessage(
   }
 
   const dmPolicy = params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing";
+  const unpairedResponse = params.discordConfig?.unpairedResponse ?? "branded";
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const resolvedAccountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
@@ -251,19 +252,19 @@ export async function preflightDiscordMessage(
             `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
           );
           try {
-            await sendMessageDiscord(
-              `user:${author.id}`,
-              buildPairingReply({
-                channel: "discord",
-                idLine: `Your Discord user id: ${author.id}`,
-                code,
-              }),
-              {
+            const replyText = buildPairingReply({
+              channel: "discord",
+              idLine: `Your Discord user id: ${author.id}`,
+              code,
+              mode: unpairedResponse,
+            });
+            if (replyText) {
+              await sendMessageDiscord(`user:${author.id}`, replyText, {
                 token: params.token,
                 rest: params.client.rest,
                 accountId: params.accountId,
-              },
-            );
+              });
+            }
           } catch (err) {
             logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
           }

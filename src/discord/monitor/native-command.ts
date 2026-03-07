@@ -1369,6 +1369,7 @@ async function dispatchDiscordCommandInteraction(params: {
       await respond("Discord DMs are disabled.");
       return;
     }
+    const unpairedResponse = discordConfig?.unpairedResponse ?? "branded";
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
@@ -1392,14 +1393,15 @@ async function dispatchDiscordCommandInteraction(params: {
           name: sender.name,
         },
         onPairingCreated: async (code) => {
-          await respond(
-            buildPairingReply({
-              channel: "discord",
-              idLine: `Your Discord user id: ${user.id}`,
-              code,
-            }),
-            { ephemeral: true },
-          );
+          const replyText = buildPairingReply({
+            channel: "discord",
+            idLine: `Your Discord user id: ${user.id}`,
+            code,
+            mode: unpairedResponse,
+          });
+          if (replyText) {
+            await respond(replyText, { ephemeral: true });
+          }
         },
         onUnauthorized: async () => {
           await respond("You are not authorized to use this command.", { ephemeral: true });

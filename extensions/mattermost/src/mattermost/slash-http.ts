@@ -171,11 +171,12 @@ async function authorizeSlashInvocation(params: {
         ...decision,
         denyResponse: {
           response_type: "ephemeral",
-          text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${senderId}`,
-            code,
-          }),
+          text:
+            core.channel.pairing.buildPairingReply({
+              channel: "mattermost",
+              idLine: `Your Mattermost user id: ${senderId}`,
+              code,
+            }) ?? "",
         },
       };
     }

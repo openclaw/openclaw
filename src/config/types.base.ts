@@ -7,6 +7,7 @@ export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-ch
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+export type UnpairedResponseMode = "silent" | "code-only" | "branded";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */

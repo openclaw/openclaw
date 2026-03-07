@@ -3,6 +3,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
+  UnpairedResponseMode,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
@@ -20,6 +21,8 @@ export type CommonChannelMessagingConfig = {
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** How OpenClaw responds to unknown DM senders in pairing mode. */
+  unpairedResponse?: UnpairedResponseMode;
   /** Optional allowlist for inbound DM senders. */
   allowFrom?: Array<string | number>;
   /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */

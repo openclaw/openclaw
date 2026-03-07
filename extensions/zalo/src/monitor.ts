@@ -422,15 +422,19 @@ async function processMessageWithPipeline(params: {
       if (created) {
         logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
         try {
+          const replyText = core.channel.pairing.buildPairingReply({
+            channel: "zalo",
+            idLine: `Your Zalo user id: ${senderId}`,
+            code,
+          });
+          if (!replyText) {
+            return;
+          }
           await sendMessage(
             token,
             {
               chat_id: chatId,
-              text: core.channel.pairing.buildPairingReply({
-                channel: "zalo",
-                idLine: `Your Zalo user id: ${senderId}`,
-                code,
-              }),
+              text: replyText,
             },
             fetcher,
           );

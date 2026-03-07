@@ -8,6 +8,7 @@ import type {
   LocationMessage,
 } from "@line/bot-sdk";
 import type { BaseProbeResult } from "../channels/plugins/types.js";
+import type { UnpairedResponseMode } from "../config/types.js";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
@@ -21,6 +22,7 @@ interface LineAccountBaseConfig {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+  unpairedResponse?: UnpairedResponseMode;
   groupPolicy?: "open" | "allowlist" | "disabled";
   /** Outbound response prefix override for this account. */
   responsePrefix?: string;

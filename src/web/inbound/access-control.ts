@@ -60,6 +60,7 @@ export async function checkInboundAccessControl(params: {
     accountId: params.accountId,
   });
   const dmPolicy = account.dmPolicy ?? "pairing";
+  const unpairedResponse = account.unpairedResponse ?? "branded";
   const configuredAllowFrom = account.allowFrom ?? [];
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "whatsapp",
@@ -182,13 +183,17 @@ export async function checkInboundAccessControl(params: {
             `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
           );
           try {
-            await params.sock.sendMessage(params.remoteJid, {
-              text: buildPairingReply({
-                channel: "whatsapp",
-                idLine: `Your WhatsApp phone number: ${candidate}`,
-                code,
-              }),
+            const replyText = buildPairingReply({
+              channel: "whatsapp",
+              idLine: `Your WhatsApp phone number: ${candidate}`,
+              code,
+              mode: unpairedResponse,
             });
+            if (replyText) {
+              await params.sock.sendMessage(params.remoteJid, {
+                text: replyText,
+              });
+            }
           } catch (err) {
             logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
           }

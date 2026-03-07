@@ -66,6 +66,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       historyLimit,
       groupHistories,
       dmPolicy,
+      unpairedResponse: telegramCfg.unpairedResponse,
       allowFrom,
       groupAllowFrom,
       ackReactionScope,

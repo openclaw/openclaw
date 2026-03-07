@@ -3,7 +3,7 @@ import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import type { OpenClawConfig, SlackReactionNotificationMode } from "../../config/config.js";
 import { resolveSessionKey, type SessionScope } from "../../config/sessions.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy, UnpairedResponseMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { getChildLogger } from "../../logging.js";
@@ -36,6 +36,7 @@ export type SlackMonitorContext = {
 
   dmEnabled: boolean;
   dmPolicy: DmPolicy;
+  unpairedResponse: UnpairedResponseMode;
   allowFrom: string[];
   allowNameMatching: boolean;
   groupDmEnabled: boolean;
@@ -101,6 +102,7 @@ export function createSlackMonitorContext(params: {
 
   dmEnabled: boolean;
   dmPolicy: DmPolicy;
+  unpairedResponse?: UnpairedResponseMode;
   allowFrom: Array<string | number> | undefined;
   allowNameMatching: boolean;
   groupDmEnabled: boolean;
@@ -399,6 +401,7 @@ export function createSlackMonitorContext(params: {
     mainKey: params.mainKey,
     dmEnabled: params.dmEnabled,
     dmPolicy: params.dmPolicy,
+    unpairedResponse: params.unpairedResponse ?? "branded",
     allowFrom,
     allowNameMatching: params.allowNameMatching,
     groupDmEnabled: params.groupDmEnabled,

@@ -41,6 +41,7 @@ export async function authorizeSlackDirectMessage(params: {
       channel: "slack",
       senderId: params.senderId,
       senderIdLine: `Your Slack user id: ${params.senderId}`,
+      responseMode: params.ctx.unpairedResponse,
       meta: { name: senderName },
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertChannelPairingRequest({

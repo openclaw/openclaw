@@ -219,13 +219,15 @@ export async function handleIrcInbound(params: {
                 idLine: `Your IRC id: ${senderDisplay}`,
                 code,
               });
-              await deliverIrcReply({
-                payload: { text: reply },
-                target: message.senderNick,
-                accountId: account.accountId,
-                sendReply: params.sendReply,
-                statusSink,
-              });
+              if (reply) {
+                await deliverIrcReply({
+                  payload: { text: reply },
+                  target: message.senderNick,
+                  accountId: account.accountId,
+                  sendReply: params.sendReply,
+                  statusSink,
+                });
+              }
             } catch (err) {
               runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
             }

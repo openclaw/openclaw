@@ -1447,6 +1447,7 @@ export const registerTelegramHandlers = ({
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
           dmPolicy,
+          unpairedResponse: telegramCfg.unpairedResponse,
           msg: event.msg,
           chatId: event.chatId,
           effectiveDmAllow,

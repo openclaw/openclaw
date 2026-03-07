@@ -519,6 +519,7 @@ async function ensureDmComponentAuthorized(params: {
   }
 
   if (dmPolicy === "pairing") {
+    const unpairedResponse = ctx.discordConfig?.unpairedResponse ?? "branded";
     const { code, created } = await upsertChannelPairingRequest({
       channel: "discord",
       id: user.id,
@@ -529,14 +530,19 @@ async function ensureDmComponentAuthorized(params: {
       },
     });
     try {
+      const replyText = created
+        ? buildPairingReply({
+            channel: "discord",
+            idLine: `Your Discord user id: ${user.id}`,
+            code,
+            mode: unpairedResponse,
+          })
+        : "Pairing already requested. Ask the bot owner to approve your code.";
+      if (!replyText) {
+        return false;
+      }
       await interaction.reply({
-        content: created
-          ? buildPairingReply({
-              channel: "discord",
-              idLine: `Your Discord user id: ${user.id}`,
-              code,
-            })
-          : "Pairing already requested. Ask the bot owner to approve your code.",
+        content: replyText,
         ...replyOpts,
       });
     } catch {

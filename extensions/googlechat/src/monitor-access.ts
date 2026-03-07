@@ -318,16 +318,19 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         if (created) {
           logVerbose(`googlechat pairing request sender=${senderId}`);
           try {
-            await sendGoogleChatMessage({
-              account,
-              space: spaceId,
-              text: core.channel.pairing.buildPairingReply({
-                channel: "googlechat",
-                idLine: `Your Google Chat user id: ${senderId}`,
-                code,
-              }),
+            const replyText = core.channel.pairing.buildPairingReply({
+              channel: "googlechat",
+              idLine: `Your Google Chat user id: ${senderId}`,
+              code,
             });
-            statusSink?.({ lastOutboundAt: Date.now() });
+            if (replyText) {
+              await sendGoogleChatMessage({
+                account,
+                space: spaceId,
+                text: replyText,
+              });
+              statusSink?.({ lastOutboundAt: Date.now() });
+            }
           } catch (err) {
             logVerbose(`pairing reply failed for ${senderId}: ${String(err)}`);
           }

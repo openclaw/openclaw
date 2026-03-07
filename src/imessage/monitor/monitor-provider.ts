@@ -300,20 +300,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (created) {
         logVerbose(`imessage pairing request sender=${decision.senderId}`);
         try {
-          await sendMessageIMessage(
-            sender,
-            buildPairingReply({
-              channel: "imessage",
-              idLine: `Your iMessage sender id: ${decision.senderId}`,
-              code,
-            }),
-            {
-              client,
-              maxBytes: mediaMaxBytes,
-              accountId: accountInfo.accountId,
-              ...(chatId ? { chatId } : {}),
-            },
-          );
+          const replyText = buildPairingReply({
+            channel: "imessage",
+            idLine: `Your iMessage sender id: ${decision.senderId}`,
+            code,
+            mode: accountInfo.config.unpairedResponse,
+          });
+          if (!replyText) {
+            return;
+          }
+          await sendMessageIMessage(sender, replyText, {
+            client,
+            maxBytes: mediaMaxBytes,
+            accountId: accountInfo.accountId,
+            ...(chatId ? { chatId } : {}),
+          });
         } catch (err) {
           logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
         }

@@ -247,6 +247,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     mainKey,
     dmEnabled,
     dmPolicy,
+    unpairedResponse: slackCfg.unpairedResponse,
     allowFrom,
     allowNameMatching: isDangerousNameMatchingEnabled(slackCfg),
     groupDmEnabled,

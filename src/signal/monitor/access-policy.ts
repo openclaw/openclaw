@@ -8,6 +8,7 @@ import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 type SignalGroupPolicy = "open" | "allowlist" | "disabled";
+type SignalUnpairedResponseMode = "silent" | "code-only" | "branded";
 
 export async function resolveSignalAccessState(params: {
   accountId: string;
@@ -49,6 +50,7 @@ export async function handleSignalDirectMessageAccess(params: {
   senderDisplay: string;
   senderName?: string;
   accountId: string;
+  unpairedResponse?: SignalUnpairedResponseMode;
   sendPairingReply: (text: string) => Promise<void>;
   log: (message: string) => void;
 }): Promise<boolean> {
@@ -66,6 +68,7 @@ export async function handleSignalDirectMessageAccess(params: {
       channel: "signal",
       senderId: params.senderId,
       senderIdLine: params.senderIdLine,
+      responseMode: params.unpairedResponse,
       meta: { name: params.senderName },
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertChannelPairingRequest({

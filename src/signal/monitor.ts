@@ -430,6 +430,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       groupHistories,
       textLimit,
       dmPolicy,
+      unpairedResponse: accountInfo.config.unpairedResponse,
       allowFrom,
       groupAllowFrom,
       groupPolicy,

@@ -1,6 +1,6 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
-import type { DmPolicy } from "../config/types.js";
+import type { DmPolicy, UnpairedResponseMode } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
@@ -34,6 +34,7 @@ function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSe
 export async function enforceTelegramDmAccess(params: {
   isGroup: boolean;
   dmPolicy: DmPolicy;
+  unpairedResponse?: UnpairedResponseMode;
   msg: Message;
   chatId: number;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -93,18 +94,18 @@ export async function enforceTelegramDmAccess(params: {
           },
           "telegram pairing request",
         );
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          fn: () =>
-            bot.api.sendMessage(
-              chatId,
-              buildPairingReply({
-                channel: "telegram",
-                idLine: `Your Telegram user id: ${telegramUserId}`,
-                code,
-              }),
-            ),
+        const replyText = buildPairingReply({
+          channel: "telegram",
+          idLine: `Your Telegram user id: ${telegramUserId}`,
+          code,
+          mode: params.unpairedResponse,
         });
+        if (replyText) {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            fn: () => bot.api.sendMessage(chatId, replyText),
+          });
+        }
       }
     } catch (err) {
       logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);

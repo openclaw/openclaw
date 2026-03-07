@@ -603,15 +603,17 @@ export async function processMessage(
       if (created) {
         logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
         try {
-          await sendMessageBlueBubbles(
-            message.senderId,
-            core.channel.pairing.buildPairingReply({
-              channel: "bluebubbles",
-              idLine: `Your BlueBubbles sender id: ${message.senderId}`,
-              code,
-            }),
-            { cfg: config, accountId: account.accountId },
-          );
+          const replyText = core.channel.pairing.buildPairingReply({
+            channel: "bluebubbles",
+            idLine: `Your BlueBubbles sender id: ${message.senderId}`,
+            code,
+          });
+          if (replyText) {
+            await sendMessageBlueBubbles(message.senderId, replyText, {
+              cfg: config,
+              accountId: account.accountId,
+            });
+          }
           statusSink?.({ lastOutboundAt: Date.now() });
         } catch (err) {
           logVerbose(

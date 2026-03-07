@@ -1047,12 +1047,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           id: params.payload.user_id,
           meta: { name: params.userName },
         });
+        const replyText = core.channel.pairing.buildPairingReply({
+          channel: "mattermost",
+          idLine: `Your Mattermost user id: ${params.payload.user_id}`,
+          code,
+        });
+        if (!replyText) {
+          return { ephemeral_text: "" };
+        }
         return {
-          ephemeral_text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${params.payload.user_id}`,
-            code,
-          }),
+          ephemeral_text: replyText,
         };
       }
       const denyText =
@@ -1316,15 +1320,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           logVerboseMessage(`mattermost: pairing request sender=${senderId} created=${created}`);
           if (created) {
             try {
-              await sendMessageMattermost(
-                `user:${senderId}`,
-                core.channel.pairing.buildPairingReply({
-                  channel: "mattermost",
-                  idLine: `Your Mattermost user id: ${senderId}`,
-                  code,
-                }),
-                { accountId: account.accountId },
-              );
+              const replyText = core.channel.pairing.buildPairingReply({
+                channel: "mattermost",
+                idLine: `Your Mattermost user id: ${senderId}`,
+                code,
+              });
+              if (replyText) {
+                await sendMessageMattermost(`user:${senderId}`, replyText, {
+                  accountId: account.accountId,
+                });
+              }
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
               logVerboseMessage(`mattermost: pairing reply failed for ${senderId}: ${String(err)}`);

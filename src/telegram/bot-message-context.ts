@@ -36,6 +36,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
+  UnpairedResponseMode,
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -120,6 +121,7 @@ export type BuildTelegramMessageContextParams = {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
+  unpairedResponse?: UnpairedResponseMode;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
@@ -163,6 +165,7 @@ export const buildTelegramMessageContext = async ({
   historyLimit,
   groupHistories,
   dmPolicy,
+  unpairedResponse,
   allowFrom,
   groupAllowFrom,
   ackReactionScope,
@@ -301,6 +304,7 @@ export const buildTelegramMessageContext = async ({
     !(await enforceTelegramDmAccess({
       isGroup,
       dmPolicy: effectiveDmPolicy,
+      unpairedResponse,
       msg,
       chatId,
       effectiveDmAllow,

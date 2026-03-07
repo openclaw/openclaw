@@ -7,6 +7,7 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
   SessionThreadBindingsConfig,
+  UnpairedResponseMode,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
@@ -74,6 +75,8 @@ export type TelegramAccountConfig = {
    * - "disabled": ignore all inbound DMs
    */
   dmPolicy?: DmPolicy;
+  /** How OpenClaw responds to unknown DM senders in pairing mode. */
+  unpairedResponse?: UnpairedResponseMode;
   /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
   botToken?: string;

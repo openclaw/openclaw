@@ -179,15 +179,16 @@ export async function handleNextcloudTalkInbound(params: {
         });
         if (created) {
           try {
-            await sendMessageNextcloudTalk(
-              roomToken,
-              core.channel.pairing.buildPairingReply({
-                channel: CHANNEL_ID,
-                idLine: `Your Nextcloud user id: ${senderId}`,
-                code,
-              }),
-              { accountId: account.accountId },
-            );
+            const replyText = core.channel.pairing.buildPairingReply({
+              channel: CHANNEL_ID,
+              idLine: `Your Nextcloud user id: ${senderId}`,
+              code,
+            });
+            if (replyText) {
+              await sendMessageNextcloudTalk(roomToken, replyText, {
+                accountId: account.accountId,
+              });
+            }
             statusSink?.({ lastOutboundAt: Date.now() });
           } catch (err) {
             runtime.error?.(`nextcloud-talk: pairing reply failed for ${senderId}: ${String(err)}`);
