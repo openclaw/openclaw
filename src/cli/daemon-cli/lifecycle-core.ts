@@ -5,10 +5,7 @@ import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
-import {
-  isGatewaySecretRefUnavailableError,
-  resolveGatewayCredentialsFromConfig,
-} from "../../gateway/credentials.js";
+import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -284,11 +281,7 @@ export async function runServiceRestart(params: {
       const command = await params.service.readCommand(process.env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const cfg = loadConfig();
-      const configToken = resolveGatewayCredentialsFromConfig({
-        cfg,
-        env: process.env,
-        modeOverride: "local",
-      }).token;
+      const configToken = cfg.gateway?.auth?.token?.trim() || undefined;
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
         const warning = driftIssue.detail

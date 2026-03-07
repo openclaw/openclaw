@@ -74,11 +74,8 @@ describe("installGatewayDaemonNonInteractive", () => {
     });
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+    expect("token" in buildGatewayInstallPlan.mock.calls[0][0]).toBe(false);
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 

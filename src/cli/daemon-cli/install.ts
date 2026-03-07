@@ -91,7 +91,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: tokenResolution.token,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {
