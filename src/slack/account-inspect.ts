@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 import type { SlackAccountConfig } from "../config/types.slack.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import {
   mergeSlackAccountConfig,
   resolveDefaultSlackAccountId,
@@ -29,18 +30,7 @@ export type InspectedSlackAccount = {
   userTokenStatus: SlackCredentialStatus;
   configured: boolean;
   config: SlackAccountConfig;
-  groupPolicy?: SlackAccountConfig["groupPolicy"];
-  textChunkLimit?: SlackAccountConfig["textChunkLimit"];
-  mediaMaxMb?: SlackAccountConfig["mediaMaxMb"];
-  reactionNotifications?: SlackAccountConfig["reactionNotifications"];
-  reactionAllowlist?: SlackAccountConfig["reactionAllowlist"];
-  replyToMode?: SlackAccountConfig["replyToMode"];
-  replyToModeByChatType?: SlackAccountConfig["replyToModeByChatType"];
-  actions?: SlackAccountConfig["actions"];
-  slashCommand?: SlackAccountConfig["slashCommand"];
-  dm?: SlackAccountConfig["dm"];
-  channels?: SlackAccountConfig["channels"];
-};
+} & SlackAccountSurfaceFields;
 
 function inspectSlackToken(value: unknown): {
   token?: string;

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SlackAccountConfig } from "../config/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 
 export type SlackTokenSource = "env" | "config" | "none";
@@ -19,18 +20,7 @@ export type ResolvedSlackAccount = {
   appTokenSource: SlackTokenSource;
   userTokenSource: SlackTokenSource;
   config: SlackAccountConfig;
-  groupPolicy?: SlackAccountConfig["groupPolicy"];
-  textChunkLimit?: SlackAccountConfig["textChunkLimit"];
-  mediaMaxMb?: SlackAccountConfig["mediaMaxMb"];
-  reactionNotifications?: SlackAccountConfig["reactionNotifications"];
-  reactionAllowlist?: SlackAccountConfig["reactionAllowlist"];
-  replyToMode?: SlackAccountConfig["replyToMode"];
-  replyToModeByChatType?: SlackAccountConfig["replyToModeByChatType"];
-  actions?: SlackAccountConfig["actions"];
-  slashCommand?: SlackAccountConfig["slashCommand"];
-  dm?: SlackAccountConfig["dm"];
-  channels?: SlackAccountConfig["channels"];
-};
+} & SlackAccountSurfaceFields;
 
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
 export const listSlackAccountIds = listAccountIds;
