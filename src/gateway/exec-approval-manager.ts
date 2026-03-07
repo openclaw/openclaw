@@ -97,7 +97,11 @@ export class ExecApprovalManager {
   }
 
   resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
-    const pending = this.pending.get(recordId);
+    const fullId = this.resolveCanonicalId(recordId);
+    if (!fullId) {
+      return false;
+    }
+    const pending = this.pending.get(fullId);
     if (!pending) {
       return false;
     }
@@ -114,11 +118,29 @@ export class ExecApprovalManager {
     pending.resolve(decision);
     setTimeout(() => {
       // Only delete if the entry hasn't been replaced
-      if (this.pending.get(recordId) === pending) {
-        this.pending.delete(recordId);
+      if (this.pending.get(fullId) === pending) {
+        this.pending.delete(fullId);
       }
     }, RESOLVED_ENTRY_GRACE_MS);
     return true;
+  }
+
+  private resolveCanonicalId(input: string): string | null {
+    // Exact match first
+    if (this.pending.has(input)) {
+      return input;
+    }
+    // Prefix match fallback
+    const matches: string[] = [];
+    for (const key of this.pending.keys()) {
+      if (key.startsWith(input)) {
+        matches.push(key);
+        if (matches.length > 1) {
+          return null; // ambiguous → hard fail
+        }
+      }
+    }
+    return matches.length === 1 ? matches[0] : null;
   }
 
   expire(recordId: string, resolvedBy?: string | null): boolean {
