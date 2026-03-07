@@ -633,6 +633,22 @@ describe("tts", () => {
       },
     };
 
+    const customBailianCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "bailian",
+          bailian: {
+            apiKey: "test-dashscope-key",
+            baseUrl: "http://bailian.internal/api/v1",
+            model: "qwen3-tts-flash",
+            voice: "Cherry",
+          },
+        },
+      },
+    };
+
     it("applies inbound auto-TTS gating by audio status and cleaned text length", async () => {
       const cases = [
         {
@@ -859,6 +875,44 @@ describe("tts", () => {
       expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
         expect.objectContaining({
           url: "https://example.com/generated.wav",
+          policy: undefined,
+          auditContext: "tts-bailian-audio-download",
+        }),
+      );
+    });
+
+    it("pins bailian audio downloads to the configured custom host", async () => {
+      vi.mocked(fetchWithTimeout).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: { audio: { url: "http://bailian.internal/generated.wav" } },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+      vi.mocked(fetchWithSsrFGuard).mockResolvedValueOnce({
+        response: new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/wav" },
+        }),
+        finalUrl: "http://bailian.internal/generated.wav",
+        release: async () => {},
+      });
+
+      const result = await tts.textToSpeech({
+        text: "This is a custom-host Bailian TTS test.",
+        cfg: customBailianCfg,
+        channel: "discord",
+      });
+
+      expect(result.success).toBe(true);
+      expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://bailian.internal/generated.wav",
+          policy: { allowedHostnames: ["bailian.internal"] },
           auditContext: "tts-bailian-audio-download",
         }),
       );
