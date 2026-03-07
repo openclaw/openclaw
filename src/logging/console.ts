@@ -1,6 +1,7 @@
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
+import { formatTimestamp } from "../infra/format-time/format-datetime.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -169,10 +170,7 @@ function isEpipeError(err: unknown): boolean {
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    return formatTimestamp(now, { style: "short" });
   }
   return formatLocalIsoWithOffset(now);
 }
