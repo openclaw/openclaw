@@ -1,4 +1,8 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  resolveEffectiveModelFallbacks,
+  resolveFallbackAgentId,
+} from "../../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
@@ -147,16 +151,36 @@ export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
+  const cfg = run.config;
+  const agentId = resolveFallbackAgentId({
+    agentId: run.agentId,
+    sessionKey: run.sessionKey,
+  });
+
+  // Detect whether the run's model differs from the agent-aware configured
+  // primary.  `resolveDefaultModelForAgent` factors in per-agent
+  // `model.primary` entries under `agents.list[n]` before falling back to
+  // the global `agents.defaults.model`, so agents with their own primary
+  // are not incorrectly flagged as having a session override.
+  // This mirrors the intent of `commands/agent.ts` which reads
+  // `sessionEntry.modelOverride` directly.
+  const configuredPrimary = cfg ? resolveDefaultModelForAgent({ cfg, agentId: run.agentId }) : null;
+  const hasSessionModelOverride = configuredPrimary
+    ? run.provider !== configuredPrimary.provider || run.model !== configuredPrimary.model
+    : false;
+
   return {
-    cfg: run.config,
+    cfg,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    }),
+    fallbacksOverride: cfg
+      ? resolveEffectiveModelFallbacks({
+          cfg,
+          agentId,
+          hasSessionModelOverride,
+        })
+      : undefined,
   };
 }
 
