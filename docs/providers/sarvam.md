@@ -39,7 +39,7 @@ title: "Sarvam AI"
 **Option A: Environment Variable**
 
 ```bash
-export SARVAM_API_KEY="your-api-key-here"
+export SARVAM_API_KEY="your-api-key-here"  # pragma: allowlist secret
 ```
 
 **Option B: Interactive Setup (Recommended)**
@@ -156,7 +156,7 @@ Sarvam API is at `https://api.sarvam.ai/v1`. Ensure your network allows HTTPS co
 
 ```json5
 {
-  env: { SARVAM_API_KEY: "your-api-key" },
+  env: { SARVAM_API_KEY: "your-api-key" }, // pragma: allowlist secret
   agents: { defaults: { model: { primary: "sarvam/sarvam-30b" } } },
   models: {
     mode: "merge",
