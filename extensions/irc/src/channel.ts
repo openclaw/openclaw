@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
   createScopedAccountConfigAccessors,
   formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk";
@@ -12,8 +13,6 @@ import {
   deleteAccountFromConfigSection,
   getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/irc";
@@ -142,22 +141,22 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const warnings: string[] = [];
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      const warnings = collectAllowlistProviderGroupPolicyWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.irc !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          groupPolicy === "open"
+            ? [
+                buildOpenGroupPolicyWarning({
+                  surface: "IRC channels",
+                  openBehavior: "allows all channels and senders (mention-gated)",
+                  remediation:
+                    'Prefer channels.irc.groupPolicy="allowlist" with channels.irc.groups',
+                }),
+              ]
+            : [],
       });
-      if (groupPolicy === "open") {
-        warnings.push(
-          buildOpenGroupPolicyWarning({
-            surface: "IRC channels",
-            openBehavior: "allows all channels and senders (mention-gated)",
-            remediation: 'Prefer channels.irc.groupPolicy="allowlist" with channels.irc.groups',
-          }),
-        );
-      }
       if (!account.config.tls) {
         warnings.push(
           "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
