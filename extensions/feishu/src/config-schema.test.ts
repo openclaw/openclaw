@@ -24,6 +24,14 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
+  it("normalizes legacy groupPolicy allowall to open", () => {
+    const result = FeishuConfigSchema.parse({
+      groupPolicy: "allowall",
+    });
+
+    expect(result.groupPolicy).toBe("open");
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
@@ -138,7 +146,7 @@ describe("FeishuConfigSchema replyInThread", () => {
 });
 
 describe("FeishuConfigSchema optimization flags", () => {
-  it("defaults top-level typingIndicator, resolveSenderNames, resolveGroupNames and resolveDmDisplayNames to true", () => {
+  it("defaults top-level optimization flags to true", () => {
     const result = FeishuConfigSchema.parse({});
     expect(result.typingIndicator).toBe(true);
     expect(result.resolveSenderNames).toBe(true);
