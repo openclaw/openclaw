@@ -83,7 +83,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Config JSON endpoint ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/config",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherFinanceConfigData(gatherDeps));
@@ -92,7 +93,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Finance Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/finance",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/overview" });
@@ -102,7 +103,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Exchange Health ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/exchange-health",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, { exchanges: healthStore.listAll() });
@@ -111,7 +113,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Trading JSON endpoint ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/trading",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherTradingData(gatherDeps));
@@ -120,7 +123,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Trading Dashboard → redirect to unified trader ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/trading",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/trader" });
@@ -130,7 +133,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Place Order (unified: paper + live) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/orders",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -308,7 +312,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Cancel Order ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/orders/cancel",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -336,7 +341,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Close Position ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/positions/close",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -444,7 +450,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Emergency Stop ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/emergency-stop",
     handler: async (_req: unknown, res: HttpRes) => {
       try {
@@ -484,7 +491,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Events List ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/events",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, {
@@ -496,7 +504,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Approval Flow ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/events/approve",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -547,7 +556,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Risk Evaluation ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/risk/evaluate",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -573,7 +583,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherCommandCenterData(gatherDeps));
@@ -582,7 +593,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center Dashboard → redirect to unified trader ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/trader" });
@@ -592,7 +603,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherMissionControlData(gatherDeps));
@@ -601,7 +613,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/overview" });
@@ -611,7 +623,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Overview ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/overview",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherOverviewData(gatherDeps);
@@ -627,7 +639,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Strategy (merged Arena + Lab) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/strategy",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherStrategyData(gatherDeps);
@@ -643,7 +655,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Trader (with domain switching) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/trader",
     handler: async (req: unknown, res: HttpRes) => {
       // Extract domain from query string if available
@@ -663,7 +675,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Setting ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherSettingData({ ...gatherDeps, healthStore });
@@ -679,7 +691,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── JSON API for new dashboard tabs ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/dashboard/strategy",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherStrategyData(gatherDeps));
@@ -687,7 +700,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
   });
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/dashboard/trader",
     handler: async (req: unknown, res: HttpRes) => {
       const url = (req as { url?: string }).url ?? "";
@@ -698,7 +712,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
   });
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherSettingData({ ...gatherDeps, healthStore }));
@@ -707,7 +722,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Flow (lifecycle pipeline) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/plugins/findoo-trader/dashboard/flow",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherFlowData(gatherDeps, deps.lifecycleEngine);
@@ -722,7 +737,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
   });
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/dashboard/flow",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherFlowData(gatherDeps, deps.lifecycleEngine));
@@ -731,7 +747,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Flow: Approve L3 promotion ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/flow/approve",
     handler: async (req: unknown, res: HttpRes) => {
       const body = await parseJsonBody(req as HttpReq);
@@ -752,7 +769,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Flow: Reject L3 promotion ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/flow/reject",
     handler: async (req: unknown, res: HttpRes) => {
       const body = await parseJsonBody(req as HttpReq);
@@ -774,7 +792,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── OHLCV K-line Data ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/ohlcv",
     handler: async (req: unknown, res: HttpRes) => {
       try {
@@ -815,7 +834,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── OrderBook Data ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/orderbook",
     handler: async (req: unknown, res: HttpRes) => {
       try {
@@ -882,7 +902,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Performance Snapshots ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/performance",
     handler: async (req: unknown, res: HttpRes) => {
       try {
@@ -908,7 +929,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Ideation: Status ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/ideation/status",
     handler: async (_req: unknown, res: HttpRes) => {
       const scheduler = deps.ideationScheduler;
@@ -925,7 +947,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Ideation: Manual Trigger ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
+
     path: "/api/v1/finance/ideation/trigger",
     handler: async (_req: unknown, res: HttpRes) => {
       const scheduler = deps.ideationScheduler;
@@ -945,7 +968,6 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
   // ── Legacy path redirects (old namespaced paths) ──
   for (const [from, to] of [
     ["/plugins/findoo-trader/dashboard/evolution", "/plugins/findoo-trader/dashboard/strategy"],
-    ["/plugins/findoo-trader/dashboard/fund", "/plugins/findoo-trader/dashboard/strategy"],
     ["/plugins/findoo-trader/dashboard/trading-desk", "/plugins/findoo-trader/dashboard/trader"],
     [
       "/plugins/findoo-trader/dashboard/strategy-arena",
@@ -954,7 +976,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     ["/plugins/findoo-trader/dashboard/strategy-lab", "/plugins/findoo-trader/dashboard/strategy"],
   ] as const) {
     api.registerHttpRoute({
-      auth: "gateway",
+      auth: "plugin",
       path: from,
       handler: async (_req: unknown, res: HttpRes) => {
         res.writeHead(302, { Location: to });
@@ -975,13 +997,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     "command-center",
     "mission-control",
     "evolution",
-    "fund",
     "trading-desk",
     "strategy-arena",
     "strategy-lab",
   ]) {
     api.registerHttpRoute({
-      auth: "gateway",
+      auth: "plugin",
       path: `/dashboard/${page}`,
       handler: async (req: unknown, res: HttpRes) => {
         const url = (req as { url?: string }).url ?? "";

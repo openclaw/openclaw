@@ -222,7 +222,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   // ── HTTP REST Routes ──
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/status",
     handler: async (
       _req: unknown,
@@ -249,7 +249,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   });
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/leaderboard",
     handler: async (
       _req: unknown,
@@ -265,7 +265,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   });
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/risk",
     handler: async (
       _req: unknown,
@@ -289,7 +289,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   });
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/allocations",
     handler: async (
       _req: unknown,
@@ -316,7 +316,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   // ── Performance Snapshots API ──
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/performance",
     handler: async (
       _req: unknown,
@@ -334,7 +334,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   // ── Capital Flows API ──
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/capital-flows",
     handler: async (
       _req: unknown,
@@ -352,7 +352,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   // ── SSE Stream ──
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/fund/stream",
     handler: async (
       req: { on: (event: string, cb: () => void) => void },
@@ -446,7 +446,7 @@ export function registerFundRoutes(api: OpenClawPluginApi, deps: FundRouteDeps):
   // ── Dashboard Route ──
 
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/dashboard/fund",
     handler: async (
       _req: unknown,

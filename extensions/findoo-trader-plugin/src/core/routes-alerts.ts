@@ -14,7 +14,7 @@ export function registerAlertRoutes(
 ): void {
   // GET /api/v1/finance/alerts -- List all alerts
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/alerts",
     handler: async (_req: unknown, res: HttpRes) => {
       const alertEngine = runtime.services?.get?.("fin-alert-engine") as
@@ -30,7 +30,7 @@ export function registerAlertRoutes(
 
   // POST /api/v1/finance/alerts/create -- Create an alert
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/alerts/create",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -80,7 +80,7 @@ export function registerAlertRoutes(
 
   // POST /api/v1/finance/alerts/remove -- Remove an alert
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/alerts/remove",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {

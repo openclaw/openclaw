@@ -24,7 +24,7 @@ export function registerSseRoutes(
 ): void {
   // ── Finance config SSE (30s interval) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/config/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
@@ -42,7 +42,7 @@ export function registerSseRoutes(
 
   // ── Trading data SSE (10s interval) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/trading/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
@@ -60,7 +60,7 @@ export function registerSseRoutes(
 
   // ── Agent events SSE (subscription-based) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/events/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
@@ -96,7 +96,7 @@ export function registerSseRoutes(
 
   // ── Strategy data SSE (15s interval) ──
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/strategy/stream",
     handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
       res.writeHead(200, {
@@ -115,7 +115,7 @@ export function registerSseRoutes(
   // ── Agent activity log SSE (subscription-based) ──
   if (activityLog) {
     api.registerHttpRoute({
-      auth: "gateway",
+      auth: "plugin",
       path: "/api/v1/finance/agent-activity/stream",
       handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
         res.writeHead(200, {
@@ -152,7 +152,7 @@ export function registerSseRoutes(
   // ── Backtest progress SSE (event-driven) ──
   if (progressStore) {
     api.registerHttpRoute({
-      auth: "gateway",
+      auth: "plugin",
       path: "/api/v1/finance/backtest/progress/stream",
       handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
         res.writeHead(200, {

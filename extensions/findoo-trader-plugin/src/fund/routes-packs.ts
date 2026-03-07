@@ -49,7 +49,7 @@ export function registerPackRoutes(api: OpenClawPluginApi, deps: PackRouteDeps):
 
   // GET /api/v1/finance/strategy-packs — list available packs
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/strategy-packs",
     handler: async (_req: unknown, res: unknown) => {
       const httpRes = res as HttpRes;
@@ -67,7 +67,7 @@ export function registerPackRoutes(api: OpenClawPluginApi, deps: PackRouteDeps):
 
   // POST /api/v1/finance/strategy-packs/deploy — deploy a pack
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/strategy-packs/deploy",
     handler: async (req: unknown, res: unknown) => {
       const httpReq = req as HttpReq;
@@ -116,7 +116,7 @@ export function registerPackRoutes(api: OpenClawPluginApi, deps: PackRouteDeps):
 
   // POST /api/v1/finance/strategy-packs/quick-start — one-click deploy preset + risk config
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/strategy-packs/quick-start",
     handler: async (req: unknown, res: unknown) => {
       const httpReq = req as HttpReq;

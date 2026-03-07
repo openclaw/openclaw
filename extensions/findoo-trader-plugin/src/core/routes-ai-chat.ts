@@ -32,7 +32,7 @@ function buildSystemPrompt(page?: string, context?: Record<string, unknown>): st
 export function registerAiChatRoute(api: OpenClawPluginApi, runtime: RuntimeServices): void {
   // POST /api/v1/finance/ai/chat -- Unified AI chat for dashboard panels
   api.registerHttpRoute({
-    auth: "gateway",
+    auth: "plugin",
     path: "/api/v1/finance/ai/chat",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
