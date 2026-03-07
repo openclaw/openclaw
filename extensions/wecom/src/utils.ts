@@ -4,7 +4,7 @@
 
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { CHANNEL_ID } from "./const.js";
+import { CHANNEL_ID } from "./const.ts";
 
 // ============================================================================
 // 配置类型定义

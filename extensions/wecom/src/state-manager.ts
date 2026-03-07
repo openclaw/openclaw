@@ -10,9 +10,9 @@ import {
   MESSAGE_STATE_TTL_MS,
   MESSAGE_STATE_CLEANUP_INTERVAL_MS,
   MESSAGE_STATE_MAX_SIZE,
-} from "./const.js";
-import type { MessageState } from "./interface.js";
-import { createPersistentReqIdStore, type PersistentReqIdStore } from "./reqid-store.js";
+} from "./const.ts";
+import type { MessageState } from "./interface.ts";
+import { createPersistentReqIdStore, type PersistentReqIdStore } from "./reqid-store.ts";
 
 // ============================================================================
 // WSClient 实例管理

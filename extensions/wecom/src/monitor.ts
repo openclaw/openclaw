@@ -27,14 +27,14 @@ import {
   MESSAGE_PROCESS_TIMEOUT_MS,
   WS_HEARTBEAT_INTERVAL_MS,
   WS_MAX_RECONNECT_ATTEMPTS,
-} from "./const.js";
-import { checkDmPolicy } from "./dm-policy.js";
-import { checkGroupPolicy } from "./group-policy.js";
-import type { WeComMonitorOptions, MessageState } from "./interface.js";
-import { downloadAndSaveImages, downloadAndSaveFiles } from "./media-handler.js";
-import { parseMessageContent, type MessageBody } from "./message-parser.js";
-import { sendWeComReply } from "./message-sender.js";
-import { getWeComRuntime } from "./runtime.js";
+} from "./const.ts";
+import { checkDmPolicy } from "./dm-policy.ts";
+import { checkGroupPolicy } from "./group-policy.ts";
+import type { WeComMonitorOptions, MessageState } from "./interface.ts";
+import { downloadAndSaveImages, downloadAndSaveFiles } from "./media-handler.ts";
+import { parseMessageContent, type MessageBody } from "./message-parser.ts";
+import { sendWeComReply } from "./message-sender.ts";
+import { getWeComRuntime } from "./runtime.ts";
 import {
   setWeComWebSocket,
   setMessageState,
@@ -44,17 +44,17 @@ import {
   startMessageStateCleanup,
   stopMessageStateCleanup,
   cleanupAccount,
-} from "./state-manager.js";
-import { withTimeout } from "./timeout.js";
-import { generateReqId } from "./utils.js";
-import type { ResolvedWeComAccount } from "./utils.js";
+} from "./state-manager.ts";
+import { withTimeout } from "./timeout.ts";
+import { generateReqId } from "./utils.ts";
+import type { ResolvedWeComAccount } from "./utils.ts";
 
 // ============================================================================
 // 重新导出（保持向后兼容）
 // ============================================================================
 
-export type { WeComMonitorOptions } from "./interface.js";
-export { WeComCommand } from "./const.js";
+export type { WeComMonitorOptions } from "./interface.ts";
+export { WeComCommand } from "./const.ts";
 export {
   getWeComWebSocket,
   setReqIdForChat,
@@ -63,8 +63,8 @@ export {
   deleteReqIdForChat,
   warmupReqIdStore,
   flushReqIdStore,
-} from "./state-manager.js";
-export { sendWeComReply } from "./message-sender.js";
+} from "./state-manager.ts";
+export { sendWeComReply } from "./message-sender.ts";
 
 // ============================================================================
 // 消息上下文构建

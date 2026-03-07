@@ -7,13 +7,13 @@ import {
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import { CHANNEL_ID, TEXT_CHUNK_LIMIT } from "./const.js";
-import { monitorWeComProvider } from "./monitor.js";
-import { wecomOnboardingAdapter } from "./onboarding.js";
-import { getWeComRuntime } from "./runtime.js";
-import { getWeComWebSocket } from "./state-manager.js";
-import type { WeComConfig, ResolvedWeComAccount } from "./utils.js";
-import { resolveWeComAccount } from "./utils.js";
+import { CHANNEL_ID, TEXT_CHUNK_LIMIT } from "./const.ts";
+import { monitorWeComProvider } from "./monitor.ts";
+import { wecomOnboardingAdapter } from "./onboarding.ts";
+import { getWeComRuntime } from "./runtime.ts";
+import { getWeComWebSocket } from "./state-manager.ts";
+import type { WeComConfig, ResolvedWeComAccount } from "./utils.ts";
+import { resolveWeComAccount } from "./utils.ts";
 
 /**
  * 使用 SDK 的 sendMessage 主动发送企业微信消息

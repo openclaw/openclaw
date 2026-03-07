@@ -11,10 +11,10 @@ import {
   IMAGE_DOWNLOAD_TIMEOUT_MS,
   FILE_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_MEDIA_MAX_MB,
-} from "./const.js";
-import { getWeComRuntime } from "./runtime.js";
-import { withTimeout } from "./timeout.js";
-import type { ResolvedWeComAccount } from "./utils.js";
+} from "./const.ts";
+import { getWeComRuntime } from "./runtime.ts";
+import { withTimeout } from "./timeout.ts";
+import type { ResolvedWeComAccount } from "./utils.ts";
 
 // ============================================================================
 // 图片格式检测辅助函数（基于 file-type 包）

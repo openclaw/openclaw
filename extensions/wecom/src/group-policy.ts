@@ -10,8 +10,8 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
-import { CHANNEL_ID } from "./const.js";
-import type { ResolvedWeComAccount, WeComConfig, WeComGroupConfig } from "./utils.js";
+import { CHANNEL_ID } from "./const.ts";
+import type { ResolvedWeComAccount, WeComConfig, WeComGroupConfig } from "./utils.ts";
 
 // ============================================================================
 // 检查结果类型

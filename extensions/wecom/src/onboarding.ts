@@ -9,9 +9,9 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import { CHANNEL_ID } from "./const.js";
-import type { ResolvedWeComAccount } from "./utils.js";
-import { resolveWeComAccount, setWeComAccount } from "./utils.js";
+import { CHANNEL_ID } from "./const.ts";
+import type { ResolvedWeComAccount } from "./utils.ts";
+import { resolveWeComAccount, setWeComAccount } from "./utils.ts";
 
 const channel = CHANNEL_ID;
 

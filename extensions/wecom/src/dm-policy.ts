@@ -6,11 +6,11 @@
 
 import type { WSClient, WsFrame } from "@wecom/aibot-node-sdk";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { CHANNEL_ID } from "./const.js";
-import { isSenderAllowed } from "./group-policy.js";
-import { sendWeComReply } from "./message-sender.js";
-import { getWeComRuntime } from "./runtime.js";
-import type { ResolvedWeComAccount } from "./utils.js";
+import { CHANNEL_ID } from "./const.ts";
+import { isSenderAllowed } from "./group-policy.ts";
+import { sendWeComReply } from "./message-sender.ts";
+import { getWeComRuntime } from "./runtime.ts";
+import type { ResolvedWeComAccount } from "./utils.ts";
 
 // ============================================================================
 // 检查结果类型

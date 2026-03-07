@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { wecomPlugin } from "./src/channel.js";
-import { setWeComRuntime } from "./src/runtime.js";
+import { wecomPlugin } from "./src/channel.ts";
+import { setWeComRuntime } from "./src/runtime.ts";
 
 const plugin = {
   id: "wecom",

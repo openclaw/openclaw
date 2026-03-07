@@ -6,9 +6,9 @@
 
 import type { WSClient, WsFrame } from "@wecom/aibot-node-sdk";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { REPLY_SEND_TIMEOUT_MS } from "./const.js";
-import { withTimeout } from "./timeout.js";
-import { generateReqId } from "./utils.js";
+import { REPLY_SEND_TIMEOUT_MS } from "./const.ts";
+import { withTimeout } from "./timeout.ts";
+import { generateReqId } from "./utils.ts";
 
 // ============================================================================
 // 消息发送
