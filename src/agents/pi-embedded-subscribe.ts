@@ -691,6 +691,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    getLastAssistantRateLimits: (): Record<string, string> | undefined =>
+      (state.lastAssistant as { rateLimits?: Record<string, string> } | undefined)?.rateLimits,
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {
