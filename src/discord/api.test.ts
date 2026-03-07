@@ -42,6 +42,20 @@ describe("fetchDiscord", () => {
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
   });
 
+  it("sends a Discord-compliant User-Agent header", async () => {
+    let capturedHeaders: Headers | undefined;
+    const fetcher = withFetchPreconnect(async (url: string | URL | Request, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      return jsonResponse([{ id: "1", name: "Guild" }], 200);
+    });
+
+    await fetchDiscord("/users/@me/guilds", "test-token", fetcher);
+
+    expect(capturedHeaders).toBeDefined();
+    expect(capturedHeaders!.get("User-Agent")).toMatch(/^DiscordBot \(/);
+    expect(capturedHeaders!.get("Authorization")).toBe("Bot test-token");
+  });
+
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
