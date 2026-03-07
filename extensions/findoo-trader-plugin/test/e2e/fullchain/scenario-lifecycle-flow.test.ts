@@ -241,8 +241,8 @@ describe("Phase F — Scenario: Lifecycle Flow", () => {
     expect(heartbeatLogs.some((l) => l.action === "lifecycle_engine_started")).toBe(true);
   });
 
-  // ── 7. runCycle() full chain: create L1 strategy → runCycle → verify auto-promotion ──
-  it("runCycle() auto-promotes L1→L2 strategy with passing gates + records activity", async () => {
+  // ── 7. runCycle() full chain: create L1 strategy → runCycle → verify recommendation (Agent-sovereign) ──
+  it("runCycle() recommends L1→L2 promotion via wake bridge (does not auto-execute)", async () => {
     // Create a strategy with data that satisfies real FundManager L1→L2 gates
     const createRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/create`, {
       method: "POST",
@@ -289,35 +289,24 @@ describe("Phase F — Scenario: Lifecycle Flow", () => {
       threshold: 0.6,
     } as never);
 
-    // Count activity before cycle
-    const beforeLogs = ctx.services.activityLog.listRecent(100, "promotion").length;
-
     // Execute lifecycle cycle — real FundManager gates will evaluate
-    // Note: other strategies from earlier tests may also get promoted (e.g. L0→L1)
     const result = await ctx.services.lifecycleEngine.runCycle();
     expect(result.promoted).toBeGreaterThanOrEqual(1);
     expect(result.errors).toBe(0);
 
-    // Verify strategy level actually changed in real registry
+    // LifecycleEngine no longer auto-executes — strategy stays at L1
     const updated = ctx.services.strategyRegistry.get(strategyId);
-    expect(updated?.level).toBe("L2_PAPER");
+    expect(updated?.level).toBe("L1_BACKTEST");
 
-    // Verify activity log recorded the promotion
-    const afterLogs = ctx.services.activityLog.listRecent(100, "promotion");
-    expect(afterLogs.length).toBeGreaterThan(beforeLogs);
-    const promoLog = afterLogs.find((l) => l.strategyId === strategyId);
-    expect(promoLog).toBeDefined();
-    expect(promoLog!.detail).toContain("L2_PAPER");
+    // Activity log should have lifecycle recommendation (not direct promotion)
+    const lifecycleLogs = ctx.services.activityLog.listRecent(100, "lifecycle");
+    expect(lifecycleLogs.some((l) => l.action === "lifecycle_recommendation")).toBe(true);
 
-    // Verify the flow JSON API reflects the updated level
-    const flowRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/dashboard/flow`);
-    expect(flowRes.status).toBe(200);
-    const flowData = flowRes.body as { strategies: Array<{ id: string; level: string }> };
-    const card = flowData.strategies.find((s) => s.id === strategyId);
-    expect(card?.level).toBe("L2_PAPER");
+    // Wake bridge pending wakes should include the recommendation
+    const pending = ctx.services.wakeBridge.getPending();
+    expect(pending.some((w) => w.contextKey === "cron:findoo:lifecycle-recommendation")).toBe(true);
 
     // Verify engine stats
     expect(ctx.services.lifecycleEngine.getStats().cycleCount).toBeGreaterThanOrEqual(1);
-    expect(ctx.services.lifecycleEngine.getStats().promotionCount).toBeGreaterThanOrEqual(1);
   });
 });

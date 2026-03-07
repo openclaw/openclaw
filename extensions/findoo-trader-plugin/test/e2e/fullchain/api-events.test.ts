@@ -179,6 +179,35 @@ describe("B5 — Events & Approval API full-chain", () => {
     });
     expect(p1.status).toBe(200);
 
+    // Seed backtest + walk-forward data (required by L1→L2 promotion gate)
+    const reg = ctx.services.strategyRegistry;
+    reg.updateBacktest(sid, {
+      strategyId: sid,
+      startDate: Date.now() - 86_400_000 * 90,
+      endDate: Date.now(),
+      initialCapital: 10000,
+      finalEquity: 15000,
+      totalReturn: 50,
+      sharpe: 1.8,
+      sortino: 2.0,
+      maxDrawdown: -12,
+      calmar: 1.5,
+      winRate: 0.55,
+      profitFactor: 1.8,
+      totalTrades: 150,
+      trades: [],
+      equityCurve: [],
+      dailyReturns: [],
+    });
+    reg.updateWalkForward(sid, {
+      passed: true,
+      windows: [],
+      combinedTestSharpe: 1.2,
+      avgTrainSharpe: 1.5,
+      ratio: 0.8,
+      threshold: 0.6,
+    });
+
     // Promote L1→L2
     const p2 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
       method: "POST",
@@ -249,12 +278,43 @@ describe("B5 — Events & Approval API full-chain", () => {
     expect(createRes.status).toBe(201);
     const sid = (createRes.body as { strategy: { id: string } }).strategy.id;
 
-    // Promote L0→L1→L2
+    // Promote L0→L1
     await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: sid }),
     });
+
+    // Seed backtest + walk-forward data (required by L1→L2 promotion gate)
+    const reg = ctx.services.strategyRegistry;
+    reg.updateBacktest(sid, {
+      strategyId: sid,
+      startDate: Date.now() - 86_400_000 * 90,
+      endDate: Date.now(),
+      initialCapital: 10000,
+      finalEquity: 15000,
+      totalReturn: 50,
+      sharpe: 1.8,
+      sortino: 2.0,
+      maxDrawdown: -12,
+      calmar: 1.5,
+      winRate: 0.55,
+      profitFactor: 1.8,
+      totalTrades: 150,
+      trades: [],
+      equityCurve: [],
+      dailyReturns: [],
+    });
+    reg.updateWalkForward(sid, {
+      passed: true,
+      windows: [],
+      combinedTestSharpe: 1.2,
+      avgTrainSharpe: 1.5,
+      ratio: 0.8,
+      threshold: 0.6,
+    });
+
+    // Promote L1→L2
     await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

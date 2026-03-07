@@ -146,20 +146,9 @@ describe("Scenario S6 — Multi-Strategy Correlation Conflict", () => {
         dailyReturns: [],
       });
 
-      // Promote L0 → L1 → L2
-      const p1 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sid }),
-      });
-      expect(p1.status).toBe(200);
-
-      const p2 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sid }),
-      });
-      expect(p2.status).toBe(200);
+      // Simulate Agent promoting L0 → L1 → L2 (LifecycleEngine no longer auto-promotes)
+      ctx.services.strategyRegistry.updateLevel(sid, "L1_BACKTEST");
+      ctx.services.strategyRegistry.updateLevel(sid, "L2_PAPER");
     }
 
     expect(ids.length).toBe(5);

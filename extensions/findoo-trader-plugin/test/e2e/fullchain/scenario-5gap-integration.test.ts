@@ -322,23 +322,23 @@ describe("L2/L3 — 5 Gap Integration", () => {
       expect(result.errors).toBe(0);
       expect(result.promoted).toBeGreaterThanOrEqual(1);
 
-      // Verify strategy promoted
+      // Verify strategy level unchanged (engine only recommends, does not auto-promote)
       const updated = ctx.services.strategyRegistry.get(strategyId);
-      expect(updated?.level).toBe("L2_PAPER");
+      expect(updated?.level).toBe("L1_BACKTEST");
 
       // Verify cycle count incremented
       expect(ctx.services.lifecycleEngine.getStats().cycleCount).toBe(beforeCycle + 1);
 
-      // Verify wake bridge activity was logged
-      const wakeLog = ctx.services.activityLog.listRecent(30, "promotion");
-      expect(wakeLog.some((l) => l.strategyId === strategyId)).toBe(true);
+      // Verify wake bridge recommendation was logged
+      const wakeLog = ctx.services.activityLog.listRecent(30, "lifecycle");
+      expect(wakeLog.some((l) => l.action === "lifecycle_recommendation")).toBe(true);
 
-      // Verify the promotion is visible via Flow JSON API
+      // Verify Flow JSON API still shows L1 (no auto-promotion)
       const flowRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/dashboard/flow`);
       expect(flowRes.status).toBe(200);
       const flowData = flowRes.body as { strategies: Array<{ id: string; level: string }> };
       const card = flowData.strategies.find((s) => s.id === strategyId);
-      expect(card?.level).toBe("L2_PAPER");
+      expect(card?.level).toBe("L1_BACKTEST");
     });
   });
 });

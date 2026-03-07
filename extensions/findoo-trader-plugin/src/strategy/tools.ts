@@ -1,9 +1,9 @@
 /**
  * Strategy engine AI tools — extracted from fin-strategy-engine.
  * 5 tools: fin_strategy_create, fin_strategy_list, fin_backtest_run,
- *          fin_backtest_result, fin_strategy_tick.
+ *          fin_backtest_result, fin_walk_forward_run.
  *
- * L3_LIVE path now uses LiveExecutor directly (no cross-extension service lookup).
+ * fin_strategy_tick moved to fund/tools.ts (has DataProvider/LiveExecutor deps).
  */
 
 import { Type } from "@sinclair/typebox";
@@ -21,19 +21,9 @@ import { createRsiMeanReversion } from "./builtin-strategies/rsi-mean-reversion.
 import { createSmaCrossover } from "./builtin-strategies/sma-crossover.js";
 import { createTrendFollowingMomentum } from "./builtin-strategies/trend-following-momentum.js";
 import { createVolatilityMeanReversion } from "./builtin-strategies/volatility-mean-reversion.js";
-import { buildIndicatorLib } from "./indicator-lib.js";
 import type { RemoteBacktestBridge } from "./remote-backtest-bridge.js";
 import type { StrategyRegistry } from "./strategy-registry.js";
-import type { BacktestConfig, StrategyContext, StrategyDefinition } from "./types.js";
-
-type OhlcvBar = {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
+import type { BacktestConfig, StrategyDefinition } from "./types.js";
 
 const json = (payload: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
@@ -52,9 +42,6 @@ export function registerStrategyTools(
   paperEngine: PaperEngine | null,
   progressStore?: BacktestProgressStore,
 ): void {
-  // Per-strategy tick memory, persisted across ticks
-  const tickMemory = new Map<string, Map<string, unknown>>();
-
   // --- fin_strategy_create ---
   api.registerTool(
     {
@@ -418,187 +405,5 @@ export function registerStrategyTools(
       },
     },
     { names: ["fin_walk_forward_run"] },
-  );
-
-  // --- fin_strategy_tick ---
-  api.registerTool(
-    {
-      name: "fin_strategy_tick",
-      label: "Strategy Tick",
-      description:
-        "Feed the latest market bar to a running strategy. If a signal fires, " +
-        "submit order to paper engine (L2) or live engine (L3) automatically.",
-      parameters: Type.Object({
-        strategyId: Type.String({ description: "Strategy ID to tick" }),
-        symbol: Type.Optional(
-          Type.String({ description: "Override symbol (default: strategy's first symbol)" }),
-        ),
-        timeframe: Type.Optional(
-          Type.String({ description: "Override timeframe (default: strategy's first)" }),
-        ),
-      }),
-      async execute(_id: string, params: Record<string, unknown>) {
-        try {
-          const strategyId = params.strategyId as string;
-          const record = registry.get(strategyId);
-          if (!record) return json({ error: `Strategy ${strategyId} not found` });
-          if (record.level !== "L2_PAPER" && record.level !== "L3_LIVE") {
-            return json({
-              error: `Strategy ${strategyId} is ${record.level}, must be L2_PAPER or L3_LIVE to tick`,
-            });
-          }
-
-          // Get data provider
-          const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
-          const dataProvider = runtime.services?.get?.("fin-data-provider") as
-            | {
-                getOHLCV?: (
-                  paramsOrSymbol:
-                    | {
-                        symbol: string;
-                        market: string;
-                        timeframe: string;
-                        limit?: number;
-                      }
-                    | string,
-                  timeframe?: string,
-                  limit?: number,
-                ) => Promise<OhlcvBar[]>;
-              }
-            | undefined;
-
-          if (!dataProvider?.getOHLCV) {
-            return json({ error: "Data provider not available. Load findoo-datahub-plugin." });
-          }
-
-          const symbol = (params.symbol as string) ?? record.definition.symbols[0] ?? "BTC/USDT";
-          const timeframe = (params.timeframe as string) ?? record.definition.timeframes[0] ?? "1h";
-          const market = record.definition.markets[0] ?? "crypto";
-
-          const getOHLCV = dataProvider.getOHLCV;
-          const ohlcv =
-            getOHLCV.length <= 1
-              ? await getOHLCV({ symbol, market, timeframe, limit: 200 })
-              : await getOHLCV(symbol, timeframe, 200);
-
-          if (!ohlcv || ohlcv.length === 0) {
-            return json({ error: `No OHLCV data for ${symbol} ${timeframe}` });
-          }
-
-          const latestBar = ohlcv[ohlcv.length - 1]!;
-          const indicators = buildIndicatorLib(ohlcv);
-
-          // Get paper engine portfolio state (IDs are paper-{uuid}, not "default")
-          const paperAccounts = paperEngine?.listAccounts?.() ?? [];
-          const activeAccountId = paperAccounts[0]?.id;
-          const portfolio = (activeAccountId
-            ? paperEngine?.getAccountState?.(activeAccountId)
-            : null) ?? {
-            equity: 10000,
-            cash: 10000,
-          };
-
-          // Ensure per-strategy tick memory
-          if (!tickMemory.has(strategyId)) {
-            tickMemory.set(strategyId, new Map());
-          }
-
-          let regimeSource: "detector" | "default" = "default";
-
-          const ctx: StrategyContext = {
-            portfolio: {
-              equity: (portfolio as { equity: number }).equity,
-              cash:
-                (portfolio as { cash?: number }).cash ?? (portfolio as { equity: number }).equity,
-              positions: [],
-            },
-            history: ohlcv,
-            indicators,
-            regime: "sideways",
-            memory: tickMemory.get(strategyId)!,
-            log: () => {},
-          };
-
-          // Use regime detector if available
-          const regimeDetector = runtime.services?.get?.("fin-regime-detector") as
-            | { detect?: (bars: OhlcvBar[]) => string }
-            | undefined;
-          if (regimeDetector?.detect) {
-            ctx.regime = regimeDetector.detect(ohlcv) as typeof ctx.regime;
-            regimeSource = "detector";
-          }
-
-          // Execute strategy onBar
-          const signal = await record.definition.onBar(latestBar, ctx);
-
-          if (!signal) {
-            return json({
-              strategyId,
-              symbol,
-              timeframe,
-              bar: { timestamp: latestBar.timestamp, close: latestBar.close },
-              signal: null,
-              action: "hold",
-              regime: ctx.regime,
-              regimeSource,
-            });
-          }
-
-          // Route order based on level
-          let orderResult: unknown = null;
-
-          if (record.level === "L2_PAPER") {
-            if (paperEngine?.submitOrder && activeAccountId) {
-              const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
-              orderResult = paperEngine.submitOrder(
-                activeAccountId,
-                {
-                  symbol: signal.symbol || symbol,
-                  side: signal.action === "buy" ? "buy" : "sell",
-                  type: signal.orderType,
-                  quantity,
-                  strategyId,
-                },
-                latestBar.close,
-              );
-            }
-          } else if (record.level === "L3_LIVE") {
-            // L3 path: use LiveExecutor directly (no cross-extension service lookup)
-            if (liveExecutor) {
-              const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
-              orderResult = await liveExecutor.createOrder(
-                signal.symbol || symbol,
-                signal.orderType,
-                signal.action === "buy" ? "buy" : "sell",
-                quantity,
-                signal.limitPrice,
-              );
-            } else {
-              orderResult = { warning: "Live executor not available, order not submitted" };
-            }
-          }
-
-          return json({
-            strategyId,
-            symbol,
-            timeframe,
-            bar: { timestamp: latestBar.timestamp, close: latestBar.close },
-            signal: {
-              action: signal.action,
-              sizePct: signal.sizePct,
-              reason: signal.reason,
-              confidence: signal.confidence,
-            },
-            regime: ctx.regime,
-            regimeSource,
-            level: record.level,
-            orderResult,
-          });
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
-    },
-    { names: ["fin_strategy_tick"] },
   );
 }

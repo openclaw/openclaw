@@ -162,6 +162,38 @@ describe("Phase F — Full Lifecycle Journey (B12)", () => {
     expect(data.to).toBe("L1_BACKTEST");
   });
 
+  // ── J5b: Seed backtest + walk-forward data (required by promotion gate) ──
+
+  it("J5b: seed backtest & walk-forward data for L1→L2 gate", () => {
+    const reg = ctx.services.strategyRegistry;
+    reg.updateBacktest(strategyId, {
+      strategyId,
+      startDate: Date.now() - 86_400_000 * 90,
+      endDate: Date.now(),
+      initialCapital: 10000,
+      finalEquity: 15000,
+      totalReturn: 50,
+      sharpe: 1.8,
+      sortino: 2.0,
+      maxDrawdown: -12,
+      calmar: 1.5,
+      winRate: 0.55,
+      profitFactor: 1.8,
+      totalTrades: 150,
+      trades: [],
+      equityCurve: [],
+      dailyReturns: [],
+    });
+    reg.updateWalkForward(strategyId, {
+      passed: true,
+      windows: [],
+      combinedTestSharpe: 1.2,
+      avgTrainSharpe: 1.5,
+      ratio: 0.8,
+      threshold: 0.6,
+    });
+  });
+
   // ── J6: Promote L1 → L2 ──
 
   it("J6: POST /strategies/promote L1 to L2", async () => {

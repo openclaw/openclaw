@@ -17,6 +17,10 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EvolutionScheduler } from "../../../src/alpha-factory/evolution-scheduler.js";
+import { GarbageCollector } from "../../../src/alpha-factory/garbage-collector.js";
+import { AlphaFactoryOrchestrator } from "../../../src/alpha-factory/orchestrator.js";
+import { ScreeningPipeline } from "../../../src/alpha-factory/screening-pipeline.js";
 // ── Service classes ──
 import { ActivityLogStore } from "../../../src/core/activity-log-store.js";
 import { AgentEventSqliteStore } from "../../../src/core/agent-event-sqlite-store.js";
@@ -40,6 +44,7 @@ import { CapitalFlowStore } from "../../../src/fund/capital-flow-store.js";
 import { FundManager } from "../../../src/fund/fund-manager.js";
 import { PerformanceSnapshotStore } from "../../../src/fund/performance-snapshot-store.js";
 import { registerFundRoutes } from "../../../src/fund/routes.js";
+import { FailureFeedbackStore } from "../../../src/ideation/failure-feedback-store.js";
 import { PaperEngine } from "../../../src/paper/paper-engine.js";
 import { PaperStore } from "../../../src/paper/paper-store.js";
 import { BacktestProgressStore } from "../../../src/strategy/backtest-progress-store.js";
@@ -104,6 +109,8 @@ export type FullChainServices = {
   wakeBridge: AgentWakeBridge;
   liveHealthMonitor: LiveHealthMonitor;
   liveReconciler: LiveReconciler;
+  alphaFactory: AlphaFactoryOrchestrator;
+  failureFeedbackStore: FailureFeedbackStore;
 };
 
 export type FullChainContext = {
@@ -224,6 +231,38 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     300_000, // 5 min — won't fire during tests
   );
 
+  // ── Alpha Factory services ──
+
+  const failureFeedbackStore = new FailureFeedbackStore();
+
+  const screeningPipeline = new ScreeningPipeline({
+    backtestService: {
+      async runBacktest() {
+        return null; // No remote backtest in test harness by default
+      },
+    },
+  });
+
+  const garbageCollector = new GarbageCollector();
+
+  const evolutionScheduler = new EvolutionScheduler(
+    {
+      strategyRegistry,
+      evolutionEngineResolver: () => undefined,
+      paperEngine,
+      activityLog,
+    },
+    86_400_000, // 24h — won't fire during tests
+  );
+
+  const alphaFactory = new AlphaFactoryOrchestrator({
+    screeningPipeline,
+    evolutionScheduler,
+    garbageCollector,
+    activityLog,
+  });
+  alphaFactory.start();
+
   // Init fund manager day-start
   fundManager.markDayStart(DEFAULT_FUND_CONFIG.totalCapital);
 
@@ -241,6 +280,7 @@ export async function createFullChainServer(): Promise<FullChainContext> {
   serviceMap.set("fin-strategy-registry", strategyRegistry);
 
   serviceMap.set("fin-fund-manager", fundManager);
+  serviceMap.set("fin-alpha-factory", alphaFactory);
 
   const runtime: RuntimeServices = { services: serviceMap };
 
@@ -319,6 +359,33 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     httpRes.end(JSON.stringify({ brief }));
   });
 
+  // ── Alpha Factory HTTP routes (mirroring index.ts) ──
+
+  routes.set("/api/v1/finance/alpha-factory/stats", async (_req: unknown, res: unknown) => {
+    const httpRes = res as HttpRes;
+    httpRes.writeHead(200, { "Content-Type": "application/json" });
+    httpRes.end(JSON.stringify(alphaFactory.getStats()));
+  });
+
+  routes.set("/api/v1/finance/alpha-factory/trigger", async (_req: unknown, res: unknown) => {
+    const httpRes = res as HttpRes;
+    const ids = strategyRegistry.list().map((s) => s.id);
+    const result = await alphaFactory.runFullPipeline(ids);
+    httpRes.writeHead(200, { "Content-Type": "application/json" });
+    httpRes.end(JSON.stringify(result));
+  });
+
+  routes.set("/api/v1/finance/alpha-factory/failures", async (_req: unknown, res: unknown) => {
+    const httpRes = res as HttpRes;
+    httpRes.writeHead(200, { "Content-Type": "application/json" });
+    httpRes.end(
+      JSON.stringify({
+        summary: failureFeedbackStore.getSummary(),
+        recent: failureFeedbackStore.getRecentPatterns(20),
+      }),
+    );
+  });
+
   // 7. Boot real HTTP server
   const port = await getFreePort();
   const server = http.createServer((req, res) => {
@@ -360,6 +427,8 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     wakeBridge,
     liveHealthMonitor,
     liveReconciler,
+    alphaFactory,
+    failureFeedbackStore,
   };
 
   return {
@@ -369,6 +438,16 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     runtime,
     tmpDir,
     cleanup() {
+      try {
+        alphaFactory.stop();
+      } catch {
+        /* noop */
+      }
+      try {
+        evolutionScheduler.stop();
+      } catch {
+        /* noop */
+      }
       try {
         lifecycleEngine.stop();
       } catch {

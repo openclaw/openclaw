@@ -124,6 +124,18 @@ describe("Scenario — Performance Attribution", () => {
       });
     }
 
+    // Inject walkforward results so L1→L2 gate passes
+    for (const sid of [strategyIdA, strategyIdB, strategyIdC]) {
+      ctx.services.strategyRegistry.updateWalkForward(sid, {
+        passed: true,
+        windows: [],
+        combinedTestSharpe: 1.4,
+        avgTrainSharpe: 1.8,
+        ratio: 0.78,
+        threshold: 0.6,
+      } as never);
+    }
+
     // Promote all to L2 (L0 → L1 → L2)
     for (const id of [strategyIdA, strategyIdB, strategyIdC]) {
       const p1 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {

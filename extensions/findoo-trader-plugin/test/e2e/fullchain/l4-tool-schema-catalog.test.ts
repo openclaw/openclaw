@@ -72,7 +72,6 @@ const STRATEGY_TOOLS = [
   "fin_backtest_run",
   "fin_backtest_result",
   "fin_walk_forward_run",
-  "fin_strategy_tick",
 ];
 
 const PAPER_TOOLS = [
@@ -93,6 +92,7 @@ const FUND_TOOLS = [
   "fin_fund_risk",
   "fin_list_promotions_ready",
   "fin_lifecycle_scan",
+  "fin_strategy_tick",
 ];
 
 const EXECUTION_TOOLS = [
@@ -108,7 +108,7 @@ const ALL_TOOLS = [...STRATEGY_TOOLS, ...PAPER_TOOLS, ...FUND_TOOLS, ...EXECUTIO
 // ── Tests ──
 
 describe("L4 — Tool Schema Catalog", () => {
-  describe("Strategy tools (6)", () => {
+  describe("Strategy tools (5)", () => {
     let calls: RegisterToolCall[];
 
     beforeEach(() => {
@@ -119,10 +119,10 @@ describe("L4 — Tool Schema Catalog", () => {
       registerStrategyTools(api as never, registry, bridge, null, null);
     });
 
-    it("registers exactly 6 strategy tools", () => {
+    it("registers exactly 5 strategy tools", () => {
       const names = calls.flatMap((c) => c.opts.names);
       expect(names).toEqual(expect.arrayContaining(STRATEGY_TOOLS));
-      expect(names).toHaveLength(6);
+      expect(names).toHaveLength(5);
     });
 
     for (const toolName of STRATEGY_TOOLS) {
@@ -174,7 +174,7 @@ describe("L4 — Tool Schema Catalog", () => {
     }
   });
 
-  describe("Fund tools (8)", () => {
+  describe("Fund tools (9)", () => {
     let calls: RegisterToolCall[];
 
     beforeEach(() => {
@@ -205,10 +205,10 @@ describe("L4 — Tool Schema Catalog", () => {
       });
     });
 
-    it("registers exactly 8 fund tools", () => {
+    it("registers exactly 9 fund tools", () => {
       const names = calls.flatMap((c) => c.opts.names);
       expect(names).toEqual(expect.arrayContaining(FUND_TOOLS));
-      expect(names).toHaveLength(8);
+      expect(names).toHaveLength(9);
     });
 
     for (const toolName of FUND_TOOLS) {

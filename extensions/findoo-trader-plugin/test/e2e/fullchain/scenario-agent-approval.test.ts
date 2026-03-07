@@ -1,9 +1,9 @@
 /**
  * Phase F — Scenario: Agent Intermediated Approval Flow (L2→L3)
  *
- * Tests the complete lifecycle: create strategy → promote through L0→L1→L2 →
- * lifecycle scan detects L2→L3 eligibility → approval needed event → simulate
- * agent calling fin_fund_rebalance with confirmed_promotions → verify L3_LIVE.
+ * Tests the Agent-sovereign lifecycle: create strategy → lifecycle engine
+ * recommends L0→L1→L2 (agent executes each) → L2→L3 eligibility detected →
+ * approval needed event → simulate agent calling approve → verify L3_LIVE.
  *
  * Run:
  *   npx vitest run extensions/findoo-trader-plugin/test/e2e/fullchain/scenario-agent-approval.test.ts
@@ -37,7 +37,7 @@ describe("Phase F — Scenario: Agent Intermediated Approval (L2→L3)", () => {
     ctx?.cleanup();
   });
 
-  it("full lifecycle: L0 → L1 → L2 → approval scan → agent rebalance → L3", async () => {
+  it("Agent-sovereign lifecycle: L0 → L1 → L2 (via recommendations) → approval → L3", async () => {
     // ── 1. Create strategy via HTTP ──
     const createRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/create`, {
       method: "POST",
@@ -87,19 +87,28 @@ describe("Phase F — Scenario: Agent Intermediated Approval (L2→L3)", () => {
       threshold: 0.6,
     } as never);
 
-    // ── 3. Run cycle #1: L0→L1 auto-promotion ──
+    // ── 3. Run cycle #1: LifecycleEngine recommends L0→L1 (Agent-sovereign) ──
+    // Engine no longer auto-promotes; it builds recommendations for the Agent.
     const cycle1 = await ctx.services.lifecycleEngine.runCycle();
-    expect(cycle1.promoted).toBeGreaterThanOrEqual(1);
+    expect(cycle1.promoted).toBeGreaterThanOrEqual(1); // "promoted" counts recommendations
 
+    // Strategy level is still L0 — recommendation only, not execution
     const afterCycle1 = ctx.services.strategyRegistry.get(strategyId);
-    expect(afterCycle1?.level).toBe("L1_BACKTEST");
+    expect(afterCycle1?.level).toBe("L0_INCUBATE");
 
-    // ── 4. Run cycle #2: L1→L2 auto-promotion (backtest+WF pass gates) ──
+    // Simulate Agent executing the recommendation
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L1_BACKTEST" as never);
+
+    // ── 4. Run cycle #2: LifecycleEngine recommends L1→L2 (Agent-sovereign) ──
     const cycle2 = await ctx.services.lifecycleEngine.runCycle();
-    expect(cycle2.promoted).toBeGreaterThanOrEqual(1);
+    expect(cycle2.promoted).toBeGreaterThanOrEqual(1); // recommendation count
 
+    // Strategy level is still L1 — recommendation only, not execution
     const afterCycle2 = ctx.services.strategyRegistry.get(strategyId);
-    expect(afterCycle2?.level).toBe("L2_PAPER");
+    expect(afterCycle2?.level).toBe("L1_BACKTEST");
+
+    // Simulate Agent executing the recommendation
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L2_PAPER" as never);
 
     // ── 5. Verify L2 via API ──
     const listRes = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies`);
@@ -210,8 +219,8 @@ describe("Phase F — Scenario: Agent Intermediated Approval (L2→L3)", () => {
 
     // ── 14. Verify lifecycle engine stats ──
     const stats = ctx.services.lifecycleEngine.getStats();
+    // promotionCount only increments on handleApproval (L2→L3) now; verify cycleCount instead
     expect(stats.cycleCount).toBeGreaterThanOrEqual(3);
-    expect(stats.promotionCount).toBeGreaterThanOrEqual(1);
   });
 
   it("reject flow: L2 strategy stays L2 after rejection", async () => {
