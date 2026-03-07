@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -66,44 +67,65 @@ describe("systemd availability", () => {
 });
 
 describe("isSystemdServiceEnabled", () => {
+  const mockManagedUnitPresent = () => {
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+  };
+
   beforeEach(() => {
+    vi.restoreAllMocks();
     execFileMock.mockReset();
   });
 
   it("returns false when systemctl is not present", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
+    mockManagedUnitPresent();
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
       const err = new Error("spawn systemctl EACCES") as Error & { code?: string };
       err.code = "EACCES";
       cb(err, "", "");
     });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
     expect(result).toBe(false);
+  });
+
+  it("returns false without calling systemctl when the managed unit file is missing", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    const err = new Error("missing unit") as NodeJS.ErrnoException;
+    err.code = "ENOENT";
+    vi.spyOn(fs, "access").mockRejectedValueOnce(err);
+
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
+
+    expect(result).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("calls systemctl is-enabled when systemctl is present", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
+    mockManagedUnitPresent();
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
       cb(null, "enabled", "");
     });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
     expect(result).toBe(true);
   });
 
   it("returns false when systemctl reports disabled", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
+    mockManagedUnitPresent();
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
       const err = new Error("disabled") as Error & { code?: number };
       err.code = 1;
       cb(err, "disabled", "");
     });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
     expect(result).toBe(false);
   });
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
+    mockManagedUnitPresent();
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
@@ -119,13 +141,14 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
-      "systemctl is-enabled unavailable: permission denied",
-    );
+    await expect(
+      isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } }),
+    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
+    mockManagedUnitPresent();
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
       // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
       // code 4 and prints "not-found" to stdout when the unit doesn't exist.
@@ -135,7 +158,7 @@ describe("isSystemdServiceEnabled", () => {
       err.code = 4;
       cb(err, "not-found\n", "");
     });
-    const result = await isSystemdServiceEnabled({ env: {} });
+    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
     expect(result).toBe(false);
   });
 });
