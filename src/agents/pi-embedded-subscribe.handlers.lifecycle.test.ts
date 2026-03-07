@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -72,5 +73,83 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+  });
+
+  it("emits truncated phase and notifies user when output limit is hit (stopReason=length)", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "partial response..." }],
+        usage: {
+          output_tokens: 8192,
+        },
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    // Should warn about the truncation
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("embedded run truncated at output limit");
+    expect(warn.mock.calls[0]?.[0]).toContain("runId=run-1");
+
+    // Should emit truncated phase event, not end
+    const mocked = vi.mocked(emitAgentEvent);
+    expect(mocked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "truncated",
+          stopReason: "length",
+        }),
+      }),
+    );
+
+    // Should notify user via onAgentEvent
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "system",
+      data: expect.objectContaining({
+        type: "warning",
+        message: expect.stringContaining("truncated"),
+      }),
+    });
+  });
+
+  it("emits truncated phase when output limit is hit (stopReason=max_tokens)", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "max_tokens",
+        content: [{ type: "text", text: "partial response..." }],
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    // Should emit truncated phase for max_tokens as well
+    const mocked = vi.mocked(emitAgentEvent);
+    expect(mocked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "truncated",
+          stopReason: "max_tokens",
+        }),
+      }),
+    );
+
+    // Should notify user
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "system",
+      data: expect.objectContaining({
+        type: "warning",
+      }),
+    });
   });
 });
