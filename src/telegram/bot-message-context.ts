@@ -92,6 +92,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import { getCachedSticker } from "./sticker-cache.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -166,6 +167,21 @@ async function resolveStickerVisionSupport(params: {
   } catch {
     return false;
   }
+}
+
+// oxlint-disable-next-line typescript/no-explicit-any
+function formatStickerReplyBody(sticker: any): string {
+  // Try to get cached description from sticker cache
+  const cached = sticker?.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+  if (cached?.description) {
+    const emoji = sticker?.emoji ?? cached.emoji ?? "";
+    const setName = cached.setName ? ` from "${cached.setName}"` : "";
+    return `[sticker${emoji ? ` ${emoji}` : ""}${setName}] ${cached.description}`;
+  }
+  // Fallback: emoji + set name
+  const emoji = sticker?.emoji ?? "";
+  const setName = sticker?.set_name ? ` from "${sticker.set_name}"` : "";
+  return `[sticker${emoji ? ` ${emoji}` : ""}${setName}]`;
 }
 
 export const buildTelegramMessageContext = async ({
@@ -505,7 +521,22 @@ export const buildTelegramMessageContext = async ({
   // Extract reply metadata once for use in history entries
   const replyMsg = msg.reply_to_message;
   const historyReplyToId = replyMsg?.message_id != null ? String(replyMsg.message_id) : undefined;
-  const historyReplyToBody = replyMsg?.text ?? replyMsg?.caption;
+  const historyReplyToBody =
+    replyMsg?.text ??
+    replyMsg?.caption ??
+    (replyMsg?.photo
+      ? "[image]"
+      : replyMsg?.sticker
+        ? formatStickerReplyBody(replyMsg.sticker)
+        : replyMsg?.video
+          ? "[video]"
+          : replyMsg?.voice
+            ? "[voice message]"
+            : replyMsg?.animation
+              ? "[GIF]"
+              : replyMsg?.document
+                ? `[file: ${replyMsg.document.file_name ?? "unknown"}]`
+                : undefined);
   const historyReplyToSender = replyMsg?.from?.first_name
     ? `${replyMsg.from.first_name}${replyMsg.from.last_name ? ` ${replyMsg.from.last_name}` : ""}`
     : (replyMsg?.from?.username ?? undefined);
@@ -1102,7 +1133,22 @@ async function callTelegramContextualDecision(params: {
   // Extract reply context from the Telegram message
   const replyTo = params.msg.reply_to_message;
   const replyToId = replyTo?.message_id != null ? String(replyTo.message_id) : undefined;
-  const replyToBody = replyTo?.text ?? replyTo?.caption;
+  const replyToBody =
+    replyTo?.text ??
+    replyTo?.caption ??
+    (replyTo?.photo
+      ? "[image]"
+      : replyTo?.sticker
+        ? formatStickerReplyBody(replyTo.sticker)
+        : replyTo?.video
+          ? "[video]"
+          : replyTo?.voice
+            ? "[voice message]"
+            : replyTo?.animation
+              ? "[GIF]"
+              : replyTo?.document
+                ? `[file: ${replyTo.document?.file_name ?? "unknown"}]`
+                : undefined);
   const replyToSender = replyTo
     ? replyTo.from?.first_name
       ? `${replyTo.from.first_name}${replyTo.from.last_name ? ` ${replyTo.from.last_name}` : ""}`

@@ -284,7 +284,8 @@ export function registerGatewayCli(program: Command) {
     .description("Tail contextual-activation decision logs in real-time")
     .option("-n, --lines <count>", "Number of initial lines to show", "20")
     .option("--json", "Output raw JSONL (default: human-readable)", false)
-    .action(async (opts: { lines?: string; json?: boolean }) => {
+    .option("--clean [days]", "Delete log files older than N days (default: 7)")
+    .action(async (opts: { lines?: string; json?: boolean; clean?: string | true }) => {
       const home = resolveHomeDir();
       if (!home) {
         defaultRuntime.error("Cannot resolve home directory");
@@ -297,6 +298,35 @@ export function registerGatewayCli(program: Command) {
           `No contextual-activation logs found at ${logDir}\nEnsure contextualActivation is configured in group settings.`,
         );
         defaultRuntime.exit(1);
+        return;
+      }
+
+      // --clean: remove old log files
+      if (opts.clean != null) {
+        const days =
+          opts.clean === true ? 7 : Math.max(0, Number.parseInt(String(opts.clean), 10) || 7);
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".jsonl"));
+        let removed = 0;
+        let totalBytes = 0;
+        for (const file of files) {
+          const fp = path.join(logDir, file);
+          const stat = fs.statSync(fp);
+          if (stat.mtimeMs < cutoff) {
+            totalBytes += stat.size;
+            fs.unlinkSync(fp);
+            removed++;
+          }
+        }
+        const sizeStr =
+          totalBytes > 1024 * 1024
+            ? `${(totalBytes / 1024 / 1024).toFixed(1)} MB`
+            : `${(totalBytes / 1024).toFixed(1)} KB`;
+        defaultRuntime.log(
+          removed > 0
+            ? `Removed ${removed} log file(s) older than ${days} day(s) (${sizeStr} freed)`
+            : `No log files older than ${days} day(s)`,
+        );
         return;
       }
 
