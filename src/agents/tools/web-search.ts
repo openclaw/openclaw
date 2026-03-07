@@ -511,30 +511,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
 
   // Auto-detect provider from available API keys (priority order)
   if (raw === "") {
-    // 1. Brave
-    if (resolveSearchApiKey(search)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "brave" from available API keys',
-      );
-      return "brave";
-    }
-    // 2. Gemini
-    const geminiConfig = resolveGeminiConfig(search);
-    if (resolveGeminiApiKey(geminiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "gemini" from available API keys',
-      );
-      return "gemini";
-    }
-    // 3. Kimi
-    const kimiConfig = resolveKimiConfig(search);
-    if (resolveKimiApiKey(kimiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "kimi" from available API keys',
-      );
-      return "kimi";
-    }
-    // 4. Perplexity
+    // 1. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -543,7 +520,22 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
-    // 5. Grok
+    // 2. Brave
+    if (resolveSearchApiKey(search)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "brave" from available API keys',
+      );
+      return "brave";
+    }
+    // 3. Gemini
+    const geminiConfig = resolveGeminiConfig(search);
+    if (resolveGeminiApiKey(geminiConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "gemini" from available API keys',
+      );
+      return "gemini";
+    }
+    // 4. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
       logVerbose(
@@ -551,9 +543,17 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "grok";
     }
+    // 5. Kimi
+    const kimiConfig = resolveKimiConfig(search);
+    if (resolveKimiApiKey(kimiConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "kimi" from available API keys',
+      );
+      return "kimi";
+    }
   }
 
-  return "brave";
+  return "perplexity";
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {

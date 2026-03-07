@@ -140,7 +140,7 @@ describe("resolveGatewayInstallToken", () => {
         gateway: {
           auth: {
             token: "token-value",
-            password: "password-value",
+            password: "password-value", // pragma: allowlist secret
           },
         },
       } as OpenClawConfig,

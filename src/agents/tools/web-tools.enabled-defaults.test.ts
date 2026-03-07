@@ -50,14 +50,14 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
 function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
   const searchConfig =
     provider === "perplexity"
-      ? { provider, perplexity: { apiKey: "pplx-config-test" } }
+      ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
       : provider === "grok"
-        ? { provider, grok: { apiKey: "xai-config-test" } }
+        ? { provider, grok: { apiKey: "xai-config-test" } } // pragma: allowlist secret
         : provider === "gemini"
-          ? { provider, gemini: { apiKey: "gemini-config-test" } }
+          ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
-            ? { provider, kimi: { apiKey: "moonshot-config-test" } }
-            : { provider, apiKey: "brave-config-test" };
+            ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
+            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -523,7 +523,7 @@ describe("web_search kimi provider", () => {
     global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createKimiSearchTool({
-      apiKey: "kimi-config-key",
+      apiKey: "kimi-config-key", // pragma: allowlist secret
       baseUrl: "https://api.moonshot.ai/v1",
       model: "moonshot-v1-128k",
     });

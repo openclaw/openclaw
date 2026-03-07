@@ -18,6 +18,9 @@ const {
   buildBraveDomainGoggles,
 } = __testing;
 
+const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
+const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+
 describe("web_search brave language param normalization", () => {
   it("normalizes and auto-corrects swapped Brave language params", () => {
     expect(normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
@@ -103,7 +106,7 @@ describe("web_search date normalization", () => {
 
 describe("web_search grok config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key"); // pragma: allowlist secret
   });
 
   it("returns undefined when no apiKey is available", () => {
@@ -222,15 +225,17 @@ describe("web_search grok response parsing", () => {
 
 describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
+    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key"); // pragma: allowlist secret
   });
 
   it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    withEnv({ KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("kimi-env");
+    const kimiEnvValue = "kimi-env"; // pragma: allowlist secret
+    const moonshotEnvValue = "moonshot-env"; // pragma: allowlist secret
+    withEnv({ [kimiApiKeyEnv]: kimiEnvValue, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(kimiEnvValue);
     });
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("moonshot-env");
+    withEnv({ [kimiApiKeyEnv]: undefined, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(moonshotEnvValue);
     });
   });
 

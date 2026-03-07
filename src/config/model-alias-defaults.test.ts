@@ -111,7 +111,7 @@ describe("applyModelDefaults", () => {
         providers: {
           anthropic: {
             baseUrl: "https://relay.example.com/api",
-            apiKey: "cr_xxxx",
+            apiKey: "cr_xxxx", // pragma: allowlist secret
             models: [
               {
                 id: "claude-opus-4-6",
