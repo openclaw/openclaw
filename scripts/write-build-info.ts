@@ -34,12 +34,29 @@ const resolveCommit = () => {
   }
 };
 
+const resolveDirty = () => {
+  try {
+    return (
+      execSync("git -c core.fsmonitor=false status --short --untracked-files=all", {
+        cwd: rootDir,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .toString()
+        .trim().length > 0
+    );
+  } catch {
+    return null;
+  }
+};
+
 const version = readPackageVersion();
 const commit = resolveCommit();
+const dirty = resolveDirty();
 
 const buildInfo = {
   version,
   commit,
+  dirty,
   builtAt: new Date().toISOString(),
 };
 
