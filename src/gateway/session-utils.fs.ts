@@ -503,7 +503,7 @@ function readLastMessagePreviewFromOpenTranscript(params: {
         continue;
       }
       const text = extractTextFromContent(msg.content);
-      if (text && !isSilentReplyText(text)) {
+      if (text && !(msg.role === "assistant" && isSilentReplyText(text))) {
         return text;
       }
     } catch {
@@ -633,7 +633,7 @@ function buildPreviewItems(
     const toolCall = isToolCall(message);
     const role = normalizeRole(message.role, toolCall);
     let text = extractPreviewText(message);
-    if (text && isSilentReplyText(text)) {
+    if (text && role === "assistant" && isSilentReplyText(text)) {
       text = null;
     }
     if (!text) {

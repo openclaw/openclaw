@@ -46,7 +46,7 @@ function createDeliverer(overrides?: { sendResult?: boolean }) {
 }
 
 describe("lane-delivery NO_REPLY suppression", () => {
-  it("does not finalize via preview edit when text is NO_REPLY", async () => {
+  it("skips NO_REPLY entirely without sending or editing", async () => {
     const { deliver, editPreview, sendPayload } = createDeliverer();
     const payload: ReplyPayload = { text: "NO_REPLY" };
 
@@ -57,14 +57,13 @@ describe("lane-delivery NO_REPLY suppression", () => {
       infoKind: "final",
     });
 
-    // canEditViaPreview should be false due to isSilentReplyText guard,
-    // so it falls through to sendPayload instead of editPreview.
+    // NO_REPLY is suppressed before reaching any delivery path.
     expect(editPreview).not.toHaveBeenCalled();
-    expect(sendPayload).toHaveBeenCalled();
-    expect(result).toBe("sent");
+    expect(sendPayload).not.toHaveBeenCalled();
+    expect(result).toBe("skipped");
   });
 
-  it("does not finalize via preview edit for NO_REPLY with whitespace", async () => {
+  it("skips NO_REPLY with whitespace without sending", async () => {
     const { deliver, editPreview, sendPayload } = createDeliverer();
     const payload: ReplyPayload = { text: "  NO_REPLY  " };
 
@@ -76,8 +75,8 @@ describe("lane-delivery NO_REPLY suppression", () => {
     });
 
     expect(editPreview).not.toHaveBeenCalled();
-    expect(sendPayload).toHaveBeenCalled();
-    expect(result).toBe("sent");
+    expect(sendPayload).not.toHaveBeenCalled();
+    expect(result).toBe("skipped");
   });
 
   it("allows preview edit for substantive text containing NO_REPLY", async () => {

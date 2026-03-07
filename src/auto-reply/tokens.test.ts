@@ -44,15 +44,23 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("  HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
   });
 
-  it("matches short uppercase prefixes of the token", () => {
-    expect(isSilentReplyPrefixText("N")).toBe(true);
+  it("matches bare NO for NO_REPLY token only", () => {
     expect(isSilentReplyPrefixText("NO")).toBe(true);
-    expect(isSilentReplyPrefixText("No")).toBe(true);
   });
 
-  it("rejects text that is not a token prefix", () => {
+  it("rejects ambiguous natural-language prefixes", () => {
+    expect(isSilentReplyPrefixText("N")).toBe(false);
+    expect(isSilentReplyPrefixText("No")).toBe(false);
+    expect(isSilentReplyPrefixText("no")).toBe(false);
     expect(isSilentReplyPrefixText("Hello")).toBe(false);
     expect(isSilentReplyPrefixText("NA")).toBe(false);
+  });
+
+  it("keeps underscore guard for non-NO_REPLY tokens", () => {
+    expect(isSilentReplyPrefixText("HE", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyPrefixText("HEART", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyPrefixText("HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
   });
 
   it("rejects non-prefixes and mixed characters", () => {

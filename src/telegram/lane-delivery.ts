@@ -291,12 +291,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+
+    // Suppress silent replies entirely — don't let them reach preview edit
+    // or the sendPayload fallback.
+    if (!hasMedia && isSilentReplyText(text)) {
+      return "skipped";
+    }
+
     const canEditViaPreview =
-      !hasMedia &&
-      text.length > 0 &&
-      !isSilentReplyText(text) &&
-      text.length <= params.draftMaxChars &&
-      !payload.isError;
+      !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
 
     if (infoKind === "final") {
       if (laneName === "answer") {

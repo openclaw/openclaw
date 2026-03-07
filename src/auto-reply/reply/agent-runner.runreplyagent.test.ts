@@ -391,11 +391,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
         shouldType: false,
       },
       {
-        // "No" alone is suppressed (prefix of NO_REPLY) but "No, that is valid"
-        // passes through once punctuation arrives (not all A-Z_).
+        // "No" is mixed-case so it is NOT suppressed as a prefix; both chunks
+        // are forwarded.  Only strict uppercase "NO" is treated as a prefix.
         partials: ["No", "No, that is valid"],
         finalText: "No, that is valid",
-        expectedForwarded: ["No, that is valid"],
+        expectedForwarded: ["No", "No, that is valid"],
         shouldType: true,
       },
     ] as const;
