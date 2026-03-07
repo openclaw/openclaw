@@ -52,9 +52,12 @@ export type SandboxPruneConfig = {
 
 export type SandboxScope = "session" | "agent" | "shared";
 
+export type SandboxBackend = "docker" | "gvisor" | "firecracker" | "auto";
+
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
   scope: SandboxScope;
+  backend: SandboxBackend;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
