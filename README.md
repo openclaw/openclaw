@@ -267,6 +267,12 @@ ClawHub is a minimal skill registry. With ClawHub enabled, the agent can search 
 
 [ClawHub](https://clawhub.com)
 
+## Third-party package marketplaces
+
+Community-built marketplaces and curated package registries for OpenClaw:
+
+- [AgentStandard](https://agentstandard.ai) — Certified AI agent package marketplace. 37 curated packages for OpenClaw, Claude, and Telegram. Every package includes SKILL.md for one-command install. ✦ reviewed.
+
 ## Chat commands
 
 Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group commands are owner-only):
