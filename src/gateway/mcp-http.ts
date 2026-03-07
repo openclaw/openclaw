@@ -400,7 +400,14 @@ export async function startMcpLoopbackServer(port: number): Promise<{
   }
 
   const httpServer = createHttpServer((req, res) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    } catch {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "forbidden" }));
+      return;
+    }
 
     // Fast-path well-known OAuth endpoints — tell clients no auth needed.
     if (req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
