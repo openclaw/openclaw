@@ -8,6 +8,7 @@ import {
 import type { DiscordGuildEntry } from "../../config/types.discord.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 
@@ -205,15 +206,14 @@ async function resolveAllowFromByUserAllowlist(params: {
   fetcher: typeof fetch;
   runtime: RuntimeEnv;
 }): Promise<string[] | undefined> {
-  const allowEntries =
-    params.allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
+  const allowEntries = normalizeStringEntries(params.allowFrom).filter((entry) => entry !== "*");
   if (allowEntries.length === 0) {
     return params.allowFrom;
   }
   try {
     const resolvedUsers = await resolveDiscordUserAllowlist({
       token: params.token,
-      entries: allowEntries.map((entry) => String(entry)),
+      entries: allowEntries,
       fetcher: params.fetcher,
     });
     const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolvedUsers, {
