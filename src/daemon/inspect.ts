@@ -61,11 +61,45 @@ type Marker = (typeof EXTRA_MARKERS)[number];
 
 function detectMarker(content: string): Marker | null {
   const lower = content.toLowerCase();
-  for (const marker of EXTRA_MARKERS) {
-    if (lower.includes(marker)) {
-      return marker;
+
+  // Check for markers inside <string>...</string> tags (real markers)
+  const stringMatches = content.match(/<string>([^<]+)<\/string>/g) || [];
+  for (const match of stringMatches) {
+    const value = match
+      .replace(/<\/?string>/g, "")
+      .toLowerCase()
+      .trim();
+
+    // Skip paths (e.g., /Users/openclaw/...) — only match actual labels
+    if (value.includes("/") || value.includes("application support") || value.includes(".app/")) {
+      continue;
+    }
+
+    for (const marker of EXTRA_MARKERS) {
+      if (
+        value === marker ||
+        value.startsWith(marker + ".") ||
+        (marker === "openclaw" && value.includes("openclaw."))
+      ) {
+        return marker;
+      }
     }
   }
+
+  // Fallback: check full content (legacy labels)
+  if (
+    stringMatches.length === 0 ||
+    lower.includes("openclaw_service_marker") ||
+    lower.includes("clawdbot") ||
+    lower.includes("moltbot")
+  ) {
+    for (const marker of EXTRA_MARKERS) {
+      if (lower.includes(marker)) {
+        return marker;
+      }
+    }
+  }
+
   return null;
 }
 
