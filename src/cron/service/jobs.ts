@@ -544,7 +544,11 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
-    delivery: input.delivery,
+    delivery:
+      input.delivery ??
+      (input.sessionTarget === "isolated" && input.payload.kind === "agentTurn"
+        ? { mode: "announce" }
+        : undefined),
     failureAlert: input.failureAlert,
     state: {
       ...input.state,
