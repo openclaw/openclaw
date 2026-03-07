@@ -37,6 +37,7 @@ Notes:
 BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.3.2 \
 BUILD_CONFIG=release \
+BUILD_ARCHS=all \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
 
