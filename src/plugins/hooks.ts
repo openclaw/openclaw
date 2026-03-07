@@ -10,6 +10,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolCallResult,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
@@ -20,7 +21,9 @@ import type {
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -62,7 +65,9 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
@@ -76,6 +81,7 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolCallResult,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -332,20 +338,46 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe, modify, or block the LLM input payload.
+   * Runs sequentially so plugins can modify prompt content or block the call.
+   *
+   * Merge: each field uses first-set-wins — earlier handlers' values are
+   * preserved when later handlers return undefined for that field.
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>(
+      "llm_input",
+      event,
+      ctx,
+      (acc, next) => ({
+        prompt: next.prompt ?? acc?.prompt,
+        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+      }),
+    );
   }
 
   /**
    * Run llm_output hook.
-   * Allows plugins to observe the exact output payload returned by the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe or modify the LLM output (e.g. rehydrate masked tokens).
+   * Runs sequentially so plugins can transform assistantTexts.
    */
-  async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_output", event, ctx);
+  async function runLlmOutput(
+    event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmOutputResult | undefined> {
+    return runModifyingHook<"llm_output", PluginHookLlmOutputResult>(
+      "llm_output",
+      event,
+      ctx,
+      (acc, next) => ({
+        assistantTexts: next.assistantTexts ?? acc?.assistantTexts,
+      }),
+    );
   }
 
   /**
@@ -452,10 +484,33 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
-   * Run after_tool_call hook.
-   * Runs in parallel (fire-and-forget).
+   * Run after_tool_call hook (modifying).
+   * Allows plugins to observe or modify tool results before they reach the LLM.
+   * Runs sequentially so plugins can redact or transform results.
+   * Use in the adapter path where results can still be modified.
    */
   async function runAfterToolCall(
+    event: PluginHookAfterToolCallEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<PluginHookAfterToolCallResult | undefined> {
+    return runModifyingHook<"after_tool_call", PluginHookAfterToolCallResult>(
+      "after_tool_call",
+      event,
+      ctx,
+      // Last-wins: plugin load order determines which redaction takes precedence
+      (acc, next) => ({
+        result: next.result !== undefined ? next.result : acc?.result,
+      }),
+    );
+  }
+
+  /**
+   * Run after_tool_call hook (audit-only).
+   * Runs handlers in parallel for observation only — results are already
+   * committed to the session so modifications are discarded.
+   * Use in the subscribe handler path where results cannot be modified.
+   */
+  async function runAfterToolCallVoid(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
@@ -740,6 +795,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runAfterToolCallVoid,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
