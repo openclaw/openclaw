@@ -157,6 +157,26 @@
     "responseTimeoutMs": {
       "label": "Response Timeout (ms)",
       "advanced": true
+    },
+    "staleCallReaperSeconds": {
+      "label": "Stale Call Reaper (sec)",
+      "help": "Maximum age of a call before automatic cleanup. Set to 0 to disable.",
+      "advanced": true
+    },
+    "webhookSecurity.allowedHosts": {
+      "label": "Webhook Allowed Hosts",
+      "help": "Allowed hostnames for webhook URL reconstruction.",
+      "advanced": true
+    },
+    "webhookSecurity.trustForwardingHeaders": {
+      "label": "Trust Forwarding Headers",
+      "help": "Trust X-Forwarded-* headers without hostname allowlist.",
+      "advanced": true
+    },
+    "webhookSecurity.trustedProxyIPs": {
+      "label": "Trusted Proxy IPs",
+      "help": "Trusted proxy IP addresses for forwarded headers.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -248,6 +268,10 @@
       "maxDurationSeconds": {
         "type": "integer",
         "minimum": 1
+      },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
       },
       "silenceTimeoutMs": {
         "type": "integer",
@@ -349,6 +373,29 @@
       },
       "skipSignatureVerification": {
         "type": "boolean"
+      },
+      "webhookSecurity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedHosts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "trustForwardingHeaders": {
+            "type": "boolean"
+          },
+          "trustedProxyIPs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
       },
       "stt": {
         "type": "object",
