@@ -133,6 +133,7 @@ export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
 export {
+  mapAllowlistResolutionInputs,
   mapBasicAllowlistResolutionEntries,
   type BasicAllowlistResolutionEntry,
 } from "./allowlist-resolution.js";
@@ -515,6 +516,12 @@ export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export type { PollInput } from "../polls.js";
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
+  listDirectoryUserEntriesFromAllowFrom,
+  listDirectoryUserEntriesFromAllowFromAndMapKeys,
+} from "../channels/plugins/directory-config-helpers.js";
 export {
   clearAccountEntryFields,
   deleteAccountFromConfigSection,

@@ -1,40 +1,18 @@
 import { describe, expect, it } from "vitest";
-import {
-  mapBasicAllowlistResolutionEntries,
-  type BasicAllowlistResolutionEntry,
-} from "./allowlist-resolution.js";
+import { mapAllowlistResolutionInputs } from "./allowlist-resolution.js";
 
-describe("mapBasicAllowlistResolutionEntries", () => {
-  it("maps entries to normalized allowlist resolver output", () => {
-    const entries: BasicAllowlistResolutionEntry[] = [
-      {
-        input: "alice",
-        resolved: true,
-        id: "U123",
-        name: "Alice",
-        note: "ok",
+describe("mapAllowlistResolutionInputs", () => {
+  it("maps inputs sequentially and preserves order", async () => {
+    const visited: string[] = [];
+    const result = await mapAllowlistResolutionInputs({
+      inputs: ["one", "two", "three"],
+      mapInput: async (input) => {
+        visited.push(input);
+        return input.toUpperCase();
       },
-      {
-        input: "bob",
-        resolved: false,
-      },
-    ];
+    });
 
-    expect(mapBasicAllowlistResolutionEntries(entries)).toEqual([
-      {
-        input: "alice",
-        resolved: true,
-        id: "U123",
-        name: "Alice",
-        note: "ok",
-      },
-      {
-        input: "bob",
-        resolved: false,
-        id: undefined,
-        name: undefined,
-        note: undefined,
-      },
-    ]);
+    expect(visited).toEqual(["one", "two", "three"]);
+    expect(result).toEqual(["ONE", "TWO", "THREE"]);
   });
 });
