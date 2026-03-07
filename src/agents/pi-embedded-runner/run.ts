@@ -1040,6 +1040,7 @@ export async function runEmbeddedPiAgent(
                   diagId: overflowDiagId,
                   attempt: overflowCompactionAttempts,
                   maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  abortSignal: params.abortSignal,
                 },
               });
               if (compactResult.compacted) {
