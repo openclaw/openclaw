@@ -122,6 +122,7 @@ describe("acp cli option collisions", () => {
     await withSecretFiles({ password: "pw_file\n" }, async (files) => {
       // pragma: allowlist secret
       // pragma: allowlist secret
+      // pragma: allowlist secret
       await parseAcp(["--password", "pw_inline", "--password-file", files.passwordFile ?? ""]);
     });
 

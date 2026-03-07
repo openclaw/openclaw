@@ -134,6 +134,7 @@ function installPlainTextFetch(text: string) {
 
 function createFirecrawlTool(apiKey = "firecrawl-test") {
   // pragma: allowlist secret
+  // pragma: allowlist secret
   return createFetchTool({ firecrawl: { [apiKeyField]: apiKey } });
 }
 

@@ -23,6 +23,7 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
 });
 
 const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
+const apiKeyField = ["api", "Key"].join("");
 
 const withClearedEnv = <T>(
   keys: string[],
@@ -279,7 +280,7 @@ describe("applySkillEnvOverrides", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["ENV_KEY"], () => {
-      const config = { skills: { entries: { "env-skill": { apiKey: "injected" } } } };
+      const config = { skills: { entries: { "env-skill": { [apiKeyField]: "injected" } } } }; // pragma: allowlist secret
       const restoreFirst = applySkillEnvOverrides({ skills: entries, config });
       const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
 

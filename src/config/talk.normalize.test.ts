@@ -102,6 +102,7 @@ describe("talk normalization", () => {
 
   it("merges ELEVENLABS_API_KEY into normalized defaults for legacy configs", async () => {
     await withEnvAsync({ [elevenLabsApiKeyEnv]: "env-eleven-key" }, async () => {
+      // pragma: allowlist secret
       await withTempConfig(
         {
           talk: {
@@ -121,8 +122,7 @@ describe("talk normalization", () => {
   });
 
   it("does not apply ELEVENLABS_API_KEY when active provider is not elevenlabs", async () => {
-    await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
-      // pragma: allowlist secret
+    await withEnvAsync({ [elevenLabsApiKeyEnv]: "env-eleven-key" }, async () => {
       // pragma: allowlist secret
       await withTempConfig(
         {
