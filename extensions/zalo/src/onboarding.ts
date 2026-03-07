@@ -11,8 +11,8 @@ import {
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
   normalizeAccountId,
-  promptAccountId,
   promptSingleChannelSecretInput,
+  resolveAccountIdForConfigure,
 } from "openclaw/plugin-sdk/zalo";
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
@@ -240,19 +240,16 @@ export const zaloOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    const zaloOverride = accountOverrides.zalo?.trim();
     const defaultZaloAccountId = resolveDefaultZaloAccountId(cfg);
-    let zaloAccountId = zaloOverride ? normalizeAccountId(zaloOverride) : defaultZaloAccountId;
-    if (shouldPromptAccountIds && !zaloOverride) {
-      zaloAccountId = await promptAccountId({
-        cfg: cfg,
-        prompter,
-        label: "Zalo",
-        currentId: zaloAccountId,
-        listAccountIds: listZaloAccountIds,
-        defaultAccountId: defaultZaloAccountId,
-      });
-    }
+    const zaloAccountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Zalo",
+      accountOverride: accountOverrides.zalo,
+      shouldPromptAccountIds,
+      listAccountIds: listZaloAccountIds,
+      defaultAccountId: defaultZaloAccountId,
+    });
 
     let next = cfg;
     const resolvedAccount = resolveZaloAccount({

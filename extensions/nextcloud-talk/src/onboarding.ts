@@ -4,7 +4,7 @@ import {
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
-  promptAccountId,
+  resolveAccountIdForConfigure,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   type SecretInput,
@@ -202,22 +202,16 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    const nextcloudTalkOverride = accountOverrides["nextcloud-talk"]?.trim();
     const defaultAccountId = resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
-    let accountId = nextcloudTalkOverride
-      ? normalizeAccountId(nextcloudTalkOverride)
-      : defaultAccountId;
-
-    if (shouldPromptAccountIds && !nextcloudTalkOverride) {
-      accountId = await promptAccountId({
-        cfg: cfg as CoreConfig,
-        prompter,
-        label: "Nextcloud Talk",
-        currentId: accountId,
-        listAccountIds: listNextcloudTalkAccountIds as (cfg: OpenClawConfig) => string[],
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Nextcloud Talk",
+      accountOverride: accountOverrides["nextcloud-talk"],
+      shouldPromptAccountIds,
+      listAccountIds: listNextcloudTalkAccountIds as (cfg: OpenClawConfig) => string[],
+      defaultAccountId,
+    });
 
     let next = cfg as CoreConfig;
     const resolvedAccount = resolveNextcloudTalkAccount({

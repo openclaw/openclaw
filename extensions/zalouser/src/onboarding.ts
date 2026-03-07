@@ -10,8 +10,8 @@ import {
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
-  promptAccountId,
   promptChannelAccessConfig,
+  resolveAccountIdForConfigure,
 } from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
@@ -226,20 +226,16 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg);
-    let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
-
-    if (shouldPromptAccountIds && !zalouserOverride) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Zalo Personal",
-        currentId: accountId,
-        listAccountIds: listZalouserAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Zalo Personal",
+      accountOverride: accountOverrides.zalouser,
+      shouldPromptAccountIds,
+      listAccountIds: listZalouserAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const account = resolveZalouserAccountSync({ cfg: next, accountId });
