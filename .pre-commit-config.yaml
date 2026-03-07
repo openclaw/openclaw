@@ -27,7 +27,6 @@ repos:
     hooks:
       - id: detect-secrets
         args:
-          - --no-update-baseline
           - --baseline
           - .secrets.baseline
           - --exclude-files
