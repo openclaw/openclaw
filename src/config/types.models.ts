@@ -57,6 +57,13 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /**
+   * Disable streaming for tool calls.
+   * Set to false to use non-streaming requests when tools are present.
+   * Required for Ollama and some other local models that don't support
+   * streaming tool call deltas properly.
+   */
+  streamToolCalls?: boolean;
 };
 
 export type BedrockDiscoveryConfig = {
