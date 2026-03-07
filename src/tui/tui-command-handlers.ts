@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -431,7 +432,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await setSession(uniqueKey);
           chatLog.addSystem(`new session: ${state.currentSessionKey}`);
         } catch (err) {
-          chatLog.addSystem(`new session failed: ${String(err)}`);
+          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
         }
         break;
       case "reset":
