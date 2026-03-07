@@ -946,6 +946,7 @@ Default slash command settings:
 
     - env-first local auth (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` then `gateway.auth.*`)
     - remote-mode support via `gateway.remote.*` when applicable
+    - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
 
     If approvals fail with unknown approval IDs, verify approver list and feature enablement.
 
