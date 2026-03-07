@@ -40,6 +40,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
+import { discoverKilocodeModels } from "./kilocode-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
@@ -920,6 +921,23 @@ export function buildKilocodeProvider(): ProviderConfig {
   };
 }
 
+/**
+ * Build the Kilocode provider with dynamic model discovery from the gateway
+ * API. Falls back to the static catalog on failure.
+ *
+ * Used by {@link resolveImplicitProviders} (async context). The sync
+ * {@link buildKilocodeProvider} is kept for the onboarding config path
+ * which cannot await.
+ */
+async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConfig> {
+  const models = await discoverKilocodeModels();
+  return {
+    baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -1133,7 +1151,7 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("kilocode") ??
     resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
   if (kilocodeKey) {
-    providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
+    providers.kilocode = { ...(await buildKilocodeProviderWithDiscovery()), apiKey: kilocodeKey };
   }
 
   return providers;

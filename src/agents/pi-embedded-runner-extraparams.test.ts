@@ -321,7 +321,7 @@ describe("applyExtraParamsToAgent", () => {
   it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { reasoning_effort: "medium" };
       options?.onPayload?.(payload);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;

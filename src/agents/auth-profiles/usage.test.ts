@@ -26,6 +26,7 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
       "openai:default": { type: "api_key", provider: "openai", key: "sk-test-2" },
       "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
+      "kilocode:default": { type: "api_key", provider: "kilocode", key: "sk-kc-test" },
     },
     usageStats,
   };
@@ -119,6 +120,17 @@ describe("isProfileInCooldown", () => {
       },
     });
     expect(isProfileInCooldown(store, "openrouter:default")).toBe(false);
+  });
+
+  it("returns false for Kilocode even when cooldown fields exist", () => {
+    const store = makeStore({
+      "kilocode:default": {
+        cooldownUntil: Date.now() + 60_000,
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    });
+    expect(isProfileInCooldown(store, "kilocode:default")).toBe(false);
   });
 });
 
