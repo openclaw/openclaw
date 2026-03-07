@@ -85,4 +85,5 @@ export {
   registerWebhookTargetWithPluginRoute,
   resolveWebhookTargets,
   resolveWebhookTargetWithAuthOrReject,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
