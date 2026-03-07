@@ -7,6 +7,7 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/feishu";
 import {
+  buildSingleChannelSecretPromptState,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   hasConfiguredSecretInput,
@@ -240,9 +241,12 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
     const hasConfigCreds = Boolean(
       typeof feishuCfg?.appId === "string" && feishuCfg.appId.trim() && hasConfigSecret,
     );
-    const canUseEnv = Boolean(
-      !hasConfigCreds && process.env.FEISHU_APP_ID?.trim() && process.env.FEISHU_APP_SECRET?.trim(),
-    );
+    const appSecretPromptState = buildSingleChannelSecretPromptState({
+      accountConfigured: Boolean(resolved),
+      hasConfigToken: hasConfigSecret,
+      allowEnv: !hasConfigCreds && Boolean(process.env.FEISHU_APP_ID?.trim()),
+      envValue: process.env.FEISHU_APP_SECRET,
+    });
 
     let next = cfg;
     let appId: string | null = null;
@@ -258,9 +262,9 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
       prompter,
       providerHint: "feishu",
       credentialLabel: "App Secret",
-      accountConfigured: Boolean(resolved),
-      canUseEnv,
-      hasConfigToken: hasConfigSecret,
+      accountConfigured: appSecretPromptState.accountConfigured,
+      canUseEnv: appSecretPromptState.canUseEnv,
+      hasConfigToken: appSecretPromptState.hasConfigToken,
       envPrompt: "FEISHU_APP_ID + FEISHU_APP_SECRET detected. Use env vars?",
       keepPrompt: "Feishu App Secret already configured. Keep it?",
       inputPrompt: "Enter Feishu App Secret",
@@ -346,14 +350,19 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
     if (connectionMode === "webhook") {
       const currentVerificationToken = (next.channels?.feishu as FeishuConfig | undefined)
         ?.verificationToken;
+      const verificationTokenPromptState = buildSingleChannelSecretPromptState({
+        accountConfigured: hasConfiguredSecretInput(currentVerificationToken),
+        hasConfigToken: hasConfiguredSecretInput(currentVerificationToken),
+        allowEnv: false,
+      });
       const verificationTokenResult = await promptSingleChannelSecretInput({
         cfg: next,
         prompter,
         providerHint: "feishu-webhook",
         credentialLabel: "verification token",
-        accountConfigured: hasConfiguredSecretInput(currentVerificationToken),
-        canUseEnv: false,
-        hasConfigToken: hasConfiguredSecretInput(currentVerificationToken),
+        accountConfigured: verificationTokenPromptState.accountConfigured,
+        canUseEnv: verificationTokenPromptState.canUseEnv,
+        hasConfigToken: verificationTokenPromptState.hasConfigToken,
         envPrompt: "",
         keepPrompt: "Feishu verification token already configured. Keep it?",
         inputPrompt: "Enter Feishu verification token",

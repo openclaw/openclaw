@@ -1,6 +1,7 @@
 import type { DmPolicy } from "openclaw/plugin-sdk/matrix";
 import {
   addWildcardAllowFrom,
+  buildSingleChannelSecretPromptState,
   formatResolvedUnresolvedNote,
   formatDocsLink,
   hasConfiguredSecretInput,
@@ -323,14 +324,20 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             },
           }),
         ).trim();
+        const passwordPromptState = buildSingleChannelSecretPromptState({
+          accountConfigured: Boolean(existingPasswordConfigured),
+          hasConfigToken: existingPasswordConfigured,
+          allowEnv: true,
+          envValue: envPassword,
+        });
         const passwordResult = await promptSingleChannelSecretInput({
           cfg: next,
           prompter,
           providerHint: "matrix",
           credentialLabel: "password",
-          accountConfigured: Boolean(existingPasswordConfigured),
-          canUseEnv: Boolean(envPassword?.trim()) && !existingPasswordConfigured,
-          hasConfigToken: existingPasswordConfigured,
+          accountConfigured: passwordPromptState.accountConfigured,
+          canUseEnv: passwordPromptState.canUseEnv,
+          hasConfigToken: passwordPromptState.hasConfigToken,
           envPrompt: "MATRIX_PASSWORD detected. Use env var?",
           keepPrompt: "Matrix password already configured. Keep it?",
           inputPrompt: "Matrix password",

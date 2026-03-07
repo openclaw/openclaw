@@ -9,6 +9,7 @@ vi.mock("../../../plugin-sdk/onboarding.js", () => ({
 
 import {
   applySingleTokenPromptResult,
+  buildSingleChannelSecretPromptState,
   normalizeAllowFromEntries,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -103,6 +104,38 @@ async function runPromptSingleToken(params: {
     inputPrompt: "token",
   });
 }
+
+describe("buildSingleChannelSecretPromptState", () => {
+  it("enables env path only when env is present and no config token exists", () => {
+    expect(
+      buildSingleChannelSecretPromptState({
+        accountConfigured: false,
+        hasConfigToken: false,
+        allowEnv: true,
+        envValue: "token-from-env",
+      }),
+    ).toEqual({
+      accountConfigured: false,
+      hasConfigToken: false,
+      canUseEnv: true,
+    });
+  });
+
+  it("disables env path when config token already exists", () => {
+    expect(
+      buildSingleChannelSecretPromptState({
+        accountConfigured: true,
+        hasConfigToken: true,
+        allowEnv: true,
+        envValue: "token-from-env",
+      }),
+    ).toEqual({
+      accountConfigured: true,
+      hasConfigToken: true,
+      canUseEnv: false,
+    });
+  });
+});
 
 async function runPromptLegacyAllowFrom(params: {
   cfg?: OpenClawConfig;
