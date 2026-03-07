@@ -8,7 +8,7 @@ metadata: { "openclaw": { "emoji": "🏛️", "requires": { "extensions": ["find
 
 Use **fin_macro** for macroeconomic indicators and interest rate data via DataHub.
 
-> Deep reference: `references/macro-cycle-cn.md` for Merrill Lynch Clock and cycle analysis.
+> 美林时钟四象限: Recovery (GDP↑CPI↓) / Overheat (GDP↑CPI↑) / Stagflation (GDP↓CPI↑) / Recession (GDP↓CPI↓)。判定信号详见下方 Macro Cycle Locator。
 
 ## fin_macro Parameters
 
@@ -82,7 +82,7 @@ Use **fin_macro** for macroeconomic indicators and interest rate data via DataHu
 
 ### Macro Cycle Locator
 
-> See `references/macro-cycle-cn.md` for full Merrill Lynch Clock framework.
+> 美林时钟象限由 GDP 趋势 + CPI 趋势交叉判定，辅以 PMI/社融/M1 领先指标验证。
 
 ```
 Step 1: fin_macro(endpoint="gdp/real", limit=8)   → GDP trend (8 quarters)
@@ -198,12 +198,12 @@ Probability adjustment rules (each trigger shifts +10pp):
 | Both rising  | Commodity longs, short duration bonds                      |
 | Both falling | Long duration bonds, defensive sectors                     |
 
-### 社融-GDP 领先关系
+### 社融-GDP 领先关系 (信贷脉冲)
 
-`fin_macro(endpoint="social_financing", limit=24)` + `fin_macro(endpoint="gdp/real", limit=8)` — 社融增速拐点 → GDP 在 2-3Q 后跟随:
+`fin_macro(endpoint="social_financing", limit=24)` + `fin_macro(endpoint="gdp/real", limit=8)` — 信贷脉冲 = 社融增量的二阶导 (3 月移动平均增速的变化率)，领先 GDP 2-3Q:
 
-- 社融连续 3 月加速 + PMI > 50 → high confidence GDP recovery ahead
-- 社融萎缩 + M1 下行 → GDP 下行风险，提前减仓周期股
+- 脉冲转正 (社融增速加速) + PMI > 50 → high confidence GDP recovery ahead
+- 脉冲转负 (社融增速减速) + M1 下行 → GDP 下行风险，提前减仓周期股
 
 ### HIBOR-LIBOR 利差 (港元联系汇率压力)
 

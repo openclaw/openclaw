@@ -8,7 +8,7 @@ metadata: { "openclaw": { "emoji": "🔗", "requires": { "extensions": ["findoo-
 
 跨资产相关性分析与大类资产配置。综合编排 **fin_macro** + **fin_index** + **fin_market** + **fin_derivatives** + **fin_crypto**，构建宏观象限判定与配置建议。
 
-> 美林时钟四象限定义、象限判定信号、各象限配置权重表 → see references/macro-cycle-cn.md
+> 美林时钟象限判定 → see `fin-macro` skill (Macro Cycle Locator 段落)。本 skill 聚焦跨资产配置权重映射。
 
 ## 多工具编排序列
 
@@ -172,7 +172,7 @@ fin_data_regime(symbol="000300.SH")  # 当前市场体制检测
 
 `fin_macro(social_financing)` + `fin_macro(money_supply)`:
 
-- 社融 3 月变化率转正 → 6-9 月后大宗需求回升; M2 拐头 + 社融放量 = 信贷宽松
+- 信贷脉冲 = 社融增量的二阶导 (3 月移动平均增速的变化率)。脉冲转正 → 6-9 月后大宗需求回升
 - 脉冲正 → 增配铜/原油/A 股周期板块
 
 ### Crypto-Equity 脱钩检测

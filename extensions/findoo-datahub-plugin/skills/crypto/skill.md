@@ -10,7 +10,7 @@ CEX 行情 + CoinGecko 市场数据 + DefiLlama DeFi 数据，统一通过 `fin_
 
 > **数据边界:** DataHub 提供 CoinGecko + DefiLlama + CCXT 数据。链上原始数据（活跃地址、Gas、MVRV、NUPL、巨鲸追踪、交易所余额）不在覆盖范围，需 Glassnode / Nansen / Dune 等第三方服务。
 >
-> 详细分析框架、估值模型、风险矩阵 → `references/crypto-analysis.md`
+> 详细分析框架、估值模型、风险矩阵见下方 Analysis Patterns 和 Advanced Patterns 段落。
 
 ## Tools
 
@@ -99,7 +99,7 @@ Indicators: sma, ema, rsi, macd, bbands
 3. fin_crypto(defi/yields)                   → 当前 yield vs 历史中位
 4. fin_crypto(defi/stablecoins)              → 稳定币流入趋势
 → 估值: P/F = FDV / annualized_revenue; P/TVL = mcap / TVL
-→ 同赛道横向对比 (详见 references/crypto-analysis.md §1)
+→ 同赛道横向对比: 同类 protocol P/F + P/TVL 排名, TVL 趋势, fees 增长率
 ```
 
 ## Advanced Patterns

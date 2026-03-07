@@ -62,7 +62,6 @@ Step 3: fin_macro(endpoint="currency/price/historical", symbol="USDCNH") -> exch
 ```
 
 Formula: `premium = A_price_CNY / (H_price_HKD × CNYHKD_rate) - 1`
-
 > ⚠️ H 股以 HKD 计价（非 USD），需用 CNY/HKD 汇率。
 > 获取方式: `fin_macro(currency/price/historical, symbol="USDCNH")` 和 `fin_macro(currency/price/historical, symbol="USDHKD")`，
 > 然后 CNYHKD = USDHKD / USDCNH。旧公式 `A/H*USDCNH` 币种错误。
