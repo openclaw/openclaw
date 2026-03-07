@@ -522,11 +522,13 @@ export function resolveSkillsPromptForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   preferEntries?: boolean;
+  eligibility?: SkillEligibilityContext;
 }): string {
   if (params.preferEntries && params.entries && params.entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      eligibility: params.eligibility,
     });
     return prompt.trim() ? prompt : "";
   }
@@ -538,6 +540,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      eligibility: params.eligibility,
     });
     return prompt.trim() ? prompt : "";
   }
