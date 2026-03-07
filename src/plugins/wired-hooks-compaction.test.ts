@@ -182,6 +182,29 @@ describe("compaction hook wiring", () => {
     expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
   });
 
+  it("does not increment counter when compaction has result but was aborted", () => {
+    const ctx = {
+      params: { runId: "r3b2", session: { messages: [] } },
+      state: { compactionInFlight: true },
+      log: { debug: vi.fn(), warn: vi.fn() },
+      maybeResolveCompactionWait: vi.fn(),
+      incrementCompactionCount: vi.fn(),
+      getCompactionCount: () => 0,
+    };
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: false,
+        result: { summary: "compacted" },
+        aborted: true,
+      } as never,
+    );
+
+    expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
+  });
+
   it("does not increment counter when result is undefined", () => {
     const ctx = {
       params: { runId: "r3c", session: { messages: [] } },
