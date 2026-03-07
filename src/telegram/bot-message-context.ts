@@ -830,7 +830,8 @@ export const buildTelegramMessageContext = async ({
       })
     : null;
 
-  await recordInboundSession({
+  // Fire-and-forget: session recording doesn't need to block response.
+  void recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? sessionKey,
     ctx: ctxPayload,

@@ -11,7 +11,7 @@ import {
 } from "../auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
-import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
+// Lazy-loaded: buildCommandsMessagePaginated from "../auto-reply/status.js" (898 LOC, heavy deps)
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
@@ -1153,6 +1153,8 @@ export const registerTelegramHandlers = ({
           cfg,
           agentIds: [agentId],
         });
+        // Lazy-load status module only when /commands is actually invoked.
+        const { buildCommandsMessagePaginated } = await import("../auto-reply/status.js");
         const result = buildCommandsMessagePaginated(cfg, skillCommands, {
           page,
           surface: "telegram",

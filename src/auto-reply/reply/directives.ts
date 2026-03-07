@@ -18,12 +18,26 @@ type ExtractedLevel<T> = {
   hasDirective: boolean;
 };
 
+// Pre-compiled regex cache keyed by sorted names (avoids new RegExp() per call).
+const directiveRegexCache = new Map<string, RegExp>();
+
+function getDirectiveRegex(names: string[]): RegExp {
+  const key = names.join("|");
+  let cached = directiveRegexCache.get(key);
+  if (!cached) {
+    const namePattern = names.map(escapeRegExp).join("|");
+    cached = new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)`, "i");
+    directiveRegexCache.set(key, cached);
+  }
+  return cached;
+}
+
 const matchLevelDirective = (
   body: string,
   names: string[],
 ): { start: number; end: number; rawLevel?: string } | null => {
-  const namePattern = names.map(escapeRegExp).join("|");
-  const match = body.match(new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)`, "i"));
+  const regex = getDirectiveRegex(names);
+  const match = body.match(regex);
   if (!match || match.index === undefined) {
     return null;
   }
@@ -73,14 +87,26 @@ const extractLevelDirective = <T>(
   };
 };
 
+// Pre-compiled regex cache for simple directives (includes trailing colon consumption).
+const simpleDirectiveRegexCache = new Map<string, RegExp>();
+
+function getSimpleDirectiveRegex(names: string[]): RegExp {
+  const key = names.join("|");
+  let cached = simpleDirectiveRegexCache.get(key);
+  if (!cached) {
+    const namePattern = names.map(escapeRegExp).join("|");
+    cached = new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)(?:\\s*:\\s*)?`, "i");
+    simpleDirectiveRegexCache.set(key, cached);
+  }
+  return cached;
+}
+
 const extractSimpleDirective = (
   body: string,
   names: string[],
 ): { cleaned: string; hasDirective: boolean } => {
-  const namePattern = names.map(escapeRegExp).join("|");
-  const match = body.match(
-    new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)(?:\\s*:\\s*)?`, "i"),
-  );
+  const regex = getSimpleDirectiveRegex(names);
+  const match = body.match(regex);
   const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
   return {
     cleaned,
