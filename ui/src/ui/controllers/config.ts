@@ -208,7 +208,11 @@ export function updateConfigFormValue(
   }
 }
 
-export function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
+export function ensureAgentConfigEntry(
+  state: ConfigState,
+  agentId: string,
+  createIfMissing = true,
+): number {
   const trimmedAgentId = agentId.trim();
   const current = (state.configForm ?? state.configSnapshot?.config ?? {}) as {
     agents?: { list?: unknown[] };
@@ -226,6 +230,9 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
     if (existingIndex >= 0) {
       return existingIndex;
     }
+  }
+  if (!createIfMissing) {
+    return -1;
   }
 
   const base = cloneConfigObject(current);

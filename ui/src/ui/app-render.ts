@@ -696,7 +696,14 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const index = ensureAgentConfigEntry(state, agentId);
+                  const index = ensureAgentConfigEntry(
+                    state,
+                    agentId,
+                    alsoAllow.length > 0 || deny.length > 0,
+                  );
+                  if (index < 0) {
+                    return;
+                  }
                   const basePath = ["agents", "list", index, "tools"];
                   if (alsoAllow.length > 0) {
                     updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
