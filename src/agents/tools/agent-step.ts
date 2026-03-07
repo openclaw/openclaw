@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_NAMES,
+  GATEWAY_CLIENT_MODES,
+  INTERNAL_MESSAGE_CHANNEL,
+} from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
 
@@ -60,6 +64,9 @@ export async function runAgentStep(params: {
       },
     },
     timeoutMs: 10_000,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    clientDisplayName: "agent",
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
   });
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
