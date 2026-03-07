@@ -28,7 +28,7 @@ function makeParams(overrides?: Record<string, unknown>) {
     cfg: {
       agents: {
         defaults: {
-          sandbox: { mode: "all" },
+          sandbox: { mode: "all" as const },
         },
       },
     },
