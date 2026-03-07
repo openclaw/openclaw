@@ -104,7 +104,7 @@ Brave provides paid plans; check the Brave API portal for the current limits and
       search: {
         enabled: true,
         provider: "brave",
-        apiKey: "BSA...", // optional if BRAVE_API_KEY is set
+        apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
       },
     },
   },

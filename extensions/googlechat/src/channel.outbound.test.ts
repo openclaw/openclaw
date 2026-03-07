@@ -20,7 +20,7 @@ function createGoogleChatCfg(): OpenClawConfig {
         serviceAccount: {
           type: "service_account",
           client_email: "bot@example.com",
-          private_key: "test-key",
+          private_key: "test-key", // pragma: allowlist secret
           token_uri: "https://oauth2.googleapis.com/token",
         },
       },
