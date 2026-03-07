@@ -124,6 +124,82 @@ describe("session sanitization helper runtime", () => {
     ).rejects.toThrow();
   });
 
+  it("uses mode-specific system prompt schemas", async () => {
+    let recallSystemPrompt = "";
+    const recallRunner = vi.fn(async (params: Record<string, unknown>) => {
+      recallSystemPrompt = String(params.systemPromptOverride ?? "");
+      return {
+        payloads: [
+          {
+            text: JSON.stringify({
+              mode: "recall",
+              result: "ok",
+              source: "summary",
+              matchedSummaryIds: [],
+              usedRawMessageIds: [],
+            }),
+          },
+        ],
+        meta: { durationMs: 1 },
+      };
+    });
+
+    await runSessionSanitizationHelper({
+      cfg: createConfig(),
+      agentId: "main",
+      mode: "recall",
+      runner: recallRunner,
+      files: [
+        {
+          relativePath: "mode.json",
+          content: JSON.stringify({ mode: "recall", query: "status" }),
+        },
+      ],
+    });
+
+    expect(recallSystemPrompt).toContain('"mode": "recall"');
+    expect(recallSystemPrompt).not.toContain('"mode": "mcp"');
+
+    let mcpSystemPrompt = "";
+    const mcpRunner = vi.fn(async (params: Record<string, unknown>) => {
+      mcpSystemPrompt = String(params.systemPromptOverride ?? "");
+      return {
+        payloads: [
+          {
+            text: JSON.stringify({
+              mode: "mcp",
+              safe: true,
+              structuredResult: {},
+              flags: [],
+              contextNote: "",
+            }),
+          },
+        ],
+        meta: { durationMs: 1 },
+      };
+    });
+
+    await runSessionSanitizationHelper({
+      cfg: createConfig(),
+      agentId: "main",
+      mode: "mcp",
+      runner: mcpRunner,
+      files: [
+        {
+          relativePath: "query.json",
+          content: JSON.stringify({ tool: "t" }),
+        },
+        {
+          relativePath: "mcp-result.json",
+          content: JSON.stringify({ ok: true }),
+        },
+      ],
+    });
+
+    expect(mcpSystemPrompt).toContain('"mode": "mcp"');
+    expect(mcpSystemPrompt).toContain('"structuredResult": {}');
+  });
+
   it("fails closed when sandbox isolation is unavailable", async () => {
     await expect(
       runSessionSanitizationHelper({

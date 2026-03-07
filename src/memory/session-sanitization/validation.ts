@@ -117,27 +117,39 @@ function normalizeHomoglyphs(text: string): string {
  * Recursively compute the maximum JSON nesting depth of a value.
  * Objects and arrays contribute one level each.
  */
-function measureJsonDepth(value: unknown, current = 0): number {
+function measureJsonDepth(
+  value: unknown,
+  current = 0,
+  inPath: WeakSet<object> = new WeakSet<object>(),
+): number {
   if (value === null || typeof value !== "object") {
     return current;
   }
-  if (Array.isArray(value)) {
-    if (value.length === 0) return current + 1;
+  if (inPath.has(value)) {
+    return current + 1;
+  }
+  inPath.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (value.length === 0) return current + 1;
+      let max = current + 1;
+      for (const item of value) {
+        const depth = measureJsonDepth(item, current + 1, inPath);
+        if (depth > max) max = depth;
+      }
+      return max;
+    }
+    const keys = Object.keys(value as Record<string, unknown>);
+    if (keys.length === 0) return current + 1;
     let max = current + 1;
-    for (const item of value) {
-      const depth = measureJsonDepth(item, current + 1);
+    for (const key of keys) {
+      const depth = measureJsonDepth((value as Record<string, unknown>)[key], current + 1, inPath);
       if (depth > max) max = depth;
     }
     return max;
+  } finally {
+    inPath.delete(value);
   }
-  const keys = Object.keys(value as Record<string, unknown>);
-  if (keys.length === 0) return current + 1;
-  let max = current + 1;
-  for (const key of keys) {
-    const depth = measureJsonDepth((value as Record<string, unknown>)[key], current + 1);
-    if (depth > max) max = depth;
-  }
-  return max;
 }
 
 /**
