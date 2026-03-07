@@ -90,6 +90,21 @@ function run(command: string, args: string[]) {
   });
 }
 
+function commandExists(command: string) {
+  return new Promise<boolean>((resolve) => {
+    const probe = process.platform === "win32"
+      ? `where.exe ${command} >NUL 2>&1`
+      : `command -v ${command} >/dev/null 2>&1`;
+    const child = spawn(probe, {
+      cwd: ROOT_DIR,
+      shell: true,
+      stdio: "ignore",
+    });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
 async function main() {
   try {
     await fs.access(A2UI_RENDERER_DIR);
@@ -121,10 +136,15 @@ async function main() {
 
   try {
     await run("pnpm", ["-s", "exec", "tsc", "-p", path.join(A2UI_RENDERER_DIR, "tsconfig.json")]);
-    await run("pnpm", ["exec", "rolldown", "-c", path.join(A2UI_APP_DIR, "rolldown.config.mjs")]);
+
+    if (await commandExists("rolldown")) {
+      await run("rolldown", ["-c", path.join(A2UI_APP_DIR, "rolldown.config.mjs")]);
+    } else {
+      await run("pnpm", ["-s", "dlx", "rolldown", "-c", path.join(A2UI_APP_DIR, "rolldown.config.mjs")]);
+    }
 
     await fs.mkdir(path.dirname(HASH_FILE), { recursive: true });
-    await fs.writeFile(HASH_FILE, currentHash);
+    await fs.writeFile(HASH_FILE, `${currentHash}\n`);
   } catch (error) {
     console.error(error);
     console.error("A2UI bundling failed. Re-run with: pnpm canvas:a2ui:bundle");
