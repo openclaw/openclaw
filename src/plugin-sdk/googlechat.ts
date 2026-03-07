@@ -14,6 +14,10 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
+export {
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryUserEntriesFromAllowFrom,
+} from "../channels/plugins/directory-config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { resolveGoogleChatGroupRequireMention } from "../channels/plugins/group-mentions.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
