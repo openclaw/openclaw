@@ -209,6 +209,43 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("does not deliver chat/agent broadcasts to node clients", () => {
+    const nodeSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const operatorSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: nodeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "node", scopes: [] as string[] } as unknown as GatewayWsClient["connect"],
+        connId: "c-node",
+      },
+      {
+        socket: operatorSocket as unknown as GatewayWsClient["socket"],
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+        } as unknown as GatewayWsClient["connect"],
+        connId: "c-operator",
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { text: "hello" });
+    broadcast("agent", { runId: "r1", phase: "delta" });
+
+    expect(nodeSocket.send).toHaveBeenCalledTimes(0);
+    expect(operatorSocket.send).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("chat run registry", () => {
