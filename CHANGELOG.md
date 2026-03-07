@@ -522,6 +522,7 @@ Docs: https://docs.openclaw.ai
 - Browser/config schema: accept `browser.profiles.*.driver: "openclaw"` while preserving legacy `"clawd"` compatibility in validated config. (#39374; based on #35621) Thanks @gambletan and @ingyukoh.
 - Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
 - Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
+- Install/Windows PowerShell: keep the installer window open on failure so users can read error messages, check `$LASTEXITCODE` after native commands (`npm`, `git`, `pnpm`) to detect silent failures, rename `$ERROR` to `$CLR_ERROR` to avoid collision with PowerShell's automatic `$Error` variable, and fix the `Write-Host` module qualifier. (#38634) Thanks @ademczuk.
 
 ## 2026.3.2
 
