@@ -35,6 +35,7 @@ export type AcpSessionResolution =
   | {
       kind: "ready";
       sessionKey: string;
+      storeSessionKey: string;
       meta: SessionAcpMeta;
     };
 

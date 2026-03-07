@@ -107,6 +107,7 @@ function setReadyAcpResolution() {
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
     sessionKey,
+    storeSessionKey: sessionKey,
     meta: createAcpSessionMeta(),
   });
 }

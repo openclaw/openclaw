@@ -50,6 +50,7 @@ const acpManagerMocks = vi.hoisted(() => ({
       | {
           kind: "ready";
           sessionKey: string;
+          storeSessionKey: string;
           meta: unknown;
         }
   >(() => ({ kind: "none" })),
@@ -399,6 +400,7 @@ describe("abort detection", () => {
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey,
+      storeSessionKey: sessionKey,
       meta: {} as never,
     });
 
@@ -428,6 +430,7 @@ describe("abort detection", () => {
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey,
+      storeSessionKey: sessionKey,
       meta: {} as never,
     });
     acpManagerMocks.cancelSession.mockRejectedValueOnce(new Error("cancel failed"));

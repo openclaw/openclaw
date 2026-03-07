@@ -271,6 +271,81 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("reuses legacy store keys for ACP metadata writes after canonical dispatch", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      agent: "helper",
+      runtimeSessionName: "legacy-helper-main",
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        return null;
+      }
+      return {
+        sessionKey: "agent:helper:desk",
+        storeSessionKey: "agent:helper:main",
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey?: string;
+        rawSessionKey?: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        throw new Error("expected ACP metadata writes to preserve the legacy helper alias");
+      }
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-helper-main",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "desk" },
+      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+    } as OpenClawConfig;
+
+    await manager.runTurn({
+      cfg,
+      sessionKey: "agent:helper:desk",
+      rawSessionKey: "agent:helper:main",
+      text: "persist helper alias",
+      mode: "prompt",
+      requestId: "r-helper-write",
+    });
+
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(
+      hoisted.upsertAcpSessionMetaMock.mock.calls.every(
+        ([firstArg]) =>
+          (firstArg as { rawSessionKey?: string }).rawSessionKey === "agent:helper:main",
+      ),
+    ).toBe(true);
+  });
+
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

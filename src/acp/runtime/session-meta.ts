@@ -211,6 +211,7 @@ export async function listAcpSessionEntries(params: {
 
 export async function upsertAcpSessionMeta(params: {
   sessionKey: string;
+  rawSessionKey?: string;
   cfg?: OpenClawConfig;
   mutate: (
     current: SessionAcpMeta | undefined,
@@ -237,6 +238,7 @@ export async function upsertAcpSessionMeta(params: {
         resolveStoreLookupKeys({
           cfg,
           sessionKey,
+          rawSessionKey: params.rawSessionKey,
         }),
       );
       const currentEntry = store[storeSessionKey];

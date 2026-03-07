@@ -15,6 +15,7 @@ import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  storeSessionKey?: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
@@ -24,6 +25,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    storeSessionKey?: string;
     mutate: (
       current: SessionAcpMeta | undefined,
       entry: SessionEntry | undefined,
@@ -129,6 +131,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    storeSessionKey: params.storeSessionKey,
     mutate: (current, entry) => {
       if (!entry) {
         return null;
