@@ -103,4 +103,38 @@ describe("provider discovery auth marker guardrails", () => {
     );
     expect(huggingfaceCalls).toHaveLength(0);
   });
+
+  it("keeps all-caps plaintext API keys for authenticated discovery", async () => {
+    enableDiscovery();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ id: "vllm/test-model" }] }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await writeFile(
+      join(agentDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "vllm:default": {
+              type: "api_key",
+              provider: "vllm",
+              key: "AKIAIOSFODNN7EXAMPLE",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    await resolveImplicitProviders({ agentDir });
+    const vllmCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":8000"));
+    const request = vllmCall?.[1] as { headers?: Record<string, string> } | undefined;
+    expect(request?.headers?.Authorization).toBe("Bearer AKIAIOSFODNN7EXAMPLE");
+  });
 });
