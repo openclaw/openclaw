@@ -5,8 +5,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 const loadConfig = vi.fn(() => ({
   gateway: {
     mode: "remote",
-    remote: { url: "wss://remote.example:18789", token: "rtok" },
-    auth: { token: "ltok" },
+    remote: { url: "wss://remote.example:18789", token: "rtok" }, // pragma: allowlist secret
+    auth: { token: "ltok" }, // pragma: allowlist secret
   },
 }));
 const resolveGatewayPort = vi.fn((_cfg?: unknown) => 18789);
@@ -139,7 +139,11 @@ function asRuntimeEnv(runtime: ReturnType<typeof createRuntimeCapture>["runtime"
   return runtime as unknown as RuntimeEnv;
 }
 
-function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok") {
+function makeRemoteGatewayConfig(
+  url: string,
+  token = "rtok", // pragma: allowlist secret
+  localToken = "ltok", // pragma: allowlist secret
+) {
   return {
     gateway: {
       mode: "remote",
