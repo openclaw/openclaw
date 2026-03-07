@@ -325,14 +325,26 @@ export const dispatchTelegramMessage = async ({
     lane.lastPartialText = text;
     laneStream.update(text);
   };
+  // In partial mode, all tool-call rounds share a single preview message
+  // (edited in place). In block mode, each assistant message boundary creates
+  // a new preview message. Mirrors Discord's shouldSplitPreviewMessages.
+  const shouldSplitPreviewMessages = streamMode === "block";
+
   const ingestDraftLaneSegments = async (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
     const hasAnswerSegment = split.segments.some((segment) => segment.lane === "answer");
     if (hasAnswerSegment && finalizedPreviewByLane.answer) {
       // Some providers can emit the first partial of a new assistant message before
-      // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
-      // the previously finalized preview message with the next message's text.
-      skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
+      // onAssistantMessageStart() arrives.
+      if (shouldSplitPreviewMessages) {
+        // Block mode: rotate preemptively so we do not edit the previously
+        // finalized preview message with the next message's text.
+        skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
+      } else {
+        // Partial mode: reuse the same preview — just revive the stream.
+        answerLane.stream?.revive();
+        finalizedPreviewByLane.answer = false;
+      }
     }
     for (const segment of split.segments) {
       if (segment.lane === "reasoning") {
@@ -657,7 +669,15 @@ export const dispatchTelegramMessage = async ({
                   finalizedPreviewByLane.answer = false;
                   return;
                 }
-                await rotateAnswerLaneForNewAssistantMessage();
+                if (shouldSplitPreviewMessages) {
+                  await rotateAnswerLaneForNewAssistantMessage();
+                } else {
+                  // Partial mode: reuse the same preview message across
+                  // tool-call rounds. Revive the stream so subsequent
+                  // partials continue editing the same message.
+                  answerLane.stream?.revive();
+                  resetDraftLaneState(answerLane);
+                }
                 // Message-start is an explicit assistant-message boundary.
                 // Even when no forceNewMessage happened (e.g. prior answer had no
                 // streamed partials), the next partial belongs to a fresh lifecycle

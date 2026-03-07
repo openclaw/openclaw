@@ -66,6 +66,11 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /**
+   * Re-open the stream lifecycle without creating a new message.
+   * Used in partial mode to continue editing the same preview across tool-call boundaries.
+   */
+  revive: () => void;
 };
 
 type TelegramDraftPreview = {
@@ -408,6 +413,18 @@ export function createTelegramDraftStream(params: {
     return undefined;
   };
 
+  const revive = () => {
+    if (streamState.stopped) {
+      // Stream was killed by an error; don't resurrect.
+      return;
+    }
+    streamState.final = false;
+    lastSentText = "";
+    lastSentParseMode = undefined;
+    loop.resetPending();
+    loop.resetThrottleWindow();
+  };
+
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
@@ -421,5 +438,6 @@ export function createTelegramDraftStream(params: {
     stop,
     materialize,
     forceNewMessage,
+    revive,
   };
 }
