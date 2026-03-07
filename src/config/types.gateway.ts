@@ -67,7 +67,7 @@ export type TalkProviderConfig = {
 
 /** Typed ElevenLabs config for Talk mode (mirrors messages.tts.elevenlabs). */
 export type TalkElevenLabsConfig = {
-  apiKey?: string;
+  apiKey?: SecretInput;
   baseUrl?: string;
   voiceId?: string;
   voiceAliases?: Record<string, string>;
@@ -87,7 +87,7 @@ export type TalkElevenLabsConfig = {
 
 /** Typed OpenAI config for Talk mode (extends messages.tts.openai with baseUrl). */
 export type TalkOpenAIConfig = {
-  apiKey?: string;
+  apiKey?: SecretInput;
   baseUrl?: string;
   model?: string;
   voice?: string;
