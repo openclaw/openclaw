@@ -7,11 +7,13 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/feishu";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   hasConfiguredSecretInput,
   promptSingleChannelSecretInput,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
@@ -28,34 +30,19 @@ function normalizeString(value: unknown): string | undefined {
 }
 
 function setFeishuDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy): ClawdbotConfig {
-  const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.feishu?.allowFrom)?.map((entry) => String(entry))
-      : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...cfg.channels?.feishu,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "feishu",
+    dmPolicy,
+  }) as ClawdbotConfig;
 }
 
 function setFeishuAllowFrom(cfg: ClawdbotConfig, allowFrom: string[]): ClawdbotConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...cfg.channels?.feishu,
-        allowFrom,
-      },
-    },
-  };
+  return setTopLevelChannelAllowFrom({
+    cfg,
+    channel: "feishu",
+    allowFrom,
+  }) as ClawdbotConfig;
 }
 
 function parseAllowFromInput(raw: string): string[] {
@@ -137,17 +124,12 @@ function setFeishuGroupPolicy(
   cfg: ClawdbotConfig,
   groupPolicy: "open" | "allowlist" | "disabled",
 ): ClawdbotConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...cfg.channels?.feishu,
-        enabled: true,
-        groupPolicy,
-      },
-    },
-  };
+  return setTopLevelChannelGroupPolicy({
+    cfg,
+    channel: "feishu",
+    groupPolicy,
+    enabled: true,
+  }) as ClawdbotConfig;
 }
 
 function setFeishuGroupAllowFrom(cfg: ClawdbotConfig, groupAllowFrom: string[]): ClawdbotConfig {

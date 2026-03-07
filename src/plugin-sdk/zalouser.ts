@@ -21,6 +21,7 @@ export {
   mergeAllowFromEntries,
   promptAccountId,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,

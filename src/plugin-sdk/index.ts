@@ -533,6 +533,10 @@ export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
+  resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 

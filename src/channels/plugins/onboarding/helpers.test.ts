@@ -27,6 +27,9 @@ import {
   setAccountAllowFromForChannel,
   setAccountGroupPolicyForChannel,
   setChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
   setLegacyChannelAllowFrom,
   setLegacyChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
@@ -910,6 +913,73 @@ describe("setChannelDmPolicyWithAllowFrom", () => {
     });
     expect(next.channels?.telegram?.dmPolicy).toBe("open");
     expect(next.channels?.telegram?.allowFrom).toEqual(["123", "*"]);
+  });
+});
+
+describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
+  it("adds wildcard allowFrom for open policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalo: {
+          dmPolicy: "pairing",
+          allowFrom: ["12345"],
+        },
+      },
+    };
+
+    const next = setTopLevelChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "zalo",
+      dmPolicy: "open",
+    });
+    expect(next.channels?.zalo?.dmPolicy).toBe("open");
+    expect(next.channels?.zalo?.allowFrom).toEqual(["12345", "*"]);
+  });
+
+  it("supports custom allowFrom lookup callback", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        "nextcloud-talk": {
+          dmPolicy: "pairing",
+          allowFrom: ["alice"],
+        },
+      },
+    };
+
+    const next = setTopLevelChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "nextcloud-talk",
+      dmPolicy: "open",
+      getAllowFrom: (inputCfg) =>
+        (inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? []).map((entry) => String(entry)),
+    });
+    expect(next.channels?.["nextcloud-talk"]?.allowFrom).toEqual(["alice", "*"]);
+  });
+});
+
+describe("setTopLevelChannelAllowFrom", () => {
+  it("writes allowFrom and can force enabled state", () => {
+    const next = setTopLevelChannelAllowFrom({
+      cfg: {},
+      channel: "msteams",
+      allowFrom: ["user-1"],
+      enabled: true,
+    });
+    expect(next.channels?.msteams?.allowFrom).toEqual(["user-1"]);
+    expect(next.channels?.msteams?.enabled).toBe(true);
+  });
+});
+
+describe("setTopLevelChannelGroupPolicy", () => {
+  it("writes groupPolicy and can force enabled state", () => {
+    const next = setTopLevelChannelGroupPolicy({
+      cfg: {},
+      channel: "feishu",
+      groupPolicy: "allowlist",
+      enabled: true,
+    });
+    expect(next.channels?.feishu?.groupPolicy).toBe("allowlist");
+    expect(next.channels?.feishu?.enabled).toBe(true);
   });
 });
 

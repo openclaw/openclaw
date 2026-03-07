@@ -27,6 +27,7 @@ export {
   promptAccountId,
   promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";

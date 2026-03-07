@@ -37,6 +37,9 @@ export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channe
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {

@@ -161,6 +161,75 @@ export function setAccountAllowFromForChannel(params: {
   });
 }
 
+export function setTopLevelChannelAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  allowFrom: string[];
+  enabled?: boolean;
+}): OpenClawConfig {
+  const channelConfig =
+    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channel]: {
+        ...channelConfig,
+        ...(params.enabled ? { enabled: true } : {}),
+        allowFrom: params.allowFrom,
+      },
+    },
+  };
+}
+
+export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  dmPolicy: DmPolicy;
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+}): OpenClawConfig {
+  const channelConfig =
+    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  const existingAllowFrom =
+    params.getAllowFrom?.(params.cfg) ??
+    (channelConfig.allowFrom as Array<string | number> | undefined) ??
+    undefined;
+  const allowFrom =
+    params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channel]: {
+        ...channelConfig,
+        dmPolicy: params.dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
+      },
+    },
+  };
+}
+
+export function setTopLevelChannelGroupPolicy(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  groupPolicy: GroupPolicy;
+  enabled?: boolean;
+}): OpenClawConfig {
+  const channelConfig =
+    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channel]: {
+        ...channelConfig,
+        ...(params.enabled ? { enabled: true } : {}),
+        groupPolicy: params.groupPolicy,
+      },
+    },
+  };
+}
+
 export function setChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: "imessage" | "signal" | "telegram";

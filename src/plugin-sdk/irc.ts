@@ -19,6 +19,8 @@ export {
   addWildcardAllowFrom,
   promptAccountId,
   resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type { BaseProbeResult } from "../channels/plugins/types.js";

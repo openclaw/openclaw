@@ -1,9 +1,10 @@
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   promptChannelAccessConfig,
   resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type DmPolicy,
@@ -90,32 +91,19 @@ function updateIrcAccountConfig(
 }
 
 function setIrcDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.irc?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...cfg.channels?.irc,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "irc",
+    dmPolicy,
+  }) as CoreConfig;
 }
 
 function setIrcAllowFrom(cfg: CoreConfig, allowFrom: string[]): CoreConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...cfg.channels?.irc,
-        allowFrom,
-      },
-    },
-  };
+  return setTopLevelChannelAllowFrom({
+    cfg,
+    channel: "irc",
+    allowFrom,
+  }) as CoreConfig;
 }
 
 function setIrcNickServ(
