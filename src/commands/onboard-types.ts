@@ -49,6 +49,7 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "sarvam-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -75,6 +76,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "sarvam"
   | "xai"
   | "volcengine"
   | "byteplus"
@@ -135,6 +137,7 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  sarvamApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

@@ -23,6 +23,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "sarvamApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
 >;
@@ -197,5 +198,12 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--byteplus-api-key",
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
+  },
+  {
+    optionKey: "sarvamApiKey",
+    authChoice: "sarvam-api-key",
+    cliFlag: "--sarvam-api-key",
+    cliOption: "--sarvam-api-key <key>",
+    description: "Sarvam AI API key",
   },
 ];
