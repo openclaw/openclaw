@@ -6,6 +6,8 @@ import {
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   getChatChannelMeta,
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryUserEntriesFromAllowFrom,
   migrateBaseNameToDefaultAccount,
   missingTargetError,
   normalizeAccountId,
@@ -243,34 +245,23 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         cfg: cfg,
         accountId,
       });
-      const q = query?.trim().toLowerCase() || "";
-      const allowFrom = account.config.dm?.allowFrom ?? [];
-      const peers = Array.from(
-        new Set(
-          allowFrom
-            .map((entry) => String(entry).trim())
-            .filter((entry) => Boolean(entry) && entry !== "*")
-            .map((entry) => normalizeGoogleChatTarget(entry) ?? entry),
-        ),
-      )
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "user", id }) as const);
-      return peers;
+      return listDirectoryUserEntriesFromAllowFrom({
+        allowFrom: account.config.dm?.allowFrom,
+        query,
+        limit,
+        normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
+      });
     },
     listGroups: async ({ cfg, accountId, query, limit }) => {
       const account = resolveGoogleChatAccount({
         cfg: cfg,
         accountId,
       });
-      const groups = account.config.groups ?? {};
-      const q = query?.trim().toLowerCase() || "";
-      const entries = Object.keys(groups)
-        .filter((key) => key && key !== "*")
-        .filter((key) => (q ? key.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "group", id }) as const);
-      return entries;
+      return listDirectoryGroupEntriesFromMapKeys({
+        groups: account.config.groups,
+        query,
+        limit,
+      });
     },
   },
   resolver: {
