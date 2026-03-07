@@ -398,15 +398,19 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
     - `react` (`chatId`, `messageId`, `emoji`)
+    - `listPins` (`chatId`)
     - `deleteMessage` (`chatId`, `messageId`)
     - `editMessage` (`chatId`, `messageId`, `content`)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
 
-    Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
+    Channel message actions expose ergonomic aliases (`send`, `react`, `list-pins`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
+
+    Telegram currently exposes the chat-level `pinned_message` via `getChat`, so `listPins` returns zero or one pinned messages for the target chat.
 
     Gating controls:
 
     - `channels.telegram.actions.sendMessage`
+    - `channels.telegram.actions.pins`
     - `channels.telegram.actions.deleteMessage`
     - `channels.telegram.actions.reactions`
     - `channels.telegram.actions.sticker` (default: disabled)
@@ -884,6 +888,7 @@ Primary reference:
 - `channels.telegram.webhookHost`: local webhook bind host (default `127.0.0.1`).
 - `channels.telegram.webhookPort`: local webhook bind port (default `8787`).
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
+- `channels.telegram.actions.pins`: gate Telegram pinned-message reads.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
@@ -902,7 +907,7 @@ Telegram-specific high-signal fields:
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
-- actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
+- actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|pins|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 

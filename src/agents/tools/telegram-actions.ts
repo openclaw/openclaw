@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withNormalizedTimestamp } from "../date-time.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import {
@@ -16,6 +17,7 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
+  listPinsTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendPollTelegram,
@@ -33,6 +35,16 @@ import {
 } from "./common.js";
 
 const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
+
+function normalizeTelegramPinnedMessage(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return message;
+  }
+  return withNormalizedTimestamp(
+    message as Record<string, unknown>,
+    (message as { date?: unknown }).date,
+  );
+}
 
 export function readTelegramButtons(
   params: Record<string, unknown>,
@@ -331,6 +343,22 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
     });
     return jsonResult({ ok: true, deleted: true });
+  }
+
+  if (action === "listPins") {
+    if (!isActionEnabled("pins")) {
+      throw new Error("Telegram pinned-message reads are disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const pins = await listPinsTelegram(chatId ?? "", {
+      accountId: accountId ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      pins: pins.map((pin) => normalizeTelegramPinnedMessage(pin)),
+    });
   }
 
   if (action === "editMessage") {

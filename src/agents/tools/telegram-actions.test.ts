@@ -18,6 +18,7 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const listPinsTelegram = vi.fn(async () => []);
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../telegram/send.js", () => ({
@@ -30,6 +31,7 @@ vi.mock("../../telegram/send.js", () => ({
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
+  listPinsTelegram: (...args: Parameters<typeof listPinsTelegram>) => listPinsTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -90,6 +92,7 @@ describe("handleTelegramAction", () => {
     sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    listPinsTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -497,6 +500,61 @@ describe("handleTelegramAction", () => {
       456,
       expect.objectContaining({ token: "tok" }),
     );
+  });
+
+  it("lists pinned messages and normalizes Telegram timestamps", async () => {
+    listPinsTelegram.mockResolvedValueOnce([
+      {
+        message_id: 77,
+        text: "Pinned build status",
+        date: 1_736_942_400,
+      },
+    ]);
+
+    const result = await handleTelegramAction(
+      {
+        action: "listPins",
+        chatId: "123",
+      },
+      telegramConfig(),
+    );
+
+    expect(listPinsTelegram).toHaveBeenCalledWith(
+      "123",
+      expect.objectContaining({ accountId: undefined }),
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      pins: [
+        {
+          message_id: 77,
+          text: "Pinned build status",
+        },
+      ],
+    });
+    const payload = result.details as {
+      pins: Array<{ timestampMs?: number; timestampUtc?: string }>;
+    };
+    expect(payload.pins[0]?.timestampMs).toBe(1_736_942_400_000);
+    expect(payload.pins[0]?.timestampUtc).toBe("2025-01-15T12:00:00.000Z");
+  });
+
+  it("respects listPins gating", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", actions: { pins: false } },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleTelegramAction(
+        {
+          action: "listPins",
+          chatId: "123",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/pinned-message reads are disabled/i);
   });
 
   it("respects deleteMessage gating", async () => {

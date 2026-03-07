@@ -94,6 +94,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("reactions")) {
       actions.add("react");
     }
+    if (isEnabled("pins")) {
+      actions.add("list-pins");
+    }
     if (isEnabled("deleteMessage")) {
       actions.add("delete");
     }
@@ -200,6 +203,19 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "deleteMessage",
           chatId,
           messageId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "list-pins") {
+      const chatId = readTelegramChatIdParam(params);
+      return await handleTelegramAction(
+        {
+          action: "listPins",
+          chatId,
           accountId: accountId ?? undefined,
         },
         cfg,

@@ -15,6 +15,7 @@ const {
   buildInlineKeyboard,
   createForumTopicTelegram,
   editMessageTelegram,
+  listPinsTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendPollTelegram,
@@ -1303,6 +1304,68 @@ describe("reactMessageTelegram", () => {
         resolvedChatId: "-100123",
       }),
     );
+  });
+});
+
+describe("listPinsTelegram", () => {
+  it("returns the pinned message from getChat as a pins array", async () => {
+    const pinnedMessage = {
+      message_id: 77,
+      text: "Pinned build status",
+      date: 1_736_942_400,
+    };
+    const getChat = vi.fn().mockResolvedValue({
+      id: -100123,
+      pinned_message: pinnedMessage,
+    });
+    const api = { getChat } as unknown as {
+      getChat: typeof getChat;
+    };
+
+    const pins = await listPinsTelegram("telegram:group:-100123:topic:42", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenCalledWith("-100123");
+    expect(pins).toEqual([pinnedMessage]);
+  });
+
+  it("resolves legacy targets before listing pins", async () => {
+    const getChat = vi
+      .fn()
+      .mockResolvedValueOnce({ id: -100123 })
+      .mockResolvedValueOnce({
+        id: -100123,
+        pinned_message: { message_id: 1, text: "Pinned" },
+      });
+    const api = { getChat } as unknown as {
+      getChat: typeof getChat;
+    };
+
+    const pins = await listPinsTelegram("@mychannel", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenNthCalledWith(1, "@mychannel");
+    expect(getChat).toHaveBeenNthCalledWith(2, "-100123");
+    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawTarget: "@mychannel",
+        resolvedChatId: "-100123",
+      }),
+    );
+    expect(pins).toEqual([{ message_id: 1, text: "Pinned" }]);
+  });
+
+  it("returns an empty array when the chat has no pinned message", async () => {
+    const getChat = vi.fn().mockResolvedValue({ id: "123" });
+    const api = { getChat } as unknown as {
+      getChat: typeof getChat;
+    };
+
+    await expect(listPinsTelegram("123", { token: "tok", api })).resolves.toEqual([]);
   });
 });
 

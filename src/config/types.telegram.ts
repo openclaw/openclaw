@@ -17,6 +17,8 @@ export type TelegramActionConfig = {
   sendMessage?: boolean;
   /** Enable poll creation. Requires sendMessage to also be enabled. */
   poll?: boolean;
+  /** Enable pinned-message reads via getChat. */
+  pins?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
