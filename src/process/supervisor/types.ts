@@ -1,5 +1,7 @@
 export type RunState = "starting" | "running" | "exiting" | "exited";
 
+export type OverallTimeoutPolicy = "fixed" | "extend-on-output";
+
 export type TerminationReason =
   | "manual-cancel"
   | "overall-timeout"
@@ -7,6 +9,23 @@ export type TerminationReason =
   | "spawn-error"
   | "signal"
   | "exit";
+
+export type RunOutputTail = {
+  lines: string[];
+  truncated: boolean;
+  maxLines: number;
+  maxChars: number;
+};
+
+export type RunOutputActivity = {
+  lastOutputAtMs: number;
+  silenceMs: number;
+  stdoutBytes: number;
+  stderrBytes: number;
+  stdoutChunks: number;
+  stderrChunks: number;
+  tail: RunOutputTail;
+};
 
 export type RunRecord = {
   runId: string;
@@ -34,6 +53,7 @@ export type RunExit = {
   stderr: string;
   timedOut: boolean;
   noOutputTimedOut: boolean;
+  outputActivity?: RunOutputActivity;
 };
 
 export type ManagedRun = {
@@ -73,7 +93,11 @@ type SpawnBaseInput = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  overallTimeoutPolicy?: OverallTimeoutPolicy;
+  overallMaxMs?: number;
   noOutputTimeoutMs?: number;
+  outputTailLines?: number;
+  outputTailMaxChars?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
