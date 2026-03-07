@@ -269,6 +269,51 @@ function countLines(text: string): number {
   return splitReadLines(text).length;
 }
 
+function hasFollowingTextBlock(blocks: unknown[], fromIndex: number): boolean {
+  for (let index = fromIndex + 1; index < blocks.length; index++) {
+    if (typeof extractBlockText(blocks[index]) === "string") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isReadMetadataTextBlock(params: {
+  text: string;
+  path: string;
+  hasFollowingTextBlock: boolean;
+}): boolean {
+  if (!params.hasFollowingTextBlock) {
+    return false;
+  }
+
+  const trimmed = params.text.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  const lines = splitReadLines(trimmed);
+  const firstLine = (lines[0] ?? "").trim();
+  const lowerFirstLine = firstLine.toLowerCase();
+
+  if (
+    lowerFirstLine.startsWith("path:") ||
+    lowerFirstLine.startsWith("file:") ||
+    lowerFirstLine.startsWith("offset:") ||
+    lowerFirstLine.startsWith("lines:") ||
+    lowerFirstLine.startsWith("range:") ||
+    lowerFirstLine.startsWith("line range:")
+  ) {
+    return true;
+  }
+
+  if (lines.length <= 3 && trimmed.length <= 240 && trimmed.includes(params.path)) {
+    return true;
+  }
+
+  return false;
+}
+
 function formatRange(start: number, end: number): string {
   return start === end ? `${start}` : `${start}-${end}`;
 }
@@ -788,9 +833,18 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
 
     let lineCursor = meta.offset;
     let messageChanged = false;
-    const nextContent = content.map((block) => {
+    const nextContent = content.map((block, blockIndex, allBlocks) => {
       const text = extractBlockText(block);
       if (typeof text !== "string") {
+        return block;
+      }
+
+      const metadataBlock = isReadMetadataTextBlock({
+        text,
+        path: meta.path,
+        hasFollowingTextBlock: hasFollowingTextBlock(allBlocks, blockIndex),
+      });
+      if (metadataBlock) {
         return block;
       }
 
@@ -1290,7 +1344,11 @@ function foldRepeatedTextRuns(text: string): {
   const combinedStats = createEmptyRepeatFoldStats();
   let changed = false;
 
-  const linePatternFold = foldContiguousRepeatedUnitPatterns(workingText.split("\n"), "\n");
+  const linePatternFold = foldContiguousRepeatedUnitPatterns(
+    workingText.split("\n"),
+    "\n",
+    (unit) => unit,
+  );
   if (linePatternFold.changed) {
     workingText = linePatternFold.text;
     changed = true;

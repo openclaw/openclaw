@@ -448,6 +448,64 @@ describe("context-dedup", () => {
     expect(result.stats.fullyOmittedChunks).toBe(0);
   });
 
+  it("keeps read line cursor aligned when array-form read results include header text", () => {
+    const baseLines = Array.from(
+      { length: 20 },
+      (_, idx) => `line ${idx + 1} :: ${"h".repeat(48)}`,
+    );
+    const changedLines = [...baseLines];
+    changedLines[5] = "line 6 changed :: HHHHHHHH";
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_header_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/header-block.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_header_1",
+        content: [
+          { type: "text", text: "Path: /tmp/header-block.txt" },
+          { type: "text", text: baseLines.join("\n") },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_header_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/header-block.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_header_2",
+        content: [
+          { type: "text", text: "Path: /tmp/header-block.txt" },
+          { type: "text", text: changedLines.join("\n") },
+        ],
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const compactedFileBlock = String((result.messages[3].content as any[])[1]?.text ?? "");
+
+    expect(compactedFileBlock).toContain("Same as earlier chunk lines 1-20");
+    expect(compactedFileBlock).not.toContain("Same as earlier chunk lines 2-21");
+  });
+
   it("supports toolUse/functionCall read blocks and toolUseId-linked results", () => {
     const baseLines = Array.from(
       { length: 30 },
@@ -987,6 +1045,24 @@ describe("context-dedup", () => {
     expect(text).toContain(repeatedLine);
     expect(folded.stats.collapsedRuns).toBe(1);
     expect(folded.stats.omittedCopies).toBe(4);
+  });
+
+  it("does not fold multiline runs that differ only by indentation", () => {
+    const indented = "    setting = some_value_with_whitespace_significance()";
+    const nonIndented = "setting = some_value_with_whitespace_significance()";
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: [indented, nonIndented].join("\n"),
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[]);
+
+    expect(String(folded.messages[0].content)).toBe([indented, nonIndented].join("\n"));
+    expect(folded.stats.collapsedRuns).toBe(0);
+    expect(folded.stats.omittedCopies).toBe(0);
   });
 
   it("folds repeated sentence runs in single-line tool output", () => {
