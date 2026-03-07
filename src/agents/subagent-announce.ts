@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -84,9 +85,9 @@ function resolveSubagentOutputDir(cfg: ReturnType<typeof loadConfig>): string {
   const configured = (cfg.agents?.defaults?.subagents as Record<string, unknown> | undefined)
     ?.outputDir;
   if (typeof configured === "string" && configured.trim()) {
-    return configured.trim().replace(/^~/, process.env.HOME ?? "/root");
+    return configured.trim().replace(/^~/, process.env.HOME ?? homedir());
   }
-  const home = process.env.HOME ?? "/root";
+  const home = process.env.HOME ?? homedir();
   return `${home}/.openclaw/workspace/tmp/agent-output`;
 }
 
@@ -99,7 +100,7 @@ function saveOutputToTempFile(params: {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const safeName = (params.label || "agent").replace(/[^a-z0-9-]/gi, "-").slice(0, 40);
-    const safeRunId = params.runId.slice(0, 8);
+    const safeRunId = params.runId.replace(/[^a-z0-9]/gi, "-").slice(0, 8);
     const filename = `${timestamp}-${safeName}-${safeRunId}.md`;
     const filePath = join(params.outputDir, filename);
     mkdirSync(params.outputDir, { recursive: true });
