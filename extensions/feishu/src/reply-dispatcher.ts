@@ -5,7 +5,7 @@ import {
   type ClawdbotConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
@@ -13,7 +13,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
-import { FeishuStreamingSession } from "./streaming-card.js";
+import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -23,8 +23,8 @@ function shouldUseCard(text: string): boolean {
 }
 
 /**
- * Check if the accumulated markdown text is "safe" to render — i.e. it has
- * no unclosed fenced code blocks (```) that would cause Feishu to crash/blank.
+ * Check whether the current partial text is "safe" to push to a streaming card.
+ *
  * We ONLY check for balanced code fences. We do NOT require text to end at
  * a paragraph boundary — that was too strict and blocked all streaming updates.
  */
@@ -158,9 +158,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = ""; // current card's text (sliced from cumulative)
   let lastSafeText = "";
   let lastPartial = "";
+  const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let blockOffset = 0; // cumulative char offset: text before this was delivered in previous blocks
+
 
   const startStreaming = () => {
     if (!streamingEnabled || streamingStartPromise || streaming) {
@@ -216,6 +218,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
+        deliveredFinalTexts.clear();
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -231,12 +234,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               : [];
         const hasText = Boolean(text.trim());
         const hasMedia = mediaList.length > 0;
+        const skipTextForDuplicateFinal =
+          info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+        const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
-        if (!hasText && !hasMedia) {
+        if (!shouldDeliverText && !hasMedia) {
           return;
         }
 
-        if (hasText) {
+        if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           // For block events, feed the streaming card if active
@@ -269,8 +275,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               blockOffset += text.length;
             }
             if (info?.kind === "final") {
-              streamText = text;
+              streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
+              deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
@@ -287,7 +294,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             return;
           }
-
           // No streaming card active
           // If kind=final after blocks were delivered, only send undelivered tail text
           if (info?.kind === "final" && blockOffset > 0) {
@@ -364,6 +370,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               });
               first = false;
             }
+            if (info?.kind === "final") {
+              deliveredFinalTexts.add(text);
+            }
           } else {
             const converted = core.channel.text.convertMarkdownTables(text, tableMode);
             for (const chunk of core.channel.text.chunkTextWithMode(
@@ -381,6 +390,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 accountId,
               });
               first = false;
+            }
+            if (info?.kind === "final") {
+              deliveredFinalTexts.add(text);
             }
           }
         }
