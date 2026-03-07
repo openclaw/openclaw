@@ -57,6 +57,21 @@ describe("normalizeMessageActionInput", () => {
     expect(normalized.channel).toBe("slack");
   });
 
+  it("accepts explicit target when legacy fields are empty strings", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {
+        target: "1214056829",
+        to: "",
+        channelId: "",
+      },
+    });
+
+    expect(normalized.target).toBe("1214056829");
+    expect(normalized.to).toBe("1214056829");
+    expect(normalized.channelId).toBe("");
+  });
+
   it("throws when required target remains unresolved", () => {
     expect(() =>
       normalizeMessageActionInput({
