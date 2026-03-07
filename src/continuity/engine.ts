@@ -9,6 +9,33 @@ import type {
 } from "../context-engine/types.js";
 import type { ContinuityService } from "./service.js";
 
+function resolveNewTurnMessages(params: {
+  messages: AgentMessage[];
+  prePromptMessageCount: number;
+}): AgentMessage[] {
+  const boundary = Number.isFinite(params.prePromptMessageCount)
+    ? Math.trunc(params.prePromptMessageCount)
+    : -1;
+  if (boundary >= 0 && boundary <= params.messages.length) {
+    return params.messages.slice(boundary);
+  }
+
+  // Compaction can rewrite history before afterTurn executes, making the original
+  // prePrompt boundary stale. Fall back to the trailing user->assistant window.
+  const tail: AgentMessage[] = [];
+  for (let index = params.messages.length - 1; index >= 0 && tail.length < 4; index -= 1) {
+    const message = params.messages[index];
+    if (!message || (message.role !== "user" && message.role !== "assistant")) {
+      continue;
+    }
+    tail.unshift(message);
+    if (message.role === "user") {
+      return tail;
+    }
+  }
+  return [];
+}
+
 export class ContinuityContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: "continuity",
@@ -74,7 +101,10 @@ export class ContinuityContextEngine implements ContextEngine {
     if (!params.sessionKey) {
       return;
     }
-    const newMessages = params.messages.slice(params.prePromptMessageCount);
+    const newMessages = resolveNewTurnMessages({
+      messages: params.messages,
+      prePromptMessageCount: params.prePromptMessageCount,
+    });
     if (newMessages.length === 0) {
       return;
     }

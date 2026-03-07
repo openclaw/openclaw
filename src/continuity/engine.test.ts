@@ -126,6 +126,32 @@ describe("ContinuityContextEngine", () => {
     });
   });
 
+  it("falls back to trailing turn messages when compaction invalidates the pre-prompt boundary", async () => {
+    const service = makeService();
+    service.captureTurn.mockResolvedValue([]);
+    const engine = new ContinuityContextEngine(service, "alpha");
+    const compactedMessages = [
+      makeMessage("Compaction summary", "assistant"),
+      makeMessage("I prefer compact status updates."),
+      makeMessage("Acknowledged.", "assistant"),
+    ];
+
+    await engine.afterTurn({
+      sessionId: "session-compacted",
+      sessionKey: "main",
+      sessionFile: "/tmp/session.jsonl",
+      messages: compactedMessages,
+      prePromptMessageCount: 50,
+    });
+
+    expect(service.captureTurn).toHaveBeenCalledWith({
+      agentId: "alpha",
+      sessionId: "session-compacted",
+      sessionKey: "main",
+      messages: compactedMessages.slice(1),
+    });
+  });
+
   it("delegates compact and dispose to the legacy engine", async () => {
     const service = makeService();
     const engine = new ContinuityContextEngine(service);
