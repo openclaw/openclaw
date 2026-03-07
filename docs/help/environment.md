@@ -55,6 +55,7 @@ Env var equivalents:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
+- `OPENCLAW_AGENT_TIMEOUT_SECONDS=3600`
 
 ## Runtime-injected env vars
 

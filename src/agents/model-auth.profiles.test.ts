@@ -348,6 +348,69 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("prefers ANTHROPIC_API_KEY over stored oauth profiles when no auth config exists", async () => {
+    await withEnvAsync(
+      { ANTHROPIC_API_KEY: "sk-ant-env", ANTHROPIC_OAUTH_TOKEN: undefined },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "anthropic",
+          store: {
+            version: 1,
+            profiles: {
+              "anthropic:claude-cli": {
+                type: "oauth",
+                provider: "anthropic",
+                ...oauthFixture,
+              },
+            },
+          },
+        });
+
+        expect(resolved.apiKey).toBe("sk-ant-env");
+        expect(resolved.source).toContain("ANTHROPIC_API_KEY");
+        expect(resolved.mode).toBe("api-key");
+      },
+    );
+  });
+
+  it("keeps explicit anthropic auth profile config ahead of ANTHROPIC_API_KEY", async () => {
+    await withEnvAsync(
+      { ANTHROPIC_API_KEY: "sk-ant-env", ANTHROPIC_OAUTH_TOKEN: undefined },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "anthropic",
+          cfg: {
+            auth: {
+              profiles: {
+                "anthropic:claude-cli": {
+                  provider: "anthropic",
+                  mode: "oauth",
+                },
+              },
+              order: {
+                anthropic: ["anthropic:claude-cli"],
+              },
+            },
+          },
+          store: {
+            version: 1,
+            profiles: {
+              "anthropic:claude-cli": {
+                type: "oauth",
+                provider: "anthropic",
+                ...oauthFixture,
+              },
+            },
+          },
+        });
+
+        expect(resolved.apiKey).toBe(oauthFixture.access);
+        expect(resolved.source).toBe("profile:anthropic:claude-cli");
+        expect(resolved.mode).toBe("oauth");
+      },
+    );
+  });
+
   it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {
     await withEnvAsync(
       {

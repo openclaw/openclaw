@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
@@ -88,6 +89,32 @@ describe("getSubagentDepthFromSessionStore", () => {
 });
 
 describe("resolveAgentTimeoutMs", () => {
+  it("defaults agent runs to one hour", () => {
+    expect(resolveAgentTimeoutMs({})).toBe(3_600_000);
+  });
+
+  it("accepts direct env fallback when config timeout is unset", async () => {
+    await withEnvAsync({ OPENCLAW_AGENT_TIMEOUT_SECONDS: "7200" }, async () => {
+      expect(resolveAgentTimeoutMs({})).toBe(7_200_000);
+    });
+  });
+
+  it("keeps config timeout ahead of direct env fallback", async () => {
+    await withEnvAsync({ OPENCLAW_AGENT_TIMEOUT_SECONDS: "7200" }, async () => {
+      expect(
+        resolveAgentTimeoutMs({
+          cfg: {
+            agents: {
+              defaults: {
+                timeoutSeconds: 1800,
+              },
+            },
+          },
+        }),
+      ).toBe(1_800_000);
+    });
+  });
+
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(2_147_000_000);
     expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(2_147_000_000);

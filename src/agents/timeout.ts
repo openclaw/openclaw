@@ -1,14 +1,29 @@
 import type { OpenClawConfig } from "../config/config.js";
 
-const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
+const DEFAULT_AGENT_TIMEOUT_SECONDS = 3600;
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
+const AGENT_TIMEOUT_ENV_VAR = "OPENCLAW_AGENT_TIMEOUT_SECONDS";
 
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 
+function resolveAgentTimeoutSecondsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = env[AGENT_TIMEOUT_ENV_VAR];
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(Math.floor(parsed), 1);
+}
+
 export function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
   const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);
-  const seconds = raw ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
+  const seconds = raw ?? resolveAgentTimeoutSecondsFromEnv() ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
   return Math.max(seconds, 1);
 }
 

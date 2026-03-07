@@ -67,6 +67,42 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function hasExplicitAuthProfileConfig(cfg: OpenClawConfig | undefined, provider: string): boolean {
+  const providerKey = normalizeProviderId(provider);
+  return Object.values(cfg?.auth?.profiles ?? {}).some(
+    (profile) => normalizeProviderId(profile?.provider ?? "") === providerKey,
+  );
+}
+
+function hasExplicitAuthOrder(cfg: OpenClawConfig | undefined, provider: string): boolean {
+  const providerKey = normalizeProviderId(provider);
+  return Object.entries(cfg?.auth?.order ?? {}).some(
+    ([key, order]) =>
+      normalizeProviderId(key) === providerKey && Array.isArray(order) && order.length > 0,
+  );
+}
+
+function shouldPreferDirectAnthropicApiKey(params: {
+  provider: string;
+  cfg: OpenClawConfig | undefined;
+  envResolved: EnvApiKeyResult | null;
+  customKey: string | undefined;
+}): boolean {
+  if (normalizeProviderId(params.provider) !== "anthropic") {
+    return false;
+  }
+  if (hasExplicitAuthProfileConfig(params.cfg, params.provider)) {
+    return false;
+  }
+  if (hasExplicitAuthOrder(params.cfg, params.provider)) {
+    return false;
+  }
+  if (params.envResolved?.source.includes("ANTHROPIC_API_KEY")) {
+    return true;
+  }
+  return Boolean(params.customKey);
+}
+
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -196,6 +232,28 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
+  const envResolved = resolveEnvApiKey(provider);
+  const customKey = getCustomProviderApiKey(cfg, provider);
+
+  if (
+    !profileId &&
+    shouldPreferDirectAnthropicApiKey({
+      provider,
+      cfg,
+      envResolved,
+      customKey,
+    })
+  ) {
+    if (envResolved?.source.includes("ANTHROPIC_API_KEY")) {
+      return {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: "api-key",
+      };
+    }
+    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+  }
+
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -222,7 +280,6 @@ export async function resolveApiKeyForProvider(params: {
     } catch {}
   }
 
-  const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
     return {
       apiKey: envResolved.apiKey,
@@ -231,7 +288,6 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
