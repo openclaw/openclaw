@@ -79,6 +79,10 @@ export function resolveMatrixConfigForAccount(
       ? Math.max(0, Math.floor(matrix.initialSyncLimit))
       : undefined;
   const encryption = matrix.encryption ?? false;
+  const recoveryKey =
+    clean(matrix.recoveryKey, "channels.matrix.recoveryKey") ||
+    clean(env.MATRIX_RECOVERY_KEY, "MATRIX_RECOVERY_KEY") ||
+    undefined;
   return {
     homeserver,
     userId,
@@ -87,6 +91,7 @@ export function resolveMatrixConfigForAccount(
     deviceName,
     initialSyncLimit,
     encryption,
+    recoveryKey,
   };
 }
 
@@ -160,6 +165,7 @@ export async function resolveMatrixAuth(params?: {
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
+      recoveryKey: resolved.recoveryKey,
     };
   }
 
@@ -172,6 +178,7 @@ export async function resolveMatrixAuth(params?: {
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
+      recoveryKey: resolved.recoveryKey,
     };
   }
 
@@ -228,6 +235,7 @@ export async function resolveMatrixAuth(params?: {
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
     encryption: resolved.encryption,
+    recoveryKey: resolved.recoveryKey,
   };
 
   saveMatrixCredentials(
