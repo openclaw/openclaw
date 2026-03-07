@@ -11,6 +11,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const browserArgIndex = dockerfile.indexOf("ARG OPENCLAW_INSTALL_BROWSER");
+    const baseAptPackagesMatch = dockerfile.match(/BASE_APT_PACKAGES="([\s\S]*?)";/);
 
     expect(installIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(-1);
@@ -18,7 +19,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
     );
-    expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
+    expect(baseAptPackagesMatch).not.toBeNull();
+    expect(baseAptPackagesMatch?.[1]).toContain("xvfb");
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends ${BASE_APT_PACKAGES}");
   });
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {

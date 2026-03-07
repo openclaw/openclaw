@@ -60,6 +60,7 @@ Optional env vars:
 
 - `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
+- `OPENCLAW_INSTALL_BROWSER` — set to `1` to install browser deps at build time
 - `OPENCLAW_EXTENSIONS` — pre-install extension dependencies at build time (space-separated extension names, e.g. `diagnostics-otel matrix`)
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
@@ -219,6 +220,25 @@ echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run `clawdock-help` for all commands.
 
 See [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/main/scripts/shell-helpers/README.md) for details.
+
+### Keep macOS awake (optional)
+
+Running Docker does not reliably prevent macOS sleep. If your OpenClaw gateway
+must stay online (for Slack/Discord/webhooks), use the keep-awake helper from
+repo root:
+
+```bash
+scripts/openclaw-keepawake.sh on
+scripts/openclaw-keepawake.sh status
+scripts/openclaw-keepawake.sh off
+```
+
+Details:
+
+- Uses `caffeinate -imsu` in the background (allows display sleep).
+- Set `OPENCLAW_KEEPAWAKE_FLAGS=-dimsu` if you want displays to stay on.
+- Stores PID at `~/.openclaw/run/keepawake.pid`.
+- Requires macOS (`caffeinate` command).
 
 ### Manual flow (compose)
 
@@ -381,6 +401,109 @@ docker compose run --rm openclaw-cli \
 If you need Playwright to install system deps, rebuild the image with
 `OPENCLAW_DOCKER_APT_PACKAGES` instead of using `--with-deps` at runtime.
 
+## Docker troubleshooting notes (real-world)
+
+### CLI cannot connect to gateway (`gateway closed (1006)`)
+
+When `docker compose run --rm openclaw-cli ...` cannot reach the gateway, ensure
+the CLI service uses the gateway network namespace and starts after the gateway:
+
+- `openclaw-cli` uses `network_mode: "service:openclaw-gateway"`
+- `openclaw-cli` has `depends_on: [openclaw-gateway]`
+
+Then restart:
+
+```bash
+docker compose up -d openclaw-gateway
+```
+
+### `ERR_PNPM_NO_GLOBAL_BIN_DIR` while installing skills
+
+If skill install fails with:
+
+- `ERR_PNPM_NO_GLOBAL_BIN_DIR`
+- `Run "pnpm setup" ... or set PNPM_HOME`
+
+set `PNPM_HOME` in the image and include it in `PATH` so global binaries resolve
+for the non-root `node` user.
+
+### Global installs fail (`EACCES` / command not found)
+
+For non-root runtime installs from skills/UI, ensure these paths are configured
+in the image and on `PATH`:
+
+- `PNPM_HOME=/home/node/.local/share/pnpm`
+- `NPM_CONFIG_PREFIX=/home/node/.npm-global`
+- `GOPATH=/home/node/go` (or explicit `GOBIN`)
+
+And include:
+
+- `$PNPM_HOME`
+- `$NPM_CONFIG_PREFIX/bin`
+- `$GOPATH/bin`
+
+This avoids root-owned global install paths and keeps `pnpm`, `npm -g`, and
+`go install` binaries discoverable for the `node` user.
+
+### Slack Socket Mode connected but no replies
+
+If Slack probe is healthy but `lastInboundAt` stays `null`:
+
+1. In Slack app settings, enable **Socket Mode**.
+2. Enable **Event Subscriptions**.
+3. Add bot events (at minimum `message.im`; add `app_mention` if you use mentions).
+4. Enable **App Home → Messages Tab**.
+5. Reinstall the app to workspace after scope/event changes.
+
+If Slack asks for pairing, approve the code from the gateway container:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js pairing approve slack <PAIRING_CODE>
+```
+
+### Duplicate Slack replies (`edited` + final duplicate)
+
+If you see duplicated Slack responses, disable streaming:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js config set channels.slack.streaming off
+docker compose exec openclaw-gateway node dist/index.js config set channels.slack.nativeStreaming false
+docker compose restart openclaw-gateway
+```
+
+If duplicates still happen, verify only one OpenClaw gateway instance is connected
+to that Slack app/token pair.
+
+### `crontab: Permission denied` from agent tasks
+
+If an agent cannot manage cron jobs in Docker, your image likely lacks cron
+support (or the gateway is not started with the cron-capable entrypoint).
+
+Checklist:
+
+1. Rebuild the image so cron support from `Dockerfile` is included:
+
+```bash
+docker build -t openclaw:local -f Dockerfile .
+```
+
+2. Recreate gateway so `docker-compose.yml` gateway entrypoint/user changes apply:
+
+```bash
+docker compose up -d --force-recreate openclaw-gateway
+```
+
+3. Verify from inside gateway container:
+
+```bash
+docker compose exec openclaw-gateway sh -lc 'id && which crontab && crontab -l || true'
+```
+
+Notes:
+
+- Gateway starts as root only to launch cron daemon, then drops to `node`.
+- Set `OPENCLAW_ENABLE_CRON=0` to disable cron daemon startup.
+
 4. **Persist Playwright browser downloads**:
 
 - Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
@@ -540,6 +663,89 @@ docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
 - **Persistent host data:** Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths survive container replacement.
 - **Ephemeral sandbox tmpfs:** when `agents.defaults.sandbox` is enabled, the sandbox containers use `tmpfs` for `/tmp`, `/var/tmp`, and `/run`. Those mounts are separate from the top-level Compose stack and disappear with the sandbox container.
 - **Disk growth hotspots:** watch `media/`, `agents/<agentId>/sessions/sessions.json`, transcript JSONL files, `cron/runs/*.jsonl`, and rolling file logs under `/tmp/openclaw/` (or your configured `logging.file`). If you also run the macOS app outside Docker, its service logs are separate again: `~/.openclaw/logs/gateway.log`, `~/.openclaw/logs/gateway.err.log`, and `/tmp/openclaw/openclaw-gateway.log`.
+
+## Backup and migration (Intel Mac to Apple Silicon)
+
+For low-disruption host migration, move OpenClaw data/config and rebuild Docker
+images natively on the new machine.
+
+Use:
+
+- `scripts/migrate/backup-openclaw.sh` on source host
+- `scripts/migrate/restore-openclaw.sh` on target host
+
+### 1) Create backup on source host
+
+From repo root:
+
+```bash
+scripts/migrate/backup-openclaw.sh
+```
+
+The archive includes:
+
+- OpenClaw config dir (`OPENCLAW_CONFIG_DIR` or `~/.openclaw`)
+- OpenClaw workspace dir (`OPENCLAW_WORKSPACE_DIR` or `~/.openclaw/workspace`)
+- `.env` and Docker setup files from repo root
+- metadata + internal checksum manifest
+
+Output files:
+
+- `backups/openclaw-backup-<timestamp>.tar.gz`
+- `backups/openclaw-backup-<timestamp>.tar.gz.sha256`
+
+Optional path overrides:
+
+```bash
+scripts/migrate/backup-openclaw.sh \
+  --config-dir "$HOME/.openclaw" \
+  --workspace-dir "$HOME/.openclaw/workspace" \
+  --output-dir "$HOME/openclaw-backups"
+```
+
+### 2) Transfer archive to target host
+
+Copy archive + checksum file to the new Mac using your normal secure transfer
+method (scp, encrypted disk, etc.).
+
+### 3) Restore on target host
+
+From repo root on target host:
+
+```bash
+scripts/migrate/restore-openclaw.sh --archive /path/to/openclaw-backup-<timestamp>.tar.gz
+```
+
+Default restore behavior:
+
+- verifies archive checksums
+- stops `openclaw-gateway` container first
+- snapshots current config/workspace as `.pre-restore-<timestamp>`
+- restores config/workspace from backup
+- writes backup env file as `.env.from-backup` for review
+
+To overwrite `.env` directly:
+
+```bash
+scripts/migrate/restore-openclaw.sh \
+  --archive /path/to/openclaw-backup-<timestamp>.tar.gz \
+  --apply-env
+```
+
+### 4) Rebuild and validate on target arch
+
+Always rebuild on Apple Silicon:
+
+```bash
+docker compose up -d --build --force-recreate openclaw-gateway
+docker compose run --rm openclaw-cli health
+docker compose run --rm openclaw-cli channels status --probe
+```
+
+### Architecture migration note
+
+Do not carry over architecture-specific binary caches from x86 to arm hosts.
+Rebuild containers and reinstall native toolchains on the target host.
 
 ## Agent Sandbox (host gateway + Docker tools)
 

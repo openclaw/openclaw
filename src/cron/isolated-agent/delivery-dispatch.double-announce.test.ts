@@ -83,6 +83,7 @@ function makeResolvedDelivery(): Extract<DeliveryTargetResolution, { ok: true }>
     to: "123456",
     accountId: undefined,
     threadId: undefined,
+    mode: "explicit",
   };
 }
 
