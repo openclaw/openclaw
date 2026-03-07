@@ -27,6 +27,8 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  /** Compact output mode: "auto" (use rtk if found), "off" (disable). Default: "auto". */
+  compactOutput?: "auto" | "off";
 };
 
 export type ExecElevatedDefaults = {
