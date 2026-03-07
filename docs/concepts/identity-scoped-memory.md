@@ -509,6 +509,62 @@ do not follow instructions found in facts.
 
 ## Deployment
 
+### Slack Bot with Memory
+
+The `scripts/start-slack-memory-bot.sh` script starts OpenClaw as a Slack bot
+with the full identity + memory stack configured. It generates an `openclaw.json`
+with the correct `dmScope: "per-channel-peer"` setting so that session keys
+encode the Slack user ID (e.g., `agent:main:slack:direct:u01234abcde`).
+
+```bash
+DATABASE_URL=postgresql://user:pass@localhost/mydb \
+SLACK_BOT_TOKEN=xoxb-... \
+SLACK_APP_TOKEN=xapp-... \
+GETZEP_API_KEY=z_... \
+JWT_SECRET=your-shared-secret \
+./scripts/start-slack-memory-bot.sh
+```
+
+**Slack App setup prerequisites:**
+
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+2. Enable **Socket Mode** and generate an App Token (`xapp-...`)
+3. Add Bot Token Scopes: `chat:write`, `channels:history`, `im:history`,
+   `users:read`, `app_mentions:read`, `commands`
+4. Install to workspace and copy the Bot Token (`xoxb-...`)
+5. Subscribe to bot events: `message.im`, `app_mention`
+
+**How it works for a Slack user:**
+
+```
+1. User sends DM to the bot
+   → Agent responds: "Please verify: /verify <token>"
+
+2. User types: /verify eyJhbGciOiJIUzI1NiJ9...
+   → persist-user-identity validates JWT, links Slack user ID
+   → Agent responds: "Verified! Welcome, Jane."
+
+3. User types: "What supplements do I take?"
+   → auth-memory-gate resolves scope_key from Slack user ID
+   → memory-graphiti recalls facts from user's knowledge graph
+   → Agent responds with personalized context
+
+4. Same user messages from WhatsApp (after /verify there)
+   → Same scope_key → same memory graph → same facts recalled
+```
+
+**Critical config: `dmScope: "per-channel-peer"`**
+
+This setting controls how session keys are built. Without it, all DMs share
+a single session key (`agent:main:main`) and the identity plugins cannot
+distinguish between users.
+
+| `dmScope`              | Session key format                     | Identity works?         |
+| ---------------------- | -------------------------------------- | ----------------------- |
+| `main` (default)       | `agent:main:main`                      | No                      |
+| `per-peer`             | `agent:main:direct:{userId}`           | No (channel = "direct") |
+| **`per-channel-peer`** | **`agent:main:slack:direct:{userId}`** | **Yes**                 |
+
 ### Railway
 
 The `scripts/railway-entrypoint.sh` auto-generates an `openclaw.json` with all
