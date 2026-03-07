@@ -42,12 +42,19 @@ export function requireActiveWebListener(accountId?: string | null): {
 } {
   const id = resolveWebAccountId(accountId);
   const listener = listeners.get(id) ?? null;
-  if (!listener) {
-    throw new Error(
-      `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
-    );
+  if (listener) {
+    return { accountId: id, listener };
   }
-  return { accountId: id, listener };
+  // Fallback: when no explicit account was requested and only one listener is
+  // active, use it regardless of its registered key.  This covers configs where
+  // the single WhatsApp account is named something other than "default".
+  if (!accountId?.trim() && listeners.size === 1) {
+    const [[resolvedId, soleListener]] = listeners;
+    return { accountId: resolvedId, listener: soleListener };
+  }
+  throw new Error(
+    `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
+  );
 }
 
 export function setActiveWebListener(listener: ActiveWebListener | null): void;
