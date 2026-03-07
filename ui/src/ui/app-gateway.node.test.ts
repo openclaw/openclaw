@@ -133,9 +133,22 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
 
     secondClient.emitGap(20, 24);
-    expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
-    );
+    expect(host.lastError).toBe("event gap detected (expected seq 20, got 24); refreshing…");
+  });
+
+  it("cleans previous visibilitychange listener before reconnect", () => {
+    const host = createHost();
+    const addSpy = vi.spyOn(document, "addEventListener");
+    const removeSpy = vi.spyOn(document, "removeEventListener");
+
+    connectGateway(host);
+    connectGateway(host);
+
+    expect(addSpy).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    expect(removeSpy).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {

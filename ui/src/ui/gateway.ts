@@ -86,6 +86,7 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onReconnect?: () => void;
 };
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
@@ -97,6 +98,7 @@ export class GatewayBrowserClient {
   private closed = false;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
+  private hasConnectedOnce = false;
   private connectSent = false;
   private connectTimer: number | null = null;
   private backoffMs = 800;
@@ -258,7 +260,12 @@ export class GatewayBrowserClient {
           });
         }
         this.backoffMs = 800;
+        const isReconnect = this.hasConnectedOnce;
+        this.hasConnectedOnce = true;
         this.opts.onHello?.(hello);
+        if (isReconnect) {
+          this.opts.onReconnect?.();
+        }
       })
       .catch((err: unknown) => {
         if (err instanceof GatewayRequestError) {
