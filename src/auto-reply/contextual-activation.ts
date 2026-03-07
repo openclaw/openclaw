@@ -357,7 +357,7 @@ function formatMessagesForDecision(
         const refId = msgIdToDisplayId.get(m.replyToId);
         if (refId) {
           replyHint = ` (replying to ${refId})`;
-        } else if (m.replyToSender || m.replyToBody || allById.has(m.replyToId)) {
+        } else if (m.replyToSender || m.replyToBody || m.replyToId) {
           // Referenced message is not in the visible window — resolve the chain
           const chain = resolveOutOfRangeChain(m.replyToId, m.replyToSender, m.replyToBody);
           replyHint = ` (replying to ${chain})`;
