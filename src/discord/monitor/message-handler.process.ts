@@ -600,14 +600,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       typingCallbacks,
+      channelContext: {
+        channelId: "discord",
+        accountId: route.accountId,
+        conversationId: deliverTarget,
+      },
       deliver: async (payload: ReplyPayload, info) => {
         if (isProcessAborted(abortSignal)) {
-          return;
+          return false;
         }
         const isFinal = info.kind === "final";
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
-          return;
+          return false;
         }
         if (draftStream && isFinal) {
           await flushDraft();
@@ -627,7 +632,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           if (canFinalizeViaPreviewEdit) {
             await draftStream.stop();
             if (isProcessAborted(abortSignal)) {
-              return;
+              return false;
             }
             try {
               await editMessageDiscord(
@@ -638,7 +643,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
-              return;
+              return true;
             } catch (err) {
               logVerbose(
                 `discord: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -650,7 +655,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           if (!finalizedViaPreviewMessage) {
             await draftStream.stop();
             if (isProcessAborted(abortSignal)) {
-              return;
+              return false;
             }
             const messageIdAfterStop = draftStream.messageId();
             if (
@@ -668,7 +673,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
                 );
                 finalizedViaPreviewMessage = true;
                 replyReference.markSent();
-                return;
+                return true;
               } catch (err) {
                 logVerbose(
                   `discord: post-stop preview edit failed; falling back to standard send (${String(err)})`,
@@ -683,7 +688,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           }
         }
         if (isProcessAborted(abortSignal)) {
-          return;
+          return false;
         }
 
         const replyToId = replyReference.use();
@@ -705,6 +710,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           mediaLocalRoots,
         });
         replyReference.markSent();
+        return true;
       },
       onError: (err, info) => {
         runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));

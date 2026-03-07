@@ -399,11 +399,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dispatcher = createReplyDispatcher({
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
+      channelContext: {
+        channelId: "imessage",
+        accountId: decision.route.accountId,
+        conversationId: ctxPayload.To ?? ctxPayload.From,
+      },
       deliver: async (payload) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return false;
         }
         await deliverReplies({
           replies: [payload],
@@ -415,6 +420,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           textLimit,
           sentMessageCache,
         });
+        return true;
       },
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));

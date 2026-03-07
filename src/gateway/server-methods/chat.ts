@@ -1036,13 +1036,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
         deliver: async (payload, info) => {
           if (info.kind !== "final") {
-            return;
+            return false;
           }
           const text = payload.text?.trim() ?? "";
           if (!text) {
-            return;
+            return false;
           }
           finalReplyParts.push(text);
+          return true;
         },
       });
 

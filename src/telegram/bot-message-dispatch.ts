@@ -514,6 +514,7 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         typingCallbacks,
+        enableMessageHooks: false,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
