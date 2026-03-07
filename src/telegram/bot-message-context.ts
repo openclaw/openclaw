@@ -24,12 +24,14 @@ import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
+import { runSilentMessageIngest } from "../channels/silent-ingest.js";
 import {
   createStatusReactionController,
   type StatusReactionController,
 } from "../channels/status-reactions.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { resolveChannelGroupIngest } from "../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type {
   DmPolicy,
@@ -537,6 +539,48 @@ export const buildTelegramMessageContext = async ({
             }
           : null,
       });
+
+      // Silent ingest: run hooks on non-mentioned messages
+      const baseIngestEnabled = resolveChannelGroupIngest({
+        cfg,
+        channel: "telegram",
+        groupId: String(chatId),
+        accountId: route.accountId,
+      });
+      const ingestEnabled =
+        typeof topicConfig?.ingest === "boolean" ? topicConfig.ingest : baseIngestEnabled;
+      const messageIdForHook =
+        typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+      const ingestConversationId = buildTelegramGroupPeerId(chatId, resolvedThreadId);
+      const ingestFrom = buildTelegramGroupFrom(chatId, resolvedThreadId);
+      void runSilentMessageIngest({
+        enabled: ingestEnabled,
+        event: {
+          from: ingestFrom,
+          content: bodyText,
+          timestamp: msg.date ? msg.date * 1000 : undefined,
+          metadata: {
+            to: `telegram:${chatId}`,
+            provider: "telegram",
+            surface: "telegram",
+            threadId: resolvedThreadId,
+            originatingChannel: "telegram",
+            originatingTo: `telegram:${chatId}`,
+            messageId: messageIdForHook,
+            senderId: senderId || undefined,
+            senderName: buildSenderName(msg),
+            senderUsername,
+          },
+        },
+        ctx: {
+          channelId: "telegram",
+          accountId: route.accountId,
+          conversationId: ingestConversationId,
+        },
+        log: logVerbose,
+        logPrefix: "telegram",
+      });
+
       return null;
     }
   }
