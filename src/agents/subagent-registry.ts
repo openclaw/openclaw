@@ -564,7 +564,8 @@ function resumeSubagentRun(runId: string) {
     // even though cleanupCompletedAt is already set. This handles the case
     // where descendant runs completed after this run was deferred.
     if (entry.wakeOnDescendantSettle) {
-      entry.wakeOnDescendantSettle = false;
+      entry.wakeOnDescendantSettle = undefined;
+      entry.cleanupCompletedAt = undefined;
       persistSubagentRuns();
       // Continue to announce flow below
     } else {
