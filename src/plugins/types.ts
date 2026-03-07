@@ -338,7 +338,8 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "before_llm_call"
-  | "after_llm_call";
+  | "after_llm_call"
+  | "before_response_emit";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -367,6 +368,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_stop",
   "before_llm_call",
   "after_llm_call",
+  "before_response_emit",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -826,6 +828,33 @@ export type PluginHookAfterLlmCallResult = {
   toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
 };
 
+// before_response_emit hook (modifying — sequential)
+export type PluginHookBeforeResponseEmitEvent = {
+  /** Text content of the last assistant message. */
+  content: string;
+  /**
+   * Text content of ALL assistant messages from the current run, in chronological
+   * order. Enables full multi-turn PII redaction across tool-loop iterations.
+   * Each entry corresponds to one assistant turn's accumulated text.
+   */
+  allContent: string[];
+  channel?: string;
+  messageCount: number;
+};
+
+export type PluginHookBeforeResponseEmitResult = {
+  /** Modified content for the last assistant message (single-message modification). */
+  content?: string;
+  /**
+   * Modified content for ALL assistant messages. When returned, replaces the
+   * entire assistantTexts array and rewrites all assistant messages in session
+   * history. Takes precedence over `content` when both are provided.
+   */
+  allContent?: string[];
+  block?: boolean;
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -932,6 +961,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterLlmCallEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookAfterLlmCallResult | void> | PluginHookAfterLlmCallResult | void;
+  before_response_emit: (
+    event: PluginHookBeforeResponseEmitEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeResponseEmitResult | void>
+    | PluginHookBeforeResponseEmitResult
+    | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

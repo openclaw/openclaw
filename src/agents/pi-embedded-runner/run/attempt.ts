@@ -1911,6 +1911,47 @@ export async function runEmbeddedAttempt(
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
+        // Emit before_response_emit hook — only when this turn produced an assistant reply.
+        // Timeout/abort turns with no new assistant message must not trigger the hook,
+        // otherwise it scans messagesSnapshot and finds a stale prior-turn response.
+        if (hookRunner?.hasHooks("before_response_emit") && assistantTexts.length > 0) {
+          try {
+            const { applyBeforeResponseEmitHook } = await import("./hook-response-emit.js");
+            const emitResult = await applyBeforeResponseEmitHook({
+              hookRunner,
+              agentCtx: hookCtx,
+              assistantTexts,
+              messagesSnapshot,
+              activeSession,
+              channel: params.messageChannel ?? params.messageProvider,
+            });
+            if (emitResult !== undefined) {
+              if (emitResult.blocked) {
+                // Blocked — suppress the entire accumulated response, not just
+                // the last chunk. Earlier tool-loop iterations may have added
+                // text that would otherwise escape the hook.
+                assistantTexts.splice(0, assistantTexts.length);
+              } else if (emitResult.allContent !== undefined) {
+                // Full multi-turn modification — replace all assistant texts.
+                // Truncate to original length to prevent plugins from expanding
+                // the response beyond what was actually produced in this run.
+                const bounded = emitResult.allContent.slice(0, assistantTexts.length);
+                assistantTexts.splice(0, assistantTexts.length, ...bounded);
+              } else if (emitResult.content !== undefined) {
+                // Single last-message modification (backward-compatible).
+                // assistantTexts.length > 0 is guaranteed by the outer guard.
+                assistantTexts[assistantTexts.length - 1] = emitResult.content;
+              }
+              // Refresh messagesSnapshot so downstream consumers (agent_end,
+              // llm_output, cache trace) see the post-redaction content, not
+              // the original pre-hook text.
+              messagesSnapshot = activeSession.messages.slice();
+            }
+          } catch (err) {
+            log.warn(`before_response_emit hook failed: ${String(err)}`);
+          }
+        }
+
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
             sessionManager.appendCustomEntry("openclaw:prompt-error", {

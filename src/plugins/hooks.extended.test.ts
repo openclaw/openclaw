@@ -11,6 +11,7 @@ import type {
   PluginHookAgentContext,
   PluginHookBeforeLlmCallEvent,
   PluginHookAfterLlmCallEvent,
+  PluginHookBeforeResponseEmitEvent,
   PluginHookRegistration,
 } from "./types.js";
 
@@ -179,7 +180,7 @@ describe("before_llm_call hook", () => {
 
 describe("after_llm_call hook", () => {
   const baseEvent: PluginHookAfterLlmCallEvent = {
-    response: { role: "assistant", content: [], timestamp: Date.now() } as AgentMessage,
+    response: { role: "assistant", content: [], timestamp: Date.now() } as unknown as AgentMessage,
     toolCalls: [
       { id: "tc1", name: "read", arguments: { path: "/a" } },
       { id: "tc2", name: "write", arguments: { path: "/b" } },
@@ -265,6 +266,93 @@ describe("after_llm_call hook", () => {
   it("returns undefined when no handlers registered", async () => {
     const runner = createHookRunner(makeRegistry([]));
     const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// before_response_emit (modifying, sequential)
+// ---------------------------------------------------------------------------
+
+describe("before_response_emit hook", () => {
+  const baseEvent: PluginHookBeforeResponseEmitEvent = {
+    content: "Hello world",
+    allContent: ["Step 1", "Step 2", "Hello world"],
+    channel: "test",
+    messageCount: 3,
+  };
+
+  it("uses first-writer-wins for content", async () => {
+    const hooks: PluginHookRegistration[] = [
+      {
+        pluginId: "a",
+        hookName: "before_response_emit",
+        handler: async () => ({ content: "Modified A" }),
+        priority: 10,
+        source: "test",
+      },
+      {
+        pluginId: "b",
+        hookName: "before_response_emit",
+        handler: async () => ({ content: "Modified B" }),
+        priority: 5,
+        source: "test",
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
+    expect(result?.content).toBe("Modified A");
+  });
+
+  it("allContent takes precedence over content when first", async () => {
+    const hooks: PluginHookRegistration[] = [
+      {
+        pluginId: "a",
+        hookName: "before_response_emit",
+        handler: async () => ({ allContent: ["Redacted"] }),
+        priority: 10,
+        source: "test",
+      },
+      {
+        pluginId: "b",
+        hookName: "before_response_emit",
+        handler: async () => ({ content: "Should be ignored" }),
+        priority: 5,
+        source: "test",
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
+    expect(result?.allContent).toEqual(["Redacted"]);
+    expect(result?.content).toBeUndefined();
+  });
+
+  it("merges block from multiple handlers (one-way latch)", async () => {
+    const hooks: PluginHookRegistration[] = [
+      {
+        pluginId: "a",
+        hookName: "before_response_emit",
+        handler: async () => ({ block: false }),
+        priority: 10,
+        source: "test",
+      },
+      {
+        pluginId: "b",
+        hookName: "before_response_emit",
+        handler: async () => ({ block: true, blockReason: "policy violation" }),
+        priority: 5,
+        source: "test",
+      },
+    ];
+    const runner = createHookRunner(makeRegistry(hooks));
+    const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("policy violation");
+  });
+
+  it("returns undefined when no handlers registered", async () => {
+    const runner = createHookRunner(makeRegistry([]));
+    const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
     expect(result).toBeUndefined();
   });
 });

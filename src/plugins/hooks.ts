@@ -54,6 +54,8 @@ import type {
   PluginHookBeforeLlmCallResult,
   PluginHookAfterLlmCallEvent,
   PluginHookAfterLlmCallResult,
+  PluginHookBeforeResponseEmitEvent,
+  PluginHookBeforeResponseEmitResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -770,6 +772,40 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     );
   }
 
+  /**
+   * Run before_response_emit hook.
+   * Fires before the final assistant response is delivered to the user.
+   * Allows plugins to modify, redact, or block the response.
+   */
+  async function runBeforeResponseEmit(
+    event: PluginHookBeforeResponseEmitEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeResponseEmitResult | undefined> {
+    return runModifyingHook<"before_response_emit", PluginHookBeforeResponseEmitResult>(
+      "before_response_emit",
+      event,
+      ctx,
+      (acc, next) => ({
+        // content and allContent are mutually exclusive — first-writer-wins.
+        // If a higher-priority handler set either, it wins.
+        content:
+          acc?.content !== undefined
+            ? acc.content
+            : acc?.allContent !== undefined
+              ? undefined
+              : next.content,
+        allContent:
+          acc?.allContent !== undefined
+            ? acc.allContent
+            : acc?.content !== undefined
+              ? undefined
+              : next.allContent,
+        block: next.block || acc?.block,
+        blockReason: acc?.blockReason ?? next.blockReason,
+      }),
+    );
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -822,6 +858,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // LLM call hooks
     runBeforeLlmCall,
     runAfterLlmCall,
+    // Response emit hooks
+    runBeforeResponseEmit,
     // Utility
     hasHooks,
     getHookCount,
