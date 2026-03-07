@@ -216,6 +216,16 @@ async function scanLaunchdDir(params: {
     if (isIgnoredLaunchdLabel(label)) {
       continue;
     }
+    // Skip plists that merely reference openclaw (e.g. in a <string> value) but
+    // don't declare themselves as an openclaw gateway via OPENCLAW_SERVICE_MARKER and
+    // don't use the canonical ai.openclaw.* label scheme.
+    if (
+      marker === "openclaw" &&
+      !hasGatewayServiceMarker(contents) &&
+      !label.startsWith("ai.openclaw.")
+    ) {
+      continue;
+    }
     if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
       continue;
     }
@@ -246,6 +256,22 @@ async function scanSystemdDir(params: {
   for (const { entry, name, fullPath, contents } of candidates) {
     const marker = detectMarker(contents);
     if (!marker) {
+      continue;
+    }
+    // Skip services that merely reference openclaw (e.g. via After=/Requires= dependency
+    // lines) but don't declare themselves as an openclaw gateway. Without this guard,
+    // companion services like openclaw-voice or openclaw-update are incorrectly reported
+    // as "gateway-like services" just because they depend on openclaw-gateway.service.
+    //
+    // A service is considered an openclaw gateway if it either:
+    //   (a) carries explicit OPENCLAW_SERVICE_MARKER + OPENCLAW_SERVICE_KIND=gateway env vars, or
+    //   (b) is named openclaw-gateway* (covers old installs without markers).
+    // Everything else that merely mentions "openclaw" is a companion service and ignored.
+    if (
+      marker === "openclaw" &&
+      !hasGatewayServiceMarker(contents) &&
+      !name.startsWith("openclaw-gateway")
+    ) {
       continue;
     }
     if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
