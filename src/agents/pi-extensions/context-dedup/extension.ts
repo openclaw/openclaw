@@ -1007,6 +1007,10 @@ type RepeatFoldResult = {
   stats: RepeatFoldStats;
 };
 
+type RepeatFoldOptions = {
+  protectedMessageIndexes?: Set<number>;
+};
+
 const REPEAT_FOLD_MARKER_REGEX = /\[repeats \d+ more times\]/i;
 const REPEAT_FOLD_MIN_UNIT_CHARS = 24;
 const REPEAT_FOLD_MAX_PATTERN_UNITS = 32;
@@ -1437,17 +1441,24 @@ function isRepeatFoldEligibleMessage(msg: any): boolean {
   return role === "tool" || role === "toolresult";
 }
 
-export function applyRepeatFoldCompaction(messages: any[]): RepeatFoldResult {
+export function applyRepeatFoldCompaction(
+  messages: any[],
+  options: RepeatFoldOptions = {},
+): RepeatFoldResult {
   let nextMessages: any[] | null = null;
   const stats: RepeatFoldStats = {
     collapsedRuns: 0,
     omittedCopies: 0,
     omittedChars: 0,
   };
+  const protectedMessageIndexes = options.protectedMessageIndexes ?? new Set<number>();
 
   for (let msgIndex = 0; msgIndex < messages.length; msgIndex++) {
     const msg = messages[msgIndex];
     if (!isRepeatFoldEligibleMessage(msg)) {
+      continue;
+    }
+    if (protectedMessageIndexes.has(msgIndex)) {
       continue;
     }
 
@@ -1847,7 +1858,9 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
       protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
     });
     const resolvedMessages = rewriteReadLineageSourcePointers(result.messages);
-    const repeatFold = applyRepeatFoldCompaction(resolvedMessages);
+    const repeatFold = applyRepeatFoldCompaction(resolvedMessages, {
+      protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
+    });
 
     const candidateMessages = repeatFold.messages;
     const candidateChars = contextChars(candidateMessages);

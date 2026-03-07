@@ -1112,6 +1112,31 @@ describe("context-dedup", () => {
     expect(folded.stats.omittedCopies).toBe(4);
   });
 
+  it("skips repeat-fold on protected lineage source messages", () => {
+    const repeatedLine =
+      "ERROR: ld.so: object '/usr/lib/libtcmalloc.so.4' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.";
+
+    const messages = [
+      {
+        role: "toolResult",
+        content: [repeatedLine, repeatedLine, repeatedLine, repeatedLine, repeatedLine].join("\n"),
+      },
+      {
+        role: "toolResult",
+        content: [repeatedLine, repeatedLine, repeatedLine, repeatedLine].join("\n"),
+      },
+    ];
+
+    const folded = applyRepeatFoldCompaction(messages as any[], {
+      protectedMessageIndexes: new Set([0]),
+    });
+
+    expect(String(folded.messages[0].content)).toBe(messages[0]?.content);
+    expect(String(folded.messages[1].content)).toContain("[repeats 3 more times]");
+    expect(folded.stats.collapsedRuns).toBe(1);
+    expect(folded.stats.omittedCopies).toBe(3);
+  });
+
   it("does not fold multiline runs that differ only by indentation", () => {
     const indented = "    setting = some_value_with_whitespace_significance()";
     const nonIndented = "setting = some_value_with_whitespace_significance()";
