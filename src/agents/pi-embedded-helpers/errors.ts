@@ -611,6 +611,10 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  if (isBillingErrorMessage(raw)) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
     return transientCopy;
@@ -618,10 +622,6 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
-  }
-
-  if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -858,8 +858,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
   }
+  if (isBillingErrorMessage(raw)) {
+    return "billing";
+  }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
-    return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
+    return "rate_limit";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
@@ -881,9 +884,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
-  }
-  if (isBillingErrorMessage(raw)) {
-    return "billing";
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";

@@ -51,6 +51,8 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    /usage limits?.*regain access/i,
+    /reached your.*usage limits?/i,
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,

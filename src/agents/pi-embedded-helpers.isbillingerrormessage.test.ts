@@ -105,6 +105,8 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      "You have reached your specified API usage limits. You will regain access on 2026-04-01 at 00:00 UTC.",
+      "LLM request rejected: You have reached your specified API usage limits. You will regain access on 2026-04-01 at 00:00 UTC.",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -544,6 +546,12 @@ describe("classifyFailoverReason", () => {
       "billing",
     );
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
+    // Anthropic usage limits error must be classified as billing, not rate_limit
+    expect(
+      classifyFailoverReason(
+        "LLM request rejected: You have reached your specified API usage limits. You will regain access on 2026-04-01 at 00:00 UTC.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
     expect(classifyFailoverReason("Connection error.")).toBe("timeout");

@@ -180,12 +180,14 @@ export async function buildReplyPayloads(params: {
       originatingAccountId: params.accountId,
     }),
   });
-  // Only dedupe against messaging tool sends for the same origin target.
-  // Cross-target sends (for example posting to another channel) must not
-  // suppress the current conversation's final reply.
-  // If target metadata is unavailable, keep legacy dedupe behavior.
+  // Dedupe the final reply against texts already sent via the messaging tool.
+  // Always dedupe by text when the tool was used — handles cases where the same
+  // person has multiple identifiers (e.g. email + phone) that don't match in
+  // target comparison. Cross-channel sends with different text are unaffected.
   const dedupeMessagingToolPayloads =
-    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+    suppressMessagingToolReplies ||
+    messagingToolSentTargets.length === 0 ||
+    messagingToolSentTexts.length > 0;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
