@@ -7,6 +7,7 @@ import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
 
@@ -26,12 +27,12 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });
 }
 
-function mockConfig(home: string, storePath: string) {
-  loadConfigSpy.mockReturnValue({
+function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {
+  return {
     acp: {
       enabled: true,
       backend: "acpx",
-      allowedAgents: ["codex"],
+      allowedAgents: ["codex", "kimi"],
       dispatch: { enabled: true },
     },
     agents: {
@@ -42,7 +43,11 @@ function mockConfig(home: string, storePath: string) {
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } satisfies OpenClawConfig);
+  };
+}
+
+function mockConfig(home: string, storePath: string) {
+  loadConfigSpy.mockReturnValue(createAcpEnabledConfig(home, storePath));
 }
 
 function mockConfigWithAcpOverrides(
@@ -50,38 +55,28 @@ function mockConfigWithAcpOverrides(
   storePath: string,
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>,
 ) {
-  loadConfigSpy.mockReturnValue({
-    acp: {
-      enabled: true,
-      backend: "acpx",
-      allowedAgents: ["codex"],
-      dispatch: { enabled: true },
-      ...acpOverrides,
-    },
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.3-codex" },
-        models: { "openai/gpt-5.3-codex": {} },
-        workspace: path.join(home, "openclaw"),
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } satisfies OpenClawConfig);
+  const cfg = createAcpEnabledConfig(home, storePath);
+  cfg.acp = {
+    ...cfg.acp,
+    ...acpOverrides,
+  };
+  loadConfigSpy.mockReturnValue(cfg);
 }
 
-function writeAcpSessionStore(storePath: string) {
+function writeAcpSessionStore(storePath: string, agent = "codex") {
+  const sessionKey = `agent:${agent}:acp:test`;
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(
     storePath,
     JSON.stringify(
       {
-        "agent:codex:acp:test": {
+        [sessionKey]: {
           sessionId: "acp-session-1",
           updatedAt: Date.now(),
           acp: {
             backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "agent:codex:acp:test",
+            agent,
+            runtimeSessionName: sessionKey,
             mode: "oneshot",
             state: "idle",
             lastActivityAt: Date.now(),
@@ -127,6 +122,31 @@ function mockAcpManager(params: {
         return resolveReadySession(input.sessionKey);
       }),
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
+}
+
+async function runAcpSessionWithPolicyOverrides(params: {
+  acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
+  resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
+}) {
+  await withTempHome(async (home) => {
+    const storePath = path.join(home, "sessions.json");
+    writeAcpSessionStore(storePath);
+    mockConfigWithAcpOverrides(home, storePath, params.acpOverrides);
+
+    const runTurn = vi.fn(async (_params: unknown) => {});
+    mockAcpManager({
+      runTurn: (input: unknown) => runTurn(input),
+      ...(params.resolveSession ? { resolveSession: params.resolveSession } : {}),
+    });
+
+    await expect(
+      agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime),
+    ).rejects.toMatchObject({
+      code: "ACP_DISPATCH_DISABLED",
+    });
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+  });
 }
 
 describe("agentCommand ACP runtime routing", () => {
@@ -176,6 +196,188 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath);
+      mockConfig(home, storePath);
+
+      const assistantEvents: Array<{ text?: string; delta?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "assistant") {
+          return;
+        }
+        assistantEvents.push({
+          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+          delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
+        });
+      });
+
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+        };
+        for (const text of ["NO", "NO_", "NO_RE", "NO_REPLY", "Actual answer"]) {
+          await params.onEvent?.({ type: "text_delta", text });
+        }
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+      });
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
+
+      expect(assistantEvents).toEqual([{ text: "Actual answer", delta: "Actual answer" }]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
+      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines.some((line) => line.includes("Actual answer"))).toBe(true);
+    });
+  });
+
+  it("keeps silent-only ACP turns out of assistant output", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath);
+      mockConfig(home, storePath);
+
+      const assistantEvents: string[] = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "assistant") {
+          return;
+        }
+        if (typeof evt.data?.text === "string") {
+          assistantEvents.push(evt.data.text);
+        }
+      });
+
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+        };
+        for (const text of ["NO", "NO_", "NO_RE", "NO_REPLY"]) {
+          await params.onEvent?.({ type: "text_delta", text });
+        }
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+      });
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
+
+      expect(assistantEvents).toEqual([]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
+      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines.some((line) => line.includes("No reply from agent."))).toBe(true);
+    });
+  });
+
+  it("preserves repeated identical ACP delta chunks", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath);
+      mockConfig(home, storePath);
+
+      const assistantEvents: Array<{ text?: string; delta?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "assistant") {
+          return;
+        }
+        assistantEvents.push({
+          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+          delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
+        });
+      });
+
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+        };
+        for (const text of ["b", "o", "o", "k"]) {
+          await params.onEvent?.({ type: "text_delta", text });
+        }
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+      });
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
+
+      expect(assistantEvents).toEqual([
+        { text: "b", delta: "b" },
+        { text: "bo", delta: "o" },
+        { text: "boo", delta: "o" },
+        { text: "book", delta: "k" },
+      ]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
+      expect(logLines.some((line) => line.includes("book"))).toBe(true);
+    });
+  });
+
+  it("re-emits buffered NO prefix when ACP text becomes visible content", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath);
+      mockConfig(home, storePath);
+
+      const assistantEvents: Array<{ text?: string; delta?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "assistant") {
+          return;
+        }
+        assistantEvents.push({
+          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+          delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
+        });
+      });
+
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+        };
+        for (const text of ["NO", "W"]) {
+          await params.onEvent?.({ type: "text_delta", text });
+        }
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+      });
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stop();
+      }
+
+      expect(assistantEvents).toEqual([{ text: "NOW", delta: "NOW" }]);
+
+      const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
+      expect(logLines.some((line) => line.includes("NOW"))).toBe(true);
+    });
+  });
+
   it("fails closed for ACP-shaped session keys missing ACP metadata", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
@@ -221,50 +423,19 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
-  it("blocks ACP turns when ACP is disabled by policy", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfigWithAcpOverrides(home, storePath, {
-        enabled: false,
-      });
-
-      const runTurn = vi.fn(async (_params: unknown) => {});
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-      });
-
-      await expect(
-        agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime),
-      ).rejects.toMatchObject({
-        code: "ACP_DISPATCH_DISABLED",
-      });
-      expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("blocks ACP turns when ACP dispatch is disabled by policy", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfigWithAcpOverrides(home, storePath, {
+  it.each([
+    {
+      name: "blocks ACP turns when ACP is disabled by policy",
+      acpOverrides: { enabled: false } satisfies Partial<NonNullable<OpenClawConfig["acp"]>>,
+    },
+    {
+      name: "blocks ACP turns when ACP dispatch is disabled by policy",
+      acpOverrides: {
         dispatch: { enabled: false },
-      });
-
-      const runTurn = vi.fn(async (_params: unknown) => {});
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-      });
-
-      await expect(
-        agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime),
-      ).rejects.toMatchObject({
-        code: "ACP_DISPATCH_DISABLED",
-      });
-      expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
-    });
+      } satisfies Partial<NonNullable<OpenClawConfig["acp"]>>,
+    },
+  ])("$name", async ({ acpOverrides }) => {
+    await runAcpSessionWithPolicyOverrides({ acpOverrides });
   });
 
   it("blocks ACP turns when ACP agent is disallowed by policy", async () => {
@@ -288,6 +459,32 @@ describe("agentCommand ACP runtime routing", () => {
         message: expect.stringContaining("not allowed by policy"),
       });
       expect(runTurn).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows ACP turns for kimi when policy allowlists kimi", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath, "kimi");
+      mockConfigWithAcpOverrides(home, storePath, {
+        allowedAgents: ["kimi"],
+      });
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: ({ sessionKey }) => resolveReadySession(sessionKey, "kimi"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:kimi:acp:test",
+          text: "ping",
+        }),
+      );
       expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
     });
   });

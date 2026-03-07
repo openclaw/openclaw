@@ -6,6 +6,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -16,12 +17,17 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   getModelRefStatus,
   isCliProvider,
+  normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import {
+  countActiveDescendantRuns,
+  listDescendantRunsForRequester,
+} from "../../agents/subagent-registry.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -66,6 +72,7 @@ import {
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup.js";
 
 export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
@@ -160,6 +167,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
+
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
@@ -167,6 +175,24 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     return catalog;
   };
+  // Isolated cron sessions are subagents — prefer subagents.model when set,
+  // but only if it passes the model allowlist.  #11461
+  const subagentModelRaw =
+    normalizeModelSelection(agentConfigOverride?.subagents?.model) ??
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+  if (subagentModelRaw) {
+    const resolvedSubagent = resolveAllowedModelRef({
+      cfg: cfgWithAgentDefaults,
+      catalog: await loadCatalog(),
+      raw: subagentModelRaw,
+      defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
+    });
+    if (!("error" in resolvedSubagent)) {
+      provider = resolvedSubagent.ref.provider;
+      model = resolvedSubagent.ref.model;
+    }
+  }
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
   const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
   let hooksGmailModelApplied = false;
@@ -279,16 +305,15 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
+  // Resolve thinking level - job thinking > hooks.gmail.thinking > model/global defaults
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
     : undefined;
-  const thinkOverride = normalizeThinkLevel(agentCfg?.thinkingDefault);
   const jobThink = normalizeThinkLevel(
     (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
       undefined,
   );
-  let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
+  let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
@@ -317,8 +342,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
-    sessionKey: params.job.sessionKey,
     accountId: deliveryPlan.accountId,
+    sessionKey: params.job.sessionKey,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -382,9 +407,18 @@ export async function runCronIsolatedAgentTurn(params: {
     await persistSessionEntry();
   }
 
-  // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
+  // Persist the intended model and systemSent before the run so that
+  // sessions_list reflects the cron override even if the run fails or is
+  // still in progress (#21057).  Best-effort: a filesystem error here
+  // must not prevent the actual agent run from executing.
+  cronSession.sessionEntry.modelProvider = provider;
+  cronSession.sessionEntry.model = model;
   cronSession.sessionEntry.systemSent = true;
-  await persistSessionEntry();
+  try {
+    await persistSessionEntry();
+  } catch (err) {
+    logWarn(`[cron:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+  }
 
   // Resolve auth profile for the session, mirroring the inbound auto-reply path
   // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
@@ -401,7 +435,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
 
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>> | undefined;
   let fallbackProvider = provider;
   let fallbackModel = model;
   const runStartedAt = Date.now();
@@ -417,65 +451,151 @@ export async function runCronIsolatedAgentTurn(params: {
       verboseLevel: resolvedVerboseLevel,
     });
     const messageChannel = resolvedDelivery.channel;
-    const fallbackResult = await runWithModelFallback({
-      cfg: cfgWithAgentDefaults,
-      provider,
-      model,
-      agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
-      run: (providerOverride, modelOverride) => {
-        if (abortSignal?.aborted) {
-          throw new Error(abortReason());
-        }
-        if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
-          return runCliAgent({
+    // Per-job payload.fallbacks takes priority over agent-level fallbacks.
+    const payloadFallbacks =
+      params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
+        ? params.job.payload.fallbacks
+        : undefined;
+    let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+      cronSession.sessionEntry.systemPromptReport,
+    );
+
+    const runPrompt = async (promptText: string) => {
+      const fallbackResult = await runWithModelFallback({
+        cfg: cfgWithAgentDefaults,
+        provider,
+        model,
+        agentDir,
+        fallbacksOverride:
+          payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+        run: async (providerOverride, modelOverride, runOptions) => {
+          if (abortSignal?.aborted) {
+            throw new Error(abortReason());
+          }
+          const bootstrapPromptWarningSignature =
+            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+          if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+            // Fresh isolated cron sessions must not reuse a stored CLI session ID.
+            // Passing an existing ID activates the resume watchdog profile
+            // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
+            // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
+            // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
+            const cliSessionId = cronSession.isNewSession
+              ? undefined
+              : getCliSessionId(cronSession.sessionEntry, providerOverride);
+            const result = await runCliAgent({
+              sessionId: cronSession.sessionEntry.sessionId,
+              sessionKey: agentSessionKey,
+              agentId,
+              sessionFile,
+              workspaceDir,
+              config: cfgWithAgentDefaults,
+              prompt: promptText,
+              provider: providerOverride,
+              model: modelOverride,
+              thinkLevel,
+              timeoutMs,
+              runId: cronSession.sessionEntry.sessionId,
+              cliSessionId,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature,
+            });
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
+            return result;
+          }
+          const result = await runEmbeddedPiAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
             agentId,
+            trigger: "cron",
+            messageChannel,
+            agentAccountId: resolvedDelivery.accountId,
             sessionFile,
+            agentDir,
             workspaceDir,
             config: cfgWithAgentDefaults,
-            prompt: commandBody,
+            skillsSnapshot,
+            prompt: promptText,
+            lane: params.lane ?? "cron",
             provider: providerOverride,
             model: modelOverride,
+            authProfileId,
+            authProfileIdSource,
             thinkLevel,
+            verboseLevel: resolvedVerboseLevel,
             timeoutMs,
+            bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
+            bootstrapContextRunKind: "cron",
             runId: cronSession.sessionEntry.sessionId,
-            cliSessionId,
+            // Only enforce an explicit message target when the cron delivery target
+            // was successfully resolved. When resolution fails the agent should not
+            // be blocked by a target it cannot satisfy (#27898).
+            requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
+            disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            abortSignal,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
           });
-        }
-        return runEmbeddedPiAgent({
-          sessionId: cronSession.sessionEntry.sessionId,
-          sessionKey: agentSessionKey,
-          agentId,
-          messageChannel,
-          agentAccountId: resolvedDelivery.accountId,
-          sessionFile,
-          agentDir,
-          workspaceDir,
-          config: cfgWithAgentDefaults,
-          skillsSnapshot,
-          prompt: commandBody,
-          lane: params.lane ?? "cron",
-          provider: providerOverride,
-          model: modelOverride,
-          authProfileId,
-          authProfileIdSource,
-          thinkLevel,
-          verboseLevel: resolvedVerboseLevel,
-          timeoutMs,
-          runId: cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: true,
-          disableMessageTool: deliveryRequested,
-          abortSignal,
-        });
-      },
-    });
-    runResult = fallbackResult.result;
-    fallbackProvider = fallbackResult.provider;
-    fallbackModel = fallbackResult.model;
-    runEndedAt = Date.now();
+          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+            result.meta?.systemPromptReport,
+          );
+          return result;
+        },
+      });
+      runResult = fallbackResult.result;
+      fallbackProvider = fallbackResult.provider;
+      fallbackModel = fallbackResult.model;
+      provider = fallbackResult.provider;
+      model = fallbackResult.model;
+      runEndedAt = Date.now();
+    };
+
+    await runPrompt(commandBody);
+    if (!runResult) {
+      throw new Error("cron isolated run returned no result");
+    }
+
+    // Guardrail for cron jobs: if the first turn is only an interim ack
+    // (e.g. "on it") and no descendants are active, run one focused follow-up
+    // turn so the cron run returns an actual completion.
+    if (!isAborted()) {
+      const interimRunResult = runResult;
+      const interimPayloads = interimRunResult.payloads ?? [];
+      const interimDeliveryPayload = pickLastDeliverablePayload(interimPayloads);
+      const interimPayloadHasStructuredContent =
+        Boolean(interimDeliveryPayload?.mediaUrl) ||
+        (interimDeliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
+        Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
+      const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
+      const hasDescendantsSinceRunStart = listDescendantRunsForRequester(agentSessionKey).some(
+        (entry) => {
+          const descendantStartedAt =
+            typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+          return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
+        },
+      );
+      const shouldRetryInterimAck =
+        !interimRunResult.meta?.error &&
+        !interimRunResult.didSendViaMessagingTool &&
+        !interimPayloadHasStructuredContent &&
+        !interimPayloads.some((payload) => payload?.isError === true) &&
+        countActiveDescendantRuns(agentSessionKey) === 0 &&
+        !hasDescendantsSinceRunStart &&
+        isLikelyInterimCronMessage(interimText);
+
+      if (shouldRetryInterimAck) {
+        const continuationPrompt = [
+          "Your previous response was only an acknowledgement and did not complete this cron task.",
+          "Complete the original task now.",
+          "Do not send a status update like 'on it'.",
+          "Use tools when needed, including sessions_spawn for parallel subtasks, wait for spawned subagents to finish, then return only the final summary.",
+        ].join(" ");
+        await runPrompt(continuationPrompt);
+      }
+    }
   } catch (err) {
     return withRunSession({ status: "error", error: String(err) });
   }
@@ -483,17 +603,23 @@ export async function runCronIsolatedAgentTurn(params: {
   if (isAborted()) {
     return withRunSession({ status: "error", error: abortReason() });
   }
-
-  const payloads = runResult.payloads ?? [];
+  if (!runResult) {
+    return withRunSession({ status: "error", error: "cron isolated run returned no result" });
+  }
+  const finalRunResult = runResult;
+  const payloads = finalRunResult.payloads ?? [];
 
   // Update token+model fields in the session store.
   // Also collect best-effort telemetry for the cron run log.
   let telemetry: CronRunTelemetry | undefined;
   {
-    const usage = runResult.meta?.agentMeta?.usage;
-    const promptTokens = runResult.meta?.agentMeta?.promptTokens;
-    const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed = runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
+    if (finalRunResult.meta?.systemPromptReport) {
+      cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
+    }
+    const usage = finalRunResult.meta?.agentMeta?.usage;
+    const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
+    const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
+    const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
       agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
@@ -503,7 +629,7 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
-      const cliSessionId = runResult.meta?.agentMeta?.sessionId?.trim();
+      const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
       }
@@ -511,27 +637,32 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      const totalTokens =
-        deriveSessionTotalTokens({
-          usage,
-          contextTokens,
-          promptTokens,
-        }) ?? input;
+      const totalTokens = deriveSessionTotalTokens({
+        usage,
+        contextTokens,
+        promptTokens,
+      });
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens = totalTokens;
-      cronSession.sessionEntry.totalTokensFresh = true;
+      const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+        input_tokens: input,
+        output_tokens: output,
+      };
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+        cronSession.sessionEntry.totalTokens = totalTokens;
+        cronSession.sessionEntry.totalTokensFresh = true;
+        telemetryUsage.total_tokens = totalTokens;
+      } else {
+        cronSession.sessionEntry.totalTokens = undefined;
+        cronSession.sessionEntry.totalTokensFresh = false;
+      }
       cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
       cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
 
       telemetry = {
         model: modelUsed,
         provider: providerUsed,
-        usage: {
-          input_tokens: input,
-          output_tokens: output,
-          total_tokens: totalTokens,
-        },
+        usage: telemetryUsage,
       };
     } else {
       telemetry = {
@@ -562,17 +693,29 @@ export async function runCronIsolatedAgentTurn(params: {
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
+  const runLevelError = finalRunResult.meta?.error;
+  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
+  const hasSuccessfulPayloadAfterLastError =
+    !runLevelError &&
+    lastErrorPayloadIndex >= 0 &&
+    payloads
+      .slice(lastErrorPayloadIndex + 1)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+  // Tool wrappers can emit transient/false-positive error payloads before a valid final
+  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
+  // did not report a model/context-level error and (b) a non-error payload follows.
+  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
   const lastErrorPayloadText = [...payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
-  const embeddedRunError = hasErrorPayload
+  const embeddedRunError = hasFatalErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
   const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     withRunSession({
-      status: hasErrorPayload ? "error" : "ok",
-      ...(hasErrorPayload
+      status: hasFatalErrorPayload ? "error" : "ok",
+      ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
         : {}),
       summary,
@@ -587,8 +730,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
   const skipMessagingToolDelivery =
     deliveryRequested &&
-    runResult.didSendViaMessagingTool === true &&
-    (runResult.messagingToolSentTargets ?? []).some((target) =>
+    finalRunResult.didSendViaMessagingTool === true &&
+    (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
       matchesMessagingToolDeliveryTarget(target, {
         channel: resolvedDelivery.channel,
         to: resolvedDelivery.to,
@@ -629,7 +772,7 @@ export async function runCronIsolatedAgentTurn(params: {
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
     };
-    if (!hasErrorPayload || deliveryResult.result.status !== "ok") {
+    if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
     return resolveRunOutcome({

@@ -15,7 +15,7 @@ Welcome to the lobster tank! 🦞
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
 - **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
-  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shad0wed](https://x.com/4shad0wed)
+  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
 - **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
   - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
@@ -58,6 +58,8 @@ Welcome to the lobster tank! 🦞
 
 - **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
   - Github [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
+- **Josh Lehman** - Compaction, Tlon/Urbit subsystem
+  - Github [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
 ## How to Contribute
 
@@ -72,6 +74,7 @@ Welcome to the lobster tank! 🦞
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
 ## Control UI Decorators
 

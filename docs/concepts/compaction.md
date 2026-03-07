@@ -55,6 +55,18 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
 
+## OpenAI server-side compaction
+
+OpenClaw also supports OpenAI Responses server-side compaction hints for
+compatible direct OpenAI models. This is separate from local OpenClaw
+compaction and can run alongside it.
+
+- Local compaction: OpenClaw summarizes and persists into session JSONL.
+- Server-side compaction: OpenAI compacts context on the provider side when
+  `store` + `context_management` are enabled.
+
+See [OpenAI provider](/providers/openai) for model params and overrides.
+
 ## Tips
 
 - Use `/compact` when sessions feel stale or context is bloated.
