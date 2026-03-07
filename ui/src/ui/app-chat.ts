@@ -24,7 +24,17 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+function resolveSessionAgentId(sessionKey: string): string | undefined {
+  return parseAgentSessionKey(sessionKey)?.agentId?.trim() || undefined;
+}
+
+export function buildChatSessionListParams(sessionKey: string) {
+  return {
+    includeGlobal: false,
+    includeUnknown: false,
+    agentId: resolveSessionAgentId(sessionKey),
+  };
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -205,9 +215,7 @@ export async function handleSendChat(
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
-    loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    }),
+    loadSessions(host as unknown as OpenClawApp, buildChatSessionListParams(host.sessionKey)),
     refreshChatAvatar(host),
   ]);
   if (opts?.scheduleScroll !== false) {
