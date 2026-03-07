@@ -1,5 +1,7 @@
+import { loadConfig } from "../config/config.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { resolveSessionStoreKey } from "./session-utils.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 const ADMIN_SCOPE = "operator.admin";
@@ -38,6 +40,15 @@ export type GatewayBroadcastToConnIdsFn = (
   opts?: GatewayBroadcastOpts,
 ) => void;
 
+function hasAdminScope(client: GatewayWsClient): boolean {
+  const role = client.connect.role ?? "operator";
+  if (role !== "operator") {
+    return false;
+  }
+  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
@@ -47,11 +58,54 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   if (role !== "operator") {
     return false;
   }
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
-  if (scopes.includes(ADMIN_SCOPE)) {
+  if (hasAdminScope(client)) {
     return true;
   }
+  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   return required.some((scope) => scopes.includes(scope));
+}
+
+/**
+ * Check whether a client should receive a session-scoped chat event.
+ *
+ * Scoping rules (evaluated in order):
+ *  1. Clients with operator.admin scope → always receive all chat events.
+ *  2. Clients that have never sent chat.send (chatSessionKeys is
+ *     undefined or empty) → receive all events (backward compatibility
+ *     for Control UI and legacy clients).
+ *  3. Clients with a non-empty chatSessionKeys set → only receive events
+ *     whose sessionKey is in that set.
+ */
+function shouldReceiveChatEvent(
+  client: GatewayWsClient,
+  sessionKey: string | undefined,
+  canonicalKey: string | undefined,
+): boolean {
+  // Admin-scoped clients (e.g., Control UI operators) always see everything.
+  if (hasAdminScope(client)) {
+    return true;
+  }
+  const tracked = client.chatSessionKeys;
+  // Clients that haven't declared interest in any session yet get all
+  // events — this preserves backward compatibility for existing clients
+  // that rely on client-side sessionKey filtering.
+  if (!tracked || tracked.size === 0) {
+    return true;
+  }
+  // If the event has no sessionKey we can't scope it — deliver to all.
+  if (!sessionKey) {
+    return true;
+  }
+  // Try raw key first (fast path), then fall back to canonical form.
+  // Event producers may emit raw aliases (e.g. "main") while tracked keys
+  // are canonical (e.g. "agent:main:main"), so we check both.
+  if (tracked.has(sessionKey)) {
+    return true;
+  }
+  if (canonicalKey && canonicalKey !== sessionKey) {
+    return tracked.has(canonicalKey);
+  }
+  return false;
 }
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
@@ -90,11 +144,38 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       logWs("out", "event", logMeta);
     }
+    // Extract sessionKey from chat event payloads for session-scoped delivery.
+    // Resolve the canonical form once so we don't call resolveSessionStoreKey
+    // per-client inside the loop.
+    let chatSessionKey: string | undefined;
+    let chatCanonicalKey: string | undefined;
+    if (event === "chat" && payload && typeof payload === "object" && "sessionKey" in payload) {
+      chatSessionKey = (payload as { sessionKey?: string }).sessionKey;
+      if (chatSessionKey) {
+        try {
+          const resolved = resolveSessionStoreKey({
+            cfg: loadConfig(),
+            sessionKey: chatSessionKey,
+          });
+          if (resolved !== chatSessionKey) {
+            chatCanonicalKey = resolved;
+          }
+        } catch {
+          /* config not available — skip canonicalization */
+        }
+      }
+    }
+
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
       }
       if (!hasEventScope(c, event)) {
+        continue;
+      }
+      // Session-scoped delivery for chat events: skip clients that have
+      // declared session interest and are not subscribed to this session.
+      if (event === "chat" && !shouldReceiveChatEvent(c, chatSessionKey, chatCanonicalKey)) {
         continue;
       }
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
