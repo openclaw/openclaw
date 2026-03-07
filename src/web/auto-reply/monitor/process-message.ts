@@ -134,6 +134,7 @@ export async function processMessage(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<typeof getChildLogger>;
   backgroundTasks: Set<Promise<unknown>>;
+  contextualActivationHint?: string;
   rememberSentText: (
     text: string | undefined,
     opts: {
@@ -325,6 +326,9 @@ export async function processMessage(params: {
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
+    GroupSystemPrompt: params.contextualActivationHint
+      ? `You've been silently reading the group chat. You noticed: "${params.contextualActivationHint}". Join the conversation naturally, like a human group member chiming in.`
+      : undefined,
     Provider: "whatsapp",
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",

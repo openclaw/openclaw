@@ -32,6 +32,12 @@ export type HistoryEntry = {
   body: string;
   timestamp?: number;
   messageId?: string;
+  /** ID of the message this is replying to. */
+  replyToId?: string;
+  /** Body of the replied-to message. */
+  replyToBody?: string;
+  /** Sender of the replied-to message. */
+  replyToSender?: string;
 };
 
 export function buildHistoryContext(params: {

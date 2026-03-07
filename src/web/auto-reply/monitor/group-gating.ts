@@ -22,6 +22,9 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
 };
 
 type ApplyGroupGatingParams = {
@@ -69,6 +72,9 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: params.msg.senderJid,
+      replyToId: params.msg.replyToId,
+      replyToBody: params.msg.replyToBody,
+      replyToSender: params.msg.replyToSender,
     },
   });
 }
@@ -165,7 +171,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     if (engagement?.mode === "engaged") {
       const decision = await callContextualDecision(params, contextualConfig);
       if (decision.shouldProcess) {
-        return { shouldProcess: true };
+        return { shouldProcess: true, contextualActivationHint: decision.reason };
       }
       // Model decided to disengage — fall through to normal mention gating below
     }
@@ -176,7 +182,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     if (contextualConfig?.model) {
       const decision = await callContextualDecision(params, contextualConfig);
       if (decision.shouldProcess) {
-        return { shouldProcess: true };
+        return { shouldProcess: true, contextualActivationHint: decision.reason };
       }
       if (decision.error) {
         params.logVerbose(
@@ -202,11 +208,19 @@ async function callContextualDecision(
     sender: h.sender,
     body: h.body,
     timestamp: h.timestamp,
+    messageId: h.id,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
   }));
   const senderLabel =
     params.msg.senderName && params.msg.senderE164
       ? `${params.msg.senderName} (${params.msg.senderE164})`
       : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+  const imagePaths =
+    params.msg.mediaPath && params.msg.mediaType?.startsWith("image/")
+      ? [params.msg.mediaPath]
+      : undefined;
   return shouldParticipateInGroup({
     cfg: params.cfg,
     config: contextualConfig,
@@ -215,6 +229,11 @@ async function callContextualDecision(
       sender: senderLabel,
       body: params.msg.body,
       timestamp: params.msg.timestamp,
+      imagePaths,
+      messageId: params.msg.id,
+      replyToId: params.msg.replyToId,
+      replyToBody: params.msg.replyToBody,
+      replyToSender: params.msg.replyToSender,
     },
     groupKey: params.groupHistoryKey,
   });

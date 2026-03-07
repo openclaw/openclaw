@@ -501,6 +501,15 @@ export const buildTelegramMessageContext = async ({
   }
 
   let bodyText = rawBody;
+
+  // Extract reply metadata once for use in history entries
+  const replyMsg = msg.reply_to_message;
+  const historyReplyToId = replyMsg?.message_id != null ? String(replyMsg.message_id) : undefined;
+  const historyReplyToBody = replyMsg?.text ?? replyMsg?.caption;
+  const historyReplyToSender = replyMsg?.from?.first_name
+    ? `${replyMsg.from.first_name}${replyMsg.from.last_name ? ` ${replyMsg.from.last_name}` : ""}`
+    : (replyMsg?.from?.username ?? undefined);
+
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
   const disableAudioPreflight =
@@ -608,6 +617,7 @@ export const buildTelegramMessageContext = async ({
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   const contextualConfig = (groupConfig as TelegramGroupConfig | undefined)?.contextualActivation;
   const groupKey = historyKey ?? "";
+  let contextualActivationHint: string | undefined;
 
   // When engaged via contextual activation, skip mention gating entirely and ask
   // the model whether to continue or disengage.
@@ -623,8 +633,10 @@ export const buildTelegramMessageContext = async ({
         rawBody,
         senderId: senderId || chatId,
         botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+        allMedia,
       });
       if (decision.shouldProcess) {
+        contextualActivationHint = decision.reason;
         // Stay engaged, skip mention gate — fall through to process
       } else {
         // Model disengaged — fall through to normal mention gating below
@@ -645,8 +657,10 @@ export const buildTelegramMessageContext = async ({
           rawBody,
           senderId: senderId || chatId,
           botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+          allMedia,
         });
         if (decision.shouldProcess) {
+          contextualActivationHint = decision.reason;
           logVerbose(`[contextual-activation] Telegram group ${chatId}: decided to participate`);
           // Fall through — treat as if mentioned
         } else {
@@ -667,6 +681,9 @@ export const buildTelegramMessageContext = async ({
                   timestamp: msg.date ? msg.date * 1000 : undefined,
                   messageId:
                     typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+                  replyToId: historyReplyToId,
+                  replyToBody: historyReplyToBody,
+                  replyToSender: historyReplyToSender,
                 }
               : null,
           });
@@ -684,6 +701,9 @@ export const buildTelegramMessageContext = async ({
                 body: rawBody,
                 timestamp: msg.date ? msg.date * 1000 : undefined,
                 messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+                replyToId: historyReplyToId,
+                replyToBody: historyReplyToBody,
+                replyToSender: historyReplyToSender,
               }
             : null,
         });
@@ -905,7 +925,17 @@ export const buildTelegramMessageContext = async ({
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
+    GroupSystemPrompt:
+      isGroup || (!isGroup && groupConfig)
+        ? contextualActivationHint
+          ? [
+              groupSystemPrompt,
+              `\nYou've been silently reading the group chat. You noticed: "${contextualActivationHint}". Join the conversation naturally, like a human group member chiming in.`,
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : groupSystemPrompt
+        : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,
     SenderUsername: senderUsername || undefined,
@@ -1054,13 +1084,30 @@ async function callTelegramContextualDecision(params: {
   rawBody: string;
   senderId: string | number;
   botName?: string;
+  allMedia?: TelegramMediaRef[];
 }) {
   const existingHistory = params.groupHistories.get(params.groupKey) ?? [];
   const recentMessages = existingHistory.map((h) => ({
     sender: h.sender,
     body: h.body,
     timestamp: h.timestamp,
+    messageId: h.messageId,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
   }));
+  const imagePaths = (params.allMedia ?? [])
+    .filter((m) => m.path && m.contentType?.startsWith("image/"))
+    .map((m) => m.path);
+  // Extract reply context from the Telegram message
+  const replyTo = params.msg.reply_to_message;
+  const replyToId = replyTo?.message_id != null ? String(replyTo.message_id) : undefined;
+  const replyToBody = replyTo?.text ?? replyTo?.caption;
+  const replyToSender = replyTo
+    ? replyTo.from?.first_name
+      ? `${replyTo.from.first_name}${replyTo.from.last_name ? ` ${replyTo.from.last_name}` : ""}`
+      : (replyTo.from?.username ?? undefined)
+    : undefined;
   return shouldParticipateInGroup({
     cfg: params.cfg,
     config: params.contextualConfig,
@@ -1069,6 +1116,12 @@ async function callTelegramContextualDecision(params: {
       sender: buildSenderLabel(params.msg as never, params.senderId),
       body: params.rawBody,
       timestamp: params.msg.date ? params.msg.date * 1000 : undefined,
+      imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+      messageId:
+        typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined,
+      replyToId,
+      replyToBody,
+      replyToSender,
     },
     groupKey: params.groupKey,
     botName: params.botName,
