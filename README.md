@@ -458,15 +458,12 @@ Runbook: [Android connect](https://docs.openclaw.ai/platforms/android).
 
 ## Configuration
 
-> **Note:** Config files use JSON5 format (supports comments and unquoted keys). The file
-> is located at `~/.openclaw/openclaw.json`.
-
 Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 ```json5
 {
   agent: {
-    model: "claude-opus-4-6", // Anthropic model ID — no provider prefix required
+    model: "anthropic/claude-opus-4-6",
   },
 }
 ```
@@ -661,7 +658,7 @@ and the community.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 AI/vibe-coded PRs welcome! 🤖
 
-Special thanks to [Mario Zechner](https://mariozachner.at/) for his support and for
+Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
 [pi-mono](https://github.com/badlogic/pi-mono). Special thanks to Adam Doppelt for
 lobster.bot.
 
