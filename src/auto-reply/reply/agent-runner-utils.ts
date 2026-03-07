@@ -1,5 +1,6 @@
 import {
   resolveEffectiveModelFallbacks,
+  resolveFallbackAgentId,
   resolveRunModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
@@ -167,17 +168,21 @@ export function resolveModelFallbackOptions(
     providerOverride?: unknown;
   },
 ) {
-  const fallbacksOverride = sessionEntry
-    ? resolveEffectiveModelFallbacks({
-        cfg: run.config,
-        agentId: run.agentId,
-        hasSessionModelOverride: hasSessionModelOverride(sessionEntry),
-      })
-    : resolveRunModelFallbacksOverride({
-        cfg: run.config,
-        agentId: run.agentId,
-        sessionKey: run.sessionKey,
-      });
+  const fallbacksOverride =
+    sessionEntry && run.config
+      ? resolveEffectiveModelFallbacks({
+          cfg: run.config,
+          agentId: resolveFallbackAgentId({
+            agentId: run.agentId,
+            sessionKey: run.sessionKey,
+          }),
+          hasSessionModelOverride: hasSessionModelOverride(sessionEntry),
+        })
+      : resolveRunModelFallbacksOverride({
+          cfg: run.config,
+          agentId: run.agentId,
+          sessionKey: run.sessionKey,
+        });
   return {
     cfg: run.config,
     provider: run.provider,

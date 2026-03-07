@@ -4,12 +4,18 @@ import type { FollowupRun } from "./queue.js";
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
   const resolveEffectiveModelFallbacksMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock, resolveEffectiveModelFallbacksMock };
+  const resolveFallbackAgentIdMock = vi.fn();
+  return {
+    resolveRunModelFallbacksOverrideMock,
+    resolveEffectiveModelFallbacksMock,
+    resolveFallbackAgentIdMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: (...args: unknown[]) =>
     hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveFallbackAgentId: (...args: unknown[]) => hoisted.resolveFallbackAgentIdMock(...args),
   resolveRunModelFallbacksOverride: (...args: unknown[]) =>
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
 }));
@@ -49,6 +55,11 @@ describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
     hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveFallbackAgentIdMock.mockClear();
+    hoisted.resolveFallbackAgentIdMock.mockImplementation(
+      (params: { agentId?: string; sessionKey?: string }) =>
+        params.agentId ?? `derived:${params.sessionKey ?? ""}`,
+    );
   });
 
   it("resolves model fallback options from run context", () => {
@@ -93,6 +104,10 @@ describe("agent-runner-utils", () => {
       modelOverride: "override-model",
     });
 
+    expect(hoisted.resolveFallbackAgentIdMock).toHaveBeenCalledWith({
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+    });
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
@@ -100,6 +115,67 @@ describe("agent-runner-utils", () => {
     });
     expect(hoisted.resolveRunModelFallbacksOverrideMock).not.toHaveBeenCalled();
     expect(resolved.fallbacksOverride).toEqual(["default-fallback"]);
+  });
+
+  it("derives the agent id from sessionKey for effective fallback resolution", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["derived-fallback"]);
+    const run = makeRun({
+      agentId: undefined,
+      sessionKey: "agent:derived-agent:session",
+    });
+
+    const resolved = resolveModelFallbackOptions(run, {
+      modelOverride: "override-model",
+    });
+
+    expect(hoisted.resolveFallbackAgentIdMock).toHaveBeenCalledWith({
+      agentId: undefined,
+      sessionKey: "agent:derived-agent:session",
+    });
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: "derived:agent:derived-agent:session",
+      hasSessionModelOverride: true,
+    });
+    expect(resolved.fallbacksOverride).toEqual(["derived-fallback"]);
+  });
+
+  it("uses effective fallback resolution with hasSessionModelOverride=false when session overrides are absent", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["agent-specific-fallback"]);
+    const run = makeRun();
+
+    const resolved = resolveModelFallbackOptions(run, {
+      modelOverride: "",
+      providerOverride: "",
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      hasSessionModelOverride: false,
+    });
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual(["agent-specific-fallback"]);
+  });
+
+  it("falls back to safe run-based resolution when config is missing", () => {
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(undefined);
+    const run = makeRun({
+      config: undefined,
+      agentId: undefined,
+    });
+
+    const resolved = resolveModelFallbackOptions(run, {
+      modelOverride: "override-model",
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+      cfg: undefined,
+      agentId: undefined,
+      sessionKey: run.sessionKey,
+    });
+    expect(resolved.fallbacksOverride).toBeUndefined();
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
