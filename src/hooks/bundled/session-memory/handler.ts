@@ -181,13 +181,20 @@ const saveSessionToMemory: HookHandler = async (event) => {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
     const context = event.context || {};
+
+    // NOTE: blockSessionSave and sessionSaveContent are checked in a
+    // postHookActions callback (see bottom of this handler) so that hooks
+    // registered after this bundled handler can still set them.  The file
+    // is written inline (fail-safe: if postHookActions never runs, data is
+    // preserved on disk).  The post-hook callback handles retraction
+    // (blockSessionSave) and content replacement (sessionSaveContent).
+
     const cfg = context.cfg as OpenClawConfig | undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
       : path.join(resolveStateDir(process.env, os.homedir), "workspace");
     const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
 
     // Get today's date for filename
     const now = new Date(event.timestamp);
@@ -242,8 +249,22 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
+    const hasCustomContent = typeof context.sessionSaveContent === "string";
 
-    if (sessionFile) {
+    // Short-circuit transcript loading and LLM slug generation when
+    // blockSessionSave is already set — no point loading sensitive content
+    // or sending it to a model provider when saving is explicitly blocked.
+    const blockPreSet = context.blockSessionSave === true;
+
+    // Known limitation: if an earlier hook pre-sets sessionSaveContent and
+    // a later hook *clears* it (expecting a revert to the default
+    // transcript), the transcript is not available — it was never loaded
+    // because hasCustomContent was true at this point.  The post-hook
+    // cannot fall back to the default entry without re-reading the session
+    // file and re-running slug generation.  In practice, hooks that want
+    // to override earlier custom content should set their own
+    // sessionSaveContent rather than clearing it.
+    if (sessionFile && !hasCustomContent && !blockPreSet) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
@@ -267,10 +288,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
+    // If no slug, use timestamp with a random suffix to avoid collisions.
+    // Second-resolution (HHMMSS) alone can collide when automated or
+    // multi-channel setups emit rapid /new or /reset commands within the
+    // same second — both writes target the same filename and the later
+    // one silently overwrites the earlier memory entry.
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
+      const rand = Math.random().toString(36).slice(2, 6); // 4-char alphanumeric
+      slug = `${timeSlug.slice(0, 6)}-${rand}`;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
@@ -289,35 +315,98 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Build Markdown entry
-    const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
-      "",
-      `- **Session Key**: ${event.sessionKey}`,
-      `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
-      "",
-    ];
+    // Use custom content from upstream hook if available, otherwise build entry.
+    // hasCustomContent (set above) already gates session loading + slug generation.
+    let entry: string;
+    if (hasCustomContent) {
+      // An empty string is a valid redaction signal — hooks may intentionally
+      // set it to persist a blank marker while avoiding transcript retention.
+      entry = context.sessionSaveContent as string;
+      log.debug("Using custom session content from upstream hook", {
+        length: entry.length,
+      });
+    } else {
+      const entryParts = [
+        `# Session: ${dateStr} ${timeStr} UTC`,
+        "",
+        `- **Session Key**: ${event.sessionKey}`,
+        `- **Session ID**: ${sessionId}`,
+        `- **Source**: ${source}`,
+        "",
+      ];
 
-    // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      if (sessionContent) {
+        entryParts.push("## Conversation Summary", "", sessionContent, "");
+      }
+
+      entry = entryParts.join("\n");
     }
 
-    const entry = entryParts.join("\n");
+    // Write inline (fail-safe: if postHookActions never drains, the file
+    // is preserved on disk with the best content available at this point).
+    // If blockSessionSave was already set by an upstream hook, skip the write.
+    if (context.blockSessionSave === true) {
+      log.debug("Session save blocked by upstream hook (inline check)");
+    } else {
+      await fs.mkdir(memoryDir, { recursive: true });
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: filename,
+        data: entry,
+        encoding: "utf-8",
+      });
+      log.debug("Memory file written successfully");
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
+      const relPath = memoryFilePath.replace(os.homedir(), "~");
+      log.info(`Session context saved to ${relPath}`);
+    }
+
+    // Defer retraction/replacement to post-hook phase so that hooks
+    // registered after this handler can set blockSessionSave or
+    // sessionSaveContent and still have them honored.
+    const writtenEntry = context.blockSessionSave === true ? null : entry;
+    // Post-hook callback — errors propagate to the framework's per-action
+    // catch in triggerInternalHook, which provides consistent log formatting
+    // and per-action isolation.
+    event.postHookActions.push(async () => {
+      // If a later hook blocked the save, retract the file we just wrote.
+      if (event.context.blockSessionSave === true && writtenEntry !== null) {
+        try {
+          await fs.unlink(memoryFilePath);
+          log.debug("Session save retracted by post-hook (blockSessionSave)");
+        } catch (err) {
+          // File may not exist if inline write also didn't happen — that's fine.
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw err;
+          }
+        }
+        return;
+      }
+
+      // If a later hook set sessionSaveContent, overwrite with new content.
+      // blockSessionSave takes precedence — never create/overwrite a file that
+      // was blocked, even if sessionSaveContent is also set.
+      const postContent = event.context.sessionSaveContent;
+      if (
+        event.context.blockSessionSave !== true &&
+        typeof postContent === "string" &&
+        postContent !== writtenEntry
+      ) {
+        // Ensure memoryDir exists — the inline write may have been
+        // skipped (e.g. blockSessionSave was true initially) so mkdir
+        // might never have run.
+        await fs.mkdir(memoryDir, { recursive: true });
+        await writeFileWithinRoot({
+          rootDir: memoryDir,
+          relativePath: filename,
+          data: postContent,
+          encoding: "utf-8",
+        });
+        log.debug("Session save content replaced by post-hook (sessionSaveContent)", {
+          length: postContent.length,
+        });
+      }
     });
-    log.debug("Memory file written successfully");
-
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {

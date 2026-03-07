@@ -32,6 +32,7 @@ function makeEvent(overrides?: Partial<InternalHookEvent>): InternalHookEvent {
     context: {},
     timestamp: new Date(),
     messages: [],
+    postHookActions: [],
     ...overrides,
   };
 }
