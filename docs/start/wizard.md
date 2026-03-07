@@ -35,9 +35,10 @@ openclaw agents add <name>
 </Note>
 
 <Tip>
-Recommended: set up a Brave Search API key so the agent can use `web_search`
-(`web_fetch` works without a key). Easiest path: `openclaw configure --section web`
-which stores `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
+The onboarding wizard includes a web search step where you can pick a provider
+(Perplexity, Brave, Gemini, Grok, or Kimi) and paste your API key so the agent
+can use `web_search`. You can also configure this later with
+`openclaw configure --section web`. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## QuickStart vs Advanced
@@ -50,7 +51,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
     - Workspace default (or existing workspace)
     - Gateway port **18789**
     - Gateway auth **Token** (auto‑generated, even on loopback)
-    - Tool policy default for new local setups: `tools.profile: "messaging"` (existing explicit profile is preserved)
+    - Tool policy default for new local setups: `tools.profile: "coding"` (existing explicit profile is preserved)
     - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram + WhatsApp DMs default to **allowlist** (you'll be prompted for your phone number)

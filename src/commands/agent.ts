@@ -38,6 +38,7 @@ import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -47,11 +48,20 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import {
   mergeSessionEntry,
   parseSessionThreadInfo,
@@ -148,6 +158,80 @@ function prependInternalEventContext(
   return [renderedEvents, body].filter(Boolean).join("\n\n");
 }
 
+function createAcpVisibleTextAccumulator() {
+  let pendingSilentPrefix = "";
+  let visibleText = "";
+  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
+
+  const resolveNextCandidate = (base: string, chunk: string): string => {
+    if (!base) {
+      return chunk;
+    }
+    if (
+      isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
+      !chunk.startsWith(base) &&
+      startsWithWordChar(chunk)
+    ) {
+      return chunk;
+    }
+    // Some ACP backends emit cumulative snapshots even on text_delta-style hooks.
+    // Accept those only when they strictly extend the buffered text.
+    if (chunk.startsWith(base) && chunk.length > base.length) {
+      return chunk;
+    }
+    return `${base}${chunk}`;
+  };
+
+  const mergeVisibleChunk = (base: string, chunk: string): { text: string; delta: string } => {
+    if (!base) {
+      return { text: chunk, delta: chunk };
+    }
+    if (chunk.startsWith(base) && chunk.length > base.length) {
+      const delta = chunk.slice(base.length);
+      return { text: chunk, delta };
+    }
+    return {
+      text: `${base}${chunk}`,
+      delta: chunk,
+    };
+  };
+
+  return {
+    consume(chunk: string): { text: string; delta: string } | null {
+      if (!chunk) {
+        return null;
+      }
+
+      if (!visibleText) {
+        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+        const trimmedLeadCandidate = leadCandidate.trim();
+        if (
+          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
+          isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
+        ) {
+          pendingSilentPrefix = leadCandidate;
+          return null;
+        }
+        if (pendingSilentPrefix) {
+          pendingSilentPrefix = "";
+          visibleText = leadCandidate;
+          return {
+            text: visibleText,
+            delta: leadCandidate,
+          };
+        }
+      }
+
+      const nextVisible = mergeVisibleChunk(visibleText, chunk);
+      visibleText = nextVisible.text;
+      return nextVisible.delta ? nextVisible : null;
+    },
+    finalize(): string {
+      return visibleText.trim();
+    },
+  };
+}
+
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
@@ -174,6 +258,7 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  allowTransientCooldownProbe?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -324,6 +409,7 @@ function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -345,11 +431,23 @@ async function agentCommandInternal(
   }
 
   const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
   const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
     commandName: "agent",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
@@ -490,7 +588,7 @@ async function agentCommandInternal(
         },
       });
 
-      let streamedText = "";
+      const visibleTextAccumulator = createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
         const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
@@ -526,13 +624,16 @@ async function agentCommandInternal(
             if (!event.text) {
               return;
             }
-            streamedText += event.text;
+            const visibleUpdate = visibleTextAccumulator.consume(event.text);
+            if (!visibleUpdate) {
+              return;
+            }
             emitAgentEvent({
               runId,
               stream: "assistant",
               data: {
-                text: streamedText,
-                delta: event.text,
+                text: visibleUpdate.text,
+                delta: visibleUpdate.delta,
               },
             });
           },
@@ -564,14 +665,10 @@ async function agentCommandInternal(
         },
       });
 
-      const finalText = streamedText.trim();
-      const payloads = finalText
-        ? [
-            {
-              text: finalText,
-            },
-          ]
-        : [];
+      const normalizedFinalPayload = normalizeReplyPayload({
+        text: visibleTextAccumulator.finalize(),
+      });
+      const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
         payloads,
         meta: {
@@ -838,7 +935,7 @@ async function agentCommandInternal(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride) => {
+        run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -866,6 +963,7 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

@@ -34,6 +34,7 @@ import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
+import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -70,15 +71,7 @@ type DiscordReactionRoutingParams = {
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
-const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
-
-function normalizeDiscordListenerTimeoutMs(raw: number | undefined): number {
-  if (!Number.isFinite(raw) || (raw ?? 0) <= 0) {
-    return DISCORD_DEFAULT_LISTENER_TIMEOUT_MS;
-  }
-  return Math.max(1_000, Math.floor(raw!));
-}
 
 function formatListenerContextValue(value: unknown): string | null {
   if (value === undefined || value === null) {
@@ -138,57 +131,44 @@ async function runDiscordListenerWithSlowLog(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
-  run: (abortSignal: AbortSignal) => Promise<void>;
+  run: (abortSignal: AbortSignal | undefined) => Promise<void>;
   timeoutMs?: number;
   context?: Record<string, unknown>;
   onError?: (err: unknown) => void;
 }) {
   const startedAt = Date.now();
   const timeoutMs = normalizeDiscordListenerTimeoutMs(params.timeoutMs);
-  let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const logger = params.logger ?? discordEventQueueLog;
-  const abortController = new AbortController();
-  const runPromise = params.run(abortController.signal).catch((err) => {
-    if (timedOut) {
-      const errorName =
-        err && typeof err === "object" && "name" in err ? String(err.name) : undefined;
-      if (abortController.signal.aborted && errorName === "AbortError") {
+  let timedOut = false;
+
+  try {
+    timedOut = await runDiscordTaskWithTimeout({
+      run: params.run,
+      timeoutMs,
+      onTimeout: (resolvedTimeoutMs) => {
+        logger.error(
+          danger(
+            `discord handler timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
+              decimals: 1,
+              unit: "seconds",
+            })}${formatListenerContextSuffix(params.context)}`,
+          ),
+        );
+      },
+      onAbortAfterTimeout: () => {
         logger.warn(
           `discord handler canceled after timeout${formatListenerContextSuffix(params.context)}`,
         );
-        return;
-      }
-      logger.error(
-        danger(
-          `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
-        ),
-      );
-      return;
-    }
-    throw err;
-  });
-
-  try {
-    const timeoutPromise = new Promise<"timeout">((resolve) => {
-      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-      timeoutHandle.unref?.();
+      },
+      onErrorAfterTimeout: (err) => {
+        logger.error(
+          danger(
+            `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
+          ),
+        );
+      },
     });
-    const result = await Promise.race([
-      runPromise.then(() => "completed" as const),
-      timeoutPromise,
-    ]);
-    if (result === "timeout") {
-      timedOut = true;
-      abortController.abort();
-      logger.error(
-        danger(
-          `discord handler timed out after ${formatDurationSeconds(timeoutMs, {
-            decimals: 1,
-            unit: "seconds",
-          })}${formatListenerContextSuffix(params.context)}`,
-        ),
-      );
+    if (timedOut) {
       return;
     }
   } catch (err) {
@@ -198,9 +178,6 @@ async function runDiscordListenerWithSlowLog(params: {
     }
     throw err;
   } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
     if (!timedOut) {
       logSlowDiscordListener({
         logger: params.logger,

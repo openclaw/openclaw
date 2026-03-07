@@ -25,40 +25,49 @@ openclaw onboard --kilocode-api-key <key>
 Or set the environment variable:
 
 ```bash
-export KILOCODE_API_KEY="your-api-key"
+export KILOCODE_API_KEY="<your-kilocode-api-key>" # pragma: allowlist secret
 ```
 
 ## Config snippet
 
 ```json5
 {
-  env: { KILOCODE_API_KEY: "sk-..." },
+  env: { KILOCODE_API_KEY: "<your-kilocode-api-key>" }, // pragma: allowlist secret
   agents: {
     defaults: {
-      model: { primary: "kilocode/anthropic/claude-opus-4.6" },
+      model: { primary: "kilocode/kilo/auto" },
     },
   },
 }
 ```
 
-## Surfaced model refs
+## Default model
 
-The built-in Kilo Gateway catalog currently surfaces these model refs:
+The default model is `kilocode/kilo/auto`, a smart routing model that automatically selects
+the best underlying model based on the task:
 
-- `kilocode/anthropic/claude-opus-4.6` (default)
-- `kilocode/z-ai/glm-5:free`
-- `kilocode/minimax/minimax-m2.5:free`
-- `kilocode/anthropic/claude-sonnet-4.5`
-- `kilocode/openai/gpt-5.2`
-- `kilocode/google/gemini-3-pro-preview`
-- `kilocode/google/gemini-3-flash-preview`
-- `kilocode/x-ai/grok-code-fast-1`
-- `kilocode/moonshotai/kimi-k2.5`
+- Planning, debugging, and orchestration tasks route to Claude Opus
+- Code writing and exploration tasks route to Claude Sonnet
+
+## Available models
+
+OpenClaw dynamically discovers available models from the Kilo Gateway at startup. Use
+`/models kilocode` to see the full list of models available with your account.
+
+Any model available on the gateway can be used with the `kilocode/` prefix:
+
+```
+kilocode/kilo/auto              (default - smart routing)
+kilocode/anthropic/claude-sonnet-4
+kilocode/openai/gpt-5.2
+kilocode/google/gemini-3-pro-preview
+...and many more
+```
 
 ## Notes
 
-- Model refs are `kilocode/<provider>/<model>` (e.g., `kilocode/anthropic/claude-opus-4.6`).
-- Default model: `kilocode/anthropic/claude-opus-4.6`
+- Model refs are `kilocode/<model-id>` (e.g., `kilocode/anthropic/claude-sonnet-4`).
+- Default model: `kilocode/kilo/auto`
 - Base URL: `https://api.kilo.ai/api/gateway/`
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - Kilo Gateway uses a Bearer token with your API key under the hood.

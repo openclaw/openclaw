@@ -5,6 +5,7 @@ import { withTempHome } from "./home-env.test-harness.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
   loadConfig,
   setRuntimeConfigSnapshot,
   writeConfigFile,
@@ -12,6 +13,70 @@ import {
 import type { OpenClawConfig } from "./types.js";
 
 describe("runtime config snapshot writes", () => {
+  it("returns the source snapshot when runtime snapshot is active", async () => {
+    await withTempHome("openclaw-config-runtime-source-", async () => {
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-runtime-resolved",
+              models: [],
+            },
+          },
+        },
+      };
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("clears runtime source snapshot when runtime snapshot is cleared", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-runtime-resolved",
+            models: [],
+          },
+        },
+      },
+    };
+
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+  });
+
   it("preserves source secret refs when writeConfigFile receives runtime-resolved config", async () => {
     await withTempHome("openclaw-config-runtime-write-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

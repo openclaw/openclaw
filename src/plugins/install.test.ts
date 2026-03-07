@@ -858,4 +858,78 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND);
     }
   });
+
+  it("rejects bare npm specs that resolve to prerelease versions", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    mockNpmPackMetadataResult(run, {
+      id: "@openclaw/voice-call@0.0.2-beta.1",
+      name: "@openclaw/voice-call",
+      version: "0.0.2-beta.1",
+      filename: "voice-call-0.0.2-beta.1.tgz",
+      integrity: "sha512-beta",
+      shasum: "betashasum",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call",
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("prerelease version 0.0.2-beta.1");
+      expect(result.error).toContain('"@openclaw/voice-call@beta"');
+    }
+  });
+
+  it("allows explicit prerelease npm tags", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    let packTmpDir = "";
+    const packedName = "voice-call-0.0.2-beta.1.tgz";
+    const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
+    run.mockImplementation(async (argv, opts) => {
+      if (argv[0] === "npm" && argv[1] === "pack") {
+        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
+        fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
+        return {
+          code: 0,
+          stdout: JSON.stringify([
+            {
+              id: "@openclaw/voice-call@0.0.2-beta.1",
+              name: "@openclaw/voice-call",
+              version: "0.0.2-beta.1",
+              filename: packedName,
+              integrity: "sha512-beta",
+              shasum: "betashasum",
+            },
+          ]),
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    });
+
+    const { extensionsDir } = await setupVoiceCallArchiveInstall({
+      outName: "voice-call-0.0.2-beta.1.tgz",
+      version: "0.0.1",
+    });
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@beta",
+      extensionsDir,
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
+    expectSingleNpmPackIgnoreScriptsCall({
+      calls: run.mock.calls,
+      expectedSpec: "@openclaw/voice-call@beta",
+    });
+    expect(packTmpDir).not.toBe("");
+  });
 });

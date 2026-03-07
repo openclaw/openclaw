@@ -1,10 +1,16 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  isTrustedProxyAddress,
+  resolveClientIp,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient } from "./client.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
+const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
 
 /**
  * Mattermost interactive message callback payload.
@@ -31,6 +37,16 @@ export type MattermostInteractionResponse = {
   ephemeral_text?: string;
 };
 
+export type MattermostInteractiveButtonInput = {
+  id?: string;
+  callback_data?: string;
+  text?: string;
+  name?: string;
+  label?: string;
+  style?: "default" | "primary" | "danger";
+  context?: Record<string, unknown>;
+};
+
 // ── Callback URL registry ──────────────────────────────────────────────
 
 const callbackUrls = new Map<string, string>();
@@ -43,21 +59,100 @@ export function getInteractionCallbackUrl(accountId: string): string | undefined
   return callbackUrls.get(accountId);
 }
 
+type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
+  interactions?: {
+    callbackBaseUrl?: string;
+  };
+};
+
+export function resolveInteractionCallbackPath(accountId: string): string {
+  return `/mattermost/interactions/${accountId}`;
+}
+
+function isWildcardBindHost(rawHost: string): boolean {
+  const trimmed = rawHost.trim();
+  if (!trimmed) return false;
+  const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
+}
+
+function normalizeCallbackBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || undefined;
+  }
+  return value?.trim() || undefined;
+}
+
+function isAllowedInteractionSource(params: {
+  req: IncomingMessage;
+  allowedSourceIps?: string[];
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+}): boolean {
+  const { allowedSourceIps } = params;
+  if (!allowedSourceIps?.length) {
+    return true;
+  }
+
+  const clientIp = resolveClientIp({
+    remoteAddr: params.req.socket?.remoteAddress,
+    forwardedFor: headerValue(params.req.headers["x-forwarded-for"]),
+    realIp: headerValue(params.req.headers["x-real-ip"]),
+    trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
+  });
+  return isTrustedProxyAddress(clientIp, allowedSourceIps);
+}
+
 /**
  * Resolve the interaction callback URL for an account.
- * Prefers the in-memory registered URL (set by the gateway monitor).
- * Falls back to computing it from the gateway port in config (for CLI callers).
+ * Falls back to computing it from interactions.callbackBaseUrl or gateway host config.
+ */
+export function computeInteractionCallbackUrl(
+  accountId: string,
+  cfg?: InteractionCallbackConfig,
+): string {
+  const path = resolveInteractionCallbackPath(accountId);
+  // Prefer merged per-account config when available, but keep the top-level path for
+  // callers/tests that still pass the root Mattermost config shape directly.
+  const callbackBaseUrl =
+    cfg?.interactions?.callbackBaseUrl?.trim() ??
+    cfg?.channels?.mattermost?.interactions?.callbackBaseUrl?.trim();
+  if (callbackBaseUrl) {
+    return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
+  }
+  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
+  let host =
+    cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
+      ? cfg.gateway.customBindHost.trim()
+      : "localhost";
+
+  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
+  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
+    host = `[${host}]`;
+  }
+
+  return `http://${host}:${port}${path}`;
+}
+
+/**
+ * Resolve the interaction callback URL for an account.
+ * Prefers the in-memory registered URL (set by the gateway monitor) so callers outside the
+ * monitor lifecycle can reuse the runtime-validated callback destination.
  */
 export function resolveInteractionCallbackUrl(
   accountId: string,
-  cfg?: { gateway?: { port?: number } },
+  cfg?: InteractionCallbackConfig,
 ): string {
   const cached = callbackUrls.get(accountId);
   if (cached) {
     return cached;
   }
-  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
-  return `http://localhost:${port}/mattermost/interactions/${accountId}`;
+  return computeInteractionCallbackUrl(accountId, cfg);
 }
 
 // ── HMAC token management ──────────────────────────────────────────────
@@ -99,13 +194,26 @@ export function getInteractionSecret(accountId?: string): string {
   );
 }
 
+function canonicalizeInteractionContext(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeInteractionContext(item));
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => [key, canonicalizeInteractionContext(entryValue)]);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
 export function generateInteractionToken(
   context: Record<string, unknown>,
   accountId?: string,
 ): string {
   const secret = getInteractionSecret(accountId);
-  // Sort keys for stable serialization — Mattermost may reorder context keys
-  const payload = JSON.stringify(context, Object.keys(context).sort());
+  const payload = JSON.stringify(canonicalizeInteractionContext(context));
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
@@ -198,16 +306,44 @@ export function buildButtonAttachments(params: {
   ];
 }
 
-// ── Localhost validation ───────────────────────────────────────────────
+export function buildButtonProps(params: {
+  callbackUrl: string;
+  accountId?: string;
+  channelId: string;
+  buttons: Array<unknown>;
+  text?: string;
+}): Record<string, unknown> | undefined {
+  const rawButtons = params.buttons.flatMap((item) =>
+    Array.isArray(item) ? item : [item],
+  ) as MattermostInteractiveButtonInput[];
 
-const LOCALHOST_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+  const buttons = rawButtons
+    .map((btn) => ({
+      id: String(btn.id ?? btn.callback_data ?? "").trim(),
+      name: String(btn.text ?? btn.name ?? btn.label ?? "").trim(),
+      style: btn.style ?? "default",
+      context:
+        typeof btn.context === "object" && btn.context !== null
+          ? {
+              ...btn.context,
+              [SIGNED_CHANNEL_ID_CONTEXT_KEY]: params.channelId,
+            }
+          : { [SIGNED_CHANNEL_ID_CONTEXT_KEY]: params.channelId },
+    }))
+    .filter((btn) => btn.id && btn.name);
 
-export function isLocalhostRequest(req: IncomingMessage): boolean {
-  const addr = req.socket?.remoteAddress;
-  if (!addr) {
-    return false;
+  if (buttons.length === 0) {
+    return undefined;
   }
-  return LOCALHOST_ADDRESSES.has(addr);
+
+  return {
+    attachments: buildButtonAttachments({
+      callbackUrl: params.callbackUrl,
+      accountId: params.accountId,
+      buttons,
+      text: params.text,
+    }),
+  };
 }
 
 // ── Request body reader ────────────────────────────────────────────────
@@ -251,8 +387,18 @@ export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
   botUserId: string;
   accountId: string;
-  callbackUrl: string;
+  allowedSourceIps?: string[];
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   resolveSessionKey?: (channelId: string, userId: string) => Promise<string>;
+  handleInteraction?: (opts: {
+    payload: MattermostInteractionPayload;
+    userName: string;
+    actionId: string;
+    actionName: string;
+    originalMessage: string;
+    context: Record<string, unknown>;
+  }) => Promise<MattermostInteractionResponse | null>;
   dispatchButtonClick?: (opts: {
     channelId: string;
     userId: string;
@@ -276,14 +422,20 @@ export function createMattermostInteractionHandler(params: {
       return;
     }
 
-    // Verify request is from localhost
-    if (!isLocalhostRequest(req)) {
+    if (
+      !isAllowedInteractionSource({
+        req,
+        allowedSourceIps: params.allowedSourceIps,
+        trustedProxies: params.trustedProxies,
+        allowRealIpFallback: params.allowRealIpFallback,
+      })
+    ) {
       log?.(
-        `mattermost interaction: rejected non-localhost request from ${req.socket?.remoteAddress}`,
+        `mattermost interaction: rejected callback source remote=${req.socket?.remoteAddress ?? "?"}`,
       );
       res.statusCode = 403;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Forbidden" }));
+      res.end(JSON.stringify({ error: "Forbidden origin" }));
       return;
     }
 
@@ -335,10 +487,98 @@ export function createMattermostInteractionHandler(params: {
       return;
     }
 
+    const signedChannelId =
+      typeof contextWithoutToken[SIGNED_CHANNEL_ID_CONTEXT_KEY] === "string"
+        ? contextWithoutToken[SIGNED_CHANNEL_ID_CONTEXT_KEY].trim()
+        : "";
+    if (signedChannelId && signedChannelId !== payload.channel_id) {
+      log?.(
+        `mattermost interaction: signed channel mismatch payload=${payload.channel_id} signed=${signedChannelId}`,
+      );
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Channel mismatch" }));
+      return;
+    }
+
+    const userName = payload.user_name ?? payload.user_id;
+    let originalMessage = "";
+    let clickedButtonName: string | null = null;
+    try {
+      const originalPost = await client.request<{
+        channel_id?: string | null;
+        message?: string;
+        props?: Record<string, unknown>;
+      }>(`/posts/${payload.post_id}`);
+      const postChannelId = originalPost.channel_id?.trim();
+      if (!postChannelId || postChannelId !== payload.channel_id) {
+        log?.(
+          `mattermost interaction: post channel mismatch payload=${payload.channel_id} post=${postChannelId ?? "<missing>"}`,
+        );
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Post/channel mismatch" }));
+        return;
+      }
+      originalMessage = originalPost.message ?? "";
+
+      // Ensure the callback can only target an action that exists on the original post.
+      const postAttachments = Array.isArray(originalPost?.props?.attachments)
+        ? (originalPost.props.attachments as Array<{
+            actions?: Array<{ id?: string; name?: string }>;
+          }>)
+        : [];
+      for (const att of postAttachments) {
+        const match = att.actions?.find((a) => a.id === actionId);
+        if (match?.name) {
+          clickedButtonName = match.name;
+          break;
+        }
+      }
+      if (clickedButtonName === null) {
+        log?.(`mattermost interaction: action ${actionId} not found in post ${payload.post_id}`);
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Unknown action" }));
+        return;
+      }
+    } catch (err) {
+      log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${String(err)}`);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Failed to validate interaction" }));
+      return;
+    }
+
     log?.(
       `mattermost interaction: action=${actionId} user=${payload.user_name ?? payload.user_id} ` +
         `post=${payload.post_id} channel=${payload.channel_id}`,
     );
+
+    if (params.handleInteraction) {
+      try {
+        const response = await params.handleInteraction({
+          payload,
+          userName,
+          actionId,
+          actionName: clickedButtonName,
+          originalMessage,
+          context: contextWithoutToken,
+        });
+        if (response !== null) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(response));
+          return;
+        }
+      } catch (err) {
+        log?.(`mattermost interaction: custom handler failed: ${String(err)}`);
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Interaction handler failed" }));
+        return;
+      }
+    }
 
     // Dispatch as system event so the agent can handle it.
     // Wrapped in try/catch — the post update below must still run even if
@@ -359,34 +599,6 @@ export function createMattermostInteractionHandler(params: {
       });
     } catch (err) {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
-    }
-
-    // Fetch the original post to preserve its message and find the clicked button name.
-    const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let clickedButtonName = actionId; // fallback to action ID if we can't find the name
-    try {
-      const originalPost = await client.request<{
-        message?: string;
-        props?: Record<string, unknown>;
-      }>(`/posts/${payload.post_id}`);
-      originalMessage = originalPost?.message ?? "";
-
-      // Find the clicked button's display name from the original attachments
-      const postAttachments = Array.isArray(originalPost?.props?.attachments)
-        ? (originalPost.props.attachments as Array<{
-            actions?: Array<{ id?: string; name?: string }>;
-          }>)
-        : [];
-      for (const att of postAttachments) {
-        const match = att.actions?.find((a) => a.id === actionId);
-        if (match?.name) {
-          clickedButtonName = match.name;
-          break;
-        }
-      }
-    } catch (err) {
-      log?.(`mattermost interaction: failed to fetch post ${payload.post_id}: ${String(err)}`);
     }
 
     // Update the post via API to replace buttons with a completion indicator.

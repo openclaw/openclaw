@@ -36,6 +36,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
@@ -600,8 +601,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (voiceEnabled) {
       clientPlugins.push(new VoicePlugin());
     }
-    // Pass eventQueue config to Carbon so the listener timeout can be tuned.
-    // Default listenerTimeout is 120s (Carbon defaults to 30s which is too short for LLM calls).
+    // Pass eventQueue config to Carbon so the gateway listener budget can be tuned.
+    // Default listenerTimeout is 120s (Carbon defaults to 30s, which is too short for some
+    // Discord normalization/enqueue work).
     const eventQueueOpts = {
       listenerTimeout: 120_000,
       ...discordCfg.eventQueue,
@@ -683,7 +685,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
-      listenerTimeoutMs: eventQueueOpts.listenerTimeout,
+      workerRunTimeoutMs: discordCfg.inboundWorker?.runTimeoutMs,
       botUserId,
       guildHistories,
       historyLimit,
@@ -751,7 +753,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.({ connected: true });
+      opts.setStatus?.(createConnectedChannelStatusPatch());
     }
 
     lifecycleStarted = true;

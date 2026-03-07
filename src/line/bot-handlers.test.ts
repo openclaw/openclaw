@@ -65,8 +65,49 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
+type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+
+function createReplayMessageEvent(params: {
+  messageId: string;
+  groupId: string;
+  userId: string;
+  webhookEventId: string;
+  isRedelivery: boolean;
+}) {
+  return {
+    type: "message",
+    message: { id: params.messageId, type: "text", text: "hello" },
+    replyToken: "reply-token",
+    timestamp: Date.now(),
+    source: { type: "group", groupId: params.groupId, userId: params.userId },
+    mode: "active",
+    webhookEventId: params.webhookEventId,
+    deliveryContext: { isRedelivery: params.isRedelivery },
+  } as MessageEvent;
+}
+
+function createOpenGroupReplayContext(
+  processMessage: LineWebhookContext["processMessage"],
+  replayCache: ReturnType<typeof createLineWebhookReplayCache>,
+): Parameters<typeof handleLineWebhookEvents>[1] {
+  return {
+    cfg: { channels: { line: { groupPolicy: "open" } } },
+    account: {
+      accountId: "default",
+      enabled: true,
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      tokenSource: "config",
+      config: { groupPolicy: "open" },
+    },
+    runtime: createRuntime(),
+    mediaMaxBytes: 1,
+    processMessage,
+    replayCache,
+  };
+}
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: readAllowFromStoreMock,
@@ -377,32 +418,14 @@ describe("handleLineWebhookEvents", () => {
 
   it("deduplicates replayed webhook events by webhookEventId before processing", async () => {
     const processMessage = vi.fn();
-    const event = {
-      type: "message",
-      message: { id: "m-replay", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-replay", userId: "user-replay" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-replay",
+      groupId: "group-replay",
+      userId: "user-replay",
       webhookEventId: "evt-replay-1",
-      deliveryContext: { isRedelivery: true },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
+      isRedelivery: true,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
 
     await handleLineWebhookEvents([event], context);
     await handleLineWebhookEvents([event], context);
@@ -419,32 +442,14 @@ describe("handleLineWebhookEvents", () => {
     const processMessage = vi.fn(async () => {
       await firstDone;
     });
-    const event = {
-      type: "message",
-      message: { id: "m-inflight", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-inflight", userId: "user-inflight" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-inflight",
+      groupId: "group-inflight",
+      userId: "user-inflight",
       webhookEventId: "evt-inflight-1",
-      deliveryContext: { isRedelivery: true },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
+      isRedelivery: true,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
 
     const firstRun = handleLineWebhookEvents([event], context);
     await Promise.resolve();
@@ -464,32 +469,14 @@ describe("handleLineWebhookEvents", () => {
     const processMessage = vi.fn(async () => {
       await firstDone;
     });
-    const event = {
-      type: "message",
-      message: { id: "m-inflight-fail", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-inflight", userId: "user-inflight" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-inflight-fail",
+      groupId: "group-inflight",
+      userId: "user-inflight",
       webhookEventId: "evt-inflight-fail-1",
-      deliveryContext: { isRedelivery: true },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
+      isRedelivery: true,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
 
     const firstRun = handleLineWebhookEvents([event], context);
     await Promise.resolve();
@@ -604,32 +591,14 @@ describe("handleLineWebhookEvents", () => {
       .fn()
       .mockRejectedValueOnce(new Error("transient failure"))
       .mockResolvedValueOnce(undefined);
-    const event = {
-      type: "message",
-      message: { id: "m-fail-then-retry", type: "text", text: "hello" },
-      replyToken: "reply-token",
-      timestamp: Date.now(),
-      source: { type: "group", groupId: "group-retry", userId: "user-retry" },
-      mode: "active",
+    const event = createReplayMessageEvent({
+      messageId: "m-fail-then-retry",
+      groupId: "group-retry",
+      userId: "user-retry",
       webhookEventId: "evt-fail-then-retry",
-      deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
-
-    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { groupPolicy: "open" } } },
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        config: { groupPolicy: "open" },
-      },
-      runtime: createRuntime(),
-      mediaMaxBytes: 1,
-      processMessage,
-      replayCache: createLineWebhookReplayCache(),
-    };
+      isRedelivery: false,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
 
     await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("transient failure");
     await handleLineWebhookEvents([event], context);
