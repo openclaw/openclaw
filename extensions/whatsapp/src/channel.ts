@@ -349,7 +349,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }
       const listenerActive = deps?.hasActiveWebListener
         ? deps.hasActiveWebListener()
-        : Boolean(getWhatsAppRuntime().channel.whatsapp.getActiveWebListener());
+        : Boolean(getWhatsAppRuntime().channel.whatsapp.getActiveWebListener(accountId));
       if (!listenerActive) {
         return { ok: false, reason: "whatsapp-not-running" };
       }
