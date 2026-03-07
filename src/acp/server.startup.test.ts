@@ -180,7 +180,7 @@ describe("serveAcpGateway startup", () => {
   it("passes resolved SecretInput gateway credentials to the ACP gateway client", async () => {
     mockState.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({
       token: undefined,
-      password: "resolved-secret-password",
+      password: "resolved-secret-password", // pragma: allowlist secret
     });
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
@@ -195,7 +195,7 @@ describe("serveAcpGateway startup", () => {
       );
       expect(mockState.gatewayAuth[0]).toEqual({
         token: undefined,
-        password: "resolved-secret-password",
+        password: "resolved-secret-password", // pragma: allowlist secret
       });
 
       const gateway = getMockGateway();

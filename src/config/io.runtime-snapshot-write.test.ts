@@ -12,96 +12,67 @@ import {
 } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
+function createSourceConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createRuntimeConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function resetRuntimeConfigState(): void {
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+}
+
 describe("runtime config snapshot writes", () => {
   it("returns the source snapshot when runtime snapshot is active", async () => {
     await withTempHome("openclaw-config-runtime-source-", async () => {
-      const sourceConfig: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      };
-      const runtimeConfig: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      };
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig = createRuntimeConfig();
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
       } finally {
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
+        resetRuntimeConfigState();
       }
     });
   });
 
   it("clears runtime source snapshot when runtime snapshot is cleared", async () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = createSourceConfig();
+    const runtimeConfig = createRuntimeConfig();
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    resetRuntimeConfigState();
     expect(getRuntimeConfigSourceSnapshot()).toBeNull();
   });
 
   it("preserves source secret refs when writeConfigFile receives runtime-resolved config", async () => {
     await withTempHome("openclaw-config-runtime-write-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const sourceConfig: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      };
-      const runtimeConfig: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      };
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig = createRuntimeConfig();
 
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
@@ -121,8 +92,7 @@ describe("runtime config snapshot writes", () => {
           id: "OPENAI_API_KEY",
         });
       } finally {
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
+        resetRuntimeConfigState();
       }
     });
   });

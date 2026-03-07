@@ -125,7 +125,7 @@ describe("gateway auth", () => {
       resolveGatewayAuth({
         authConfig: {
           token: "config-token",
-          password: "config-password",
+          password: "config-password", // pragma: allowlist secret
         },
         env: {
           OPENCLAW_GATEWAY_TOKEN: "env-token",
@@ -134,7 +134,7 @@ describe("gateway auth", () => {
       }),
     ).toMatchObject({
       token: "config-token",
-      password: "config-password",
+      password: "config-password", // pragma: allowlist secret
     });
   });
 
@@ -174,7 +174,7 @@ describe("gateway auth", () => {
   it("marks mode source as override when runtime mode override is provided", () => {
     expect(
       resolveGatewayAuth({
-        authConfig: { mode: "password", password: "config-password" },
+        authConfig: { mode: "password", password: "config-password" }, // pragma: allowlist secret
         authOverride: { mode: "token" },
         env: {} as NodeJS.ProcessEnv,
       }),
@@ -182,7 +182,7 @@ describe("gateway auth", () => {
       mode: "token",
       modeSource: "override",
       token: undefined,
-      password: "config-password",
+      password: "config-password", // pragma: allowlist secret
     });
   });
 
