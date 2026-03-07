@@ -581,6 +581,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      // Native modules that should use Node's native require() instead of being transformed.
+      // This prevents binding resolution failures for plugins using sqlite3/better-sqlite3.
+      // Without this, the bindings package resolves paths relative to jiti instead of the
+      // actual native module package, causing "Could not locate the bindings file" errors.
+      // See: https://github.com/openclaw/openclaw/issues/36377
+      nativeModules: ["typescript", "sqlite3", "better-sqlite3"],
       ...(Object.keys(aliasMap).length > 0
         ? {
             alias: aliasMap,
