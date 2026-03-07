@@ -69,6 +69,10 @@ function resolvePositiveNumber(
   return value;
 }
 
+function resolveScopeDefault(value: unknown): "allow" | "deny" {
+  return value === "allow" || value === "deny" ? value : DEFAULT_SCOPE.default;
+}
+
 function cloneScope(scope?: SessionSendPolicyConfig): SessionSendPolicyConfig {
   if (!scope) {
     return {
@@ -80,7 +84,7 @@ function cloneScope(scope?: SessionSendPolicyConfig): SessionSendPolicyConfig {
     };
   }
   return {
-    default: scope.default,
+    default: resolveScopeDefault(scope.default),
     rules: scope.rules?.map((rule) => ({
       action: rule.action,
       match: rule.match ? { ...rule.match } : undefined,

@@ -102,4 +102,25 @@ describe("resolveContinuityConfig", () => {
 
     expect(resolved.capture.minConfidence).toBe(0);
   });
+
+  it("keeps recall scope deny-by-default when custom scope omits or invalidates default", () => {
+    const missingDefault = resolveContinuityConfig({
+      recall: {
+        scope: {
+          rules: [{ action: "allow", match: { channel: "discord", chatType: "direct" } }],
+        },
+      },
+    });
+    const invalidDefault = resolveContinuityConfig({
+      recall: {
+        scope: {
+          default: "maybe" as unknown as "allow" | "deny",
+          rules: [{ action: "allow", match: { channel: "discord", chatType: "direct" } }],
+        },
+      },
+    });
+
+    expect(missingDefault.recall.scope.default).toBe("deny");
+    expect(invalidDefault.recall.scope.default).toBe("deny");
+  });
 });
