@@ -1,7 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  collectOpenGroupPolicyRestrictSendersWarnings,
   createScopedAccountConfigAccessors,
+  collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk";
 import {
   buildChannelConfigSchema,
@@ -11,8 +11,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   LineConfigSchema,
   processLineMessage,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
@@ -175,14 +173,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.line !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
         surface: "LINE groups",
         openScope: "any member in groups",
         groupPolicyPath: "channels.line.groupPolicy",
