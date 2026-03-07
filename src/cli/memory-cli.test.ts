@@ -60,7 +60,7 @@ describe("memory cli", () => {
     return JSON.parse(String(log.mock.calls[0]?.[0] ?? "null")) as Record<string, unknown>;
   }
 
-  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive";
+  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
     expect(sync).toHaveBeenCalledWith(
