@@ -1,0 +1,75 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Runs every 6 hours — upstream pushes daily, this keeps you fresh
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    # Also allows manual trigger from GitHub Actions UI
+
+jobs:
+  sync:
+    name: Sync main ← openclaw/openclaw
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git remote -v
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Check if sync needed
+        id: check
+        run: |
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/main)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "in_sync=true" >> $GITHUB_OUTPUT
+            echo "✅ Already in sync with upstream."
+          else
+            echo "in_sync=false" >> $GITHUB_OUTPUT
+            BEHIND=$(git rev-list HEAD..upstream/main --count)
+            echo "🔄 Fork is $BEHIND commit(s) behind upstream."
+          fi
+
+      - name: Sync main with upstream
+        if: steps.check.outputs.in_sync == 'false'
+        run: |
+          # Fast-forward merge — safe because main is kept clean (no direct commits)
+          git merge upstream/main --ff-only --no-edit || {
+            echo "⚠️  Fast-forward failed — upstream has diverged."
+            echo "This usually means a direct commit landed on fork/main."
+            echo "Falling back to hard reset (safe since main = upstream mirror)."
+            git reset --hard upstream/main
+          }
+
+      - name: Push synced main to fork
+        if: steps.check.outputs.in_sync == 'false'
+        run: git push origin main
+
+      - name: Summary
+        run: |
+          echo "### Sync Result" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.in_sync }}" = "true" ]; then
+            echo "✅ Fork already up to date with upstream." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🔄 Successfully synced fork main ← openclaw/openclaw main" >> $GITHUB_STEP_SUMMARY
+            echo "Next sync in ~6 hours." >> $GITHUB_STEP_SUMMARY
+          fi
