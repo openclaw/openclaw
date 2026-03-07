@@ -170,7 +170,11 @@ resolve_user_home() {
     home="$(awk -F: -v u="$user" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
   fi
   if [[ -z "$home" ]]; then
-    home="/home/$user"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      home="/Users/$user" # Use /Users for macOS
+    else
+      home="/home/$user"
+    fi
   fi
   printf '%s' "$home"
 }
@@ -194,6 +198,18 @@ if ! user_exists "$OPENCLAW_USER"; then
   elif command -v adduser >/dev/null 2>&1; then
     # Debian/Ubuntu: adduser supports --disabled-password/--gecos. Busybox adduser differs.
     run_root adduser --disabled-password --gecos "" --shell "$NOLOGIN_SHELL" "$OPENCLAW_USER"
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS: Use dscl to create the user
+    if ! dscl . -read /Users/$OPENCLAW_USER >/dev/null 2>&1; then
+      echo "Creating user $OPENCLAW_USER on macOS..."
+      run_root dscl . -create /Users/$OPENCLAW_USER
+      run_root dscl . -create "/Users/$OPENCLAW_USER" UserShell "$(resolve_nologin_shell)"
+      run_root dscl . -create "/Users/$OPENCLAW_USER" NFSHomeDirectory "/Users/$OPENCLAW_USER"
+      run_root mkdir -p "/Users/$OPENCLAW_USER"
+      run_root chown -R "$OPENCLAW_USER":staff "/Users/$OPENCLAW_USER"
+    else
+      echo "User $OPENCLAW_USER already exists on macOS."
+    fi
   else
     echo "Neither useradd nor adduser found, cannot create user $OPENCLAW_USER." >&2
     exit 1
