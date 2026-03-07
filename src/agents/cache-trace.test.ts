@@ -137,4 +137,35 @@ describe("createCacheTrace", () => {
       ?.source ?? {}) as Record<string, unknown>;
     expect(source.data).toBe("<redacted:0kb>");
   });
+
+  it("handles circular references in messages without stack overflow", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const parent: Record<string, unknown> = { role: "user", content: "hello" };
+    const child: Record<string, unknown> = { ref: parent };
+    parent.child = child; // circular reference
+
+    trace?.recordStage("prompt:images", {
+      messages: [parent] as unknown as [],
+    });
+
+    expect(lines.length).toBe(1);
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.messageCount).toBe(1);
+    expect(event.messageFingerprints).toHaveLength(1);
+  });
 });

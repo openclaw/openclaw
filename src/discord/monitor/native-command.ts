@@ -937,6 +937,11 @@ async function handleDiscordModelPickerInteraction(
       return;
     }
 
+    // The session store write happens asynchronously after the command dispatch
+    // completes. Give it a short window to flush before reading back the persisted
+    // value, otherwise the check races the write and reports a false mismatch.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,
       route,

@@ -1,4 +1,10 @@
-import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
+import {
+  cancel,
+  confirm as clackConfirm,
+  isCancel,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -34,24 +40,38 @@ import {
 } from "../provider-auth-helpers.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
-const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
-  clackConfirm({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-const text = (params: Parameters<typeof clackText>[0]) =>
-  clackText({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+function guardCancel<T>(value: T | symbol): T {
+  if (typeof value === "symbol" || isCancel(value)) {
+    cancel("Cancelled.");
+    process.exit(0);
+  }
+  return value;
+}
+
+const confirm = async (params: Parameters<typeof clackConfirm>[0]) =>
+  guardCancel(
+    await clackConfirm({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
+const text = async (params: Parameters<typeof clackText>[0]) =>
+  guardCancel(
+    await clackText({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
+const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  guardCancel(
+    await clackSelect({
+      ...params,
+      message: stylePromptMessage(params.message),
+      options: params.options.map((opt) =>
+        opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      ),
+    }),
+  );
 
 type TokenProvider = "anthropic";
 
@@ -165,13 +185,13 @@ export async function modelsAuthPasteTokenCommand(
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
-  const provider = (await select({
+  const provider = await select({
     message: "Token provider",
     options: [
       { value: "anthropic", label: "anthropic" },
       { value: "custom", label: "custom (type provider id)" },
     ],
-  })) as TokenProvider | "custom";
+  });
 
   const providerId =
     provider === "custom"
