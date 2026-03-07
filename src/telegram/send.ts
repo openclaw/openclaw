@@ -855,6 +855,8 @@ function extractTelegramPinnedMessages(chat: unknown): unknown[] {
     pinned_messages?: unknown;
   };
   if (Array.isArray(chatRecord.pinned_messages)) {
+    // NOTE: Telegram Bot API does not currently return `pinned_messages` from getChat.
+    // This branch is a forward-compatibility stub only.
     return chatRecord.pinned_messages.filter((message) => message != null);
   }
   return chatRecord.pinned_message == null ? [] : [chatRecord.pinned_message];
