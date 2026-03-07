@@ -1,0 +1,33 @@
+name: Build Fork
+
+on:
+  push:
+    branches: [rocobot]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Build dist
+        run: pnpm build
+
+      - name: Package tarball
+        run: pnpm pack
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-fork
+          path: openclaw-*.tgz
+          retention-days: 30
