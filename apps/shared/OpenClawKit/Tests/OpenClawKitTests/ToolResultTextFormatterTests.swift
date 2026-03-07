@@ -78,4 +78,16 @@ struct ToolResultTextFormatterTests {
         let result = ToolResultTextFormatter.format(text: json, toolName: "bash")
         #expect(result == "primary output")
     }
+
+    @Test func surfacesStderrWhenStdoutIsMissing() {
+        let json = """
+        {
+          "stderr": "permission denied",
+          "exitCode": 1
+        }
+        """
+
+        let result = ToolResultTextFormatter.format(text: json, toolName: "bash")
+        #expect(result == "permission denied")
+    }
 }
