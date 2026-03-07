@@ -42,9 +42,8 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const remoteKey = normalizeRemoteClientKey(req.socket?.remoteAddress);
-    const localRequest = isLoopbackClientIp(remoteKey);
-    if (!localRequest && params.allowRemoteViewer !== true) {
+    const access = resolveViewerAccess(req);
+    if (!access.localRequest && params.allowRemoteViewer !== true) {
       respondText(res, 404, "Diff not found");
       return true;
     }
@@ -54,8 +53,8 @@ export function createDiffsHttpHandler(params: {
       return true;
     }
 
-    if (!localRequest) {
-      const throttled = viewerFailureLimiter.check(remoteKey);
+    if (!access.localRequest) {
+      const throttled = viewerFailureLimiter.check(access.remoteKey);
       if (!throttled.allowed) {
         res.statusCode = 429;
         setSharedHeaders(res, "text/plain; charset=utf-8");
@@ -74,27 +73,21 @@ export function createDiffsHttpHandler(params: {
       !DIFF_ARTIFACT_ID_PATTERN.test(id) ||
       !DIFF_ARTIFACT_TOKEN_PATTERN.test(token)
     ) {
-      if (!localRequest) {
-        viewerFailureLimiter.recordFailure(remoteKey);
-      }
+      recordRemoteFailure(viewerFailureLimiter, access);
       respondText(res, 404, "Diff not found");
       return true;
     }
 
     const artifact = await params.store.getArtifact(id, token);
     if (!artifact) {
-      if (!localRequest) {
-        viewerFailureLimiter.recordFailure(remoteKey);
-      }
+      recordRemoteFailure(viewerFailureLimiter, access);
       respondText(res, 404, "Diff not found or expired");
       return true;
     }
 
     try {
       const html = await params.store.readHtml(id);
-      if (!localRequest) {
-        viewerFailureLimiter.reset(remoteKey);
-      }
+      resetRemoteFailures(viewerFailureLimiter, access);
       res.statusCode = 200;
       setSharedHeaders(res, "text/html; charset=utf-8");
       res.setHeader("content-security-policy", VIEWER_CONTENT_SECURITY_POLICY);
@@ -105,9 +98,7 @@ export function createDiffsHttpHandler(params: {
       }
       return true;
     } catch (error) {
-      if (!localRequest) {
-        viewerFailureLimiter.recordFailure(remoteKey);
-      }
+      recordRemoteFailure(viewerFailureLimiter, access);
       params.logger?.warn(`Failed to serve diff artifact ${id}: ${String(error)}`);
       respondText(res, 500, "Failed to load diff");
       return true;
@@ -182,6 +173,44 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
 
 function isLoopbackClientIp(clientIp: string): boolean {
   return clientIp === "127.0.0.1" || clientIp === "::1";
+}
+
+function hasProxyForwardingHints(req: IncomingMessage): boolean {
+  const headers = req.headers ?? {};
+  return Boolean(
+    headers["x-forwarded-for"] ||
+    headers["x-real-ip"] ||
+    headers.forwarded ||
+    headers["x-forwarded-host"] ||
+    headers["x-forwarded-proto"],
+  );
+}
+
+function resolveViewerAccess(req: IncomingMessage): {
+  remoteKey: string;
+  localRequest: boolean;
+} {
+  const remoteKey = normalizeRemoteClientKey(req.socket?.remoteAddress);
+  const localRequest = isLoopbackClientIp(remoteKey) && !hasProxyForwardingHints(req);
+  return { remoteKey, localRequest };
+}
+
+function recordRemoteFailure(
+  limiter: ViewerFailureLimiter,
+  access: { remoteKey: string; localRequest: boolean },
+): void {
+  if (!access.localRequest) {
+    limiter.recordFailure(access.remoteKey);
+  }
+}
+
+function resetRemoteFailures(
+  limiter: ViewerFailureLimiter,
+  access: { remoteKey: string; localRequest: boolean },
+): void {
+  if (!access.localRequest) {
+    limiter.reset(access.remoteKey);
+  }
 }
 
 type RateLimitCheckResult = {

@@ -77,6 +77,22 @@ function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>)
   });
 }
 
+function publishSlackDisconnectedStatus(
+  setStatus?: (next: Record<string, unknown>) => void,
+  error?: unknown,
+) {
+  if (!setStatus) {
+    return;
+  }
+  const at = Date.now();
+  const message = error ? formatUnknownError(error) : undefined;
+  setStatus({
+    connected: false,
+    lastDisconnect: message ? { at, error: message } : { at },
+    lastError: message ?? null,
+  });
+}
+
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -440,6 +456,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         if (opts.abortSignal?.aborted) {
           break;
         }
+        publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
 
         // Bail immediately on non-recoverable auth errors during reconnect too.
         if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
@@ -495,6 +512,7 @@ export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 export const __testing = {
   publishSlackConnectedStatus,
+  publishSlackDisconnectedStatus,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   getSocketEmitter,

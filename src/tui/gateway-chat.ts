@@ -379,7 +379,7 @@ export async function resolveGatewayConnection(
     };
   }
 
-  if (gatewayAuthMode === "token") {
+  const resolveToken = async () => {
     const localToken =
       explicitAuth.token || envToken
         ? { value: explicitAuth.token ?? envToken }
@@ -395,6 +395,11 @@ export async function resolveGatewayConnection(
         localToken.unresolvedRefReason ?? "Missing gateway auth token.",
       );
     }
+    return token;
+  };
+
+  if (gatewayAuthMode === "token") {
+    const token = await resolveToken();
     return {
       url,
       token,
@@ -428,21 +433,7 @@ export async function resolveGatewayConnection(
     };
   }
 
-  const localToken =
-    explicitAuth.token || envToken
-      ? { value: explicitAuth.token ?? envToken }
-      : await resolveConfiguredSecretInputString({
-          value: config.gateway?.auth?.token,
-          path: "gateway.auth.token",
-          env,
-          config,
-        });
-  const token = explicitAuth.token ?? envToken ?? localToken.value;
-  if (!token) {
-    throwGatewayAuthResolutionError(
-      localToken.unresolvedRefReason ?? "Missing gateway auth token.",
-    );
-  }
+  const token = await resolveToken();
   return {
     url,
     token,

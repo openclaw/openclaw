@@ -1029,6 +1029,7 @@ export function renderApp(state: AppViewState) {
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,
+                streamSegments: state.chatStreamSegments,
                 stream: state.chatStream,
                 streamStartedAt: state.chatStreamStartedAt,
                 draft: state.chatMessage,

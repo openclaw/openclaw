@@ -52,8 +52,7 @@ type TurnOptions = {
   storeEntries?: Record<string, Record<string, unknown>>;
 };
 
-/** Like runTurn but does NOT assert the embedded agent was called (for error paths). */
-async function runErrorTurn(home: string, options: TurnOptions = {}) {
+async function runTurnCore(home: string, options: TurnOptions = {}) {
   const storePath = await writeSessionStoreEntries(home, {
     "agent:main:main": {
       sessionId: "main-session",
@@ -80,36 +79,17 @@ async function runErrorTurn(home: string, options: TurnOptions = {}) {
     lane: "cron",
   });
 
+  return res;
+}
+
+/** Like runTurn but does NOT assert the embedded agent was called (for error paths). */
+async function runErrorTurn(home: string, options: TurnOptions = {}) {
+  const res = await runTurnCore(home, options);
   return { res };
 }
 
 async function runTurn(home: string, options: TurnOptions = {}) {
-  const storePath = await writeSessionStoreEntries(home, {
-    "agent:main:main": {
-      sessionId: "main-session",
-      updatedAt: Date.now(),
-      lastProvider: "webchat",
-      lastTo: "",
-    },
-    ...options.storeEntries,
-  });
-  mockEmbeddedOk();
-
-  const jobPayload = options.jobPayload ?? {
-    kind: "agentTurn" as const,
-    message: DEFAULT_MESSAGE,
-    deliver: false,
-  };
-
-  const res = await runCronIsolatedAgentTurn({
-    cfg: makeCfg(home, storePath, options.cfgOverrides),
-    deps: makeDeps(),
-    job: makeJob(jobPayload),
-    message: DEFAULT_MESSAGE,
-    sessionKey: options.sessionKey ?? "cron:job-1",
-    lane: "cron",
-  });
-
+  const res = await runTurnCore(home, options);
   return { res, call: lastEmbeddedCall() };
 }
 
