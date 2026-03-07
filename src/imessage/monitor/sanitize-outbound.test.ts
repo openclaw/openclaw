@@ -61,4 +61,19 @@ describe("sanitizeOutboundText", () => {
     expect(result).not.toMatch(/assistant to=final/i);
     expect(result).toContain("Actual reply");
   });
+
+  it("strips [[reply_to_current]] directive tag", () => {
+    const text = "[[reply_to_current]] Hello from iMessage!";
+    expect(sanitizeOutboundText(text)).toBe("Hello from iMessage!");
+  });
+
+  it("strips [[reply_to:<id>]] directive tag with message id", () => {
+    const text = "[[reply_to:1234567890]] Thanks for your message.";
+    expect(sanitizeOutboundText(text)).toBe("Thanks for your message.");
+  });
+
+  it("strips inline directive tags while preserving surrounding content", () => {
+    const text = "[[reply_to_current]]Here is your answer: 42";
+    expect(sanitizeOutboundText(text)).toBe("Here is your answer: 42");
+  });
 });

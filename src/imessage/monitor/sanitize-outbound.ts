@@ -1,4 +1,5 @@
 import { stripAssistantInternalScaffolding } from "../../shared/text/assistant-visible-text.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.
@@ -10,7 +11,8 @@ const ROLE_TURN_MARKER_RE = /\b(?:user|system|assistant)\s*:\s*$/gm;
 
 /**
  * Strip all assistant-internal scaffolding from outbound text before delivery.
- * Applies reasoning/thinking tag removal, memory tag removal, and
+ * Applies reasoning/thinking tag removal, memory tag removal,
+ * inline directive tag removal ([[reply_to:...]], [[audio:...]]), and
  * model-specific internal separator stripping.
  */
 export function sanitizeOutboundText(text: string): string {
@@ -19,6 +21,10 @@ export function sanitizeOutboundText(text: string): string {
   }
 
   let cleaned = stripAssistantInternalScaffolding(text);
+
+  // Strip [[reply_to:...]] and [[audio:...]] inline directive tags so they
+  // are never delivered as raw text to the user (e.g. via iMessage).
+  cleaned = stripInlineDirectiveTagsForDisplay(cleaned).text;
 
   cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
   cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");
