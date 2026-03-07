@@ -53,6 +53,9 @@ export {
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
+import { select, spinner } from "@clack/prompts";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { scanCommonstackModels } from "../agents/model-scan.js";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -169,6 +172,133 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyCommonstackProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.commonstack;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.commonstack = {
+    ...existingProviderRest,
+    baseUrl: "https://api.commonstack.ai/v1",
+    api: "openai-completions",
+    headers: {
+      "User-Agent": "https://openclaw.ai",
+    },
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: existingModels,
+  };
+
+  return {
+    ...cfg,
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export async function applyCommonstackConfig(
+  cfg: OpenClawConfig,
+  params: {
+    agentDir?: string;
+    nonInteractive?: boolean;
+    apiKey?: string;
+    setDefaultModel?: boolean;
+    noteAgentModel?: (model: string) => Promise<void>;
+  },
+): Promise<{ config: OpenClawConfig; selectedModel?: string }> {
+  const next = applyCommonstackProviderConfig(cfg);
+
+  if (!params.nonInteractive) {
+    let apiKey = params.apiKey ?? resolveEnvApiKey("commonstack")?.apiKey;
+
+    if (!apiKey) {
+      const { resolveApiKeyForProvider } = await import("../agents/model-auth.js");
+      try {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "commonstack",
+          cfg,
+          agentDir: params.agentDir,
+        });
+        apiKey = resolved.apiKey;
+      } catch {
+        throw new Error("CommonStack API key not found. Please configure it first.");
+      }
+    }
+
+    const spin = spinner();
+    spin.start("Scanning CommonStack models...");
+    let models;
+    try {
+      models = await scanCommonstackModels({
+        apiKey,
+        probe: false,
+      });
+      spin.stop();
+    } catch (err) {
+      spin.stop();
+      throw err;
+    }
+
+    if (models.length === 0) {
+      throw new Error("No CommonStack models found.");
+    }
+
+    const modelOptions = models.map((m) => ({
+      value: m.modelRef,
+      label: `${m.name} (${m.id})`,
+      hint: m.pricing
+        ? `$${m.pricing.prompt}/M input, $${m.pricing.completion}/M output`
+        : undefined,
+    }));
+
+    const selectedModel = await select({
+      message: "Select default CommonStack model",
+      options: modelOptions,
+    });
+
+    if (!selectedModel || typeof selectedModel !== "string") {
+      throw new Error("Model selection cancelled.");
+    }
+
+    const existingModel = next.agents?.defaults?.model;
+    const updatedConfig = {
+      ...next,
+      agents: {
+        ...next.agents,
+        defaults: {
+          ...next.agents?.defaults,
+          model: {
+            ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+              ? {
+                  fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+                }
+              : undefined),
+            primary: selectedModel,
+          },
+        },
+      },
+    };
+
+    if (params.setDefaultModel) {
+      return { config: updatedConfig };
+    }
+
+    if (params.noteAgentModel) {
+      await params.noteAgentModel(selectedModel);
+    }
+    return { config: updatedConfig, selectedModel };
+  }
+
+  return { config: next };
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
