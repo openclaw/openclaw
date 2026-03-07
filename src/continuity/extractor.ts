@@ -48,8 +48,19 @@ function extractMessageText(message: AgentMessage): string {
 }
 
 function firstSentence(text: string): string {
-  const match = text.match(/^[^.!?]+[.!?]?/);
-  const candidate = normalizeSpaces(match?.[0] ?? text);
+  let boundary = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch !== "." && ch !== "!" && ch !== "?") {
+      continue;
+    }
+    const next = text[i + 1];
+    if (!next || /\s/.test(next)) {
+      boundary = i + 1;
+      break;
+    }
+  }
+  const candidate = normalizeSpaces(boundary >= 0 ? text.slice(0, boundary) : text);
   return candidate.length > 280 ? `${candidate.slice(0, 277)}...` : candidate;
 }
 
