@@ -1,0 +1,18 @@
+<meta http-equiv="refresh" content="300">
+ <title>KungFuTrader 实战监控</title>
+ <style>
+ body{max-width:1000px;margin:30px auto;font-family:Arial}
+ .card{padding:15px;margin:10px;background:#f8f9fa;border-radius:10px;display:inline-block;width:140px;text-align:center}
+ .num{font-size:20px;font-weight:bold;color:#0066cc}
+ img{max-width:100%;margin-top:20px}
+ </style>
+ <h1>KungFuTrader 实战全自动交易</h1>
+ <p>更新：{{ update_time }}｜每5分钟自动刷新</p>
+ <div>
+ <div class="card">初始<br><span class="num">{{ "%.0f"|format(report.initial_capital) }}</span></div>
+ <div class="card">最终<br><span class="num">{{ "%.0f"|format(report.final_capital) }}</span></div>
+ <div class="card">年化<br><span class="num">{{ "%.1f"|format(report.annual_return*100) }}%</span></div>
+ <div class="card">回撤<br><span class="num">{{ "%.1f"|format(report.max_drawdown*100) }}%</span></div>
+ <div class="card">夏普<br><span class="num">{{ "%.2f"|format(report.sharpe_ratio) }}</span></div>
+ </div>
+ <img src="/image?{{ now }}">

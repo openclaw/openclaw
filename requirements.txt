@@ -1,0 +1,7 @@
+flask
+pandas
+numpy
+matplotlib
+akshare
+tushare
+python-dotenv
