@@ -323,6 +323,11 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(imageGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { image_key: imageKey },
@@ -514,6 +519,11 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(messageResourceGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
@@ -534,6 +544,11 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpTimeoutMs: 120_000,
+      }),
+    );
     expect(messageResourceGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_img_msg", file_key: "img_key_1" },

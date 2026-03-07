@@ -64,6 +64,9 @@ export function normalizeProviderId(provider: string): string {
 /** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
 export function normalizeProviderIdForAuth(provider: string): string {
   const normalized = normalizeProviderId(provider);
+  if (normalized === "codex-cli") {
+    return "openai-codex";
+  }
   if (normalized === "volcengine-plan") {
     return "volcengine";
   }
