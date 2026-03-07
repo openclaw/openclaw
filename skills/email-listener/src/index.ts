@@ -8,6 +8,8 @@ import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { spawn } from "child_process";
 import { pollAgentMailInbox, healthCheckAgentMail } from "./agentmail-polling.js";
+import { initializeTracker, isProcessed, markAsProcessed } from "./processed-tracker.js";
+import { addResult, getBatchedResponse } from "./response-batcher.js";
 
 // IMAP modules are optional - lazy loaded only when needed
 let imapModules: any = null;
@@ -172,6 +174,9 @@ async function runCleanup(): Promise<void> {
 export async function initialize(customConfigPath?: string): Promise<void> {
   logger.info("Initializing email listener skill");
 
+  // Initialize processed message tracker
+  await initializeTracker();
+
   // Load configuration
   config = await loadConfig(customConfigPath);
 
@@ -299,10 +304,29 @@ async function poll(): Promise<void> {
 async function processEmail(email: ParsedEmail): Promise<void> {
   if (!config) return;
 
+  // Check if this email has already been processed
+  if (isProcessed(email.messageId)) {
+    logger.debug("Email already processed, skipping", {
+      messageId: email.messageId,
+      subject: email.subject,
+    });
+    return;
+  }
+
+  // Skip emails with X-AgentMail-Response header (self-generated feedback loop prevention)
+  if (email.headers?.["x-agentmail-response"] === "true") {
+    logger.debug("Skipping self-generated email (has X-AgentMail-Response header)", {
+      messageId: email.messageId,
+      subject: email.subject,
+    });
+    return;
+  }
+
   try {
     logger.info("Processing email", {
       from: email.sender,
       subject: email.subject,
+      messageId: email.messageId,
     });
 
     // Classify the message
@@ -330,6 +354,9 @@ async function processEmail(email: ParsedEmail): Promise<void> {
         await handleFreeform(email);
         break;
     }
+
+    // Mark as processed after successful handling
+    await markAsProcessed(email.messageId);
   } catch (error) {
     logger.error("Failed to process email", {
       error: String(error),
@@ -490,48 +517,84 @@ async function handleFreeform(email: ParsedEmail): Promise<void> {
     preview: message.substring(0, 100),
   });
 
-  // Call openclaw agent --message
-  const agentProcess = spawn(
-    "openclaw",
-    ["agent", "--message", message, "--agent", agentName],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-    }
-  );
+  try {
+    // Call openclaw agent --message
+    const agentProcess = spawn(
+      "openclaw",
+      ["agent", "--message", message, "--agent", agentName],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
 
-  let stdout = "";
-  let stderr = "";
+    let stdout = "";
+    let stderr = "";
 
-  agentProcess.stdout?.on("data", (data) => {
-    stdout += data.toString();
-  });
+    agentProcess.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
 
-  agentProcess.stderr?.on("data", (data) => {
-    stderr += data.toString();
-  });
+    agentProcess.stderr?.on("data", (data) => {
+      stderr += data.toString();
+    });
 
-  // Wait for completion with timeout
-  const result = await new Promise<{ exitCode: number; stdout: string; stderr: string }>(
-    (resolve) => {
-      const timeout = setTimeout(() => {
-        agentProcess.kill("SIGTERM");
-        resolve({ exitCode: -1, stdout, stderr: "Timeout" });
-      }, messageTimeoutMs);
+    // Handle spawn errors (e.g., command not found)
+    agentProcess.on("error", (error) => {
+      logger.warn("Failed to spawn agent subprocess", {
+        agent: agentName,
+        error: String(error),
+      });
+      // Add error result to batcher instead of sending immediately
+      addResult(email.messageId, email.sender, email.subject, {
+        command: "AGENT_SUBPROCESS",
+        success: false,
+        message: `Agent subprocess failed: ${String(error)}`,
+      });
+    });
 
-      agentProcess.on("close", (code) => {
-        clearTimeout(timeout);
-        resolve({ exitCode: code ?? -1, stdout, stderr });
+    // Wait for completion with timeout
+    const result = await new Promise<{ exitCode: number; stdout: string; stderr: string }>(
+      (resolve) => {
+        const timeout = setTimeout(() => {
+          agentProcess.kill("SIGTERM");
+          resolve({ exitCode: -1, stdout, stderr: "Timeout" });
+        }, messageTimeoutMs);
+
+        agentProcess.on("close", (code) => {
+          clearTimeout(timeout);
+          resolve({ exitCode: code ?? -1, stdout, stderr });
+        });
+      }
+    );
+
+    if (result.exitCode === 0) {
+      logger.info("Agent processed freeform email", { agent: agentName });
+      addResult(email.messageId, email.sender, email.subject, {
+        command: "AGENT_SUBPROCESS",
+        success: true,
+        message: "Agent subprocess processed message successfully",
+      });
+    } else {
+      logger.error("Agent failed to process freeform email", {
+        agent: agentName,
+        exitCode: result.exitCode,
+        stderr: result.stderr,
+      });
+      addResult(email.messageId, email.sender, email.subject, {
+        command: "AGENT_SUBPROCESS",
+        success: false,
+        message: `Agent subprocess failed with exit code ${result.exitCode}`,
       });
     }
-  );
-
-  if (result.exitCode === 0) {
-    logger.info("Agent processed freeform email", { agent: agentName });
-  } else {
-    logger.error("Agent failed to process freeform email", {
+  } catch (error) {
+    logger.warn("Exception spawning agent subprocess", {
       agent: agentName,
-      exitCode: result.exitCode,
-      stderr: result.stderr,
+      error: String(error),
+    });
+    addResult(email.messageId, email.sender, email.subject, {
+      command: "AGENT_SUBPROCESS",
+      success: false,
+      message: `Exception spawning agent: ${String(error)}`,
     });
   }
 }
@@ -622,8 +685,17 @@ export {
 // Export for testing
 export { resetPollingState, config };
 
-// Main entry point
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Main entry point - always run when executed directly
+// Check if this file is the main module (works with tsx, node, bun)
+function isMainModule(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return true; // No argv[1] means executed directly
+  
+  // Check if argv[1] contains index.ts
+  return argv1.includes("index.ts") || argv1.includes("index.js");
+}
+
+if (isMainModule()) {
   // Run as standalone
   initialize()
     .then(() => {

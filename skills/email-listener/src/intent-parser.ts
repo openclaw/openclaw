@@ -1,28 +1,25 @@
 /**
  * Email Listener Skill - Intent Parser Module
  *
- * Uses Claude Haiku to extract intent from natural language emails.
+ * Uses local Ollama (llama3.2) to extract intent from natural language emails.
  * Classifies messages into action categories and extracts parameters.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import type { ParsedIntent, IntentAction, IntentParams } from "./types.js";
 import { logger } from "./logger.js";
 
-let anthropicClient: Anthropic | null = null;
+/**
+ * Get Ollama API endpoint from environment or use default
+ */
+function getOllamaEndpoint(): string {
+  return process.env.OLLAMA_API_URL || "http://127.0.0.1:11434";
+}
 
 /**
- * Get or initialize Anthropic client
+ * Get Ollama model name from environment or use default
  */
-function getClient(): Anthropic {
-  if (!anthropicClient) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY environment variable is not set");
-    }
-    anthropicClient = new Anthropic({ apiKey });
-  }
-  return anthropicClient;
+function getOllamaModel(): string {
+  return process.env.OLLAMA_MODEL || "llama3.2";
 }
 
 /**
@@ -84,7 +81,7 @@ Email: "Thanks! Hope you have a great day!"
 {"action":"UNKNOWN","confidence":0.97,"reasoning":"Casual message with no actionable request","params":{"taskTitle":null,"taskDescription":null,"taskPriority":null,"taskDueDate":null,"targetFolder":null,"rawArgs":[]}}`;
 
 /**
- * Parse intent from email subject and body using Claude Haiku
+ * Parse intent from email subject and body using local Ollama
  */
 export async function parseIntent(
   subject: string,
@@ -92,30 +89,59 @@ export async function parseIntent(
   model: string
 ): Promise<ParsedIntent | null> {
   try {
-    const client = getClient();
-    const message = `Subject: ${subject}\n\nBody: ${body}`;
+    const endpoint = getOllamaEndpoint();
+    const actualModel = model || getOllamaModel();
 
-    const response = await client.messages.create({
-      model,
-      max_tokens: 512,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: message,
-        },
-      ],
+    const message = `Subject: ${subject}\n\nBody: ${body}`;
+    const prompt = `${SYSTEM_PROMPT}\n\nUser message:\n${message}\n\nRespond with ONLY valid JSON.`;
+
+    logger.debug("Calling Ollama for intent parsing", {
+      endpoint,
+      model: actualModel,
     });
 
-    // Extract text from response
-    const textBlock = response.content.find((block) => block.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      logger.warn("No text in Claude response");
+    const response = await fetch(`${endpoint}/api/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: actualModel,
+        prompt: prompt,
+        stream: false,
+      }),
+      timeout: 30000, // 30 second timeout
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    let responseText = data.response;
+
+    if (!responseText || typeof responseText !== "string") {
+      logger.warn("Invalid response from Ollama", {
+        responseType: typeof responseText,
+        hasResponse: !!data.response
+      });
       return null;
     }
 
+    // Trim the response
+    responseText = responseText.trim();
+
+    if (responseText.length === 0) {
+      logger.warn("Empty response from Ollama");
+      return null;
+    }
+
+    logger.debug("Ollama response received", {
+      length: responseText.length,
+    });
+
     // Parse the intent
-    return parseIntentResponse(textBlock.text);
+    return parseIntentResponse(responseText);
   } catch (error) {
     logger.error("Intent parser failed", { error: String(error) });
     return null;

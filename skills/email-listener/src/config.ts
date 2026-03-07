@@ -6,7 +6,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { EmailListenerConfig, ImapConfig, SecurityConfig, PollingConfig, AgentConfig, CleanupConfig } from "./types.js";
+import type { EmailListenerConfig, ImapConfig, SecurityConfig, PollingConfig, AgentConfig, CleanupConfig, ConsolidationConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import { logger } from "./logger.js";
 
@@ -23,6 +23,7 @@ export async function loadConfig(configPath?: string): Promise<EmailListenerConf
     commands: loadCommandConfig(),
     agent: loadAgentConfig(),
     cleanup: loadCleanupConfig(),
+    consolidation: loadConsolidationConfig(),
   };
 
   // Override with file config if provided
@@ -96,8 +97,8 @@ function loadAgentConfig(): AgentConfig {
     enableFreeform: getEnv("ENABLE_FREEFORM", "true").toLowerCase() === "true",
     messageTimeoutMs: parseInt(getEnv("MESSAGE_TIMEOUT", "120000"), 10),
     intentParserEnabled: getEnv("INTENT_PARSER_ENABLED", "true").toLowerCase() === "true",
-    intentParserModel: getEnv("INTENT_PARSER_MODEL", "claude-haiku-4-5-20251001"),
-    intentConfidenceThreshold: parseFloat(getEnv("INTENT_CONFIDENCE_THRESHOLD", "0.7")),
+    intentParserModel: getEnv("INTENT_PARSER_MODEL", "llama3.2"),
+    intentConfidenceThreshold: parseFloat(getEnv("INTENT_CONFIDENCE_THRESHOLD", "0.6")),
   };
 }
 
@@ -114,10 +115,22 @@ function loadCleanupConfig(): CleanupConfig {
 }
 
 /**
+ * Load consolidation configuration from environment variables
+ */
+function loadConsolidationConfig(): ConsolidationConfig {
+  return {
+    enabled: getEnv("CONSOLIDATION_ENABLED", "false").toLowerCase() === "true",
+    intervalMs: parseInt(getEnv("CONSOLIDATION_INTERVAL", "300000"), 10), // 5 minutes
+    maxBatchSize: parseInt(getEnv("CONSOLIDATION_MAX_BATCH", "10"), 10),
+    subjectPrefix: getEnv("CONSOLIDATION_SUBJECT_PREFIX", "[Consolidated Responses]"),
+  };
+}
+
+/**
  * Load command configuration from environment variables
  */
 function loadCommandConfig() {
-  const enabled = getEnv("ENABLED_COMMANDS", "STATUS,SECURITY_AUDIT,CHECK_UPDATES,MEMORY_COMPACT,AGENT_STATUS")
+  const enabled = getEnv("ENABLED_COMMANDS", "STATUS,SECURITY_AUDIT,CHECK_UPDATES,MEMORY_COMPACT,AGENT_STATUS,CREATE_TASK")
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
@@ -142,17 +155,19 @@ function getEnv(name: string, defaultValue: string): string {
  * Validate configuration
  */
 function validateConfig(config: EmailListenerConfig): void {
-  // Validate IMAP config
-  if (!config.imap.host) {
-    throw new Error("IMAP host is required");
-  }
+  // Only validate IMAP config if not using AgentMail
+  if (!process.env.AGENTMAIL_API_KEY) {
+    if (!config.imap.host) {
+      throw new Error("IMAP host is required");
+    }
 
-  if (!config.imap.user) {
-    throw new Error("IMAP user is required");
-  }
+    if (!config.imap.user) {
+      throw new Error("IMAP user is required");
+    }
 
-  if (!config.imap.password) {
-    throw new Error("IMAP password is required");
+    if (!config.imap.password) {
+      throw new Error("IMAP password is required");
+    }
   }
 
   // Validate security config

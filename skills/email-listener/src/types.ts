@@ -41,6 +41,8 @@ export interface EmailListenerConfig {
   agent: AgentConfig;
   /** Cleanup configuration */
   cleanup: CleanupConfig;
+  /** Response consolidation configuration */
+  consolidation: ConsolidationConfig;
 }
 
 /**
@@ -107,6 +109,8 @@ export interface ParsedEmail {
   body: string;
   /** Timestamp when email was received */
   timestamp: Date;
+  /** Email headers (optional, for custom headers like X-AgentMail-Response) */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -267,6 +271,20 @@ export interface CleanupConfig {
 }
 
 /**
+ * Response consolidation configuration
+ */
+export interface ConsolidationConfig {
+  /** Whether response consolidation is enabled */
+  enabled: boolean;
+  /** Interval in milliseconds between sending consolidated emails */
+  intervalMs: number;
+  /** Maximum number of responses to batch before forcing send */
+  maxBatchSize: number;
+  /** Subject prefix for consolidated emails */
+  subjectPrefix: string;
+}
+
+/**
  * Processed email tracking for cleanup
  */
 export interface ProcessedEmail {
@@ -306,5 +324,11 @@ export const DEFAULT_CONFIG: Partial<EmailListenerConfig> = {
     intervalMs: 3600000, // 1 hour
     retentionPeriodMs: 86400000, // 24 hours
     action: "trash",
+  },
+  consolidation: {
+    enabled: false,
+    intervalMs: 300000, // 5 minutes
+    maxBatchSize: 10,
+    subjectPrefix: "[Consolidated Responses]",
   },
 };

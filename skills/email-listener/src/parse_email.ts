@@ -33,10 +33,18 @@ export function parseEmail(message: Record<string, unknown>): ParsedEmail {
   // Extract body
   const body = extractBody(message);
 
+  // Extract custom headers (for feedback loop prevention)
+  const customHeader = extractHeader(header, "x-agentmail-response");
+  const headers: Record<string, string> = {};
+  if (customHeader) {
+    headers["x-agentmail-response"] = customHeader;
+  }
+
   logger.debug("Parsed email", {
     messageId,
     sender,
     subject: subject.substring(0, 50),
+    hasAgentMailHeader: !!customHeader,
   });
 
   return {
@@ -46,6 +54,7 @@ export function parseEmail(message: Record<string, unknown>): ParsedEmail {
     subject,
     body,
     timestamp,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
   };
 }
 

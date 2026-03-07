@@ -71,14 +71,14 @@ async function getInboxId(inboxAddress: string): Promise<string> {
 
     // Find inbox matching our address
     const inbox = inboxes.find(
-      (i: any) => (i.email_address || i.address || i.id) === inboxAddress
+      (i: any) => (i.inbox_id || i.email_address || i.address || i.id) === inboxAddress
     );
 
     if (!inbox) {
       throw new Error(`Inbox not found in AgentMail: ${inboxAddress}`);
     }
 
-    const inboxId = inbox.id || inboxAddress;
+    const inboxId = inbox.inbox_id || inbox.id || inboxAddress;
 
     // Cache the result
     inboxIdCache = {
@@ -146,19 +146,38 @@ export async function pollAgentMailInbox(): Promise<ParsedEmail[]> {
  * Parse AgentMail message into ParsedEmail format
  */
 function parseAgentMailMessage(msg: any): ParsedEmail {
-  // Extract sender info
-  const from = msg.from || {};
-  const senderEmail = from.email || msg.sender || "unknown@example.com";
-  const senderName = from.name || from.email || "Unknown Sender";
+  // Extract sender info - AgentMail returns 'from' as a string like "Name <email@example.com>"
+  let senderEmail = "unknown@example.com";
+  let senderName = "Unknown Sender";
+
+  const fromField = msg.from || msg.sender || "";
+
+  if (typeof fromField === "string") {
+    // Parse "Name <email@example.com>" format
+    const emailMatch = fromField.match(/<(.+?)>/);
+    if (emailMatch) {
+      senderEmail = emailMatch[1];
+      senderName = fromField.substring(0, fromField.indexOf("<")).trim() || senderEmail;
+    } else if (fromField.includes("@")) {
+      // Just an email address
+      senderEmail = fromField;
+      senderName = fromField;
+    }
+  } else if (typeof fromField === "object" && fromField !== null) {
+    // Handle object format (for compatibility)
+    senderEmail = fromField.email || fromField.address || "unknown@example.com";
+    senderName = fromField.name || senderEmail;
+  }
 
   // Extract subject and body
   const subject = msg.subject || "(no subject)";
-  const body = msg.text || msg.body || "";
+  const body = msg.text || msg.body || msg.preview || "";
 
   // Parse date
   let timestamp = new Date();
-  if (msg.date) {
-    const parsed = new Date(msg.date);
+  if (msg.date || msg.timestamp) {
+    const dateToparse = msg.date || msg.timestamp;
+    const parsed = new Date(dateToparse);
     if (!isNaN(parsed.getTime())) {
       timestamp = parsed;
     }
@@ -205,6 +224,10 @@ export async function sendEmailViaAgentMail(
           to: to,
           subject: subject,
           text: body,
+          // Add custom header to identify self-generated emails (feedback loop prevention)
+          headers: {
+            "X-AgentMail-Response": "true",
+          },
         }),
       }
     );

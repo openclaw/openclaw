@@ -125,3 +125,10 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# Personal development directories (user-specific, never commit)
+.pnotes/
+skills/
+logs/
+services/
+plans/
