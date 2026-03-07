@@ -1,9 +1,34 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
+  function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
+    return {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-5.2",
+                name: "GPT-5.2",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: overrides?.contextWindow ?? 200_000,
+                maxTokens: overrides?.maxTokens ?? 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+  }
+
   it("adds default aliases when models are present", () => {
     const cfg = {
       agents: {
@@ -58,18 +83,7 @@ describe("applyModelDefaults", () => {
   });
 
   it("fills missing model provider defaults", () => {
-    const cfg = {
-      models: {
-        providers: {
-          myproxy: {
-            baseUrl: "https://proxy.example/v1",
-            apiKey: "sk-test",
-            api: "openai-completions",
-            models: [{ id: "gpt-5.2", name: "GPT-5.2" }],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = buildProxyProviderConfig();
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
@@ -82,21 +96,51 @@ describe("applyModelDefaults", () => {
   });
 
   it("clamps maxTokens to contextWindow", () => {
-    const cfg = {
-      models: {
-        providers: {
-          myproxy: {
-            api: "openai-completions",
-            models: [{ id: "gpt-5.2", name: "GPT-5.2", contextWindow: 32768, maxTokens: 40960 }],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = buildProxyProviderConfig({ contextWindow: 32768, maxTokens: 40960 });
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
 
     expect(model?.contextWindow).toBe(32768);
     expect(model?.maxTokens).toBe(32768);
+  });
+
+  it("defaults anthropic provider and model api to anthropic-messages", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://relay.example.com/api",
+            apiKey: "cr_xxxx",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const provider = next.models?.providers?.anthropic;
+    const model = provider?.models?.[0];
+
+    expect(provider?.api).toBe("anthropic-messages");
+    expect(model?.api).toBe("anthropic-messages");
+  });
+
+  it("propagates provider api to models when model api is missing", () => {
+    const cfg = buildProxyProviderConfig();
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+    expect(model?.api).toBe("openai-completions");
   });
 });

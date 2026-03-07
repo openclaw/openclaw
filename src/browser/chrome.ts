@@ -2,13 +2,23 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import WebSocket from "ws";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { ensurePortAvailable } from "../infra/ports.js";
+import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { appendCdpPath } from "./cdp.helpers.js";
-import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
+import {
+  CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
+  CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
+  CHROME_LAUNCH_READY_POLL_MS,
+  CHROME_LAUNCH_READY_WINDOW_MS,
+  CHROME_REACHABILITY_TIMEOUT_MS,
+  CHROME_STDERR_HINT_MAX_CHARS,
+  CHROME_STOP_PROBE_TIMEOUT_MS,
+  CHROME_STOP_TIMEOUT_MS,
+  CHROME_WS_READY_TIMEOUT_MS,
+} from "./cdp-timeouts.js";
+import { appendCdpPath, fetchCdpChecked, openCdpWebSocket } from "./cdp.helpers.js";
+import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -18,6 +28,7 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -67,7 +78,10 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
-export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
+export async function isChromeReachable(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+): Promise<boolean> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   return Boolean(version);
 }
@@ -78,18 +92,15 @@ type ChromeVersion = {
   "User-Agent"?: string;
 };
 
-async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
+async function fetchChromeVersion(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetch(versionUrl, {
-      signal: ctrl.signal,
-      headers: getHeadersWithAuth(versionUrl),
-    });
-    if (!res.ok) {
-      return null;
-    }
+    const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal });
     const data = (await res.json()) as ChromeVersion;
     if (!data || typeof data !== "object") {
       return null;
@@ -104,7 +115,7 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
 
 export async function getChromeWebSocketUrl(
   cdpUrl: string,
-  timeoutMs = 500,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
 ): Promise<string | null> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
@@ -114,13 +125,45 @@ export async function getChromeWebSocketUrl(
   return normalizeCdpWsUrl(wsUrl, cdpUrl);
 }
 
-async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
+async function canRunCdpHealthCommand(
+  wsUrl: string,
+  timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
+): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
-    const headers = getHeadersWithAuth(wsUrl);
-    const ws = new WebSocket(wsUrl, {
-      handshakeTimeout: timeoutMs,
-      ...(Object.keys(headers).length ? { headers } : {}),
+    const ws = openCdpWebSocket(wsUrl, {
+      handshakeTimeoutMs: timeoutMs,
     });
+    let settled = false;
+    const onMessage = (raw: Parameters<typeof rawDataToString>[0]) => {
+      if (settled) {
+        return;
+      }
+      let parsed: { id?: unknown; result?: unknown } | null = null;
+      try {
+        parsed = JSON.parse(rawDataToString(raw)) as { id?: unknown; result?: unknown };
+      } catch {
+        return;
+      }
+      if (parsed?.id !== 1) {
+        return;
+      }
+      finish(Boolean(parsed.result && typeof parsed.result === "object"));
+    };
+
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      ws.off("message", onMessage);
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      resolve(value);
+    };
     const timer = setTimeout(
       () => {
         try {
@@ -128,36 +171,45 @@ async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean
         } catch {
           // ignore
         }
-        resolve(false);
+        finish(false);
       },
       Math.max(50, timeoutMs + 25),
     );
+
     ws.once("open", () => {
-      clearTimeout(timer);
       try {
-        ws.close();
+        ws.send(
+          JSON.stringify({
+            id: 1,
+            method: "Browser.getVersion",
+          }),
+        );
       } catch {
-        // ignore
+        finish(false);
       }
-      resolve(true);
     });
+
+    ws.on("message", onMessage);
+
     ws.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
+      finish(false);
+    });
+    ws.once("close", () => {
+      finish(false);
     });
   });
 }
 
 export async function isChromeCdpReady(
   cdpUrl: string,
-  timeoutMs = 500,
-  handshakeTimeoutMs = 800,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+  handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
 ): Promise<boolean> {
   const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs);
   if (!wsUrl) {
     return false;
   }
-  return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
+  return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
 }
 
 export async function launchOpenClawChrome(
@@ -214,6 +266,11 @@ export async function launchOpenClawChrome(
       args.push("--disable-dev-shm-usage");
     }
 
+    // Append user-configured extra arguments (e.g., stealth flags, window size)
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
+    }
+
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 
@@ -237,7 +294,7 @@ export async function launchOpenClawChrome(
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
     const bootstrap = spawnOnce();
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (exists(localStatePath) && exists(preferencesPath)) {
         break;
@@ -249,7 +306,7 @@ export async function launchOpenClawChrome(
     } catch {
       // ignore
     }
-    const exitDeadline = Date.now() + 5000;
+    const exitDeadline = Date.now() + CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
     while (Date.now() < exitDeadline) {
       if (bootstrap.exitCode != null) {
         break;
@@ -277,25 +334,47 @@ export async function launchOpenClawChrome(
   }
 
   const proc = spawnOnce();
+
+  // Collect stderr for diagnostics in case Chrome fails to start.
+  // The listener is removed on success to avoid unbounded memory growth
+  // from a long-lived Chrome process that emits periodic warnings.
+  const stderrChunks: Buffer[] = [];
+  const onStderr = (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+  };
+  proc.stderr?.on("data", onStderr);
+
   // Wait for CDP to come up.
-  const readyDeadline = Date.now() + 15_000;
+  const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl, 500)) {
+    if (await isChromeReachable(profile.cdpUrl)) {
       break;
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl, 500))) {
+  if (!(await isChromeReachable(profile.cdpUrl))) {
+    const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
+    const stderrHint = stderrOutput
+      ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+      : "";
+    const sandboxHint =
+      process.platform === "linux" && !resolved.noSandbox
+        ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
+        : "";
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
     );
   }
+
+  // Chrome started successfully — detach the stderr listener and release the buffer.
+  proc.stderr?.off("data", onStderr);
+  stderrChunks.length = 0;
 
   const pid = proc.pid ?? -1;
   log.info(
@@ -312,7 +391,10 @@ export async function launchOpenClawChrome(
   };
 }
 
-export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
+export async function stopOpenClawChrome(
+  running: RunningChrome,
+  timeoutMs = CHROME_STOP_TIMEOUT_MS,
+) {
   const proc = running.proc;
   if (proc.killed) {
     return;
@@ -328,7 +410,7 @@ export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 250
     if (!proc.exitCode && proc.killed) {
       break;
     }
-    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), 200))) {
+    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
       return;
     }
     await new Promise((r) => setTimeout(r, 100));

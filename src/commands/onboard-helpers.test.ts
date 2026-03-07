@@ -4,17 +4,23 @@ import {
   openUrl,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn(async () => ({
+  runCommandWithTimeout: vi.fn<
+    (
+      argv: string[],
+      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
+    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
+  >(async () => ({
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
   })),
-  pickPrimaryTailnetIPv4: vi.fn(() => undefined),
+  pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -120,5 +126,30 @@ describe("normalizeGatewayTokenInput", () => {
 
   it("returns empty string for non-string input", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
+  });
+
+  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
+    expect(normalizeGatewayTokenInput("undefined")).toBe("");
+    expect(normalizeGatewayTokenInput("null")).toBe("");
+  });
+});
+
+describe("validateGatewayPasswordInput", () => {
+  it("requires a non-empty password", () => {
+    expect(validateGatewayPasswordInput("")).toBe("Required");
+    expect(validateGatewayPasswordInput("   ")).toBe("Required");
+  });
+
+  it("rejects literal string coercion artifacts", () => {
+    expect(validateGatewayPasswordInput("undefined")).toBe(
+      'Cannot be the literal string "undefined" or "null"',
+    );
+    expect(validateGatewayPasswordInput("null")).toBe(
+      'Cannot be the literal string "undefined" or "null"',
+    );
+  });
+
+  it("accepts a normal password", () => {
+    expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
   });
 });

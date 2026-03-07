@@ -1,8 +1,9 @@
 import {
+  buildOauthProviderAuthResult,
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
   type ProviderAuthContext,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/google-gemini-cli-auth";
 import { loginGeminiCliOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "google-gemini-cli";
@@ -46,34 +47,16 @@ const geminiCliPlugin = {
               });
 
               spin.stop("Gemini CLI OAuth complete");
-              const profileId = `google-gemini-cli:${result.email ?? "default"}`;
-              return {
-                profiles: [
-                  {
-                    profileId,
-                    credential: {
-                      type: "oauth",
-                      provider: PROVIDER_ID,
-                      access: result.access,
-                      refresh: result.refresh,
-                      expires: result.expires,
-                      email: result.email,
-                      projectId: result.projectId,
-                    },
-                  },
-                ],
-                configPatch: {
-                  agents: {
-                    defaults: {
-                      models: {
-                        [DEFAULT_MODEL]: {},
-                      },
-                    },
-                  },
-                },
+              return buildOauthProviderAuthResult({
+                providerId: PROVIDER_ID,
                 defaultModel: DEFAULT_MODEL,
+                access: result.access,
+                refresh: result.refresh,
+                expires: result.expires,
+                email: result.email,
+                credentialExtra: { projectId: result.projectId },
                 notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
-              };
+              });
             } catch (err) {
               spin.stop("Gemini CLI OAuth failed");
               await ctx.prompter.note(

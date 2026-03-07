@@ -1,48 +1,25 @@
-import type { DaemonInstallOptions } from "./types.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
+import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
+import {
+  buildDaemonServiceSnapshot,
+  createDaemonActionContext,
+  installDaemonServiceAndEmit,
+} from "./response.js";
 import { parsePort } from "./shared.js";
+import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
-  const warnings: string[] = [];
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-    hints?: string[];
-    warnings?: string[];
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "install", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message, warnings: warnings.length ? warnings : undefined });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service install is disabled.");
@@ -81,7 +58,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         result: "already-installed",
         message: `Gateway service already ${service.loadedText}.`,
         service: buildDaemonServiceSnapshot(service, loaded),
-        warnings: warnings.length ? warnings : undefined,
       });
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
@@ -93,10 +69,29 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: cfg,
+    env: process.env,
+    explicitToken: opts.token,
+    autoGenerateWhenMissing: true,
+    persistGeneratedToken: true,
+  });
+  if (tokenResolution.unavailableReason) {
+    fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
+    return;
+  }
+  for (const warning of tokenResolution.warnings) {
+    if (json) {
+      warnings.push(warning);
+    } else {
+      defaultRuntime.log(warning);
+    }
+  }
+
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: opts.token || cfg.gateway?.auth?.token || process.env.OPENCLAW_GATEWAY_TOKEN,
+    token: tokenResolution.token,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {
@@ -108,29 +103,20 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     config: cfg,
   });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-    });
-  } catch (err) {
-    fail(`Gateway install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Gateway",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: process.env,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+      });
+    },
   });
 }

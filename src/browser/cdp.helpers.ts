@@ -1,6 +1,8 @@
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
+import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -112,33 +114,59 @@ function createCdpSender(ws: WebSocket) {
   return { send, closeWithError };
 }
 
-export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(
+  url: string,
+  timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetchCdpChecked(url, timeoutMs, init);
+  return (await res.json()) as T;
+}
+
+export async function fetchCdpChecked(
+  url: string,
+  timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
+  init?: RequestInit,
+): Promise<Response> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    const res = await withNoProxyForCdpUrl(url, () =>
+      fetch(url, { ...init, headers, signal: ctrl.signal }),
+    );
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    return res;
   } finally {
     clearTimeout(t);
   }
 }
 
-export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-  } finally {
-    clearTimeout(t);
-  }
+export async function fetchOk(
+  url: string,
+  timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
+  init?: RequestInit,
+): Promise<void> {
+  await fetchCdpChecked(url, timeoutMs, init);
+}
+
+export function openCdpWebSocket(
+  wsUrl: string,
+  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+): WebSocket {
+  const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+  const handshakeTimeoutMs =
+    typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
+      ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
+      : CDP_WS_HANDSHAKE_TIMEOUT_MS;
+  const agent = getDirectAgentForCdp(wsUrl);
+  return new WebSocket(wsUrl, {
+    handshakeTimeout: handshakeTimeoutMs,
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(agent ? { agent } : {}),
+  });
 }
 
 export async function withCdpSocket<T>(
@@ -146,15 +174,7 @@ export async function withCdpSocket<T>(
   fn: (send: CdpSendFn) => Promise<T>,
   opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
 ): Promise<T> {
-  const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
-  const handshakeTimeoutMs =
-    typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
-      ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
-      : 5000;
-  const ws = new WebSocket(wsUrl, {
-    handshakeTimeout: handshakeTimeoutMs,
-    ...(Object.keys(headers).length ? { headers } : {}),
-  });
+  const ws = openCdpWebSocket(wsUrl, opts);
   const { send, closeWithError } = createCdpSender(ws);
 
   const openPromise = new Promise<void>((resolve, reject) => {

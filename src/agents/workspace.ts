@@ -1,9 +1,11 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
@@ -29,6 +31,61 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
+const WORKSPACE_STATE_DIRNAME = ".openclaw";
+const WORKSPACE_STATE_FILENAME = "workspace-state.json";
+const WORKSPACE_STATE_VERSION = 1;
+
+const workspaceTemplateCache = new Map<string, Promise<string>>();
+let gitAvailabilityPromise: Promise<boolean> | null = null;
+const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
+
+// File content cache keyed by stable file identity to avoid stale reads.
+const workspaceFileCache = new Map<string, { content: string; identity: string }>();
+
+/**
+ * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
+ */
+type WorkspaceGuardedReadResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
+
+function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
+  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
+async function readWorkspaceFileWithGuards(params: {
+  filePath: string;
+  workspaceDir: string;
+}): Promise<WorkspaceGuardedReadResult> {
+  const opened = await openBoundaryFile({
+    absolutePath: params.filePath,
+    rootPath: params.workspaceDir,
+    boundaryLabel: "workspace root",
+    maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  });
+  if (!opened.ok) {
+    workspaceFileCache.delete(params.filePath);
+    return opened;
+  }
+
+  const identity = workspaceFileIdentity(opened.stat, opened.path);
+  const cached = workspaceFileCache.get(params.filePath);
+  if (cached && cached.identity === identity) {
+    syncFs.closeSync(opened.fd);
+    return { ok: true, content: cached.content };
+  }
+
+  try {
+    const content = syncFs.readFileSync(opened.fd, "utf-8");
+    workspaceFileCache.set(params.filePath, { content, identity });
+    return { ok: true, content };
+  } catch (error) {
+    workspaceFileCache.delete(params.filePath);
+    return { ok: false, reason: "io", error };
+  } finally {
+    syncFs.closeSync(opened.fd);
+  }
+}
 
 function stripFrontMatter(content: string): string {
   if (!content.startsWith("---")) {
@@ -45,15 +102,30 @@ function stripFrontMatter(content: string): string {
 }
 
 async function loadTemplate(name: string): Promise<string> {
-  const templateDir = await resolveWorkspaceTemplateDir();
-  const templatePath = path.join(templateDir, name);
+  const cached = workspaceTemplateCache.get(name);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const templateDir = await resolveWorkspaceTemplateDir();
+    const templatePath = path.join(templateDir, name);
+    try {
+      const content = await fs.readFile(templatePath, "utf-8");
+      return stripFrontMatter(content);
+    } catch {
+      throw new Error(
+        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
+      );
+    }
+  })();
+
+  workspaceTemplateCache.set(name, pending);
   try {
-    const content = await fs.readFile(templatePath, "utf-8");
-    return stripFrontMatter(content);
-  } catch {
-    throw new Error(
-      `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
-    );
+    return await pending;
+  } catch (error) {
+    workspaceTemplateCache.delete(name);
+    throw error;
   }
 }
 
@@ -75,17 +147,131 @@ export type WorkspaceBootstrapFile = {
   missing: boolean;
 };
 
-async function writeFileIfMissing(filePath: string, content: string) {
+export type ExtraBootstrapLoadDiagnosticCode =
+  | "invalid-bootstrap-filename"
+  | "missing"
+  | "security"
+  | "io";
+
+export type ExtraBootstrapLoadDiagnostic = {
+  path: string;
+  reason: ExtraBootstrapLoadDiagnosticCode;
+  detail: string;
+};
+
+type WorkspaceOnboardingState = {
+  version: typeof WORKSPACE_STATE_VERSION;
+  bootstrapSeededAt?: string;
+  onboardingCompletedAt?: string;
+};
+
+/** Set of recognized bootstrap filenames for runtime validation */
+const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+]);
+
+async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, {
       encoding: "utf-8",
       flag: "wx",
     });
+    return true;
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code !== "EEXIST") {
       throw err;
     }
+    return false;
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveWorkspaceStatePath(dir: string): string {
+  return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
+}
+
+function parseWorkspaceOnboardingState(raw: string): WorkspaceOnboardingState | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      bootstrapSeededAt?: unknown;
+      onboardingCompletedAt?: unknown;
+    };
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return {
+      version: WORKSPACE_STATE_VERSION,
+      bootstrapSeededAt:
+        typeof parsed.bootstrapSeededAt === "string" ? parsed.bootstrapSeededAt : undefined,
+      onboardingCompletedAt:
+        typeof parsed.onboardingCompletedAt === "string" ? parsed.onboardingCompletedAt : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readWorkspaceOnboardingState(statePath: string): Promise<WorkspaceOnboardingState> {
+  try {
+    const raw = await fs.readFile(statePath, "utf-8");
+    return (
+      parseWorkspaceOnboardingState(raw) ?? {
+        version: WORKSPACE_STATE_VERSION,
+      }
+    );
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+    return {
+      version: WORKSPACE_STATE_VERSION,
+    };
+  }
+}
+
+async function readWorkspaceOnboardingStateForDir(dir: string): Promise<WorkspaceOnboardingState> {
+  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
+  return await readWorkspaceOnboardingState(statePath);
+}
+
+export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boolean> {
+  const state = await readWorkspaceOnboardingStateForDir(dir);
+  return (
+    typeof state.onboardingCompletedAt === "string" && state.onboardingCompletedAt.trim().length > 0
+  );
+}
+
+async function writeWorkspaceOnboardingState(
+  statePath: string,
+  state: WorkspaceOnboardingState,
+): Promise<void> {
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  const payload = `${JSON.stringify(state, null, 2)}\n`;
+  const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  try {
+    await fs.writeFile(tmpPath, payload, { encoding: "utf-8" });
+    await fs.rename(tmpPath, statePath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
   }
 }
 
@@ -99,12 +285,20 @@ async function hasGitRepo(dir: string): Promise<boolean> {
 }
 
 async function isGitAvailable(): Promise<boolean> {
-  try {
-    const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
-    return result.code === 0;
-  } catch {
-    return false;
+  if (gitAvailabilityPromise) {
+    return gitAvailabilityPromise;
   }
+
+  gitAvailabilityPromise = (async () => {
+    try {
+      const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
+      return result.code === 0;
+    } catch {
+      return false;
+    }
+  })();
+
+  return gitAvailabilityPromise;
 }
 
 async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
@@ -152,9 +346,16 @@ export async function ensureAgentWorkspace(params?: {
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
+  const statePath = resolveWorkspaceStatePath(dir);
 
   const isBrandNewWorkspace = await (async () => {
-    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const userContentPaths = [
+      path.join(dir, "memory"),
+      path.join(dir, DEFAULT_MEMORY_FILENAME),
+      path.join(dir, ".git"),
+    ];
+    const paths = [...templatePaths, ...userContentPaths];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -174,16 +375,74 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
-
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
-  if (isBrandNewWorkspace) {
-    await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+
+  let state = await readWorkspaceOnboardingState(statePath);
+  let stateDirty = false;
+  const markState = (next: Partial<WorkspaceOnboardingState>) => {
+    state = { ...state, ...next };
+    stateDirty = true;
+  };
+  const nowIso = () => new Date().toISOString();
+
+  let bootstrapExists = await fileExists(bootstrapPath);
+  if (!state.bootstrapSeededAt && bootstrapExists) {
+    markState({ bootstrapSeededAt: nowIso() });
+  }
+
+  if (!state.onboardingCompletedAt && state.bootstrapSeededAt && !bootstrapExists) {
+    markState({ onboardingCompletedAt: nowIso() });
+  }
+
+  if (!state.bootstrapSeededAt && !state.onboardingCompletedAt && !bootstrapExists) {
+    // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
+    // indicators exist, treat onboarding as complete and avoid recreating BOOTSTRAP for
+    // already-onboarded workspaces.
+    const [identityContent, userContent] = await Promise.all([
+      fs.readFile(identityPath, "utf-8"),
+      fs.readFile(userPath, "utf-8"),
+    ]);
+    const hasUserContent = await (async () => {
+      const indicators = [
+        path.join(dir, "memory"),
+        path.join(dir, DEFAULT_MEMORY_FILENAME),
+        path.join(dir, ".git"),
+      ];
+      for (const indicator of indicators) {
+        try {
+          await fs.access(indicator);
+          return true;
+        } catch {
+          // continue
+        }
+      }
+      return false;
+    })();
+    const legacyOnboardingCompleted =
+      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
+    if (legacyOnboardingCompleted) {
+      markState({ onboardingCompletedAt: nowIso() });
+    } else {
+      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+      const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+      if (!wroteBootstrap) {
+        bootstrapExists = await fileExists(bootstrapPath);
+      } else {
+        bootstrapExists = true;
+      }
+      if (bootstrapExists && !state.bootstrapSeededAt) {
+        markState({ bootstrapSeededAt: nowIso() });
+      }
+    }
+  }
+
+  if (stateDirty) {
+    await writeWorkspaceOnboardingState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
@@ -277,29 +536,120 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
-    try {
-      const content = await fs.readFile(entry.filePath, "utf-8");
+    const loaded = await readWorkspaceFileWithGuards({
+      filePath: entry.filePath,
+      workspaceDir: resolvedDir,
+    });
+    if (loaded.ok) {
       result.push({
         name: entry.name,
         path: entry.filePath,
-        content,
+        content: loaded.content,
         missing: false,
       });
-    } catch {
+    } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
   }
   return result;
 }
 
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+]);
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey || !isSubagentSessionKey(sessionKey)) {
+  if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
     return files;
   }
-  return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+}
+
+export async function loadExtraBootstrapFiles(
+  dir: string,
+  extraPatterns: string[],
+): Promise<WorkspaceBootstrapFile[]> {
+  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
+  return loaded.files;
+}
+
+export async function loadExtraBootstrapFilesWithDiagnostics(
+  dir: string,
+  extraPatterns: string[],
+): Promise<{
+  files: WorkspaceBootstrapFile[];
+  diagnostics: ExtraBootstrapLoadDiagnostic[];
+}> {
+  if (!extraPatterns.length) {
+    return { files: [], diagnostics: [] };
+  }
+  const resolvedDir = resolveUserPath(dir);
+
+  // Resolve glob patterns into concrete file paths
+  const resolvedPaths = new Set<string>();
+  for (const pattern of extraPatterns) {
+    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+      try {
+        const matches = fs.glob(pattern, { cwd: resolvedDir });
+        for await (const m of matches) {
+          resolvedPaths.add(m);
+        }
+      } catch {
+        // glob not available or pattern error — fall back to literal
+        resolvedPaths.add(pattern);
+      }
+    } else {
+      resolvedPaths.add(pattern);
+    }
+  }
+
+  const files: WorkspaceBootstrapFile[] = [];
+  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
+  for (const relPath of resolvedPaths) {
+    const filePath = path.resolve(resolvedDir, relPath);
+    // Only load files whose basename is a recognized bootstrap filename
+    const baseName = path.basename(relPath);
+    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+      diagnostics.push({
+        path: filePath,
+        reason: "invalid-bootstrap-filename",
+        detail: `unsupported bootstrap basename: ${baseName}`,
+      });
+      continue;
+    }
+    const loaded = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: resolvedDir,
+    });
+    if (loaded.ok) {
+      files.push({
+        name: baseName as WorkspaceBootstrapFileName,
+        path: filePath,
+        content: loaded.content,
+        missing: false,
+      });
+      continue;
+    }
+
+    const reason: ExtraBootstrapLoadDiagnosticCode =
+      loaded.reason === "path" ? "missing" : loaded.reason === "validation" ? "security" : "io";
+    diagnostics.push({
+      path: filePath,
+      reason,
+      detail:
+        loaded.error instanceof Error
+          ? loaded.error.message
+          : typeof loaded.error === "string"
+            ? loaded.error
+            : reason,
+    });
+  }
+  return { files, diagnostics };
 }

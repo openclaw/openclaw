@@ -1,7 +1,7 @@
-import OpenClawKit
-import OpenClawProtocol
 import CoreGraphics
 import Foundation
+import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 @MainActor
@@ -19,15 +19,13 @@ final class ExecApprovalsGatewayPrompter {
     }
 
     func start() {
-        guard self.task == nil else { return }
-        self.task = Task { [weak self] in
+        SimpleTaskSupport.start(task: &self.task) { [weak self] in
             await self?.run()
         }
     }
 
     func stop() {
-        self.task?.cancel()
-        self.task = nil
+        SimpleTaskSupport.stop(task: &self.task)
     }
 
     private func run() async {

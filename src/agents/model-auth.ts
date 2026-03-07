@@ -1,8 +1,8 @@
-import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import path from "node:path";
+import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -65,6 +65,35 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function resolveSyntheticLocalProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | null {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider !== "ollama") {
+    return null;
+  }
+
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return null;
+  }
+
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return null;
+  }
+
+  return {
+    apiKey: "ollama-local", // pragma: allowlist secret
+    source: "models.providers.ollama (synthetic local key)",
+    mode: "api-key",
+  };
 }
 
 function resolveEnvSourceLabel(params: {
@@ -207,6 +236,11 @@ export async function resolveApiKeyForProvider(params: {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  if (syntheticLocalAuth) {
+    return syntheticLocalAuth;
+  }
+
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
@@ -216,7 +250,7 @@ export async function resolveApiKeyForProvider(params: {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.1-codex.',
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
       );
     }
   }
@@ -279,12 +313,23 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
 
+  if (normalized === "volcengine" || normalized === "volcengine-plan") {
+    return pick("VOLCANO_ENGINE_API_KEY");
+  }
+
+  if (normalized === "byteplus" || normalized === "byteplus-plan") {
+    return pick("BYTEPLUS_API_KEY");
+  }
   if (normalized === "minimax-portal") {
     return pick("MINIMAX_OAUTH_TOKEN") ?? pick("MINIMAX_API_KEY");
   }
 
   if (normalized === "kimi-coding") {
     return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
+  }
+
+  if (normalized === "huggingface") {
+    return pick("HUGGINGFACE_HUB_TOKEN") ?? pick("HF_TOKEN");
   }
 
   const envMap: Record<string, string> = {
@@ -301,6 +346,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
     moonshot: "MOONSHOT_API_KEY",
     minimax: "MINIMAX_API_KEY",
+    nvidia: "NVIDIA_API_KEY",
     xiaomi: "XIAOMI_API_KEY",
     synthetic: "SYNTHETIC_API_KEY",
     venice: "VENICE_API_KEY",
@@ -309,6 +355,8 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
+    vllm: "VLLM_API_KEY",
+    kilocode: "KILOCODE_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {

@@ -1,3 +1,13 @@
+export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+import type {
+  GatewayAgentRow as SharedGatewayAgentRow,
+  SessionsListResultBase,
+  SessionsPatchResultBase,
+} from "../../../src/shared/session-types.js";
+export type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -281,19 +291,6 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
-export type ConfigUiHint = {
-  label?: string;
-  help?: string;
-  group?: string;
-  order?: number;
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  itemTemplate?: unknown;
-};
-
-export type ConfigUiHints = Record<string, ConfigUiHint>;
-
 export type ConfigSchemaResponse = {
   schema: unknown;
   uiHints: ConfigUiHints;
@@ -323,23 +320,42 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-  identity?: {
-    name?: string;
-    theme?: string;
-    emoji?: string;
-    avatar?: string;
-    avatarUrl?: string;
-  };
-};
+export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type AgentsListResult = {
   defaultId: string;
   mainKey: string;
   scope: string;
   agents: GatewayAgentRow[];
+};
+
+export type ToolCatalogProfile = {
+  id: "minimal" | "coding" | "messaging" | "full";
+  label: string;
+};
+
+export type ToolCatalogEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+};
+
+export type ToolCatalogGroup = {
+  id: string;
+  label: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  tools: ToolCatalogEntry[];
+};
+
+export type ToolsCatalogResult = {
+  agentId: string;
+  profiles: ToolCatalogProfile[];
+  groups: ToolCatalogGroup[];
 };
 
 export type AgentIdentityResult = {
@@ -402,249 +418,31 @@ export type GatewaySessionRow = {
   contextTokens?: number;
 };
 
-export type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
+export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: {
-    sessionId: string;
-    updatedAt?: number;
-    thinkingLevel?: string;
-    verboseLevel?: string;
-    reasoningLevel?: string;
-    elevatedLevel?: string;
-  };
-};
-
-export type SessionsUsageEntry = {
-  key: string;
-  label?: string;
-  sessionId?: string;
+export type SessionsPatchResult = SessionsPatchResultBase<{
+  sessionId: string;
   updatedAt?: number;
-  agentId?: string;
-  channel?: string;
-  chatType?: string;
-  origin?: {
-    label?: string;
-    provider?: string;
-    surface?: string;
-    chatType?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  modelOverride?: string;
-  providerOverride?: string;
-  modelProvider?: string;
-  model?: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries: number;
-    firstActivity?: number;
-    lastActivity?: number;
-    durationMs?: number;
-    activityDates?: string[]; // YYYY-MM-DD dates when session had activity
-    dailyBreakdown?: Array<{ date: string; tokens: number; cost: number }>;
-    dailyMessageCounts?: Array<{
-      date: string;
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    }>;
-    dailyLatency?: Array<{
-      date: string;
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    }>;
-    dailyModelUsage?: Array<{
-      date: string;
-      provider?: string;
-      model?: string;
-      tokens: number;
-      cost: number;
-      count: number;
-    }>;
-    messageCounts?: {
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    };
-    toolUsage?: {
-      totalCalls: number;
-      uniqueTools: number;
-      tools: Array<{ name: string; count: number }>;
-    };
-    modelUsage?: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    latency?: {
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    };
-  } | null;
-  contextWeight?: {
-    systemPrompt: { chars: number; projectContextChars: number; nonProjectContextChars: number };
-    skills: { promptChars: number; entries: Array<{ name: string; blockChars: number }> };
-    tools: {
-      listChars: number;
-      schemaChars: number;
-      entries: Array<{ name: string; summaryChars: number; schemaChars: number }>;
-    };
-    injectedWorkspaceFiles: Array<{
-      name: string;
-      path: string;
-      rawChars: number;
-      injectedChars: number;
-      truncated: boolean;
-    }>;
-  } | null;
-};
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+}>;
 
-export type SessionsUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  totalCost: number;
-  inputCost: number;
-  outputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  missingCostEntries: number;
-};
-
-export type SessionsUsageResult = {
-  updatedAt: number;
-  startDate: string;
-  endDate: string;
-  sessions: SessionsUsageEntry[];
-  totals: SessionsUsageTotals;
-  aggregates: {
-    messages: {
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    };
-    tools: {
-      totalCalls: number;
-      uniqueTools: number;
-      tools: Array<{ name: string; count: number }>;
-    };
-    byModel: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    byProvider: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    byAgent: Array<{ agentId: string; totals: SessionsUsageTotals }>;
-    byChannel: Array<{ channel: string; totals: SessionsUsageTotals }>;
-    latency?: {
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    };
-    dailyLatency?: Array<{
-      date: string;
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    }>;
-    modelDaily?: Array<{
-      date: string;
-      provider?: string;
-      model?: string;
-      tokens: number;
-      cost: number;
-      count: number;
-    }>;
-    daily: Array<{
-      date: string;
-      tokens: number;
-      cost: number;
-      messages: number;
-      toolCalls: number;
-      errors: number;
-    }>;
-  };
-};
-
-export type CostUsageDailyEntry = SessionsUsageTotals & { date: string };
-
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: SessionsUsageTotals;
-};
-
-export type SessionUsageTimePoint = {
-  timestamp: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
-  cumulativeTokens: number;
-  cumulativeCost: number;
-};
-
-export type SessionUsageTimeSeries = {
-  sessionId?: string;
-  points: SessionUsageTimePoint[];
-};
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./usage-types.ts";
 
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
 
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
@@ -654,15 +452,35 @@ export type CronPayload =
   | {
       kind: "agentTurn";
       message: string;
+      model?: string;
       thinking?: string;
       timeoutSeconds?: number;
+      lightContext?: boolean;
     };
 
 export type CronDelivery = {
-  mode: "none" | "announce";
+  mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  accountId?: string;
   bestEffort?: boolean;
+  failureDestination?: CronFailureDestination;
+};
+
+export type CronFailureDestination = {
+  channel?: string;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+};
+
+export type CronFailureAlert = {
+  after?: number;
+  channel?: string;
+  to?: string;
+  cooldownMs?: number;
+  mode?: "announce" | "webhook";
+  accountId?: string;
 };
 
 export type CronJobState = {
@@ -672,22 +490,17 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  lastFailureAlertAtMs?: number;
 };
 
-export type CronJob = {
-  id: string;
-  agentId?: string;
-  name: string;
-  description?: string;
-  enabled: boolean;
-  deleteAfterRun?: boolean;
-  createdAtMs: number;
-  updatedAtMs: number;
-  schedule: CronSchedule;
-  sessionTarget: CronSessionTarget;
-  wakeMode: CronWakeMode;
-  payload: CronPayload;
-  delivery?: CronDelivery;
+export type CronJob = CronJobBase<
+  CronSchedule,
+  CronSessionTarget,
+  CronWakeMode,
+  CronPayload,
+  CronDelivery,
+  CronFailureAlert | false
+> & {
   state?: CronJobState;
 };
 
@@ -697,20 +510,60 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
+export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
+export type CronSortDir = "asc" | "desc";
+export type CronRunsStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunsStatusValue = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronRunScope = "job" | "all";
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
-  status: "ok" | "error" | "skipped";
+  jobName?: string;
+  status?: CronRunsStatusValue;
   durationMs?: number;
   error?: string;
   summary?: string;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  delivered?: boolean;
+  runAtMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
   sessionId?: string;
   sessionKey?: string;
 };
 
+export type CronJobsListResult = {
+  jobs?: CronJob[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+};
+
+export type CronRunsResult = {
+  entries?: CronRunLogEntry[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+};
+
 export type SkillsStatusConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 
