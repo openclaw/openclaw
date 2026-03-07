@@ -1706,6 +1706,83 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies inside P2P thread when thread_id is present (#38806)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-p2p-thread",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        root_id: "om_p2p_thread_root",
+        thread_id: "omt_p2p_thread",
+        message_type: "text",
+        content: JSON.stringify({ text: "reply in p2p thread" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_p2p_thread_root",
+        replyInThread: true,
+        threadReply: true,
+        skipReplyToInMessages: false,
+      }),
+    );
+  });
+
+  it("does not reply in thread for normal P2P messages without thread_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-p2p-normal",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "normal dm" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: false,
+        threadReply: false,
+        skipReplyToInMessages: true,
+      }),
+    );
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
