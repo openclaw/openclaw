@@ -529,13 +529,15 @@ describe("hooks", () => {
       expect(event.postHookActions).toEqual([]);
     });
 
-    it("does not run post-hook actions when no handlers are registered", async () => {
+    it("drains post-hook actions even when no handlers are registered", async () => {
       const event = createInternalHookEvent("command", "new", "test-session");
+      let ran = false;
       event.postHookActions.push(() => {
-        throw new Error("should not run");
+        ran = true;
       });
-      // triggerInternalHook returns early when no handlers — post-hooks don't run
-      await expect(triggerInternalHook(event)).resolves.not.toThrow();
+      // No handlers registered — post-hooks should still drain
+      await triggerInternalHook(event);
+      expect(ran).toBe(true);
     });
   });
 
