@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  getShellConfig,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+  sanitizeBinaryOutput,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -205,5 +210,19 @@ describe("resolvePowerShellPath", () => {
     delete process.env.WINDIR;
 
     expect(resolvePowerShellPath()).toBe(ps51Path);
+  });
+});
+
+describe("sanitizeBinaryOutput", () => {
+  it("removes full ANSI control sequences instead of leaving CSI fragments", () => {
+    const raw = "\u001b[2K\u001b[1A\u001b[38;2;215;119;87mOK\u001b[39m\r\n";
+
+    expect(sanitizeBinaryOutput(raw)).toBe("OK\r\n");
+  });
+
+  it("removes OSC 8 hyperlinks while preserving visible text", () => {
+    const raw = "\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\";
+
+    expect(sanitizeBinaryOutput(raw)).toBe("link");
   });
 });
