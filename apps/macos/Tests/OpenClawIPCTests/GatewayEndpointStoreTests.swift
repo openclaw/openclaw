@@ -194,7 +194,7 @@ import Testing
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://gateway.example:18789")),
             token: nil,
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,
@@ -207,7 +207,7 @@ import Testing
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "wss://gateway.example:443/remote-ui")),
             token: nil,
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,
