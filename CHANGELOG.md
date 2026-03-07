@@ -282,6 +282,7 @@ Docs: https://docs.openclaw.ai
 - Config/env substitution degraded mode: convert missing `${VAR}` resolution in config reads from hard-fail to warning-backed degraded behavior, while preventing unresolved placeholders from being accepted as gateway credentials. (#39050) Thanks @akz142857.
 - Discord inbound listener non-blocking dispatch: make `MESSAGE_CREATE` listener handoff asynchronous (no per-listener queue blocking), so long runs no longer stall unrelated incoming events. (#39154) Thanks @yaseenkadlemakki.
 - Daemon/Windows PATH freeze fix: stop persisting install-time `PATH` snapshots into Scheduled Task scripts so runtime tool lookup follows current host PATH updates; also refresh local TUI history on silent local finals. (#39139) Thanks @Narcooo.
+- Gateway/systemd service restart hardening: clear stale gateway listeners by explicit run-port before service bind, add restart stale-pid port-override support, tune systemd start/stop/exit handling, and disable detached child mode only in service-managed runtime so cgroup stop semantics clean up descendants reliably. (#38463) Thanks @spirittechie.
 
 ## 2026.3.2
 
