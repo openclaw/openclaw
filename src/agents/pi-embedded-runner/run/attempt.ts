@@ -710,15 +710,12 @@ export async function runEmbeddedAttempt(
     }).catch(() => {});
     // #endregion
     log.info(
-      "embedded run tools: %s (web_search=%s)",
-      toolNames.join(", "),
-      hasWebSearch ? "yes" : "no",
+      `embedded run tools: ${toolNames.join(", ")} (web_search=${hasWebSearch ? "yes" : "no"})`,
     );
     if (!hasWebSearch) {
-      log.warn(
-        "[web_search debug] web_search is NOT in the tool list. toolNames=%s",
-        toolNames.join(", "),
-      );
+      log.warn("[web_search debug] web_search is NOT in the tool list.", {
+        toolNames: toolNames.join(", "),
+      });
     }
     const allowedToolNames = collectAllowedToolNames({
       tools,
