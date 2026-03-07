@@ -1,5 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
+  collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk";
 import {
@@ -21,8 +22,6 @@ import {
   readStringParam,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppOutboundTarget,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveWhatsAppAccount,
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
@@ -136,30 +135,30 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-        providerConfigPresent: cfg.channels?.whatsapp !== undefined,
-        groupPolicy: account.groupPolicy,
-        defaultGroupPolicy,
-      });
       const groupAllowlistConfigured =
         Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0;
-      return collectOpenGroupPolicyRouteAllowlistWarnings({
-        groupPolicy,
-        routeAllowlistConfigured: groupAllowlistConfigured,
-        restrictSenders: {
-          surface: "WhatsApp groups",
-          openScope: "any member in allowed groups",
-          groupPolicyPath: "channels.whatsapp.groupPolicy",
-          groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
-        },
-        noRouteAllowlist: {
-          surface: "WhatsApp groups",
-          routeAllowlistPath: "channels.whatsapp.groups",
-          routeScope: "group",
-          groupPolicyPath: "channels.whatsapp.groupPolicy",
-          groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
-        },
+      return collectAllowlistProviderGroupPolicyWarnings({
+        cfg,
+        providerConfigPresent: cfg.channels?.whatsapp !== undefined,
+        configuredGroupPolicy: account.groupPolicy,
+        collect: (groupPolicy) =>
+          collectOpenGroupPolicyRouteAllowlistWarnings({
+            groupPolicy,
+            routeAllowlistConfigured: groupAllowlistConfigured,
+            restrictSenders: {
+              surface: "WhatsApp groups",
+              openScope: "any member in allowed groups",
+              groupPolicyPath: "channels.whatsapp.groupPolicy",
+              groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+            },
+            noRouteAllowlist: {
+              surface: "WhatsApp groups",
+              routeAllowlistPath: "channels.whatsapp.groups",
+              routeScope: "group",
+              groupPolicyPath: "channels.whatsapp.groupPolicy",
+              groupAllowFromPath: "channels.whatsapp.groupAllowFrom",
+            },
+          }),
       });
     },
   },
