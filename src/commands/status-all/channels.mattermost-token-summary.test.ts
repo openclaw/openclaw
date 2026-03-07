@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { makeDirectPlugin } from "../../test-utils/channel-plugin-test-fixtures.js";
 import { buildChannelsTable } from "./channels.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -110,29 +111,6 @@ function makeUnavailableSlackPlugin(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
-}
-
-function makeDirectPlugin(params: {
-  id: string;
-  label: string;
-  docsPath: string;
-  config: ChannelPlugin["config"];
-}): ChannelPlugin {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: params.config,
     actions: {
       listActions: () => ["send"],
     },
