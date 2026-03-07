@@ -445,7 +445,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_llm_call";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -472,6 +473,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "before_llm_call",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -886,6 +888,28 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// LLM Call Hooks
+// ============================================================================
+
+// before_llm_call hook (modifying — sequential)
+export type PluginHookBeforeLlmCallEvent = {
+  messages: AgentMessage[];
+  systemPrompt: string;
+  model: string;
+  iteration: number;
+  tools: Array<{ name: string; description?: string }>;
+  tokenEstimate?: number;
+};
+
+export type PluginHookBeforeLlmCallResult = {
+  messages?: AgentMessage[];
+  systemPrompt?: string;
+  tools?: Array<{ name: string }>;
+  block?: boolean;
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -984,6 +1008,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_llm_call: (
+    event: PluginHookBeforeLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeLlmCallResult | void> | PluginHookBeforeLlmCallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

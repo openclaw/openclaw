@@ -2059,6 +2059,30 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Hook context shared across hook invocations for this run.
+      const hookCtx: import("../../../plugins/hooks.js").PluginHookAgentContext = {
+        agentId: sessionAgentId,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+      };
+
+      // Mutable ref so the wrapper always reads the current iteration count.
+      const hookIterationRef = { current: 0 };
+
+      // Wrap streamFn for before_llm_call hooks — must be the outermost
+      // wrapper so it sees the final context after all other transforms.
+      if (hookRunner?.hasHooks("before_llm_call")) {
+        const { wrapStreamFnWithHooks } = await import("./hook-stream-wrapper.js");
+        activeSession.agent.streamFn = wrapStreamFnWithHooks(activeSession.agent.streamFn, {
+          hookRunner,
+          agentCtx: hookCtx,
+          iterationRef: hookIterationRef,
+          modelId: params.modelId,
+        });
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -2182,6 +2206,17 @@ export async function runEmbeddedAttempt(
           );
         });
       };
+
+      // Track LLM call iteration for hook context.
+      // Subscribes to turn_start to increment the mutable ref that the
+      // streamFn wrapper reads for before_llm_call event.iteration.
+      const hookIterationUnsub = hookRunner?.hasHooks("before_llm_call")
+        ? activeSession.subscribe((event) => {
+            if (event.type === "turn_start") {
+              hookIterationRef.current++;
+            }
+          })
+        : undefined;
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
@@ -2461,28 +2496,35 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt));
           }
         } catch (err) {
-          // Yield-triggered abort is intentional — treat as clean stop, not error.
-          // Check the abort reason to distinguish from external aborts (timeout, user cancel)
-          // that may race after yieldDetected is set.
-          yieldAborted =
-            yieldDetected &&
-            isRunnerAbortError(err) &&
-            err instanceof Error &&
-            err.cause === "sessions_yield";
-          if (yieldAborted) {
-            aborted = false;
-            // Ensure the session abort has fully settled before proceeding.
-            if (yieldAbortSettled) {
-              // eslint-disable-next-line @typescript-eslint/await-thenable -- abort() returns Promise<void> per AgentSession.d.ts
-              await yieldAbortSettled;
-            }
-            stripSessionsYieldArtifacts(activeSession);
-            if (yieldMessage) {
-              await persistSessionsYieldContextMessage(activeSession, yieldMessage);
-            }
+          // BeforeLlmCallBlockError is a graceful hook-initiated block, not a failure.
+          // Suppress it — the run ends cleanly with no assistant response.
+          const { BeforeLlmCallBlockError } = await import("./hook-stream-wrapper.js");
+          if (err instanceof BeforeLlmCallBlockError) {
+            log.info(`LLM call blocked by before_llm_call hook: ${err.message}`);
           } else {
-            promptError = err;
-            promptErrorSource = "prompt";
+            // Yield-triggered abort is intentional — treat as clean stop, not error.
+            // Check the abort reason to distinguish from external aborts (timeout, user cancel)
+            // that may race after yieldDetected is set.
+            yieldAborted =
+              yieldDetected &&
+              isRunnerAbortError(err) &&
+              err instanceof Error &&
+              err.cause === "sessions_yield";
+            if (yieldAborted) {
+              aborted = false;
+              // Ensure the session abort has fully settled before proceeding.
+              if (yieldAbortSettled) {
+                // eslint-disable-next-line @typescript-eslint/await-thenable -- abort() returns Promise<void> per AgentSession.d.ts
+                await yieldAbortSettled;
+              }
+              stripSessionsYieldArtifacts(activeSession);
+              if (yieldMessage) {
+                await persistSessionsYieldContextMessage(activeSession, yieldMessage);
+              }
+            } else {
+              promptError = err;
+              promptErrorSource = "prompt";
+            }
           }
         } finally {
           log.debug(
@@ -2706,6 +2748,7 @@ export async function runEmbeddedAttempt(
           );
         }
         try {
+          hookIterationUnsub?.();
           unsubscribe();
         } catch (err) {
           // unsubscribe() should never throw; if it does, it indicates a serious bug.
