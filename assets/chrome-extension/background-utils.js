@@ -28,7 +28,20 @@ export async function deriveRelayToken(gatewayToken, port) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function buildRelayWsUrl(port, gatewayToken) {
+export function buildRelayWsUrl(port) {
+  return `ws://127.0.0.1:${port}/extension`;
+}
+
+function encodeRelayTokenForProtocol(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const b of bytes) {
+    binary += String.fromCharCode(b);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+export async function buildRelayWsProtocols(port, gatewayToken) {
   const token = String(gatewayToken || "").trim();
   if (!token) {
     throw new Error(
@@ -36,7 +49,7 @@ export async function buildRelayWsUrl(port, gatewayToken) {
     );
   }
   const relayToken = await deriveRelayToken(token, port);
-  return `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(relayToken)}`;
+  return ["openclaw-relay-v1", `openclaw-relay-token.${encodeRelayTokenForProtocol(relayToken)}`];
 }
 
 export function isRetryableReconnectError(err) {

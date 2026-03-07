@@ -1,4 +1,9 @@
-import { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
+import {
+  buildRelayWsProtocols,
+  buildRelayWsUrl,
+  isRetryableReconnectError,
+  reconnectDelayMs,
+} from './background-utils.js'
 
 const DEFAULT_PORT = 18792
 
@@ -135,7 +140,8 @@ async function ensureRelayConnection() {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = await buildRelayWsUrl(port, gatewayToken)
+    const wsUrl = await buildRelayWsUrl(port)
+    const wsProtocols = await buildRelayWsProtocols(port, gatewayToken)
 
     // Fast preflight: is the relay server up?
     try {
@@ -144,7 +150,7 @@ async function ensureRelayConnection() {
       throw new Error(`Relay server not reachable at ${httpBase} (${String(err)})`)
     }
 
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrl, wsProtocols)
     relayWs = ws
     relayGatewayToken = gatewayToken
     // Bind message handler before open so an immediate first frame (for example

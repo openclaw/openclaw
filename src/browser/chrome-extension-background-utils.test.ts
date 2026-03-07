@@ -2,7 +2,8 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 type BackgroundUtilsModule = {
-  buildRelayWsUrl: (port: number, gatewayToken: string) => Promise<string>;
+  buildRelayWsUrl: (port: number) => Promise<string>;
+  buildRelayWsProtocols: (port: number, gatewayToken: string) => Promise<string[]>;
   deriveRelayToken: (gatewayToken: string, port: number) => Promise<string>;
   isRetryableReconnectError: (err: unknown) => boolean;
   reconnectDelayMs: (
@@ -26,8 +27,13 @@ async function loadBackgroundUtils(): Promise<BackgroundUtilsModule> {
   }
 }
 
-const { buildRelayWsUrl, deriveRelayToken, isRetryableReconnectError, reconnectDelayMs } =
-  await loadBackgroundUtils();
+const {
+  buildRelayWsProtocols,
+  buildRelayWsUrl,
+  deriveRelayToken,
+  isRetryableReconnectError,
+  reconnectDelayMs,
+} = await loadBackgroundUtils();
 
 describe("chrome extension background utils", () => {
   it("derives relay token as HMAC-SHA256 of gateway token and port", async () => {
@@ -39,14 +45,21 @@ describe("chrome extension background utils", () => {
     expect(relayToken).not.toBe(differentPort);
   });
 
-  it("builds websocket url with derived relay token", async () => {
-    const url = await buildRelayWsUrl(18792, "test-token");
-    expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:18792\/extension\?token=[0-9a-f]{64}$/);
+  it("builds websocket url without query token", async () => {
+    const url = await buildRelayWsUrl(18792);
+    expect(url).toBe("ws://127.0.0.1:18792/extension");
+  });
+
+  it("builds websocket protocols with derived relay token", async () => {
+    const protocols = await buildRelayWsProtocols(18792, "test-token");
+    expect(protocols).toHaveLength(2);
+    expect(protocols[0]).toBe("openclaw-relay-v1");
+    expect(protocols[1]).toMatch(/^openclaw-relay-token\.[A-Za-z0-9_-]+$/);
   });
 
   it("throws when gateway token is missing", async () => {
-    await expect(buildRelayWsUrl(18792, "")).rejects.toThrow(/Missing gatewayToken/);
-    await expect(buildRelayWsUrl(18792, "   ")).rejects.toThrow(/Missing gatewayToken/);
+    await expect(buildRelayWsProtocols(18792, "")).rejects.toThrow(/Missing gatewayToken/);
+    await expect(buildRelayWsProtocols(18792, "   ")).rejects.toThrow(/Missing gatewayToken/);
   });
 
   it("uses exponential backoff from attempt index", () => {
