@@ -33,8 +33,14 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
 # Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+# Pin to a specific version for reproducible builds (see: #9479)
+ARG BUN_VERSION=1.3.9
+RUN curl -fsSL https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/aarch64/').zip -o /tmp/bun.zip \
+    && unzip -q /tmp/bun.zip -d /tmp/bun \
+    && mv /tmp/bun/bun-*/bun /usr/local/bin/bun \
+    && chmod +x /usr/local/bin/bun \
+    && rm -rf /tmp/bun /tmp/bun.zip
+ENV PATH="/usr/local/bin:${PATH}"
 
 RUN corepack enable
 
@@ -136,6 +142,11 @@ ENV NODE_ENV=production
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
+
+# Health check: verify gateway is responding
+# Uses OPENCLAW_GATEWAY_PORT env var with fallback to default port
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://localhost:'+(process.env.OPENCLAW_GATEWAY_PORT||18789)).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
