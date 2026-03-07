@@ -30,9 +30,10 @@ const channel = "slack" as const;
 
 function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
-  // Slack apps support up to 25 slash commands. This list covers the most
-  // commonly used native commands. Note: /status is reserved by Slack so
-  // OpenClaw registers it as /agentstatus instead.
+  // Slack apps support up to 25 slash commands. This list covers the legacy
+  // /openclaw catch-all plus the most commonly used native commands. Commands
+  // that require explicit opt-in (/config, /debug) are omitted since they
+  // would appear in Slack but fail silently without matching handlers.
   // Additional commands not included here due to the 25-command limit
   // (verbose, reasoning, exec, activation, send, queue, focus, unfocus,
   // agents, export-session) can be added manually if needed.
@@ -51,6 +52,11 @@ function buildSlackManifest(botName: string) {
         messages_tab_read_only_enabled: false,
       },
       slash_commands: [
+        {
+          command: "/openclaw",
+          description: "Send a message to OpenClaw",
+          should_escape: false,
+        },
         { command: "/help", description: "Show available commands.", should_escape: false },
         { command: "/commands", description: "List all slash commands.", should_escape: false },
         { command: "/new", description: "Start a new session.", should_escape: false },
@@ -94,8 +100,6 @@ function buildSlackManifest(botName: string) {
           should_escape: false,
         },
         { command: "/think", description: "Set thinking level.", should_escape: false },
-        { command: "/config", description: "Show or set config values.", should_escape: false },
-        { command: "/debug", description: "Set runtime debug overrides.", should_escape: false },
         {
           command: "/context",
           description: "Explain how context is built and used.",
