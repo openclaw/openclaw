@@ -118,6 +118,24 @@ describe("checkTokenDrift", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null when tokens match but service token has trailing newline", () => {
+    const result = checkTokenDrift({ serviceToken: "same-token\n", configToken: "same-token" });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when tokens match but have surrounding whitespace", () => {
+    const result = checkTokenDrift({ serviceToken: "  same-token  ", configToken: "same-token" });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when both tokens have different whitespace padding", () => {
+    const result = checkTokenDrift({
+      serviceToken: "same-token\r\n",
+      configToken: " same-token ",
+    });
+    expect(result).toBeNull();
+  });
+
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
     expect(result).not.toBeNull();
