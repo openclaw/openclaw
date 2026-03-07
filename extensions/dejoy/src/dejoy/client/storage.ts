@@ -5,7 +5,7 @@ import path from "node:path";
 import { getDeJoyRuntime } from "../../runtime.js";
 import type { MatrixStoragePaths } from "./types.js";
 
-export const DEFAULT_ACCOUNT_KEY = "default";
+export const DEFAULT_ACCOUNT_KEY = "default"; // pragma: allowlist secret
 const STORAGE_META_FILENAME = "storage-meta.json";
 
 function sanitizePathSegment(value: string): string {
