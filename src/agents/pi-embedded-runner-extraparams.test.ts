@@ -1499,6 +1499,32 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
+  it("keeps existing context_management when stripping store for supportsStore=false models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai-responses",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        id: "gemini-2.5-pro",
+        name: "gemini-2.5-pro",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 65_536,
+        compat: { supportsStore: false },
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        context_management: [{ type: "compaction", compact_threshold: 12_345 }],
+      },
+    });
+    expect(payload).not.toHaveProperty("store");
+    expect(payload.context_management).toEqual([{ type: "compaction", compact_threshold: 12_345 }]);
+  });
+
   it("auto-injects OpenAI Responses context_management compaction for direct OpenAI models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
