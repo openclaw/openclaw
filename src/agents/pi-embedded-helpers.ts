@@ -57,7 +57,10 @@ export {
   isMessagingToolDuplicate,
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
+  isRecentlyDelivered,
+  recordDeliveredText,
 } from "./pi-embedded-helpers/messaging-dedupe.js";
+export type { RecentDeliveredEntry } from "./pi-embedded-helpers/messaging-dedupe.js";
 
 export { pickFallbackThinkingLevel } from "./pi-embedded-helpers/thinking.js";
 

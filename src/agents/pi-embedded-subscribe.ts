@@ -9,8 +9,11 @@ import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-span
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
+  isRecentlyDelivered,
   normalizeTextForComparison,
+  recordDeliveredText,
 } from "./pi-embedded-helpers.js";
+import type { RecentDeliveredEntry } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
 import type {
   EmbeddedPiSubscribeContext,
@@ -70,6 +73,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    recentDeliveredTexts: [] as RecentDeliveredEntry[],
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -148,15 +152,21 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const shouldSkipAssistantText = (text: string) => {
-    if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) {
-      return false;
+    // Same-turn dedup (existing behaviour).
+    if (state.lastAssistantTextMessageIndex === state.assistantMessageIndex) {
+      const trimmed = text.trimEnd();
+      if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
+        return true;
+      }
+      const normalized = normalizeTextForComparison(text);
+      if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
+        return true;
+      }
     }
-    const trimmed = text.trimEnd();
-    if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
-      return true;
-    }
-    const normalized = normalizeTextForComparison(text);
-    if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
+    // Cross-turn dedup: catch duplicates caused by context compaction replaying
+    // the same assistant text in a new turn.  Uses a rolling hash cache with a
+    // 1-hour TTL so intentionally repeated content still goes through eventually.
+    if (isRecentlyDelivered(text, state.recentDeliveredTexts)) {
       return true;
     }
     return false;
@@ -171,6 +181,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     assistantTexts.push(text);
     rememberAssistantText(text);
+    // Record in cross-turn cache so post-compaction replays are caught.
+    recordDeliveredText(text, state.recentDeliveredTexts);
   };
 
   const finalizeAssistantTexts = (args: {
