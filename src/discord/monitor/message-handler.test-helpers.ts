@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { createDiscordMessageHandler } from "./message-handler.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export const DEFAULT_DISCORD_BOT_USER_ID = "bot-123";
@@ -9,7 +10,7 @@ export function createDiscordHandlerParams(overrides?: {
   setStatus?: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
   workerRunTimeoutMs?: number;
-}) {
+}): Parameters<typeof createDiscordMessageHandler>[0] {
   const cfg: OpenClawConfig = {
     channels: {
       discord: {

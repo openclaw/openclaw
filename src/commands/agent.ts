@@ -57,7 +57,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import {
   mergeSessionEntry,
   parseSessionThreadInfo,
@@ -427,11 +431,23 @@ async function agentCommandInternal(
   }
 
   const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
   const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
     commandName: "agent",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
