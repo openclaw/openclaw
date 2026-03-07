@@ -7,6 +7,7 @@ import {
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  isSessionEndEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
@@ -14,6 +15,7 @@ import {
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
+  type SessionEndHookContext,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -442,6 +444,111 @@ describe("hooks", () => {
       // Both handlers were called
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe("isSessionEndEvent", () => {
+    const testCases = [
+      {
+        name: "valid session:end event with ok status",
+        event: createInternalHookEvent("session", "end", "agent:main:webhook", {
+          sessionId: "sess-123",
+          agentId: "main",
+          status: "ok",
+          trigger: "webhook",
+          durationMs: 5000,
+          runId: "run-456",
+        } satisfies SessionEndHookContext),
+        expected: true,
+      },
+      {
+        name: "valid session:end event with error status",
+        event: createInternalHookEvent("session", "end", "cron:agent:main", {
+          sessionId: "sess-789",
+          agentId: "main",
+          status: "error",
+          error: "timeout",
+          trigger: "cron",
+          durationMs: 30000,
+        } satisfies SessionEndHookContext),
+        expected: true,
+      },
+      {
+        name: "wrong event type",
+        event: createInternalHookEvent("command", "end", "test-session", {
+          sessionId: "sess-123",
+          status: "ok",
+        }),
+        expected: false,
+      },
+      {
+        name: "wrong action",
+        event: createInternalHookEvent("session", "start", "test-session", {
+          sessionId: "sess-123",
+          status: "ok",
+        }),
+        expected: false,
+      },
+      {
+        name: "missing sessionId",
+        event: createInternalHookEvent("session", "end", "test-session", {
+          status: "ok",
+          trigger: "webhook",
+        }),
+        expected: false,
+      },
+      {
+        name: "missing status",
+        event: createInternalHookEvent("session", "end", "test-session", {
+          sessionId: "sess-123",
+          trigger: "webhook",
+        }),
+        expected: false,
+      },
+    ];
+
+    for (const testCase of testCases) {
+      it(`returns ${testCase.expected} for ${testCase.name}`, () => {
+        expect(isSessionEndEvent(testCase.event)).toBe(testCase.expected);
+      });
+    }
+  });
+
+  describe("session hooks", () => {
+    it("should trigger session:end handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("session:end", handler);
+
+      const context: SessionEndHookContext = {
+        sessionId: "sess-123",
+        agentId: "harvey",
+        status: "ok",
+        trigger: "webhook",
+        durationMs: 5000,
+        runId: "run-456",
+      };
+      const event = createInternalHookEvent("session", "end", "agent:harvey:webhook", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should trigger general session handlers for session:end", async () => {
+      const handler = vi.fn();
+      registerInternalHook("session", handler);
+
+      const context: SessionEndHookContext = {
+        sessionId: "sess-456",
+        agentId: "krish",
+        status: "error",
+        error: "timeout",
+        trigger: "cron",
+        durationMs: 30000,
+      };
+      const event = createInternalHookEvent("session", "end", "cron:agent:krish", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
     });
   });
 

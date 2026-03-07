@@ -44,6 +44,8 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -440,6 +442,7 @@ export async function runCronIsolatedAgentTurn(params: {
   let fallbackModel = model;
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
+  const sessionEndTrigger = agentSessionKey.includes(":hook:") ? "webhook" : "cron";
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
@@ -597,8 +600,36 @@ export async function runCronIsolatedAgentTurn(params: {
       }
     }
   } catch (err) {
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("session", "end", agentSessionKey, {
+          sessionId: runSessionId,
+          agentId,
+          status: "error",
+          error: String(err),
+          trigger: sessionEndTrigger,
+          durationMs: Date.now() - runStartedAt,
+          runId: runSessionId,
+        }),
+      ),
+      "session:end hook (cron error)",
+    );
     return withRunSession({ status: "error", error: String(err) });
   }
+
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent("session", "end", agentSessionKey, {
+        sessionId: runSessionId,
+        agentId,
+        status: "ok",
+        trigger: sessionEndTrigger,
+        durationMs: runEndedAt - runStartedAt,
+        runId: runSessionId,
+      }),
+    ),
+    "session:end hook (cron ok)",
+  );
 
   if (isAborted()) {
     return withRunSession({ status: "error", error: abortReason() });

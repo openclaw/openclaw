@@ -358,6 +358,39 @@ const handler = async (event) => {
 export default handler;
 ```
 
+#### Session Events
+
+- **`session`**: All session lifecycle events (general listener)
+- **`session:end`**: When an agent session completes (webhook-dispatched or cron-triggered). Fires after the agent finishes processing, before delivery.
+
+#### Session Event Context
+
+```typescript
+// session:end context
+{
+  sessionId: string,     // The session ID that ended
+  agentId?: string,      // Agent ID that ran the session
+  status: "ok" | "error", // How the session ended
+  error?: string,        // Error message if status is "error"
+  trigger: "webhook" | "cron" | "interactive", // What started the session
+  durationMs?: number,   // Session duration in milliseconds
+  runId?: string,        // Run ID for correlation
+}
+```
+
+#### Example: Session Completion Hook
+
+```typescript
+const handler = async (event) => {
+  if (event.type === "session" && event.action === "end") {
+    const { agentId, status, trigger, durationMs } = event.context;
+    console.log(`[session-end] ${agentId} (${trigger}): ${status} in ${durationMs}ms`);
+  }
+};
+
+export default handler;
+```
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
@@ -376,7 +409,6 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 Planned event types:
 
 - **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
 
 ## Creating Custom Hooks

@@ -156,6 +156,33 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
+// ============================================================================
+// Session Hook Events
+// ============================================================================
+
+export type SessionEndHookContext = {
+  /** The session ID that ended */
+  sessionId: string;
+  /** Agent ID that ran the session */
+  agentId?: string;
+  /** How the session ended: "ok" or "error" */
+  status: "ok" | "error";
+  /** Error message if status is "error" */
+  error?: string;
+  /** What triggered the session: "webhook", "cron", or "interactive" */
+  trigger: "webhook" | "cron" | "interactive";
+  /** Duration of the session in milliseconds */
+  durationMs?: number;
+  /** Run ID for correlation */
+  runId?: string;
+};
+
+export type SessionEndHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "end";
+  context: SessionEndHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -418,4 +445,15 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isSessionEndEvent(event: InternalHookEvent): event is SessionEndHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "end")) {
+    return false;
+  }
+  const context = getHookContext<SessionEndHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "sessionId") && hasStringContextField(context, "status");
 }
