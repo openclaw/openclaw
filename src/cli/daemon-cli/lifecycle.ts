@@ -22,8 +22,8 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-async function resolveGatewayRestartPort() {
-  const service = resolveGatewayService();
+async function resolveGatewayRestartPort(opts?: { scope?: DaemonLifecycleOptions["scope"] }) {
+  const service = resolveGatewayService({ scope: opts?.scope ?? "auto", env: process.env });
   const command = await service.readCommand(process.env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
@@ -38,7 +38,7 @@ async function resolveGatewayRestartPort() {
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service: resolveGatewayService({ scope: opts.scope ?? "auto", env: process.env }),
     opts,
     stopBeforeUninstall: true,
     assertNotLoadedAfterUninstall: true,
@@ -48,7 +48,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   return await runServiceStart({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service: resolveGatewayService({ scope: opts.scope ?? "auto", env: process.env }),
     renderStartHints: renderGatewayServiceStartHints,
     opts,
   });
@@ -57,7 +57,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   return await runServiceStop({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service: resolveGatewayService({ scope: opts.scope ?? "auto", env: process.env }),
     opts,
   });
 }
@@ -69,8 +69,8 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
-  const service = resolveGatewayService();
-  const restartPort = await resolveGatewayRestartPort().catch(() =>
+  const service = resolveGatewayService({ scope: opts.scope ?? "auto", env: process.env });
+  const restartPort = await resolveGatewayRestartPort({ scope: opts.scope }).catch(() =>
     resolveGatewayPort(loadConfig(), process.env),
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;

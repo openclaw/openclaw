@@ -8,10 +8,13 @@ export type GatewayRpcOpts = {
   json?: boolean;
 };
 
+export type DaemonServiceScope = "agent" | "daemon" | "auto";
+
 export type DaemonStatusOptions = {
   rpc: GatewayRpcOpts;
   probe: boolean;
   json: boolean;
+  scope?: DaemonServiceScope;
 } & FindExtraGatewayServicesOptions;
 
 export type DaemonInstallOptions = {
@@ -20,8 +23,10 @@ export type DaemonInstallOptions = {
   token?: string;
   force?: boolean;
   json?: boolean;
+  scope?: Exclude<DaemonServiceScope, "auto">;
 };
 
 export type DaemonLifecycleOptions = {
   json?: boolean;
+  scope?: DaemonServiceScope;
 };

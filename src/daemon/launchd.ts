@@ -9,6 +9,7 @@ import {
 import { execFileUtf8 } from "./exec-file.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
+  buildLaunchDaemonPlist as buildLaunchDaemonPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
@@ -43,6 +44,27 @@ function resolveLaunchAgentPlistPathForLabel(
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   const label = resolveLaunchAgentLabel({ env });
   return resolveLaunchAgentPlistPathForLabel(env, label);
+}
+
+function resolveLaunchDaemonLabel(args?: { env?: Record<string, string | undefined> }): string {
+  const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
+  if (envLabel) {
+    return envLabel;
+  }
+  return resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE);
+}
+
+function resolveLaunchDaemonPlistPathForLabel(
+  env: Record<string, string | undefined>,
+  label: string,
+): string {
+  void env; // reserved for parity with LaunchAgent resolver
+  return path.posix.join(path.sep, "Library", "LaunchDaemons", `${label}.plist`);
+}
+
+export function resolveLaunchDaemonPlistPath(env: GatewayServiceEnv): string {
+  const label = resolveLaunchDaemonLabel({ env });
+  return resolveLaunchDaemonPlistPathForLabel(env, label);
 }
 
 export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
@@ -95,6 +117,37 @@ export function buildLaunchAgentPlist({
   });
 }
 
+export function buildLaunchDaemonPlist({
+  label = GATEWAY_LAUNCH_AGENT_LABEL,
+  username,
+  comment,
+  programArguments,
+  workingDirectory,
+  stdoutPath,
+  stderrPath,
+  environment,
+}: {
+  label?: string;
+  username: string;
+  comment?: string;
+  programArguments: string[];
+  workingDirectory?: string;
+  stdoutPath: string;
+  stderrPath: string;
+  environment?: Record<string, string | undefined>;
+}): string {
+  return buildLaunchDaemonPlistImpl({
+    label,
+    username,
+    comment,
+    programArguments,
+    workingDirectory,
+    stdoutPath,
+    stderrPath,
+    environment,
+  });
+}
+
 async function execLaunchctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -109,6 +162,10 @@ function resolveGuiDomain(): string {
     return "gui/501";
   }
   return `gui/${process.getuid()}`;
+}
+
+function resolveSystemDomain(): string {
+  return "system";
 }
 
 export type LaunchctlPrintInfo = {
@@ -488,6 +545,185 @@ export async function restartLaunchAgent({
   }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+      throw err;
+    }
+  }
+}
+
+// --- LaunchDaemon (system domain) support ---
+
+export async function isLaunchDaemonLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const domain = resolveSystemDomain();
+  const label = resolveLaunchDaemonLabel({ env: args.env });
+  const res = await execLaunchctl(["print", `${domain}/${label}`]);
+  return res.code === 0;
+}
+
+export async function readLaunchDaemonProgramArguments(
+  env: GatewayServiceEnv,
+): Promise<GatewayServiceCommandConfig | null> {
+  const plistPath = resolveLaunchDaemonPlistPath(env);
+  return readLaunchAgentProgramArgumentsFromFile(plistPath);
+}
+
+export async function readLaunchDaemonRuntime(
+  env: Record<string, string | undefined>,
+): Promise<GatewayServiceRuntime> {
+  const domain = resolveSystemDomain();
+  const label = resolveLaunchDaemonLabel({ env });
+  const res = await execLaunchctl(["print", `${domain}/${label}`]);
+  if (res.code !== 0) {
+    return {
+      status: "unknown",
+      detail: (res.stderr || res.stdout).trim() || undefined,
+      missingUnit: true,
+    };
+  }
+  const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
+  // access() is fine for /Library/LaunchDaemons only when readable; treat missing as cached label.
+  let plistExists = true;
+  try {
+    await fs.access(resolveLaunchDaemonPlistPath(env));
+  } catch {
+    plistExists = false;
+  }
+  const state = parsed.state?.toLowerCase();
+  const status = state === "running" || parsed.pid ? "running" : state ? "stopped" : "unknown";
+  return {
+    status,
+    state: parsed.state,
+    pid: parsed.pid,
+    lastExitStatus: parsed.lastExitStatus,
+    lastExitReason: parsed.lastExitReason,
+    cachedLabel: !plistExists,
+  };
+}
+
+export async function uninstallLaunchDaemon({
+  env,
+  stdout,
+}: GatewayServiceManageArgs): Promise<void> {
+  const domain = resolveSystemDomain();
+  const plistPath = resolveLaunchDaemonPlistPath(env);
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
+  try {
+    await fs.unlink(plistPath);
+  } catch {
+    // ignore
+  }
+  try {
+    stdout.write(`${formatLine("Uninstalled LaunchDaemon", plistPath)}\n`);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+      throw err;
+    }
+  }
+}
+
+export async function stopLaunchDaemon({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveSystemDomain();
+  const label = resolveLaunchDaemonLabel({ env: serviceEnv });
+  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
+    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
+  }
+  try {
+    stdout.write(`${formatLine("Stopped LaunchDaemon", `${domain}/${label}`)}\n`);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+      throw err;
+    }
+  }
+}
+
+export async function installLaunchDaemon({
+  env,
+  stdout,
+  programArguments,
+  workingDirectory,
+  environment,
+  description,
+}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  await fs.mkdir(logDir, { recursive: true });
+
+  const domain = resolveSystemDomain();
+  const label = resolveLaunchDaemonLabel({ env });
+  const plistPath = resolveLaunchDaemonPlistPathForLabel(env, label);
+
+  // LaunchDaemons directory is system-owned; expect EACCES unless elevated.
+  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const username = env.USER || env.LOGNAME || "openclaw";
+  const plist = buildLaunchDaemonPlist({
+    label,
+    username,
+    comment: serviceDescription,
+    programArguments,
+    workingDirectory,
+    stdoutPath,
+    stderrPath,
+    environment,
+  });
+  await fs.writeFile(plistPath, plist, "utf8");
+
+  await execLaunchctl(["bootout", domain, plistPath]);
+  await execLaunchctl(["unload", plistPath]);
+  await execLaunchctl(["enable", `${domain}/${label}`]);
+  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  if (boot.code !== 0) {
+    const detail = (boot.stderr || boot.stdout).trim();
+    throw new Error(`launchctl bootstrap failed: ${detail}`);
+  }
+  await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+
+  writeFormattedLines(
+    stdout,
+    [
+      { label: "Installed LaunchDaemon", value: plistPath },
+      { label: "Logs", value: stdoutPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return { plistPath };
+}
+
+export async function restartLaunchDaemon({
+  stdout,
+  env,
+}: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveSystemDomain();
+  const label = resolveLaunchDaemonLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchDaemonPlistPath(serviceEnv);
+
+  const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
+  const previousPid =
+    runtime.code === 0
+      ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
+      : undefined;
+
+  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
+    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
+  }
+  if (typeof previousPid === "number") {
+    await waitForPidExit(previousPid);
+  }
+
+  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  if (boot.code !== 0) {
+    throw new Error(`launchctl bootstrap failed: ${(boot.stderr || boot.stdout).trim()}`);
+  }
+  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (start.code !== 0) {
+    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+  }
+  try {
+    stdout.write(`${formatLine("Restarted LaunchDaemon", `${domain}/${label}`)}\n`);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
       throw err;
