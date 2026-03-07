@@ -29,6 +29,7 @@ import {
   listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
+import { buildModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -44,12 +45,21 @@ import {
   type MattermostUser,
 } from "./client.js";
 import {
+  buildButtonProps,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   resolveInteractionCallbackPath,
   setInteractionCallbackUrl,
   setInteractionSecret,
+  type MattermostInteractionResponse,
 } from "./interactions.js";
+import {
+  buildMattermostAllowedModelRefs,
+  parseMattermostModelPickerContext,
+  renderMattermostModelsPickerView,
+  renderMattermostProviderPickerView,
+  resolveMattermostModelPickerCurrentModel,
+} from "./model-picker.js";
 import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
 import {
   createDedupeCache,
@@ -484,6 +494,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       client,
       botUserId,
       accountId: account.accountId,
+      handleInteraction: handleModelPickerInteraction,
       resolveSessionKey: async (channelId: string, userId: string) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
@@ -765,6 +776,250 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return null;
     }
   };
+
+  const buildModelPickerProps = (
+    channelId: string,
+    buttons: Array<unknown>,
+  ): Record<string, unknown> | undefined =>
+    buildButtonProps({
+      callbackUrl,
+      accountId: account.accountId,
+      channelId,
+      buttons,
+    });
+
+  const runModelPickerCommand = async (params: {
+    commandText: string;
+    route: ReturnType<typeof core.channel.routing.resolveAgentRoute>;
+    channelId: string;
+    senderId: string;
+    senderName: string;
+    kind: ChatType;
+    chatType: "direct" | "group" | "channel";
+    channelName?: string;
+    channelDisplay?: string;
+    roomLabel: string;
+    teamId?: string;
+    postId: string;
+  }): Promise<string> => {
+    const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
+    const fromLabel =
+      params.kind === "direct"
+        ? `Mattermost DM from ${params.senderName}`
+        : `Mattermost message in ${params.roomLabel} from ${params.senderName}`;
+    const ctxPayload = core.channel.reply.finalizeInboundContext({
+      Body: params.commandText,
+      BodyForAgent: params.commandText,
+      RawBody: params.commandText,
+      CommandBody: params.commandText,
+      From:
+        params.kind === "direct"
+          ? `mattermost:${params.senderId}`
+          : params.kind === "group"
+            ? `mattermost:group:${params.channelId}`
+            : `mattermost:channel:${params.channelId}`,
+      To: to,
+      SessionKey: params.route.sessionKey,
+      AccountId: params.route.accountId,
+      ChatType: params.chatType,
+      ConversationLabel: fromLabel,
+      GroupSubject:
+        params.kind !== "direct" ? params.channelDisplay || params.roomLabel : undefined,
+      GroupChannel: params.channelName ? `#${params.channelName}` : undefined,
+      GroupSpace: params.teamId,
+      SenderName: params.senderName,
+      SenderId: params.senderId,
+      Provider: "mattermost" as const,
+      Surface: "mattermost" as const,
+      MessageSid: `interaction:${params.postId}:${Date.now()}`,
+      Timestamp: Date.now(),
+      WasMentioned: true,
+      CommandAuthorized: true,
+      CommandSource: "native" as const,
+      OriginatingChannel: "mattermost" as const,
+      OriginatingTo: to,
+    });
+
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+    });
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg,
+      agentId: params.route.agentId,
+      channel: "mattermost",
+      accountId: account.accountId,
+    });
+    const capturedTexts: string[] = [];
+    const { dispatcher, replyOptions, markDispatchIdle } =
+      core.channel.reply.createReplyDispatcherWithTyping({
+        ...prefixOptions,
+        deliver: async (payload: ReplyPayload) => {
+          const text = core.channel.text
+            .convertMarkdownTables(payload.text ?? "", tableMode)
+            .trim();
+          if (text) {
+            capturedTexts.push(text);
+          }
+        },
+        onError: (err, info) => {
+          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
+        },
+      });
+
+    await core.channel.reply.withReplyDispatcher({
+      dispatcher,
+      onSettled: () => {
+        markDispatchIdle();
+      },
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            onModelSelected,
+          },
+        }),
+    });
+
+    return capturedTexts.join("\n\n").trim();
+  };
+
+  async function handleModelPickerInteraction(params: {
+    payload: {
+      channel_id: string;
+      post_id: string;
+      team_id?: string;
+      user_id: string;
+    };
+    userName: string;
+    context: Record<string, unknown>;
+  }): Promise<MattermostInteractionResponse | null> {
+    const pickerState = parseMattermostModelPickerContext(params.context);
+    if (!pickerState) {
+      return null;
+    }
+
+    if (pickerState.ownerUserId !== params.payload.user_id) {
+      return {
+        ephemeral_text: "Only the person who opened this picker can use it.",
+      };
+    }
+
+    const channelInfo = await resolveChannelInfo(params.payload.channel_id);
+    const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
+    const chatType = channelChatType(kind);
+    const teamId = channelInfo?.team_id ?? params.payload.team_id ?? undefined;
+    const channelName = channelInfo?.name ?? undefined;
+    const channelDisplay = channelInfo?.display_name ?? channelName ?? params.payload.channel_id;
+    const roomLabel = channelName ? `#${channelName}` : channelDisplay;
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+      teamId,
+      peer: {
+        kind,
+        id: kind === "direct" ? params.payload.user_id : params.payload.channel_id,
+      },
+    });
+
+    const data = await buildModelsProviderData(cfg);
+    if (data.providers.length === 0) {
+      return {
+        update: {
+          message: "No models available.",
+        },
+      };
+    }
+
+    const currentModel = resolveMattermostModelPickerCurrentModel({
+      cfg,
+      route,
+      data,
+    });
+
+    if (pickerState.action === "providers" || pickerState.action === "back") {
+      const view = renderMattermostProviderPickerView({
+        ownerUserId: pickerState.ownerUserId,
+        data,
+        currentModel,
+      });
+      return {
+        update: {
+          message: view.text,
+          props: buildModelPickerProps(params.payload.channel_id, view.buttons),
+        },
+      };
+    }
+
+    if (pickerState.action === "list") {
+      const view = renderMattermostModelsPickerView({
+        ownerUserId: pickerState.ownerUserId,
+        data,
+        provider: pickerState.provider,
+        page: pickerState.page,
+        currentModel,
+      });
+      return {
+        update: {
+          message: view.text,
+          props: buildModelPickerProps(params.payload.channel_id, view.buttons),
+        },
+      };
+    }
+
+    const targetModelRef = `${pickerState.provider}/${pickerState.model}`;
+    if (!buildMattermostAllowedModelRefs(data).has(targetModelRef)) {
+      return {
+        ephemeral_text: `That model is no longer available: ${targetModelRef}`,
+      };
+    }
+
+    const replyText = await runModelPickerCommand({
+      commandText: `/model ${targetModelRef}`,
+      route,
+      channelId: params.payload.channel_id,
+      senderId: params.payload.user_id,
+      senderName: params.userName,
+      kind,
+      chatType,
+      channelName,
+      channelDisplay,
+      roomLabel,
+      teamId,
+      postId: params.payload.post_id,
+    });
+    const updatedModel = resolveMattermostModelPickerCurrentModel({
+      cfg,
+      route,
+      data,
+    });
+    const view = renderMattermostModelsPickerView({
+      ownerUserId: pickerState.ownerUserId,
+      data,
+      provider: pickerState.provider,
+      page: pickerState.page,
+      currentModel: updatedModel,
+    });
+    const statusText =
+      replyText ||
+      (updatedModel === targetModelRef
+        ? `Switched to ${targetModelRef}.`
+        : `Current model: ${updatedModel}`);
+
+    return {
+      update: {
+        message: `${statusText}\n\n${view.text}`,
+        props: buildModelPickerProps(params.payload.channel_id, view.buttons),
+      },
+    };
+  }
 
   const handlePost = async (
     post: MattermostPost,

@@ -1,0 +1,98 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildMattermostAllowedModelRefs,
+  parseMattermostModelPickerContext,
+  renderMattermostModelSummaryView,
+  renderMattermostModelsPickerView,
+  renderMattermostProviderPickerView,
+  resolveMattermostModelPickerEntry,
+} from "./model-picker.js";
+
+const data = {
+  byProvider: new Map<string, Set<string>>([
+    ["anthropic", new Set(["claude-opus-4-5", "claude-sonnet-4-5"])],
+    ["openai", new Set(["gpt-4.1", "gpt-5"])],
+  ]),
+  providers: ["anthropic", "openai"],
+  resolvedDefault: {
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+  },
+};
+
+describe("Mattermost model picker", () => {
+  it("resolves bare /model and /models entry points", () => {
+    expect(resolveMattermostModelPickerEntry("/model")).toEqual({ kind: "summary" });
+    expect(resolveMattermostModelPickerEntry("/models")).toEqual({ kind: "providers" });
+    expect(resolveMattermostModelPickerEntry("/models OpenAI")).toEqual({
+      kind: "models",
+      provider: "openai",
+    });
+    expect(resolveMattermostModelPickerEntry("/model openai/gpt-5")).toBeNull();
+  });
+
+  it("builds the allowed model refs set", () => {
+    expect(buildMattermostAllowedModelRefs(data)).toEqual(
+      new Set([
+        "anthropic/claude-opus-4-5",
+        "anthropic/claude-sonnet-4-5",
+        "openai/gpt-4.1",
+        "openai/gpt-5",
+      ]),
+    );
+  });
+
+  it("renders the summary view with a browse button", () => {
+    const view = renderMattermostModelSummaryView({
+      ownerUserId: "user-1",
+      currentModel: "openai/gpt-5",
+    });
+
+    expect(view.text).toContain("Current: openai/gpt-5");
+    expect(view.text).toContain("Tap below to browse models");
+    expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
+  });
+
+  it("renders providers and models with Telegram-style navigation", () => {
+    const providersView = renderMattermostProviderPickerView({
+      ownerUserId: "user-1",
+      data,
+      currentModel: "openai/gpt-5",
+    });
+    const providerTexts = providersView.buttons.flat().map((button) => button.text);
+    expect(providerTexts).toContain("anthropic (2)");
+    expect(providerTexts).toContain("openai (2)");
+
+    const modelsView = renderMattermostModelsPickerView({
+      ownerUserId: "user-1",
+      data,
+      provider: "openai",
+      page: 1,
+      currentModel: "openai/gpt-5",
+    });
+    const modelTexts = modelsView.buttons.flat().map((button) => button.text);
+    expect(modelsView.text).toContain("Models (openai) - 2 available");
+    expect(modelTexts).toContain("gpt-5 [current]");
+    expect(modelTexts).toContain("Back to providers");
+  });
+
+  it("parses signed picker contexts", () => {
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "select",
+        ownerUserId: "user-1",
+        provider: "openai",
+        page: 2,
+        model: "gpt-5",
+      }),
+    ).toEqual({
+      action: "select",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 2,
+      model: "gpt-5",
+    });
+    expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
+  });
+});

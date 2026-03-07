@@ -14,6 +14,7 @@ import {
   logTypingFailure,
   resolveControlCommandGate,
 } from "openclaw/plugin-sdk/mattermost";
+import { buildModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -24,6 +25,13 @@ import {
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
+import {
+  renderMattermostModelSummaryView,
+  renderMattermostModelsPickerView,
+  renderMattermostProviderPickerView,
+  resolveMattermostModelPickerCurrentModel,
+  resolveMattermostModelPickerEntry,
+} from "./model-picker.js";
 import {
   isMattermostSenderAllowed,
   normalizeMattermostAllowList,
@@ -537,6 +545,48 @@ async function handleSlashCommandAsync(params: {
       : `Mattermost message in ${roomLabel} from ${senderName}`;
 
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
+  const pickerEntry = resolveMattermostModelPickerEntry(commandText);
+  if (pickerEntry) {
+    const data = await buildModelsProviderData(cfg);
+    if (data.providers.length === 0) {
+      await sendMessageMattermost(to, "No models available.", {
+        accountId: account.accountId,
+      });
+      return;
+    }
+
+    const currentModel = resolveMattermostModelPickerCurrentModel({
+      cfg,
+      route,
+      data,
+    });
+    const view =
+      pickerEntry.kind === "summary"
+        ? renderMattermostModelSummaryView({
+            ownerUserId: senderId,
+            currentModel,
+          })
+        : pickerEntry.kind === "providers"
+          ? renderMattermostProviderPickerView({
+              ownerUserId: senderId,
+              data,
+              currentModel,
+            })
+          : renderMattermostModelsPickerView({
+              ownerUserId: senderId,
+              data,
+              provider: pickerEntry.provider,
+              page: 1,
+              currentModel,
+            });
+
+    await sendMessageMattermost(to, view.text, {
+      accountId: account.accountId,
+      buttons: view.buttons,
+    });
+    runtime.log?.(`delivered model picker to ${to}`);
+    return;
+  }
 
   // Build inbound context — the command text is the body
   const ctxPayload = core.channel.reply.finalizeInboundContext({

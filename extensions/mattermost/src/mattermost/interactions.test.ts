@@ -1,5 +1,5 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
@@ -609,5 +609,63 @@ describe("createMattermostInteractionHandler", () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toContain("Unknown action");
+  });
+
+  it("lets a custom interaction handler short-circuit generic completion updates", async () => {
+    const context = { action_id: "mdlprov", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handleInteraction = vi.fn().mockResolvedValue({
+      ephemeral_text: "Only the original requester can use this picker.",
+    });
+    const dispatchButtonClick = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async (path: string, init?: { method?: string }) => {
+          requestLog.push({ path, method: init?.method });
+          return {
+            channel_id: "chan-1",
+            message: "Choose",
+            props: {
+              attachments: [{ actions: [{ id: "mdlprov", name: "Browse providers" }] }],
+            },
+          };
+        },
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+      handleInteraction,
+      dispatchButtonClick,
+    });
+
+    const req = createReq({
+      body: {
+        user_id: "user-2",
+        user_name: "alice",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(
+      JSON.stringify({
+        ephemeral_text: "Only the original requester can use this picker.",
+      }),
+    );
+    expect(requestLog).toEqual([{ path: "/posts/post-1", method: undefined }]);
+    expect(handleInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "mdlprov",
+        actionName: "Browse providers",
+        originalMessage: "Choose",
+        userName: "alice",
+      }),
+    );
+    expect(dispatchButtonClick).not.toHaveBeenCalled();
   });
 });
