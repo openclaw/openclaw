@@ -56,6 +56,7 @@ export function startOverviewPolling(host: PollingHost) {
       loadPresence(host as unknown as OpenClawApp),
       loadSessions(host as unknown as OpenClawApp),
       loadCronStatus(host as unknown as OpenClawApp),
+      loadDashboardSummary(host as unknown as OpenClawApp, { quiet: true }),
       loadDebug(host as unknown as OpenClawApp, { probe: false, includeModels: false }),
       loadLogs(host as unknown as OpenClawApp, { quiet: true }),
     ]);
@@ -72,7 +73,6 @@ export function startOverviewPolling(host: PollingHost) {
     }
     void Promise.all([
       loadCronJobs(host as unknown as OpenClawApp),
-      loadDashboardSummary(host as unknown as OpenClawApp, { quiet: true }),
       loadUsage(host as unknown as OpenClawApp),
       loadDevices(host as unknown as OpenClawApp, { quiet: true }),
     ]);

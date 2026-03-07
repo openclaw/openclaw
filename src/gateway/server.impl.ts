@@ -86,6 +86,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { ToolActivityRegistry } from "./tool-activity-registry.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -392,6 +393,7 @@ export async function startGatewayServer(
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
+  const toolActivityRegistry = new ToolActivityRegistry();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
@@ -495,19 +497,42 @@ export async function startGatewayServer(
 
   const agentUnsub = minimalTestGateway
     ? null
-    : onAgentEvent(
-        createAgentEventHandler({
-          broadcast,
-          broadcastToConnIds,
-          nodeSendToSession,
-          agentRunSeq,
-          chatRunState,
-          resolveSessionKeyForRun,
-          clearAgentRunContext,
-          toolEventRecipients,
-          scheduleDashboardDelta: () => scheduleDashboardDelta(requestContext),
-        }),
-      );
+    : (() => {
+        const unsubs = [
+          onAgentEvent(
+            createAgentEventHandler({
+              broadcast,
+              broadcastToConnIds,
+              nodeSendToSession,
+              agentRunSeq,
+              chatRunState,
+              resolveSessionKeyForRun,
+              clearAgentRunContext,
+              toolEventRecipients,
+              scheduleDashboardDelta: () => scheduleDashboardDelta(requestContext),
+            }),
+          ),
+          onAgentEvent((evt) => {
+            toolActivityRegistry.handle(evt);
+            if (evt.stream !== "tool") {
+              return;
+            }
+            const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+            if (phase === "start" || phase === "result" || phase === "error") {
+              scheduleDashboardDelta(requestContext);
+            }
+          }),
+        ];
+        return () => {
+          for (const unsub of unsubs) {
+            try {
+              unsub();
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+      })();
 
   const heartbeatUnsub = minimalTestGateway
     ? null
@@ -553,6 +578,7 @@ export async function startGatewayServer(
     cronStorePath,
     execApprovalManager,
     incidentManager,
+    toolActivityRegistry,
     loadGatewayModelCatalog,
     getHealthCache,
     refreshHealthSnapshot: refreshGatewayHealthSnapshot,

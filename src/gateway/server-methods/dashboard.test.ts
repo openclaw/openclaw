@@ -4,6 +4,8 @@ import { IncidentManager } from "../incident-manager.js";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   listDevicePairing: vi.fn(),
+  listRunningSessions: vi.fn(),
+  listFinishedSessions: vi.fn(),
   getTotalQueueSize: vi.fn(),
   getTotalPendingReplies: vi.fn(),
   getActiveEmbeddedRunCount: vi.fn(),
@@ -16,6 +18,11 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../infra/device-pairing.js", () => ({
   listDevicePairing: mocks.listDevicePairing,
+}));
+
+vi.mock("../../agents/bash-process-registry.js", () => ({
+  listRunningSessions: mocks.listRunningSessions,
+  listFinishedSessions: mocks.listFinishedSessions,
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
@@ -62,6 +69,65 @@ function createContext() {
       listConnected: () => [{ id: "node-1" }, { id: "node-2" }],
     },
     incidentManager: new IncidentManager(),
+    toolActivityRegistry: {
+      snapshot: () => ({
+        summary: {
+          active: 1,
+          recent: 2,
+          failedRecent: 1,
+          uniqueToolsActive: 1,
+        },
+        active: [
+          {
+            key: "run-1:tool-1",
+            runId: "run-1",
+            toolCallId: "tool-1",
+            sessionKey: "main",
+            agentId: "main",
+            name: "exec",
+            status: "running",
+            currentPhase: "update",
+            startedAt: 1_000,
+            updatedAt: 1_200,
+            endedAt: null,
+            argsPreview: "git status",
+            outputPreview: "still running",
+          },
+        ],
+        recent: [
+          {
+            key: "run-0:tool-0",
+            runId: "run-0",
+            toolCallId: "tool-0",
+            sessionKey: "main",
+            agentId: "main",
+            name: "apply_patch",
+            status: "failed",
+            currentPhase: "result",
+            startedAt: 900,
+            updatedAt: 950,
+            endedAt: 950,
+            argsPreview: "patch",
+            outputPreview: "failed patch",
+          },
+          {
+            key: "run-1:tool-1",
+            runId: "run-1",
+            toolCallId: "tool-1",
+            sessionKey: "main",
+            agentId: "main",
+            name: "exec",
+            status: "completed",
+            currentPhase: "result",
+            startedAt: 1_000,
+            updatedAt: 1_300,
+            endedAt: 1_300,
+            argsPreview: "git status",
+            outputPreview: "clean",
+          },
+        ],
+      }),
+    },
     hasConnectedMobileNode: () => true,
     broadcast: vi.fn(),
     logGateway: {
@@ -78,6 +144,33 @@ beforeEach(() => {
     pending: [{ requestId: "pair-1" }],
     paired: [{ deviceId: "paired-1" }, { deviceId: "paired-2" }],
   });
+  mocks.listRunningSessions.mockReturnValue([
+    {
+      id: "session-running",
+      command: "git pull",
+      scopeKey: "main",
+      sessionKey: "main",
+      pid: 4321,
+      startedAt: Date.now() - 2_000,
+      cwd: "C:/repo",
+      tail: "running",
+    },
+  ]);
+  mocks.listFinishedSessions.mockReturnValue([
+    {
+      id: "session-finished",
+      command: "npm test",
+      scopeKey: "main",
+      sessionKey: "main",
+      startedAt: Date.now() - 8_000,
+      endedAt: Date.now() - 1_000,
+      cwd: "C:/repo",
+      status: "failed",
+      exitCode: 1,
+      exitSignal: null,
+      tail: "tests failed",
+    },
+  ]);
   mocks.getTotalQueueSize.mockReturnValue(4);
   mocks.getTotalPendingReplies.mockReturnValue(2);
   mocks.getActiveEmbeddedRunCount.mockReturnValue(1);
@@ -137,6 +230,27 @@ describe("dashboard.summary", () => {
       queueSize: 4,
       pendingReplies: 2,
       activeEmbeddedRuns: 1,
+    });
+    expect(payload.tools.summary).toEqual({
+      active: 1,
+      recent: 2,
+      failedRecent: 1,
+      uniqueToolsActive: 1,
+    });
+    expect(payload.processes.summary).toEqual({
+      running: 1,
+      recent: 1,
+      failedRecent: 1,
+      killedRecent: 0,
+    });
+    expect(payload.autonomy.exec).toEqual({
+      host: "sandbox",
+      security: "deny",
+      ask: "on-miss",
+      node: null,
+      backgroundMs: null,
+      timeoutSec: null,
+      approvalRunningNoticeMs: null,
     });
     expect(payload.incidents.summary.active).toBeGreaterThan(0);
     expect(payload.incidents.active).toEqual(
@@ -220,6 +334,9 @@ describe("dashboard.summary", () => {
       expect.objectContaining({
         devices: { pending: 1, paired: 2 },
         runtime: { queueSize: 4, pendingReplies: 2, activeEmbeddedRuns: 1 },
+        tools: expect.objectContaining({
+          summary: expect.objectContaining({ active: 1 }),
+        }),
       }),
       { dropIfSlow: true },
     );

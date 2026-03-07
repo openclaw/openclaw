@@ -36,6 +36,53 @@ export type DashboardIncidentRecord = {
   occurrenceCount: number;
 };
 
+export type DashboardToolActivity = {
+  key: string;
+  runId: string;
+  toolCallId: string;
+  sessionKey: string | null;
+  agentId: string | null;
+  name: string;
+  status: "running" | "completed" | "failed";
+  currentPhase: string;
+  startedAt: number;
+  updatedAt: number;
+  endedAt: number | null;
+  argsPreview: string | null;
+  outputPreview: string | null;
+};
+
+export type DashboardProcessEntry = {
+  sessionId: string;
+  command: string;
+  sessionKey: string | null;
+  scopeKey: string | null;
+  status: "running" | "completed" | "failed" | "killed";
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  cwd: string | null;
+  pid: number | null;
+  exitCode: number | null;
+  exitSignal: string | number | null;
+  tail: string | null;
+};
+
+export type DashboardAutonomyAgent = {
+  agentId: string;
+  name: string | null;
+  toolProfile: string | null;
+  allowCount: number;
+  denyCount: number;
+  alsoAllowCount: number;
+  execHost: string | null;
+  execSecurity: string | null;
+  execAsk: string | null;
+  execNode: string | null;
+  workspaceOnly: boolean;
+  elevatedEnabled: boolean | null;
+};
+
 export type DashboardSummaryResult = {
   ts: number;
   security: {
@@ -64,6 +111,58 @@ export type DashboardSummaryResult = {
     queueSize: number;
     pendingReplies: number;
     activeEmbeddedRuns: number;
+  };
+  tools: {
+    summary: {
+      active: number;
+      recent: number;
+      failedRecent: number;
+      uniqueToolsActive: number;
+    };
+    active: DashboardToolActivity[];
+    recent: DashboardToolActivity[];
+  };
+  processes: {
+    summary: {
+      running: number;
+      recent: number;
+      failedRecent: number;
+      killedRecent: number;
+    };
+    running: DashboardProcessEntry[];
+    recent: DashboardProcessEntry[];
+  };
+  autonomy: {
+    summary: {
+      agents: number;
+      explicitToolPolicies: number;
+      nodeBoundAgents: number;
+      elevatedAgents: number;
+      workspaceOnly: boolean;
+      applyPatchEnabled: boolean;
+    };
+    exec: {
+      host: "sandbox" | "gateway" | "node";
+      security: "deny" | "allowlist" | "full";
+      ask: "off" | "on-miss" | "always";
+      node: string | null;
+      backgroundMs: number | null;
+      timeoutSec: number | null;
+      approvalRunningNoticeMs: number | null;
+    };
+    fs: {
+      workspaceOnly: boolean;
+    };
+    applyPatch: {
+      enabled: boolean;
+      workspaceOnly: boolean;
+      allowModels: string[];
+    };
+    elevated: {
+      enabled: boolean;
+      providers: string[];
+    };
+    agents: DashboardAutonomyAgent[];
   };
   incidents: {
     summary: {

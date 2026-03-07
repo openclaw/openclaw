@@ -1,4 +1,10 @@
+import type { ToolActivityRecord } from "../tool-activity-registry.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import {
+  listFinishedSessions,
+  listRunningSessions,
+  type ProcessStatus,
+} from "../../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { loadConfig } from "../../config/config.js";
@@ -53,10 +59,91 @@ export type DashboardSummaryPayload = {
     pendingReplies: number;
     activeEmbeddedRuns: number;
   };
+  tools: {
+    summary: {
+      active: number;
+      recent: number;
+      failedRecent: number;
+      uniqueToolsActive: number;
+    };
+    active: ToolActivityRecord[];
+    recent: ToolActivityRecord[];
+  };
+  processes: {
+    summary: {
+      running: number;
+      recent: number;
+      failedRecent: number;
+      killedRecent: number;
+    };
+    running: DashboardProcessSummaryEntry[];
+    recent: DashboardProcessSummaryEntry[];
+  };
+  autonomy: {
+    summary: {
+      agents: number;
+      explicitToolPolicies: number;
+      nodeBoundAgents: number;
+      elevatedAgents: number;
+      workspaceOnly: boolean;
+      applyPatchEnabled: boolean;
+    };
+    exec: {
+      host: "sandbox" | "gateway" | "node";
+      security: "deny" | "allowlist" | "full";
+      ask: "off" | "on-miss" | "always";
+      node: string | null;
+      backgroundMs: number | null;
+      timeoutSec: number | null;
+      approvalRunningNoticeMs: number | null;
+    };
+    fs: {
+      workspaceOnly: boolean;
+    };
+    applyPatch: {
+      enabled: boolean;
+      workspaceOnly: boolean;
+      allowModels: string[];
+    };
+    elevated: {
+      enabled: boolean;
+      providers: string[];
+    };
+    agents: Array<{
+      agentId: string;
+      name: string | null;
+      toolProfile: string | null;
+      allowCount: number;
+      denyCount: number;
+      alsoAllowCount: number;
+      execHost: string | null;
+      execSecurity: string | null;
+      execAsk: string | null;
+      execNode: string | null;
+      workspaceOnly: boolean;
+      elevatedEnabled: boolean | null;
+    }>;
+  };
   incidents: {
     summary: GatewayIncidentSummary;
     active: GatewayIncidentRecord[];
   };
+};
+
+type DashboardProcessSummaryEntry = {
+  sessionId: string;
+  command: string;
+  sessionKey: string | null;
+  scopeKey: string | null;
+  status: ProcessStatus;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  cwd: string | null;
+  pid: number | null;
+  exitCode: number | null;
+  exitSignal: string | number | null;
+  tail: string | null;
 };
 
 function sortFindings(findings: SecurityAuditFinding[]): SecurityAuditFinding[] {
@@ -115,6 +202,148 @@ function clampDashboardText(value: string | null | undefined, max = 140): string
     return trimmed;
   }
   return `${trimmed.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function summarizeProcessEntries(): DashboardSummaryPayload["processes"] {
+  const now = Date.now();
+  const runningSessions = listRunningSessions();
+  const finishedSessions = listFinishedSessions();
+  return {
+    summary: {
+      running: runningSessions.length,
+      recent: finishedSessions.length,
+      failedRecent: finishedSessions.filter((entry) => entry.status === "failed").length,
+      killedRecent: finishedSessions.filter((entry) => entry.status === "killed").length,
+    },
+    running: runningSessions
+      .toSorted((left, right) => right.startedAt - left.startedAt)
+      .slice(0, 8)
+      .map((entry) => ({
+        sessionId: entry.id,
+        command: entry.command,
+        sessionKey: entry.sessionKey ?? null,
+        scopeKey: entry.scopeKey ?? null,
+        status: "running" as const,
+        startedAt: entry.startedAt,
+        endedAt: null,
+        durationMs: now - entry.startedAt,
+        cwd: entry.cwd ?? null,
+        pid: entry.pid ?? null,
+        exitCode: null,
+        exitSignal: null,
+        tail: clampDashboardText(entry.tail, 220),
+      })),
+    recent: finishedSessions
+      .toSorted((left, right) => right.endedAt - left.endedAt)
+      .slice(0, 8)
+      .map((entry) => ({
+        sessionId: entry.id,
+        command: entry.command,
+        sessionKey: entry.sessionKey ?? null,
+        scopeKey: entry.scopeKey ?? null,
+        status: entry.status,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+        durationMs: Math.max(0, entry.endedAt - entry.startedAt),
+        cwd: entry.cwd ?? null,
+        pid: null,
+        exitCode: entry.exitCode ?? null,
+        exitSignal: entry.exitSignal ?? null,
+        tail: clampDashboardText(entry.tail, 220),
+      })),
+  };
+}
+
+function summarizeAutonomy(
+  cfg: ReturnType<typeof loadConfig>,
+): DashboardSummaryPayload["autonomy"] {
+  const tools = cfg.tools ?? {};
+  const globalExec = tools.exec ?? {};
+  const execHost = globalExec.host ?? "sandbox";
+  const execSecurity = globalExec.security ?? (execHost === "sandbox" ? "deny" : "allowlist");
+  const execAsk = globalExec.ask ?? "on-miss";
+  const fsWorkspaceOnly = tools.fs?.workspaceOnly === true;
+  const applyPatchConfig = globalExec.applyPatch;
+  const applyPatchWorkspaceOnly = fsWorkspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  const elevatedAllowFrom = tools.elevated?.allowFrom ?? {};
+  const elevatedProviders = Object.keys(elevatedAllowFrom).filter((entry) => entry.trim());
+  const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = configuredAgents.map((entry) => {
+    const agentTools = entry.tools ?? {};
+    const agentExec = agentTools.exec ?? {};
+    const agentFs = agentTools.fs ?? {};
+    const allow = Array.isArray(agentTools.allow) ? agentTools.allow.filter(Boolean) : [];
+    const deny = Array.isArray(agentTools.deny) ? agentTools.deny.filter(Boolean) : [];
+    const alsoAllow = Array.isArray(agentTools.alsoAllow)
+      ? agentTools.alsoAllow.filter(Boolean)
+      : [];
+    return {
+      agentId: entry.id,
+      name: entry.name?.trim() || null,
+      toolProfile: agentTools.profile ?? null,
+      allowCount: allow.length,
+      denyCount: deny.length,
+      alsoAllowCount: alsoAllow.length,
+      execHost: agentExec.host ?? null,
+      execSecurity: agentExec.security ?? null,
+      execAsk: agentExec.ask ?? null,
+      execNode: agentExec.node?.trim() || null,
+      workspaceOnly: agentFs.workspaceOnly === true,
+      elevatedEnabled:
+        typeof agentTools.elevated?.enabled === "boolean" ? agentTools.elevated.enabled : null,
+    };
+  });
+  const explicitToolPolicies = agents.filter(
+    (entry) =>
+      entry.toolProfile ||
+      entry.allowCount > 0 ||
+      entry.denyCount > 0 ||
+      entry.alsoAllowCount > 0 ||
+      entry.execHost ||
+      entry.execSecurity ||
+      entry.execAsk ||
+      entry.execNode ||
+      entry.workspaceOnly ||
+      entry.elevatedEnabled !== null,
+  ).length;
+
+  return {
+    summary: {
+      agents: Math.max(1, agents.length),
+      explicitToolPolicies,
+      nodeBoundAgents: agents.filter((entry) => Boolean(entry.execNode)).length,
+      elevatedAgents: agents.filter((entry) => entry.elevatedEnabled === true).length,
+      workspaceOnly: fsWorkspaceOnly,
+      applyPatchEnabled: applyPatchConfig?.enabled === true,
+    },
+    exec: {
+      host: execHost,
+      security: execSecurity,
+      ask: execAsk,
+      node: globalExec.node?.trim() || null,
+      backgroundMs: typeof globalExec.backgroundMs === "number" ? globalExec.backgroundMs : null,
+      timeoutSec: typeof globalExec.timeoutSec === "number" ? globalExec.timeoutSec : null,
+      approvalRunningNoticeMs:
+        typeof globalExec.approvalRunningNoticeMs === "number"
+          ? globalExec.approvalRunningNoticeMs
+          : null,
+    },
+    fs: {
+      workspaceOnly: fsWorkspaceOnly,
+    },
+    applyPatch: {
+      enabled: applyPatchConfig?.enabled === true,
+      workspaceOnly: applyPatchWorkspaceOnly,
+      allowModels: Array.isArray(applyPatchConfig?.allowModels)
+        ? applyPatchConfig.allowModels.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    },
+    elevated: {
+      enabled: tools.elevated?.enabled !== false,
+      providers: elevatedProviders,
+    },
+    agents,
+  };
 }
 
 function resolveConnectedNodeIds(
@@ -254,7 +483,11 @@ function buildIncidentCandidates(params: {
 export async function buildDashboardSummary(
   context: Pick<
     GatewayRequestContext,
-    "execApprovalManager" | "incidentManager" | "nodeRegistry" | "hasConnectedMobileNode"
+    | "execApprovalManager"
+    | "incidentManager"
+    | "nodeRegistry"
+    | "hasConnectedMobileNode"
+    | "toolActivityRegistry"
   >,
   params?: { forceAudit?: boolean },
 ): Promise<DashboardSummaryPayload> {
@@ -267,9 +500,20 @@ export async function buildDashboardSummary(
   const queueSize = getTotalQueueSize();
   const pendingReplies = getTotalPendingReplies();
   const activeEmbeddedRuns = getActiveEmbeddedRunCount();
+  const cfg = loadConfig();
   const topFindings = sortFindings(security.report.findings)
     .filter((entry) => entry.severity === "critical" || entry.severity === "warn")
     .slice(0, 6);
+  const toolSnapshot = context.toolActivityRegistry?.snapshot({
+    activeLimit: 8,
+    recentLimit: 8,
+  }) ?? {
+    summary: { active: 0, recent: 0, failedRecent: 0, uniqueToolsActive: 0 },
+    active: [],
+    recent: [],
+  };
+  const processSnapshot = summarizeProcessEntries();
+  const autonomy = summarizeAutonomy(cfg);
   const incidentCandidates = buildIncidentCandidates({
     approvals,
     devices,
@@ -318,6 +562,9 @@ export async function buildDashboardSummary(
       pendingReplies,
       activeEmbeddedRuns,
     },
+    tools: toolSnapshot,
+    processes: processSnapshot,
+    autonomy,
     incidents: {
       summary: incidentSummary,
       active: activeIncidents,
@@ -333,6 +580,7 @@ export async function broadcastDashboardDelta(
     | "incidentManager"
     | "nodeRegistry"
     | "hasConnectedMobileNode"
+    | "toolActivityRegistry"
     | "logGateway"
   >,
   params?: { forceAudit?: boolean },
@@ -355,6 +603,7 @@ export function scheduleDashboardDelta(
     | "incidentManager"
     | "nodeRegistry"
     | "hasConnectedMobileNode"
+    | "toolActivityRegistry"
     | "logGateway"
   >,
   delayMs = 750,

@@ -1,7 +1,13 @@
 import { html, nothing, svg } from "lit";
 import type { EventLogEntry } from "../app-events.ts";
 import type { DashboardTimelinePoint } from "../controllers/dashboard-timeline.ts";
-import type { DashboardIncidentRecord, DashboardSummaryResult } from "../controllers/dashboard.ts";
+import type {
+  DashboardAutonomyAgent,
+  DashboardIncidentRecord,
+  DashboardProcessEntry,
+  DashboardSummaryResult,
+  DashboardToolActivity,
+} from "../controllers/dashboard.ts";
 import type { DevicePairingList } from "../controllers/devices.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../controllers/exec-approval.ts";
 import type {
@@ -649,6 +655,67 @@ function resolveNodeCards(nodes: Array<Record<string, unknown>>): MissionNodeCar
     .slice(0, 4);
 }
 
+function resolveToolTone(status: DashboardToolActivity["status"]): Tone {
+  if (status === "failed") {
+    return "danger";
+  }
+  if (status === "running") {
+    return "info";
+  }
+  return "ok";
+}
+
+function resolveProcessTone(status: DashboardProcessEntry["status"]): Tone {
+  if (status === "failed" || status === "killed") {
+    return "danger";
+  }
+  if (status === "running") {
+    return "info";
+  }
+  return "ok";
+}
+
+function formatDurationCompact(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) {
+    return "n/a";
+  }
+  return formatDurationHuman(value);
+}
+
+function resolveAutonomyGuardTone(autonomy: DashboardSummaryResult["autonomy"] | null): Tone {
+  if (!autonomy) {
+    return "muted";
+  }
+  if (autonomy.exec.security === "full") {
+    return "danger";
+  }
+  if (autonomy.exec.host === "gateway" && autonomy.exec.ask === "off") {
+    return "warn";
+  }
+  if (!autonomy.fs.workspaceOnly) {
+    return "warn";
+  }
+  return "ok";
+}
+
+function resolveAutonomyAgentTone(agent: DashboardAutonomyAgent): Tone {
+  if (agent.execSecurity === "full") {
+    return "danger";
+  }
+  if (
+    agent.execHost === "gateway" ||
+    agent.execNode ||
+    agent.allowCount > 0 ||
+    agent.alsoAllowCount > 0
+  ) {
+    return "info";
+  }
+  if (agent.workspaceOnly) {
+    return "ok";
+  }
+  return "muted";
+}
+
 function resolveNodeIdFromText(text: string, nodeCards: MissionNodeCard[]): string | undefined {
   const lower = text.toLowerCase();
   const byId = nodeCards.find((node) => lower.includes(node.nodeId.toLowerCase()));
@@ -1269,6 +1336,18 @@ export function renderOverview(props: OverviewProps) {
   const hasMobileNodeConnected = dashboard?.nodes.hasMobileNodeConnected ?? false;
   const dashboardTimeline = props.dashboardTimeline;
   const nodeCards = resolveNodeCards(props.nodes);
+  const toolRuntime = dashboard?.tools ?? {
+    summary: { active: 0, recent: 0, failedRecent: 0, uniqueToolsActive: 0 },
+    active: [],
+    recent: [],
+  };
+  const processRuntime = dashboard?.processes ?? {
+    summary: { running: 0, recent: 0, failedRecent: 0, killedRecent: 0 },
+    running: [],
+    recent: [],
+  };
+  const autonomy = dashboard?.autonomy ?? null;
+  const autonomyGuardTone = resolveAutonomyGuardTone(autonomy);
   const securityTone: Tone = securitySummary?.critical
     ? "danger"
     : securitySummary?.warn
@@ -1444,6 +1523,20 @@ export function renderOverview(props: OverviewProps) {
           <div class="mission-kpi__label">Usage window</div>
           <div class="mission-kpi__value">${formatMoney(usage.totalCost)}</div>
           <div class="mission-kpi__detail">${formatCompactCount(usage.totalTokens)} tokens</div>
+        </article>
+        <article class="mission-kpi card">
+          <div class="mission-kpi__label">Tool runtime</div>
+          <div class="mission-kpi__value">${formatCount(toolRuntime.summary.active)}</div>
+          <div class="mission-kpi__detail">
+            ${formatCount(toolRuntime.summary.failedRecent)} failed recent · ${formatCount(toolRuntime.summary.uniqueToolsActive)} unique live
+          </div>
+        </article>
+        <article class="mission-kpi card">
+          <div class="mission-kpi__label">Background jobs</div>
+          <div class="mission-kpi__value">${formatCount(processRuntime.summary.running)}</div>
+          <div class="mission-kpi__detail">
+            ${formatCount(processRuntime.summary.failedRecent)} failed recent · ${formatCount(processRuntime.summary.recent)} retained
+          </div>
         </article>
         <article class="mission-kpi card">
           <div class="mission-kpi__label">Recent logs</div>
@@ -1839,6 +1932,285 @@ export function renderOverview(props: OverviewProps) {
                     </div>
                   `
                 : nothing
+            }
+          </div>
+        </article>
+
+        <article class="card mission-panel mission-panel--span-7">
+          <div class="mission-panel__header">
+            <div>
+              <div class="card-title">Tool Runtime</div>
+              <div class="card-sub">Live tool calls, recent failures, and pivots back into the owning session.</div>
+            </div>
+            <div class="mission-panel__meta">
+              ${renderToneBadge(`${formatCount(toolRuntime.summary.active)} active`, toolRuntime.summary.active > 0 ? "info" : "muted")}
+              ${renderToneBadge(`${formatCount(toolRuntime.summary.failedRecent)} failed`, toolRuntime.summary.failedRecent > 0 ? "danger" : "ok")}
+            </div>
+          </div>
+          <div class="mission-stack">
+            <section class="mission-subpanel">
+              <div class="mission-subpanel__title">Live calls</div>
+              ${
+                toolRuntime.active.length === 0
+                  ? renderEmptyState("No tool call is running right now.")
+                  : toolRuntime.active.map(
+                      (tool) => html`
+                        <div class="mission-row ${toneClass(resolveToolTone(tool.status))}">
+                          <div class="mission-row__body">
+                            <div class="mission-row__title">${tool.name}</div>
+                            <div class="mission-row__detail">
+                              ${tool.agentId ?? "agent unknown"}
+                              ${tool.sessionKey ? html` · ${tool.sessionKey}` : nothing}
+                              · ${tool.currentPhase}
+                              · ${formatDurationCompact(tool.updatedAt - tool.startedAt)}
+                            </div>
+                            ${tool.argsPreview ? html`<div class="mission-inline-note">${tool.argsPreview}</div>` : nothing}
+                            <div class="mission-actions-inline">
+                              ${
+                                tool.sessionKey
+                                  ? html`
+                                      <button class="btn btn--sm" type="button" @click=${() => props.onOpenSession(tool.sessionKey ?? "")}>
+                                        Session
+                                      </button>
+                                    `
+                                  : nothing
+                              }
+                              ${
+                                tool.agentId
+                                  ? html`
+                                      <button class="btn btn--sm" type="button" @click=${() => props.onFocusAgent(tool.agentId ?? "")}>
+                                        Agent
+                                      </button>
+                                    `
+                                  : nothing
+                              }
+                              <button class="btn btn--sm" type="button" @click=${() => props.onOpenLogsQuery(tool.name)}>
+                                Logs
+                              </button>
+                            </div>
+                          </div>
+                          <div class="mission-row__meta mission-row__meta--stack">
+                            ${renderToneBadge(tool.status, resolveToolTone(tool.status))}
+                            <span>${formatRelativeTimestamp(tool.updatedAt)}</span>
+                          </div>
+                        </div>
+                      `,
+                    )
+              }
+            </section>
+            <section class="mission-subpanel">
+              <div class="mission-subpanel__title">Recent completions</div>
+              ${
+                toolRuntime.recent.length === 0
+                  ? renderEmptyState("No recent tool execution retained yet.")
+                  : toolRuntime.recent.slice(0, 6).map(
+                      (tool) => html`
+                        <div class="mission-row mission-row--tight ${toneClass(resolveToolTone(tool.status))}">
+                          <div class="mission-row__body">
+                            <div class="mission-row__title">${tool.name}</div>
+                            <div class="mission-row__detail">
+                              ${tool.agentId ?? "agent unknown"}
+                              ${tool.sessionKey ? html` · ${tool.sessionKey}` : nothing}
+                              · ${formatDurationCompact((tool.endedAt ?? tool.updatedAt) - tool.startedAt)}
+                            </div>
+                            ${tool.outputPreview ? html`<div class="mission-inline-note">${tool.outputPreview}</div>` : nothing}
+                          </div>
+                          <div class="mission-row__meta mission-row__meta--stack">
+                            ${renderToneBadge(tool.status, resolveToolTone(tool.status))}
+                            <span>${formatRelativeTimestamp(tool.endedAt ?? tool.updatedAt)}</span>
+                          </div>
+                        </div>
+                      `,
+                    )
+              }
+            </section>
+          </div>
+        </article>
+
+        <article class="card mission-panel mission-panel--span-5">
+          <div class="mission-panel__header">
+            <div>
+              <div class="card-title">Execution Queue</div>
+              <div class="card-sub">Background exec and process jobs, including failures retained for operator follow-up.</div>
+            </div>
+            <div class="mission-panel__meta">
+              ${renderToneBadge(`${formatCount(processRuntime.summary.running)} running`, processRuntime.summary.running > 0 ? "info" : "muted")}
+              ${renderToneBadge(`${formatCount(processRuntime.summary.failedRecent)} failed`, processRuntime.summary.failedRecent > 0 ? "danger" : "ok")}
+            </div>
+          </div>
+          <div class="mission-stack">
+            <section class="mission-subpanel">
+              <div class="mission-subpanel__title">Running jobs</div>
+              ${
+                processRuntime.running.length === 0
+                  ? renderEmptyState("No background job is currently running.")
+                  : processRuntime.running.map(
+                      (entry) => html`
+                        <div class="mission-row ${toneClass(resolveProcessTone(entry.status))}">
+                          <div class="mission-row__body">
+                            <div class="mission-row__title">${clampText(entry.command, 76)}</div>
+                            <div class="mission-row__detail">
+                              ${entry.sessionKey ?? entry.scopeKey ?? "scope unknown"}
+                              ${entry.cwd ? html` · ${entry.cwd}` : nothing}
+                              · ${formatDurationCompact(entry.durationMs)}
+                            </div>
+                            ${entry.tail ? html`<div class="mission-inline-note">${entry.tail}</div>` : nothing}
+                            <div class="mission-actions-inline">
+                              ${
+                                entry.sessionKey
+                                  ? html`
+                                      <button class="btn btn--sm" type="button" @click=${() => props.onOpenSession(entry.sessionKey ?? "")}>
+                                        Session
+                                      </button>
+                                    `
+                                  : nothing
+                              }
+                              <button class="btn btn--sm" type="button" @click=${() => props.onOpenLogsQuery(entry.command)}>
+                                Logs
+                              </button>
+                            </div>
+                          </div>
+                          <div class="mission-row__meta mission-row__meta--stack">
+                            ${renderToneBadge(entry.status, resolveProcessTone(entry.status))}
+                            ${entry.pid != null ? html`<span>PID ${entry.pid}</span>` : nothing}
+                          </div>
+                        </div>
+                      `,
+                    )
+              }
+            </section>
+            <section class="mission-subpanel">
+              <div class="mission-subpanel__title">Recent outcomes</div>
+              ${
+                processRuntime.recent.length === 0
+                  ? renderEmptyState("No completed background job retained yet.")
+                  : processRuntime.recent.slice(0, 6).map(
+                      (entry) => html`
+                        <div class="mission-row mission-row--tight ${toneClass(resolveProcessTone(entry.status))}">
+                          <div class="mission-row__body">
+                            <div class="mission-row__title">${clampText(entry.command, 76)}</div>
+                            <div class="mission-row__detail">
+                              ${entry.sessionKey ?? entry.scopeKey ?? "scope unknown"}
+                              · ${formatDurationCompact(entry.durationMs)}
+                              ${
+                                entry.exitCode != null
+                                  ? html` · exit ${entry.exitCode}`
+                                  : entry.exitSignal
+                                    ? html` · signal ${entry.exitSignal}`
+                                    : nothing
+                              }
+                            </div>
+                            ${entry.tail ? html`<div class="mission-inline-note">${entry.tail}</div>` : nothing}
+                          </div>
+                          <div class="mission-row__meta mission-row__meta--stack">
+                            ${renderToneBadge(entry.status, resolveProcessTone(entry.status))}
+                            <span>${formatRelativeTimestamp(entry.endedAt ?? entry.startedAt)}</span>
+                          </div>
+                        </div>
+                      `,
+                    )
+              }
+            </section>
+          </div>
+        </article>
+
+        <article class="card mission-panel mission-panel--span-5">
+          <div class="mission-panel__header">
+            <div>
+              <div class="card-title">Autonomy Posture</div>
+              <div class="card-sub">Global tool guardrails, per-agent overrides, and the effective execution surface.</div>
+            </div>
+            <div class="mission-actions-inline">
+              ${renderToneBadge(autonomy ? `Exec ${autonomy.exec.host}` : "Config unavailable", autonomyGuardTone)}
+              <button class="btn btn--sm" type="button" @click=${() => props.onNavigate("agents")}>Open agents</button>
+            </div>
+          </div>
+          <div class="mission-usage-grid">
+            <div class="mission-usage-stat">
+              <div class="mission-usage-stat__label">Guardrail</div>
+              <div class="mission-usage-stat__value">${autonomy ? autonomy.exec.security : "n/a"}</div>
+              <div class="mission-usage-stat__detail">Ask ${autonomy?.exec.ask ?? "n/a"} · host ${autonomy?.exec.host ?? "n/a"}</div>
+            </div>
+            <div class="mission-usage-stat">
+              <div class="mission-usage-stat__label">Workspace</div>
+              <div class="mission-usage-stat__value">${autonomy?.fs.workspaceOnly ? "Scoped" : "Broad"}</div>
+              <div class="mission-usage-stat__detail">
+                ${autonomy?.summary.applyPatchEnabled ? "apply_patch enabled" : "apply_patch disabled"}
+              </div>
+            </div>
+            <div class="mission-usage-stat">
+              <div class="mission-usage-stat__label">Agents</div>
+              <div class="mission-usage-stat__value">${formatCount(autonomy?.summary.agents ?? 0)}</div>
+              <div class="mission-usage-stat__detail">
+                ${formatCount(autonomy?.summary.explicitToolPolicies ?? 0)} with explicit tool policy
+              </div>
+            </div>
+            <div class="mission-usage-stat">
+              <div class="mission-usage-stat__label">Node bound</div>
+              <div class="mission-usage-stat__value">${formatCount(autonomy?.summary.nodeBoundAgents ?? 0)}</div>
+              <div class="mission-usage-stat__detail">
+                ${formatCount(autonomy?.summary.elevatedAgents ?? 0)} elevated-capable
+              </div>
+            </div>
+          </div>
+          <div class="mission-stack">
+            ${
+              !autonomy
+                ? renderEmptyState("Autonomy posture is unavailable.")
+                : html`
+                    <section class="mission-subpanel">
+                      <div class="mission-subpanel__title">Global execution policy</div>
+                      <div class="mission-row ${toneClass(autonomyGuardTone)}">
+                        <div class="mission-row__body">
+                          <div class="mission-row__title">Tool host and approval model</div>
+                          <div class="mission-row__detail">
+                            Exec host ${autonomy.exec.host}
+                            ${autonomy.exec.node ? html` · node ${autonomy.exec.node}` : nothing}
+                            · security ${autonomy.exec.security}
+                            · ask ${autonomy.exec.ask}
+                          </div>
+                          <div class="mission-actions-inline">
+                            ${renderToneBadge(autonomy.fs.workspaceOnly ? "workspace only" : "full fs", autonomy.fs.workspaceOnly ? "ok" : "warn")}
+                            ${renderToneBadge(autonomy.applyPatch.enabled ? "apply_patch on" : "apply_patch off", autonomy.applyPatch.enabled ? "info" : "muted")}
+                            ${renderToneBadge(autonomy.elevated.enabled ? "elevated enabled" : "elevated off", autonomy.elevated.enabled ? "warn" : "ok")}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="mission-subpanel">
+                      <div class="mission-subpanel__title">Agent overrides</div>
+                      ${
+                        autonomy.agents.length === 0
+                          ? renderEmptyState("No agent-level tool overrides configured.")
+                          : autonomy.agents.slice(0, 6).map(
+                              (agent) => html`
+                                <div class="mission-row mission-row--tight ${toneClass(resolveAutonomyAgentTone(agent))}">
+                                  <div class="mission-row__body">
+                                    <div class="mission-row__title">${agent.name ?? agent.agentId}</div>
+                                    <div class="mission-row__detail">
+                                      ${agent.toolProfile ?? "default profile"}
+                                      ${agent.execHost ? html` · host ${agent.execHost}` : nothing}
+                                      ${agent.execSecurity ? html` · ${agent.execSecurity}` : nothing}
+                                      ${agent.execNode ? html` · node ${agent.execNode}` : nothing}
+                                    </div>
+                                    <div class="mission-actions-inline">
+                                      ${renderToneBadge(`${formatCount(agent.allowCount)} allow`, agent.allowCount > 0 ? "info" : "muted")}
+                                      ${renderToneBadge(`${formatCount(agent.denyCount)} deny`, agent.denyCount > 0 ? "warn" : "muted")}
+                                      ${renderToneBadge(agent.workspaceOnly ? "workspace" : "broad fs", agent.workspaceOnly ? "ok" : "warn")}
+                                    </div>
+                                  </div>
+                                  <div class="mission-row__meta mission-row__meta--stack">
+                                    ${renderToneBadge(resolveAutonomyAgentTone(agent), resolveAutonomyAgentTone(agent))}
+                                    <button class="btn btn--sm" type="button" @click=${() => props.onFocusAgent(agent.agentId)}>
+                                      Agent
+                                    </button>
+                                  </div>
+                                </div>
+                              `,
+                            )
+                      }
+                    </section>
+                  `
             }
           </div>
         </article>
