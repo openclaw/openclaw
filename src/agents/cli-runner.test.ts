@@ -353,6 +353,19 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 });
 
 describe("resolveCliWatchdog", () => {
+  it("defaults non-codex watchdog to extend-on-output with hard cap", () => {
+    const watchdog = resolveCliWatchdog({
+      backend: {
+        command: "claude",
+      },
+      timeoutMs: 600_000,
+      useResume: false,
+    });
+
+    expect(watchdog.overallPolicy).toBe("extend-on-output");
+    expect(watchdog.overallMaxMs).toBeGreaterThanOrEqual(600_000);
+  });
+
   it("defaults codex watchdog to extend-on-output with hard cap", () => {
     const watchdog = resolveCliWatchdog({
       backend: {
