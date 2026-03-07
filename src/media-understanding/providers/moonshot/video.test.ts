@@ -16,7 +16,7 @@ describe("describeMoonshotVideo", () => {
     const result = await describeMoonshotVideo({
       buffer: Buffer.from("video-bytes"),
       fileName: "clip.mp4",
-      apiKey: "moonshot-test",
+      apiKey: "moonshot-test", // pragma: allowlist secret
       timeoutMs: 1500,
       baseUrl: "https://api.moonshot.ai/v1/",
       model: "kimi-k2.5",
@@ -61,7 +61,7 @@ describe("describeMoonshotVideo", () => {
     const result = await describeMoonshotVideo({
       buffer: Buffer.from("video"),
       fileName: "clip.mp4",
-      apiKey: "moonshot-test",
+      apiKey: "moonshot-test", // pragma: allowlist secret
       timeoutMs: 1000,
       fetchFn,
     });

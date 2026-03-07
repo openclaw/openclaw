@@ -472,39 +472,86 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
-  const webSearchKey =
-    webSearchProvider === "perplexity"
-      ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
-      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv =
-    webSearchProvider === "perplexity"
-      ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
-      : (process.env.BRAVE_API_KEY ?? "").trim();
-  const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
-  await prompter.note(
-    hasWebSearchKey
-      ? [
+  const webSearchProvider = nextConfig.tools?.web?.search?.provider;
+  const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
+  if (webSearchProvider) {
+    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
+    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
+    const label = entry?.label ?? webSearchProvider;
+    const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
+    const keyConfigured = hasExistingKey(nextConfig, webSearchProvider);
+    const envAvailable = entry ? hasKeyInEnv(entry) : false;
+    const hasKey = keyConfigured || envAvailable;
+    const keySource = storedKey
+      ? "API key: stored in config."
+      : keyConfigured
+        ? "API key: configured via secret reference."
+        : envAvailable
+          ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
+          : undefined;
+    if (webSearchEnabled !== false && hasKey) {
+      await prompter.note(
+        [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
-          `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : "Brave Search"}`,
-          webSearchKey
-            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
-            : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n")
-      : [
-          "To enable web search, your agent will need an API key for either Perplexity Search or Brave Search.",
-          "",
-          "Set it up interactively:",
-          `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Choose a provider and paste your API key",
-          "",
-          "Alternative: set PERPLEXITY_API_KEY or BRAVE_API_KEY in the Gateway environment (no config changes).",
+          `Provider: ${label}`,
+          ...(keySource ? [keySource] : []),
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-    "Web search (optional)",
-  );
+        "Web search",
+      );
+    } else if (!hasKey) {
+      await prompter.note(
+        [
+          `Provider ${label} is selected but no API key was found.`,
+          "web_search will not work until a key is added.",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          `Web search (${label}) is configured but disabled.`,
+          `Re-enable: ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+  } else {
+    // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
+    // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
+    const { SEARCH_PROVIDER_OPTIONS, hasExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
+    const legacyDetected = SEARCH_PROVIDER_OPTIONS.find(
+      (e) => hasExistingKey(nextConfig, e.value) || hasKeyInEnv(e),
+    );
+    if (legacyDetected) {
+      await prompter.note(
+        [
+          `Web search is available via ${legacyDetected.label} (auto-detected).`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          "Web search was skipped. You can enable it later:",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+  }
 
   await prompter.note(
     'What now: https://openclaw.ai/showcase ("What People Are Building").',
