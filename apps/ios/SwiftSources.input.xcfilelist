@@ -61,7 +61,9 @@ Sources/Voice/VoiceWakePreferences.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/TalkDirective.swift
 ../../Swabble/Sources/SwabbleKit/WakeWordGate.swift
 Sources/Voice/TalkModeManager.swift
-Sources/Voice/WhisperSTTClient.swift
+Sources/Voice/WAVEncoder.swift
+Sources/Voice/ElevenLabsRealtimeSTTClient.swift
+Sources/Voice/ElevenLabsSTTClient.swift
 Sources/Voice/TalkOrbOverlay.swift
 Sources/LiveActivity/OpenClawActivityAttributes.swift
 Sources/LiveActivity/LiveActivityManager.swift

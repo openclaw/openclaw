@@ -339,6 +339,48 @@ struct SettingsTab: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
+                            if self.appModel.talkMode.gatewayTalkApiKeyConfigured {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Talk STT (ElevenLabs)")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    LabeledContent("Provider", value: "ElevenLabs")
+                                    LabeledContent("Model") {
+                                        Picker("Model", selection: Bindable(self.appModel.talkMode).sttModelId) {
+                                            Text("Scribe v2").tag("scribe_v2")
+                                            Text("Scribe v2 Realtime").tag("scribe_v2_realtime")
+                                        }
+                                        .labelsHidden()
+                                    }
+                                    LabeledContent("Language") {
+                                        Picker("Language", selection: Bindable(self.appModel.talkMode).sttLanguageCode) {
+                                            Text("Auto-detect").tag("")
+                                            Text("English").tag("eng")
+                                            Text("中文 (Mandarin)").tag("zho")
+                                            Text("日本語").tag("jpn")
+                                            Text("한국어").tag("kor")
+                                            Text("Français").tag("fra")
+                                            Text("Deutsch").tag("deu")
+                                            Text("Español").tag("spa")
+                                            Text("Português").tag("por")
+                                            Text("Italiano").tag("ita")
+                                            Text("Nederlands").tag("nld")
+                                            Text("Русский").tag("rus")
+                                            Text("العربية").tag("ara")
+                                            Text("हिन्दी").tag("hin")
+                                            Text("ภาษาไทย").tag("tha")
+                                            Text("Tiếng Việt").tag("vie")
+                                            Text("Bahasa Indonesia").tag("ind")
+                                            Text("Türkçe").tag("tur")
+                                            Text("粵語 (Cantonese)").tag("yue")
+                                        }
+                                        .labelsHidden()
+                                    }
+                                    Text("Speech-to-text settings. Stored locally on this device.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                             self.featureToggle(
                                 "Show Talk Button",
                                 isOn: self.$talkButtonEnabled,
