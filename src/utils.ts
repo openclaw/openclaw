@@ -337,8 +337,25 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return { home, prefix: "~" };
 }
 
+/**
+ * Check if path shortening is enabled.
+ * Can be disabled via OPENCLAW_EXPAND_PATHS=1 to always show full absolute paths.
+ */
+function isPathShorteningEnabled(): boolean {
+  // If explicitly disabled, return false (meaning don't shorten, show full paths)
+  if (process.env.OPENCLAW_EXPAND_PATHS === "1") {
+    return false;
+  }
+  // Default to enabled (shorten to ~)
+  return true;
+}
+
 export function shortenHomePath(input: string): string {
   if (!input) {
+    return input;
+  }
+  // Check if path shortening is disabled via environment variable
+  if (!isPathShorteningEnabled()) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
@@ -357,6 +374,10 @@ export function shortenHomePath(input: string): string {
 
 export function shortenHomeInString(input: string): string {
   if (!input) {
+    return input;
+  }
+  // Check if path shortening is disabled via environment variable
+  if (!isPathShorteningEnabled()) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
