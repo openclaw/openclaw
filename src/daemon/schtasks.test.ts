@@ -63,6 +63,33 @@ describe("scheduled task runtime derivation", () => {
       detail: "Task reports Running but Last Run Result=0x0; treating as stale runtime state.",
     });
   });
+
+  it("treats localized status with running result code as running (German locale)", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Wird ausgeführt",
+        lastRunResult: "0x41301",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats localized status with decimal running result code as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "En cours d'exécution",
+        lastRunResult: "267009",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
+  it("treats localized non-running status without running result code as stopped", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Bereit",
+        lastRunResult: "0x0",
+      }),
+    ).toEqual({ status: "stopped" });
+  });
 });
 
 describe("resolveTaskScriptPath", () => {

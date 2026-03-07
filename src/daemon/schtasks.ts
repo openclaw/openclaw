@@ -155,6 +155,8 @@ function normalizeTaskResultCode(value?: string): string | null {
   return raw;
 }
 
+const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
@@ -163,13 +165,23 @@ export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   if (!statusRaw) {
     return { status: "unknown" };
   }
-  if (statusRaw !== "running") {
+
+  const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
+  const isRunningByResultCode =
+    normalizedResult != null && RUNNING_RESULT_CODES.has(normalizedResult);
+
+  // The status string is localized (e.g. "Wird ausgeführt" on German Windows).
+  // Use the Last Run Result code 0x41301 as a locale-independent running
+  // indicator, falling back to the English "running" string.
+  const isRunning = statusRaw === "running" || isRunningByResultCode;
+
+  if (!isRunning) {
     return { status: "stopped" };
   }
 
-  const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
-  const runningCodes = new Set(["0x41301"]);
-  if (normalizedResult && !runningCodes.has(normalizedResult)) {
+  // If the status text says running but the result code disagrees, the task
+  // may be in a stale state (e.g. killed without cleanup).
+  if (normalizedResult && !RUNNING_RESULT_CODES.has(normalizedResult)) {
     return {
       status: "stopped",
       detail: `Task reports Running but Last Run Result=${parsed.lastRunResult}; treating as stale runtime state.`,
