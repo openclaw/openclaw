@@ -7,12 +7,15 @@ const PACKAGE_JSON_CANDIDATES = [
   "../package.json",
   "../../package.json",
   "../../../package.json",
+  "../../../../package.json",
   "./package.json",
 ] as const;
 
 const BUILD_INFO_CANDIDATES = [
   "../build-info.json",
   "../../build-info.json",
+  "../../../build-info.json",
+  "../../../../build-info.json",
   "./build-info.json",
 ] as const;
 
