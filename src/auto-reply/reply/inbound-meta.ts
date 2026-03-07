@@ -124,7 +124,12 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
         ? ctx.InboundHistory.length
         : undefined,
   };
-  if (Object.values(conversationInfo).some((v) => v !== undefined)) {
+  // Only show conversation info block if there's meaningful metadata beyond just conversation_label.
+  // This avoids cluttering TUI and other simple direct chat sessions.
+  const hasUsefulConversationMeta = Object.entries(conversationInfo).some(
+    ([key, value]) => key !== "conversation_label" && value !== undefined,
+  );
+  if (hasUsefulConversationMeta) {
     blocks.push(
       [
         "Conversation info (untrusted metadata):",
