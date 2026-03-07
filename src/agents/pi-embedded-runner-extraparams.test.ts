@@ -350,6 +350,62 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("normalizes reasoning_effort to none or default for Groq (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning_effort: "low",
+        reasoning: { effort: "high" },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "qwen/qwen3-32b");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("default");
+    expect((payloads[0]?.reasoning as Record<string, unknown>)?.effort).toBe("default");
+  });
+
+  it("keeps reasoning_effort none for Groq when already none", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning_effort: "none",
+        reasoning: { effort: "none" },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "qwen/qwen3-32b");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+    expect((payloads[0]?.reasoning as Record<string, unknown>)?.effort).toBe("none");
+  });
+
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

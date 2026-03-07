@@ -902,6 +902,45 @@ function createOpenRouterWrapper(
   };
 }
 
+/** Groq API only accepts "none" or "default" for reasoning_effort. Map any other value to "default". */
+const GROQ_REASONING_EFFORT_VALID = new Set(["none", "default"]);
+
+function createGroqReasoningEffortWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const flat = payloadObj.reasoning_effort;
+          if (typeof flat === "string") {
+            payloadObj.reasoning_effort = GROQ_REASONING_EFFORT_VALID.has(flat) ? flat : "default";
+          }
+          const reasoning = payloadObj.reasoning;
+          if (
+            reasoning &&
+            typeof reasoning === "object" &&
+            !Array.isArray(reasoning) &&
+            "effort" in reasoning
+          ) {
+            const effort = (reasoning as Record<string, unknown>).effort;
+            if (typeof effort === "string") {
+              (reasoning as Record<string, unknown>).effort = GROQ_REASONING_EFFORT_VALID.has(
+                effort,
+              )
+                ? effort
+                : "default";
+            }
+          }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Models on OpenRouter that do not support the `reasoning.effort` parameter.
  * Injecting it causes "Invalid arguments passed to the model" errors.
@@ -1088,6 +1127,13 @@ export function applyExtraParamsToAgent(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
     );
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
+  }
+
+  // Groq only accepts reasoning_effort "none" or "default". pi-ai may send
+  // low/medium/high; normalize to "default" to avoid 400. See openclaw/openclaw#32638.
+  if (provider === "groq") {
+    log.debug(`applying Groq reasoning_effort normalization for ${provider}/${modelId}`);
+    agent.streamFn = createGroqReasoningEffortWrapper(agent.streamFn);
   }
 
   if (provider === "moonshot") {
