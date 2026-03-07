@@ -887,28 +887,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let parsedMessage = inboundMessage;
-    let parsedImages: ChatImageContent[] = [];
-    if (normalizedAttachments.length > 0) {
-      try {
-        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
-          log: context.logGateway,
-        });
-        parsedMessage = parsed.message;
-        parsedImages = parsed.images;
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
-      }
-    }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
     });
-    const now = Date.now();
     const clientRunId = p.idempotencyKey;
 
     const sendPolicy = resolveSendPolicy({
@@ -956,15 +940,84 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    try {
-      const abortController = new AbortController();
-      context.chatAbortControllers.set(clientRunId, {
-        controller: abortController,
-        sessionId: entry?.sessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
-        startedAtMs: now,
-        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+    let parsedMessage = inboundMessage;
+    let parsedImages: ChatImageContent[] = [];
+    let parsedMediaPaths: string[] = [];
+    let parsedMediaTypes: string[] = [];
+    if (normalizedAttachments.length > 0) {
+      try {
+        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
+          maxBytes: 5_000_000,
+          log: context.logGateway,
+        });
+        parsedMessage = parsed.message;
+        parsedImages = parsed.images;
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
+
+    // Re-check dedupe after attachment parsing to preserve idempotency when a concurrent
+    // request finishes while this request is still parsing attachments.
+    const cachedAfterParse = context.dedupe.get(`chat:${clientRunId}`);
+    if (cachedAfterParse) {
+      respond(cachedAfterParse.ok, cachedAfterParse.payload, cachedAfterParse.error, {
+        cached: true,
       });
+      return;
+    }
+
+    // Re-check in-flight runs after attachment parsing, which can include I/O and widen
+    // the race window for concurrent requests sharing the same idempotencyKey.
+    const activeAfterParse = context.chatAbortControllers.get(clientRunId);
+    if (activeAfterParse) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+
+    const now = Date.now();
+    const abortController = new AbortController();
+    context.chatAbortControllers.set(clientRunId, {
+      controller: abortController,
+      sessionId: entry?.sessionId ?? clientRunId,
+      sessionKey: rawSessionKey,
+      startedAtMs: now,
+      expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+    });
+
+    if (normalizedAttachments.length > 0) {
+      try {
+        const persisted = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
+          maxBytes: 5_000_000,
+          log: context.logGateway,
+          persistImagesToDisk: true,
+        });
+        parsedMediaPaths = persisted.mediaPaths;
+        parsedMediaTypes = persisted.mediaTypes;
+      } catch (err) {
+        context.chatAbortControllers.delete(clientRunId);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
+
+    const activeBeforeStart = context.chatAbortControllers.get(clientRunId);
+    if (!activeBeforeStart || activeBeforeStart.controller.signal.aborted) {
+      context.chatAbortControllers.delete(clientRunId);
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "chat run aborted before start"),
+        { runId: clientRunId },
+      );
+      return;
+    }
+
+    try {
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -1017,6 +1070,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        MediaPath: parsedMediaPaths[0],
+        MediaPaths: parsedMediaPaths.length > 0 ? parsedMediaPaths : undefined,
+        MediaType: parsedMediaTypes[0],
+        MediaTypes: parsedMediaTypes.length > 0 ? parsedMediaTypes : undefined,
       };
 
       const agentId = resolveSessionAgentId({
@@ -1159,6 +1216,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
+      context.chatAbortControllers.delete(clientRunId);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,

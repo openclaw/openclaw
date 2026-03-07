@@ -330,6 +330,7 @@ describe("gateway server chat", () => {
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
+      const callsBeforeImage = spyCalls.length;
       const reqId = "chat-img";
       ws.send(
         JSON.stringify({
@@ -359,6 +360,27 @@ describe("gateway server chat", () => {
       );
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
+
+      await waitFor(() => spyCalls.length > callsBeforeImage, 8000);
+      const imgOpts = spyCalls.at(-1)?.[1] as
+        | { images?: Array<{ type: string; data: string; mimeType: string }> }
+        | undefined;
+      expect(imgOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+      const imgCtx = spyCalls.at(-1)?.[0] as
+        | {
+            MediaPath?: string;
+            MediaPaths?: string[];
+            MediaType?: string;
+            MediaTypes?: string[];
+          }
+        | undefined;
+      expect(typeof imgCtx?.MediaPath).toBe("string");
+      expect(imgCtx?.MediaPaths).toHaveLength(1);
+      expect(imgCtx?.MediaType).toBe("image/png");
+      expect(imgCtx?.MediaTypes).toEqual(["image/png"]);
+      await expect(fs.stat(imgCtx?.MediaPath as string)).resolves.toBeDefined();
+
+      const callsBeforeImageOnly = spyCalls.length;
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -389,6 +411,24 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
 
+      await waitFor(() => spyCalls.length > callsBeforeImageOnly, 8000);
+      const imgOnlyOpts = spyCalls.at(-1)?.[1] as
+        | { images?: Array<{ type: string; data: string; mimeType: string }> }
+        | undefined;
+      expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+      const imgOnlyCtx = spyCalls.at(-1)?.[0] as
+        | {
+            MediaPath?: string;
+            MediaPaths?: string[];
+            MediaType?: string;
+            MediaTypes?: string[];
+          }
+        | undefined;
+      expect(typeof imgOnlyCtx?.MediaPath).toBe("string");
+      expect(imgOnlyCtx?.MediaPaths).toHaveLength(1);
+      expect(imgOnlyCtx?.MediaType).toBe("image/png");
+      expect(imgOnlyCtx?.MediaTypes).toEqual(["image/png"]);
+      await expect(fs.stat(imgOnlyCtx?.MediaPath as string)).resolves.toBeDefined();
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
       testState.sessionStorePath = path.join(historyDir, "sessions.json");
