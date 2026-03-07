@@ -569,7 +569,7 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.temperature !== undefined) {
         extraParams.temperature = streamOpts.temperature;
       }
-      if (streamOpts?.maxTokens) {
+      if (streamOpts?.maxTokens !== undefined) {
         extraParams.max_output_tokens = streamOpts.maxTokens;
       }
       if (streamOpts?.topP !== undefined) {

@@ -636,6 +636,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
+    releaseWsSession("sess-max-tokens-zero");
   });
 
   it("connects to the WebSocket on first call", async () => {
@@ -1006,6 +1007,36 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.type).toBe("response.create");
     expect(sent.temperature).toBe(0.3);
     expect(sent.max_output_tokens).toBe(256);
+  });
+
+  it("forwards maxTokens: 0 to response.create as max_output_tokens", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-max-tokens-zero");
+    const opts = { maxTokens: 0 };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-max-zero", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.max_output_tokens).toBe(0);
   });
 
   it("forwards reasoningEffort/reasoningSummary to response.create reasoning block", async () => {
