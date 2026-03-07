@@ -1054,6 +1054,9 @@ export async function agentCommand(
   return await agentCommandInternal(
     {
       ...opts,
+      // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+      // Ingress callers must opt into owner semantics explicitly via
+      // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
       senderIsOwner: opts.senderIsOwner ?? true,
     },
     runtime,
@@ -1067,6 +1070,8 @@ export async function agentCommandFromIngress(
   deps: CliDeps = createDefaultDeps(),
 ) {
   if (typeof opts.senderIsOwner !== "boolean") {
+    // HTTP/WS ingress must declare the trust level explicitly at the boundary.
+    // This keeps network-facing callers from silently picking up the local trusted default.
     throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
   }
   return await agentCommandInternal(
