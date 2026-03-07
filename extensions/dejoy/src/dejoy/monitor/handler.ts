@@ -30,6 +30,7 @@ import {
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
 } from "./allowlist.js";
+import { resolveDeJoyBodyForAgent, resolveDeJoyInboundSenderLabel } from "./inbound-body.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
@@ -505,6 +506,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
+      const senderUsername = senderId.split(":")[0]?.replace(/^@/, "")?.trim() || undefined;
+      const senderLabel = resolveDeJoyInboundSenderLabel({
+        senderName,
+        senderId,
+        senderUsername,
+      });
       const textWithId = threadRootId
         ? `${bodyText}\n[dejoy event id: ${messageId} room: ${roomId} thread: ${threadRootId}]`
         : `${bodyText}\n[dejoy event id: ${messageId} room: ${roomId}]`;
@@ -528,6 +535,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           : undefined) || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
+        BodyForAgent: resolveDeJoyBodyForAgent({
+          isDirectMessage,
+          bodyText,
+          senderLabel,
+        }),
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `dejoy:${senderId}` : `dejoy:channel:${roomId}`,
@@ -538,7 +550,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
         SenderId: senderId,
-        SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
+        SenderUsername: senderUsername,
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
         GroupChannel: isRoom ? (roomInfo.canonicalAlias ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
@@ -687,17 +699,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onIdle: typingCallbacks.onIdle,
         });
 
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
+      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
-        replyOptions: {
-          ...replyOptions,
-          skillFilter: roomConfig?.skills as string[] | undefined,
-          onModelSelected,
+        onSettled: () => {
+          markDispatchIdle();
         },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions: {
+              ...replyOptions,
+              skillFilter: roomConfig?.skills as string[] | undefined,
+              onModelSelected,
+            },
+          }),
       });
-      markDispatchIdle();
       if (!queuedFinal) {
         return;
       }
