@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1", toJid: "jid" })),
   deliverOutboundPayloads: vi.fn(),
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "s" })),
 }));
 
 vi.mock("../../discord/send.js", () => ({
@@ -55,6 +56,9 @@ vi.mock("../../infra/outbound/deliver.js", async () => {
     deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   };
 });
+vi.mock("../../config/sessions/transcript.js", () => ({
+  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+}));
 const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
   "../../infra/outbound/deliver.js",
 );
@@ -153,6 +157,24 @@ describe("routeReply", () => {
     });
     expect(res.ok).toBe(true);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
+  it("mirrors internal webchat replies into session transcript", async () => {
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    const res = await routeReply({
+      payload: { text: "hello webchat" },
+      channel: "webchat",
+      to: "webchat:user-1",
+      sessionKey: "main:webchat:user-1",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "main:webchat:user-1",
+        text: "hello webchat",
+      }),
+    );
   });
 
   it("drops silent token payloads", async () => {

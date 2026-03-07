@@ -11,6 +11,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -113,10 +114,25 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   }
 
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
-    return {
-      ok: false,
-      error: "Webchat routing not supported for queued replies",
-    };
+    if (!params.sessionKey) {
+      return {
+        ok: false,
+        error: "Webchat routing requires sessionKey",
+      };
+    }
+    const mirrored = await appendAssistantMessageToSessionTranscript({
+      agentId: resolvedAgentId,
+      sessionKey: params.sessionKey,
+      text,
+      mediaUrls,
+    });
+    if (!mirrored.ok) {
+      return {
+        ok: false,
+        error: `Failed to mirror webchat reply: ${mirrored.reason}`,
+      };
+    }
+    return { ok: true };
   }
 
   const channelId = normalizeChannelId(channel) ?? null;
