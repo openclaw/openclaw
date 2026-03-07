@@ -1,4 +1,7 @@
-import { buildOpenGroupPolicyRestrictSendersWarning } from "openclaw/plugin-sdk";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  buildOpenGroupPolicyRestrictSendersWarning,
+} from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
   ChannelPlugin,
@@ -12,7 +15,6 @@ import {
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
@@ -125,19 +127,16 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   actions: bluebubblesMessageActions,
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.bluebubbles?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.bluebubbles.accounts.${resolvedAccountId}.`
-        : "channels.bluebubbles.";
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "bluebubbles",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("bluebubbles"),
+        policyPathSuffix: "dmPolicy",
         normalizeEntry: (raw) => normalizeBlueBubblesHandle(raw.replace(/^bluebubbles:/i, "")),
-      };
+      });
     },
     collectWarnings: ({ account }) => {
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
