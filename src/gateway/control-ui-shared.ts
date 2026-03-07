@@ -14,6 +14,10 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   if (!normalized) {
     return "";
   }
+  // Config values can come from Windows-style input (e.g. "\ui").
+  // Normalize to URL path separators before route matching.
+  normalized = normalized.replaceAll("\\", "/");
+  normalized = normalized.replaceAll(/\/{2,}/g, "/");
   if (!normalized.startsWith("/")) {
     normalized = `/${normalized}`;
   }
