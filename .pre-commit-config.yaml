@@ -32,7 +32,7 @@ repos:
           - --exclude-files
           - '(^|/)pnpm-lock\.yaml$'
           - --exclude-lines
-          - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
+          - '(?:key_content|decoded)\.include\?\("BEGIN PRIVATE KEY"\)'
           - --exclude-lines
           - 'case \.apiKeyEnv: "API key \(env var\)"'
           - --exclude-lines
