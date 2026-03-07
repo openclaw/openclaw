@@ -634,7 +634,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
         const firstContentType = dataMessage.attachments?.[0]?.contentType;
         const pendingKind = kindFromMime(firstContentType ?? undefined);
-        return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
+        return pendingKind && pendingKind !== "unknown"
+          ? `<media:${pendingKind}>`
+          : "<media:attachment>";
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteText;
       const historyKey = groupId ?? "unknown";
@@ -677,7 +679,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const kind = kindFromMime(mediaType ?? undefined);
-    if (kind) {
+    if (kind && kind !== "unknown") {
       placeholder = `<media:${kind}>`;
     } else if (dataMessage.attachments?.length) {
       placeholder = "<media:attachment>";
