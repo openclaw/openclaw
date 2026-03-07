@@ -501,6 +501,6 @@ describe("resolveGatewayCredentialsFromValues", () => {
       tokenPrecedence: "config-first",
       passwordPrecedence: "config-first", // pragma: allowlist secret
     });
-    expect(resolved).toEqual({ token: "real-token-value", password: "real-password" });
+    expect(resolved).toEqual({ token: "real-token-value", password: "real-password" }); // pragma: allowlist secret
   });
 });
