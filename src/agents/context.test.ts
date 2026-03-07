@@ -144,4 +144,75 @@ describe("resolveContextTokensForModel", () => {
 
     expect(result).toBe(200_000);
   });
+
+  it("uses the Codex auto-compact limit as the effective context window", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  modelContextWindow: 1_000_000,
+                  modelAutoCompactTokenLimit: 950_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 272_000,
+    });
+
+    expect(result).toBe(950_000);
+  });
+
+  it("falls back to the Codex hard cap when no auto-compact limit is set", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  modelContextWindow: 1_000_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 272_000,
+    });
+
+    expect(result).toBe(1_000_000);
+  });
+
+  it("keeps the configured Codex context window safe when compact limit exceeds hard cap", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  modelContextWindow: 800_000,
+                  modelAutoCompactTokenLimit: 950_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 272_000,
+    });
+
+    expect(result).toBe(800_000);
+  });
 });

@@ -247,6 +247,33 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+function parsePositiveContextTokens(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return undefined;
+}
+
+function resolveConfiguredCodexContextTokens(
+  modelParams: Record<string, unknown> | undefined,
+): number | undefined {
+  if (!modelParams) {
+    return undefined;
+  }
+  const hardCap = parsePositiveContextTokens(modelParams.modelContextWindow);
+  const compactLimit = parsePositiveContextTokens(modelParams.modelAutoCompactTokenLimit);
+  if (compactLimit && hardCap) {
+    return Math.min(compactLimit, hardCap);
+  }
+  return compactLimit ?? hardCap;
+}
+
 export function resolveContextTokensForModel(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -254,19 +281,28 @@ export function resolveContextTokensForModel(params: {
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
 }): number | undefined {
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
-    return params.contextTokensOverride;
-  }
-
+  // Check explicitly configured model params first — they take precedence over
+  // session-stored overrides which may be stale (e.g. stored as 200k before
+  // the user configured modelContextWindow for a Codex model).
   const ref = resolveProviderModelRef({
     provider: params.provider,
     model: params.model,
   });
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
+    if (ref.provider === "openai-codex") {
+      const codexContextTokens = resolveConfiguredCodexContextTokens(modelParams);
+      if (codexContextTokens) {
+        return codexContextTokens;
+      }
+    }
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
+  }
+
+  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
+    return params.contextTokensOverride;
   }
 
   return lookupContextTokens(params.model) ?? params.fallbackContextTokens;

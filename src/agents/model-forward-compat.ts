@@ -142,10 +142,17 @@ function resolveOpenAICodexForwardCompatModel(
     if (!template) {
       continue;
     }
-    return normalizeModelCompat({
-      ...template,
+    const overrides: Partial<Model<Api>> = {
       id: trimmedModelId,
       name: trimmedModelId,
+    };
+    if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+      overrides.contextWindow = 1_000_000;
+      overrides.maxTokens = 1_000_000;
+    }
+    return normalizeModelCompat({
+      ...template,
+      ...overrides,
     } as Model<Api>);
   }
 
@@ -158,8 +165,8 @@ function resolveOpenAICodexForwardCompatModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: lower === OPENAI_CODEX_GPT_54_MODEL_ID ? 1_000_000 : DEFAULT_CONTEXT_TOKENS,
+    maxTokens: lower === OPENAI_CODEX_GPT_54_MODEL_ID ? 1_000_000 : DEFAULT_CONTEXT_TOKENS,
   } as Model<Api>);
 }
 

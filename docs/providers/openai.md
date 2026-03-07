@@ -100,6 +100,35 @@ Related OpenAI docs:
 }
 ```
 
+### Codex large context window
+
+For `openai-codex/*`, OpenClaw uses per-model params to adjust its internal
+context tracking (status display, pruning, and compaction timing). These values
+are **not** sent to the Codex API.
+
+- `modelContextWindow`: hard context window cap used by OpenClaw internally
+- `modelAutoCompactTokenLimit`: effective working window for compaction heuristics
+
+If both values are set, the compact limit is clamped to the hard cap.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openai-codex/gpt-5.4" },
+      models: {
+        "openai-codex/gpt-5.4": {
+          params: {
+            modelContextWindow: 1000000,
+            modelAutoCompactTokenLimit: 950000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ### OpenAI WebSocket warm-up
 
 OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
