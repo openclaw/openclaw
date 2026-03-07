@@ -666,11 +666,9 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -678,7 +676,9 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
-                    return;
+                    // Agent not yet in config list — create a stub entry so the path exists.
+                    index = list.length;
+                    updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
                   const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
@@ -694,11 +694,9 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -706,7 +704,9 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
-                    return;
+                    // Agent not yet in config list — create a stub entry so the path exists.
+                    index = list.length;
+                    updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
                   const basePath = ["agents", "list", index, "tools"];
                   if (alsoAllow.length > 0) {
@@ -734,11 +734,9 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -746,9 +744,12 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
-                    return;
+                    // Agent not yet in config list — create a stub entry so the path exists.
+                    index = list.length;
+                    updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
-                  const entry = list[index] as { skills?: unknown };
+                  // list[index] may be undefined when the stub was just created above.
+                  const entry = list[index] as { skills?: unknown } | undefined;
                   const normalizedSkill = skillName.trim();
                   if (!normalizedSkill) {
                     return;
@@ -756,8 +757,8 @@ export function renderApp(state: AppViewState) {
                   const allSkills =
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
-                  const existing = Array.isArray(entry.skills)
-                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                  const existing = Array.isArray(entry?.skills)
+                    ? (entry.skills as unknown[]).map((name) => String(name).trim()).filter(Boolean)
                     : undefined;
                   const base = existing ?? allSkills;
                   const next = new Set(base);
@@ -772,10 +773,8 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
                   const index = list.findIndex(
                     (entry) =>
                       entry &&
@@ -792,11 +791,9 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -804,7 +801,9 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
-                    return;
+                    // Agent not yet in config list — create a stub entry so the path exists.
+                    index = list.length;
+                    updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
@@ -812,11 +811,9 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -824,7 +821,9 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
-                    return;
+                    // Agent not yet in config list — create a stub entry so the path exists.
+                    index = list.length;
+                    updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
                   const basePath = ["agents", "list", index, "model"];
                   if (!modelId) {
@@ -848,11 +847,9 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const rawList = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = Array.isArray(rawList) ? rawList : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -860,12 +857,15 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
-                    return;
+                    // Agent not yet in config list — create a stub entry so the path exists.
+                    index = list.length;
+                    updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
                   const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  // list[index] may be undefined when the stub was just created above.
+                  const entry = list[index] as { model?: unknown } | undefined;
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
+                  const existing = entry?.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
