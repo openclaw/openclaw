@@ -40,7 +40,6 @@ import {
   fetchMattermostUserTeams,
   deleteMattermostPost,
   normalizeMattermostBaseUrl,
-  patchMattermostPost,
   sendMattermostTyping,
   updateMattermostPost,
   type MattermostChannel,
@@ -1679,10 +1678,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
       } else {
         try {
-          await patchMattermostPost(blockStreamingClient, {
-            postId: streamMessageId,
-            message: text,
-          });
+          await updateMattermostPost(blockStreamingClient, streamMessageId, { message: text });
           runtime.log?.(`stream-patch flushed ${streamMessageId}`);
         } catch (err) {
           logVerboseMessage(`mattermost stream-patch flush failed: ${String(err)}`);
@@ -1697,9 +1693,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!blockStreamingClient) return;
       pendingPatchText = fullText;
       if (patchInterval) return; // interval already running, tick will pick up new text
+      let idleTicks = 0;
       patchInterval = setInterval(() => {
         const text = pendingPatchText;
-        if (!text || text === lastSentText || patchSending) return;
+        if (!text || text === lastSentText || patchSending) {
+          // Auto-terminate after ~5 s of no new text (handles abort/error cases).
+          if (++idleTicks > 25) stopPatchInterval();
+          return;
+        }
+        idleTicks = 0;
         lastSentText = text;
         patchSending = true;
         void (async () => {
@@ -1717,8 +1719,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
             } else {
               try {
-                await patchMattermostPost(blockStreamingClient, {
-                  postId: streamMessageId,
+                await updateMattermostPost(blockStreamingClient, streamMessageId, {
                   message: text,
                 });
                 runtime.log?.(`stream-patch edited ${streamMessageId}`);
@@ -1746,16 +1747,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           // Flush any pending partial-reply patch before final delivery.
           if (isFinal && blockStreamingClient) {
             await flushPendingPatch();
+            // Wait for any in-flight interval patch to complete before issuing the
+            // final patch, so Mattermost doesn't process a partial patch after the final.
+            while (patchSending) {
+              await new Promise<void>((r) => setTimeout(r, 20));
+            }
           }
 
           // Final: patch the streamed message with the authoritative complete text,
           // or fall back to a new message (with orphan cleanup) if patching fails.
           if (isFinal && streamMessageId && text) {
             try {
-              await patchMattermostPost(blockStreamingClient!, {
-                postId: streamMessageId,
-                message: text,
-              });
+              await updateMattermostPost(blockStreamingClient!, streamMessageId, { message: text });
               runtime.log?.(`stream-patch final edit ${streamMessageId}`);
             } catch (err) {
               logVerboseMessage(

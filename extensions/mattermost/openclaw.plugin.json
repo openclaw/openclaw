@@ -3,6 +3,12 @@
   "channels": ["mattermost"],
   "configSchema": {
     "type": "object",
-    "additionalProperties": true
+    "additionalProperties": false,
+    "properties": {
+      "blockStreaming": {
+        "type": "boolean",
+        "description": "Enable edit-in-place streaming for Mattermost responses (default: true)"
+      }
+    }
   }
 }

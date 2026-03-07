@@ -25,7 +25,7 @@ import {
   createMattermostClient,
   deleteMattermostPost,
   normalizeMattermostBaseUrl,
-  patchMattermostPost,
+  updateMattermostPost,
 } from "./mattermost/client.js";
 import {
   listMattermostDirectoryGroups,
@@ -112,10 +112,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       }
 
       const client = createMattermostClient({ baseUrl, botToken });
-      const updated = await patchMattermostPost(client, {
-        postId: messageId,
-        message,
-      });
+      const updated = await updateMattermostPost(client, messageId, { message });
 
       return {
         content: [{ type: "text" as const, text: `Edited post ${messageId}` }],
