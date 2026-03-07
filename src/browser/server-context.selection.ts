@@ -1,9 +1,10 @@
-import { fetchOk } from "./cdp.helpers.js";
-import { appendCdpPath } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import type { PwAiModule } from "./pw-ai-module.js";
-import { getPwAiModule } from "./pw-ai-module.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
+import { fetchOk } from "./cdp.helpers.js";
+import { appendCdpPath } from "./cdp.js";
+import { getPwAiModule } from "./pw-ai-module.js";
+import { getTabsByOwner, touchTab, unregisterTab } from "./server-context.tab-registry.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -18,6 +19,7 @@ type SelectionOps = {
   ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
   focusTab: (targetId: string) => Promise<void>;
   closeTab: (targetId: string) => Promise<void>;
+  closeTabsByOwner: (ownerId: string) => Promise<{ closed: string[] }>;
 };
 
 export function createProfileSelectionOps({
@@ -89,6 +91,7 @@ export function createProfileSelectionOps({
       throw new Error("tab not found");
     }
     profileState.lastTargetId = chosen.targetId;
+    touchTab(profileState, chosen.targetId);
     return chosen;
   };
 
@@ -118,6 +121,7 @@ export function createProfileSelectionOps({
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolvedTargetId;
+        touchTab(profileState, resolvedTargetId);
         return;
       }
     }
@@ -125,10 +129,12 @@ export function createProfileSelectionOps({
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
+    touchTab(profileState, resolvedTargetId);
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+    const profileState = getProfileState();
 
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (!profile.cdpIsLoopback) {
@@ -140,16 +146,35 @@ export function createProfileSelectionOps({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
         });
+        unregisterTab(profileState, resolvedTargetId);
         return;
       }
     }
 
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
+    unregisterTab(profileState, resolvedTargetId);
+  };
+
+  const closeTabsByOwner = async (ownerId: string): Promise<{ closed: string[] }> => {
+    const profileState = getProfileState();
+    const owned = getTabsByOwner(profileState, ownerId);
+    const closed: string[] = [];
+    for (const meta of owned) {
+      try {
+        await closeTab(meta.targetId);
+        closed.push(meta.targetId);
+      } catch {
+        // Tab may already be gone — remove from registry anyway.
+        unregisterTab(profileState, meta.targetId);
+      }
+    }
+    return { closed };
   };
 
   return {
     ensureTabAvailable,
     focusTab,
     closeTab,
+    closeTabsByOwner,
   };
 }
