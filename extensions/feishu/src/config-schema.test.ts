@@ -24,14 +24,6 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
-  it("normalizes legacy groupPolicy allowall to open", () => {
-    const result = FeishuConfigSchema.parse({
-      groupPolicy: "allowall",
-    });
-
-    expect(result.groupPolicy).toBe("open");
-  });
-
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
@@ -146,10 +138,12 @@ describe("FeishuConfigSchema replyInThread", () => {
 });
 
 describe("FeishuConfigSchema optimization flags", () => {
-  it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
+  it("defaults top-level typingIndicator, resolveSenderNames, resolveGroupNames and resolveDmDisplayNames to true", () => {
     const result = FeishuConfigSchema.parse({});
     expect(result.typingIndicator).toBe(true);
     expect(result.resolveSenderNames).toBe(true);
+    expect(result.resolveGroupNames).toBe(true);
+    expect(result.resolveDmDisplayNames).toBe(true);
   });
 
   it("accepts account-level optimization flags", () => {
@@ -158,11 +152,15 @@ describe("FeishuConfigSchema optimization flags", () => {
         main: {
           typingIndicator: false,
           resolveSenderNames: false,
+          resolveGroupNames: false,
+          resolveDmDisplayNames: false,
         },
       },
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+    expect(result.accounts?.main?.resolveGroupNames).toBe(false);
+    expect(result.accounts?.main?.resolveDmDisplayNames).toBe(false);
   });
 });
 
