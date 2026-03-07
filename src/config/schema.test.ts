@@ -143,6 +143,32 @@ describe("config schema", () => {
     expect(channelProps?.accessToken).toBeTruthy();
   });
 
+  it("looks up plugin config paths for slash-delimited plugin ids", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "pack/one",
+          name: "Pack One",
+          configSchema: {
+            type: "object",
+            properties: {
+              provider: { type: "string" },
+            },
+          },
+        },
+      ],
+    });
+
+    const lookup = lookupConfigSchema(res, "plugins.entries.pack/one.config");
+    expect(lookup?.path).toBe("plugins.entries.pack/one.config");
+    expect(lookup?.hintPath).toBe("plugins.entries.pack/one.config");
+    expect(lookup?.children.find((child) => child.key === "provider")).toMatchObject({
+      key: "provider",
+      path: "plugins.entries.pack/one.config.provider",
+      type: "string",
+    });
+  });
+
   it("adds heartbeat target hints with dynamic channels", () => {
     const res = buildConfigSchema(heartbeatChannelInput);
 
@@ -272,7 +298,9 @@ describe("config schema", () => {
   });
 
   it("rejects overly deep lookup paths", () => {
-    const buildNestedObjectSchema = (segments: string[]) => {
+    const buildNestedObjectSchema = (
+      segments: string[],
+    ): { type: string; properties?: Record<string, unknown> } => {
       const [head, ...rest] = segments;
       if (!head) {
         return { type: "string" };
