@@ -869,15 +869,23 @@ export async function compactEmbeddedPiSessionDirect(
     }
   } catch (err) {
     const reason = describeUnknownError(err);
-    // Only record as circuit breaker failure for actual execution errors
-    // (timeouts, provider errors), not for benign skip conditions.
-    const skipReason = classifyCompactionReason(reason);
-    const isExecutionFailure =
-      skipReason !== "no_compactable_entries" &&
-      skipReason !== "below_threshold" &&
-      skipReason !== "already_compacted_recently";
-    if (isExecutionFailure) {
-      recordCompactionFailure(sessionKey);
+    // External abort (e.g. user closes session mid-compaction) is not a real failure —
+    // do not count it toward the circuit breaker threshold.
+    const isAbortError =
+      (err instanceof DOMException && err.name === "AbortError") ||
+      (err instanceof Error && err.name === "AbortError") ||
+      err === params.abortSignal?.reason;
+    if (!isAbortError) {
+      // Only record as circuit breaker failure for actual execution errors
+      // (timeouts, provider errors), not for benign skip conditions.
+      const skipReason = classifyCompactionReason(reason);
+      const isExecutionFailure =
+        skipReason !== "no_compactable_entries" &&
+        skipReason !== "below_threshold" &&
+        skipReason !== "already_compacted_recently";
+      if (isExecutionFailure) {
+        recordCompactionFailure(sessionKey);
+      }
     }
     return fail(reason);
   } finally {
