@@ -49,7 +49,11 @@ function matchesIpv4Cidr(hostname: string, cidr: string): boolean {
 function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
   let hostname: string;
   try {
-    hostname = new URL(targetUrl).hostname.trim().toLowerCase();
+    const rawHostname = new URL(targetUrl).hostname.trim().toLowerCase();
+    hostname =
+      rawHostname.startsWith("[") && rawHostname.endsWith("]")
+        ? rawHostname.slice(1, -1)
+        : rawHostname;
   } catch {
     return false;
   }

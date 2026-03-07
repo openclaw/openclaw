@@ -81,6 +81,13 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 
+  it("returns undefined for IPv6 loopback targets", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+
+    expect(resolveProxyFetchFromEnv("http://[::1]:9001/v1/models")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
   it("returns proxy fetch for private-network targets that are not in no_proxy", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", "");
