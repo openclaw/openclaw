@@ -23,6 +23,8 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -41,6 +43,60 @@ function sanitizeModelHeaders(
     next[headerName] = headerValue;
   }
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
+}
+
+function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
+}
+
+function normalizeOpenAICodexTransport(params: {
+  provider: string;
+  model: Model<Api>;
+}): Model<Api> {
+  if (normalizeProviderId(params.provider) !== "openai-codex") {
+    return params.model;
+  }
+
+  const useCodexTransport =
+    !params.model.baseUrl ||
+    isOpenAIApiBaseUrl(params.model.baseUrl) ||
+    isOpenAICodexBaseUrl(params.model.baseUrl);
+
+  const nextApi =
+    useCodexTransport && params.model.api === "openai-responses"
+      ? ("openai-codex-responses" as const)
+      : params.model.api;
+  const nextBaseUrl =
+    nextApi === "openai-codex-responses" &&
+    (!params.model.baseUrl || isOpenAIApiBaseUrl(params.model.baseUrl))
+      ? OPENAI_CODEX_BASE_URL
+      : params.model.baseUrl;
+
+  if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
+    return params.model;
+  }
+
+  return {
+    ...params.model,
+    api: nextApi,
+    baseUrl: nextBaseUrl,
+  } as Model<Api>;
+}
+
+function normalizeResolvedModel(params: { provider: string; model: Model<Api> }): Model<Api> {
+  return normalizeModelCompat(normalizeOpenAICodexTransport(params));
 }
 
 export { buildModelAliasLines };
@@ -145,13 +201,14 @@ export function resolveModelWithRegistry(params: {
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    return normalizeModelCompat(
-      applyConfiguredProviderOverrides({
+    return normalizeResolvedModel({
+      provider,
+      model: applyConfiguredProviderOverrides({
         discoveredModel: model,
         providerConfig,
         modelId,
       }),
-    );
+    });
   }
 
   const providers = cfg?.models?.providers ?? {};
@@ -161,64 +218,71 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch?.api) {
-    return normalizeModelCompat(inlineMatch as Model<Api>);
+    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
   // Otherwise, configured providers can default to a generic API and break specific transports.
   const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
-    return normalizeModelCompat(
-      applyConfiguredProviderOverrides({
+    return normalizeResolvedModel({
+      provider,
+      model: applyConfiguredProviderOverrides({
         discoveredModel: forwardCompat,
         providerConfig,
         modelId,
       }),
-    );
+    });
   }
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
   if (normalizedProvider === "openrouter") {
-    return normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      api: "openai-completions",
+    return normalizeResolvedModel({
       provider,
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: DEFAULT_CONTEXT_TOKENS,
-      // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-      maxTokens: 8192,
-    } as Model<Api>);
+      model: {
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider,
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+        maxTokens: 8192,
+      } as Model<Api>,
+    });
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
   if (providerConfig || modelId.startsWith("mock-")) {
-    return normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+    return normalizeResolvedModel({
       provider,
-      baseUrl: providerConfig?.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers:
-        providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
-    } as Model<Api>);
+      model: {
+        id: modelId,
+        name: modelId,
+        api: providerConfig?.api ?? "openai-responses",
+        provider,
+        baseUrl: providerConfig?.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers:
+          providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      } as Model<Api>,
+    });
   }
 
   return undefined;
