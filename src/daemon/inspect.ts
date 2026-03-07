@@ -361,6 +361,11 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
   return tasks;
 }
 
+export const __test__ = {
+  detectMarker,
+  scrubHomePath,
+};
+
 export async function findExtraGatewayServices(
   env: Record<string, string | undefined>,
   opts: FindExtraGatewayServicesOptions = {},

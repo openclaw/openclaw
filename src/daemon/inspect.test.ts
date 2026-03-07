@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let findExtraGatewayServices: typeof import("./inspect.js").findExtraGatewayServices;
+let inspectTestUtils: typeof import("./inspect.js").__test__;
 
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
@@ -14,107 +12,45 @@ vi.mock("./schtasks-exec.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({ findExtraGatewayServices } = await import("./inspect.js"));
+  ({ findExtraGatewayServices, __test__: inspectTestUtils } = await import("./inspect.js"));
 });
 
-describe("findExtraGatewayServices (linux)", () => {
-  const originalPlatform = process.platform;
-  const originalHome = process.env.HOME;
-  let tempHome: string;
-
-  beforeEach(async () => {
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: "linux",
+describe("detectMarker", () => {
+  it("ignores markers that only appear in a POSIX HOME path", () => {
+    const marker = inspectTestUtils.detectMarker("ExecStart=/home/moltbot/.local/bin/helper", {
+      HOME: "/home/moltbot",
     });
-    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
-    process.env.HOME = tempHome;
-    await fs.mkdir(path.join(tempHome, ".config", "systemd", "user"), { recursive: true });
+    expect(marker).toBeNull();
   });
 
-  afterEach(async () => {
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: originalPlatform,
+  it("ignores markers that only appear in a Windows HOME path", () => {
+    const marker = inspectTestUtils.detectMarker(
+      "ExecStart=C:\\Users\\MoltBot\\tools\\helper.exe",
+      { HOME: "C:\\Users\\MoltBot" },
+    );
+    expect(marker).toBeNull();
+  });
+
+  it("does not scrub markers when Windows HOME separators do not match", () => {
+    const marker = inspectTestUtils.detectMarker("ExecStart=C:/Users/MoltBot/tools/helper.exe", {
+      HOME: "C:\\Users\\MoltBot",
     });
-    process.env.HOME = originalHome;
-    if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
+    expect(marker).toBe("moltbot");
   });
 
-  it("ignores markers that only appear inside the HOME path", async () => {
-    const servicePath = path.join(
-      tempHome,
-      ".config",
-      "systemd",
-      "user",
-      "wishlist-staging.service",
-    );
-    await fs.writeFile(
-      servicePath,
-      [
-        "[Service]",
-        `WorkingDirectory=${tempHome}/projects/wishlist`,
-        `ExecStart=${tempHome}/projects/wishlist/dev-cargo.sh`,
-      ].join("\n"),
-    );
-
-    const result = await findExtraGatewayServices({ HOME: tempHome });
-    expect(result).toEqual([]);
+  it("still detects markers that appear outside HOME", () => {
+    const marker = inspectTestUtils.detectMarker("ExecStart=/opt/moltbot/bin/moltbot run", {
+      HOME: "/home/openclaw",
+    });
+    expect(marker).toBe("moltbot");
   });
 
-  it("still detects markers outside the HOME path", async () => {
-    const servicePath = path.join(tempHome, ".config", "systemd", "user", "legacy-moltbot.service");
-    await fs.writeFile(
-      servicePath,
-      ["[Service]", "ExecStart=/opt/moltbot/bin/moltbot run"].join("\n"),
+  it("does not scrub HOME when it appears mid-path", () => {
+    const marker = inspectTestUtils.detectMarker(
+      "ExecStart=/home/useropenclaw/bin/openclaw gateway run",
+      { HOME: "/home/user" },
     );
-
-    const result = await findExtraGatewayServices({ HOME: tempHome });
-    expect(result).toEqual([
-      {
-        platform: "linux",
-        label: "legacy-moltbot.service",
-        detail: `unit: ${path.join(tempHome, ".config", "systemd", "user", "legacy-moltbot.service")}`,
-        scope: "user",
-        marker: "moltbot",
-        legacy: true,
-      },
-    ]);
-  });
-
-  it("does not scrub HOME when it appears mid-path", async () => {
-    const servicePath = path.join(tempHome, ".config", "systemd", "user", "openclaw.service");
-    await fs.writeFile(
-      servicePath,
-      ["[Service]", `ExecStart=${tempHome}openclaw/bin/openclaw gateway run`].join("\n"),
-    );
-
-    const result = await findExtraGatewayServices({ HOME: tempHome });
-    expect(result).toEqual([
-      {
-        platform: "linux",
-        label: "openclaw.service",
-        detail: `unit: ${path.join(tempHome, ".config", "systemd", "user", "openclaw.service")}`,
-        scope: "user",
-        marker: "openclaw",
-        legacy: false,
-      },
-    ]);
-  });
-  it("handles windows HOME paths", async () => {
-    const windowsHome = path.join(tempHome, "C:\\Users\\MoltBot");
-    const userDir = path.join(windowsHome, ".config", "systemd", "user");
-    const servicePath = path.join(userDir, "legacy-moltbot.service");
-    await fs.mkdir(userDir, { recursive: true });
-    await fs.writeFile(
-      servicePath,
-      ["[Service]", `ExecStart=${windowsHome}\\tools\\helper.exe`].join("\n"),
-    );
-
-    const result = await findExtraGatewayServices({ HOME: windowsHome });
-    expect(result).toEqual([]);
+    expect(marker).toBe("openclaw");
   });
 });
 
