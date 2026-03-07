@@ -780,6 +780,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           if (isProcessAborted(abortSignal)) {
             return;
           }
+          statusReactions.cancelPending();
           await statusReactions.setThinking();
         },
       },
