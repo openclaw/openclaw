@@ -154,6 +154,7 @@ export {
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
 export type {
   RegisterWebhookPluginRouteOptions,
