@@ -318,21 +318,39 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     return early;
   }
 
+  // Fast path: if no fence markers exist, use simple chunking without span parsing.
+  if (!text.includes("```") && !text.includes("~~~")) {
+    return chunkText(text, limit);
+  }
+
   const chunks: string[] = [];
   let remaining = text;
+  // Parse fence spans once; re-parse only when a fence split modifies the remaining text.
+  let spans = parseFenceSpans(remaining);
+  let spanOffset = 0;
 
   while (remaining.length > limit) {
-    const spans = parseFenceSpans(remaining);
+    // Apply offset to pre-computed spans (valid when remaining is a strict suffix of the parsed text).
+    const adjustedSpans =
+      spanOffset > 0
+        ? spans.map((span) => ({
+            ...span,
+            start: span.start - spanOffset,
+            end: span.end - spanOffset,
+          }))
+        : spans;
+
     const window = remaining.slice(0, limit);
 
-    const softBreak = pickSafeBreakIndex(window, spans);
+    const softBreak = pickSafeBreakIndex(window, adjustedSpans);
     let breakIdx = softBreak > 0 ? softBreak : limit;
 
-    const initialFence = isSafeFenceBreak(spans, breakIdx)
+    const initialFence = isSafeFenceBreak(adjustedSpans, breakIdx)
       ? undefined
-      : findFenceSpanAt(spans, breakIdx);
+      : findFenceSpanAt(adjustedSpans, breakIdx);
 
     let fenceToSplit = initialFence;
+
     if (initialFence) {
       const closeLine = `${initialFence.indent}${initialFence.marker}`;
       const maxIdxIfNeedNewline = limit - (closeLine.length + 1);
@@ -354,7 +372,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
           if (candidateBreak < minProgressIdx) {
             break;
           }
-          const candidateFence = findFenceSpanAt(spans, candidateBreak);
+          const candidateFence = findFenceSpanAt(adjustedSpans, candidateBreak);
           if (candidateFence && candidateFence.start === initialFence.start) {
             breakIdx = Math.max(1, candidateBreak);
             pickedNewline = true;
@@ -373,7 +391,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         }
       }
 
-      const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
+      const fenceAtBreak = findFenceSpanAt(adjustedSpans, breakIdx);
       fenceToSplit =
         fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
     }
@@ -391,12 +409,18 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       const closeLine = `${fenceToSplit.indent}${fenceToSplit.marker}`;
       rawChunk = rawChunk.endsWith("\n") ? `${rawChunk}${closeLine}` : `${rawChunk}\n${closeLine}`;
       next = `${fenceToSplit.openLine}\n${next}`;
+      // Fence split modifies remaining text; re-parse spans for correctness.
+      remaining = next;
+      spans = parseFenceSpans(remaining);
+      spanOffset = 0;
     } else {
       next = stripLeadingNewlines(next);
+      // No fence split: remaining is a suffix of the parsed text; track offset.
+      spanOffset += remaining.length - next.length;
+      remaining = next;
     }
 
     chunks.push(rawChunk);
-    remaining = next;
   }
 
   if (remaining.length) {

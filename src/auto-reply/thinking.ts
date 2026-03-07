@@ -41,43 +41,50 @@ const XHIGH_MODEL_IDS = new Set(
   ),
 );
 
+// O(1) lookup table for think level normalization (replaces chained Array.includes).
+const THINK_LEVEL_MAP = new Map<string, ThinkLevel>([
+  ["adaptive", "adaptive"],
+  ["auto", "adaptive"],
+  ["xhigh", "xhigh"],
+  ["extrahigh", "xhigh"],
+  ["off", "off"],
+  ["on", "low"],
+  ["enable", "low"],
+  ["enabled", "low"],
+  ["min", "minimal"],
+  ["minimal", "minimal"],
+  ["think", "minimal"],
+  ["low", "low"],
+  ["thinkhard", "low"],
+  ["think-hard", "low"],
+  ["think_hard", "low"],
+  ["mid", "medium"],
+  ["med", "medium"],
+  ["medium", "medium"],
+  ["thinkharder", "medium"],
+  ["think-harder", "medium"],
+  ["harder", "medium"],
+  ["high", "high"],
+  ["ultra", "high"],
+  ["ultrathink", "high"],
+  ["thinkhardest", "high"],
+  ["highest", "high"],
+  ["max", "high"],
+]);
+
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   if (!raw) {
     return undefined;
   }
   const key = raw.trim().toLowerCase();
+  const direct = THINK_LEVEL_MAP.get(key);
+  if (direct) {
+    return direct;
+  }
+  // Collapse separators for compound aliases (e.g. "think hard" -> "thinkhard")
   const collapsed = key.replace(/[\s_-]+/g, "");
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
-  if (["off"].includes(key)) {
-    return "off";
-  }
-  if (["on", "enable", "enabled"].includes(key)) {
-    return "low";
-  }
-  if (["min", "minimal"].includes(key)) {
-    return "minimal";
-  }
-  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-    return "low";
-  }
-  if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-    return "medium";
-  }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
-    return "high";
-  }
-  if (["think"].includes(key)) {
-    return "minimal";
-  }
-  return undefined;
+  return THINK_LEVEL_MAP.get(collapsed);
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
@@ -132,21 +139,27 @@ export function formatXHighModelHint(): string {
 
 type OnOffFullLevel = "off" | "on" | "full";
 
+// O(1) lookup table for on/off/full normalization.
+const ON_OFF_FULL_MAP = new Map<string, OnOffFullLevel>([
+  ["off", "off"],
+  ["false", "off"],
+  ["no", "off"],
+  ["0", "off"],
+  ["full", "full"],
+  ["all", "full"],
+  ["everything", "full"],
+  ["on", "on"],
+  ["minimal", "on"],
+  ["true", "on"],
+  ["yes", "on"],
+  ["1", "on"],
+]);
+
 function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "all", "everything"].includes(key)) {
-    return "full";
-  }
-  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
+  return ON_OFF_FULL_MAP.get(raw.toLowerCase());
 }
 
 // Normalize verbose flags used to toggle agent verbosity.
@@ -159,50 +172,67 @@ export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefin
   return normalizeOnOffFullLevel(raw);
 }
 
+// O(1) lookup table for usage display level normalization.
+const USAGE_DISPLAY_MAP = new Map<string, UsageDisplayLevel>([
+  ["off", "off"],
+  ["false", "off"],
+  ["no", "off"],
+  ["0", "off"],
+  ["disable", "off"],
+  ["disabled", "off"],
+  ["on", "tokens"],
+  ["true", "tokens"],
+  ["yes", "tokens"],
+  ["1", "tokens"],
+  ["enable", "tokens"],
+  ["enabled", "tokens"],
+  ["tokens", "tokens"],
+  ["token", "tokens"],
+  ["tok", "tokens"],
+  ["minimal", "tokens"],
+  ["min", "tokens"],
+  ["full", "full"],
+  ["session", "full"],
+]);
+
 // Normalize response-usage display modes used to toggle per-response usage footers.
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key)) {
-    return "tokens";
-  }
-  if (["tokens", "token", "tok", "minimal", "min"].includes(key)) {
-    return "tokens";
-  }
-  if (["full", "session"].includes(key)) {
-    return "full";
-  }
-  return undefined;
+  return USAGE_DISPLAY_MAP.get(raw.toLowerCase());
 }
 
 export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+// O(1) lookup table for elevated level normalization.
+const ELEVATED_LEVEL_MAP = new Map<string, ElevatedLevel>([
+  ["off", "off"],
+  ["false", "off"],
+  ["no", "off"],
+  ["0", "off"],
+  ["full", "full"],
+  ["auto", "full"],
+  ["auto-approve", "full"],
+  ["autoapprove", "full"],
+  ["ask", "ask"],
+  ["prompt", "ask"],
+  ["approval", "ask"],
+  ["approve", "ask"],
+  ["on", "on"],
+  ["true", "on"],
+  ["yes", "on"],
+  ["1", "on"],
+]);
+
 // Normalize elevated flags used to toggle elevated bash permissions.
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "auto", "auto-approve", "autoapprove"].includes(key)) {
-    return "full";
-  }
-  if (["ask", "prompt", "approval", "approve"].includes(key)) {
-    return "ask";
-  }
-  if (["on", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
+  return ELEVATED_LEVEL_MAP.get(raw.toLowerCase());
 }
 
 export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
@@ -215,20 +245,34 @@ export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode 
   return "ask";
 }
 
+// O(1) lookup table for reasoning level normalization.
+const REASONING_LEVEL_MAP = new Map<string, ReasoningLevel>([
+  ["off", "off"],
+  ["false", "off"],
+  ["no", "off"],
+  ["0", "off"],
+  ["hide", "off"],
+  ["hidden", "off"],
+  ["disable", "off"],
+  ["disabled", "off"],
+  ["on", "on"],
+  ["true", "on"],
+  ["yes", "on"],
+  ["1", "on"],
+  ["show", "on"],
+  ["visible", "on"],
+  ["enable", "on"],
+  ["enabled", "on"],
+  ["stream", "stream"],
+  ["streaming", "stream"],
+  ["draft", "stream"],
+  ["live", "stream"],
+]);
+
 // Normalize reasoning visibility flags used to toggle reasoning exposure.
 export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1", "show", "visible", "enable", "enabled"].includes(key)) {
-    return "on";
-  }
-  if (["stream", "streaming", "draft", "live"].includes(key)) {
-    return "stream";
-  }
-  return undefined;
+  return REASONING_LEVEL_MAP.get(raw.toLowerCase());
 }

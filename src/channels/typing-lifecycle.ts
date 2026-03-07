@@ -11,8 +11,9 @@ export function createTypingKeepaliveLoop(params: {
   intervalMs: number;
   onTick: AsyncTick;
 }): TypingKeepaliveLoop {
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let tickInFlight = false;
+  let stopped = false;
 
   const tick = async () => {
     if (tickInFlight) {
@@ -26,21 +27,35 @@ export function createTypingKeepaliveLoop(params: {
     }
   };
 
+  // Use setTimeout chain instead of setInterval for cleaner cleanup semantics.
+  // Each tick schedules the next only after completion, avoiding timer pile-up.
+  const scheduleNext = () => {
+    if (stopped || params.intervalMs <= 0) {
+      return;
+    }
+    timer = setTimeout(() => {
+      void tick().finally(() => {
+        if (!stopped) {
+          scheduleNext();
+        }
+      });
+    }, params.intervalMs);
+  };
+
   const start = () => {
     if (params.intervalMs <= 0 || timer) {
       return;
     }
-    timer = setInterval(() => {
-      void tick();
-    }, params.intervalMs);
+    stopped = false;
+    scheduleNext();
   };
 
   const stop = () => {
-    if (!timer) {
-      return;
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
     }
-    clearInterval(timer);
-    timer = undefined;
     tickInFlight = false;
   };
 
