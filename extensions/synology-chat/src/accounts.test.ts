@@ -130,4 +130,11 @@ describe("resolveAccount", () => {
     const account = resolveAccount(cfg);
     expect(account.allowedUserIds).toEqual(["u1", "u2"]);
   });
+
+  it("respects SYNOLOGY_RATE_LIMIT=0 instead of defaulting to 30", () => {
+    process.env.SYNOLOGY_RATE_LIMIT = "0";
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.rateLimitPerMinute).toBe(0);
+  });
 });
