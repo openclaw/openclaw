@@ -256,7 +256,7 @@ Enable with `tools.loopDetection.enabled: true` (default is `false`).
 
 ### `web_search`
 
-Search the web using Brave Search API.
+Search the web using Perplexity, Brave, Gemini, Grok, or Kimi.
 
 Core parameters:
 
@@ -265,7 +265,7 @@ Core parameters:
 
 Notes:
 
-- Requires a Brave API key (recommended: `openclaw configure --section web`, or set `BRAVE_API_KEY`).
+- Requires an API key for the chosen provider (recommended: `openclaw configure --section web`).
 - Enable via `tools.web.search.enabled`.
 - Responses are cached (default 15 min).
 - See [Web tools](/tools/web) for setup.
@@ -453,14 +453,18 @@ Restart or apply updates to the running Gateway process (in-place).
 Core actions:
 
 - `restart` (authorizes + sends `SIGUSR1` for in-process restart; `openclaw gateway` restart in-place)
-- `config.get` / `config.schema`
+- `config.schema.lookup` (inspect one config path at a time without loading the full schema into prompt context)
+- `config.get`
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Notes:
 
+- `config.schema.lookup` expects a targeted config path such as `gateway.auth` or `agents.list.*.heartbeat`.
+- Paths may include slash-delimited plugin ids when addressing `plugins.entries.<id>`, for example `plugins.entries.pack/one.config`.
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
+- `config.schema` remains available to internal Control UI flows and is not exposed through the agent `gateway` tool.
 - `restart` is enabled by default; set `commands.restart: false` to disable it.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
@@ -472,7 +476,7 @@ Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey` (or `sessionId`), `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `runtime?`, `agentId?`, `model?`, `thinking?`, `cwd?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`, `sandbox?`, `attachments?`, `attachAs?`
+- `sessions_spawn`: `task`, `label?`, `runtime?`, `agentId?`, `model?`, `thinking?`, `cwd?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`, `sandbox?`, `streamTo?`, `attachments?`, `attachAs?`
 - `session_status`: `sessionKey?` (default current; accepts `sessionId`), `model?` (`default` clears override)
 
 Notes:
@@ -483,6 +487,7 @@ Notes:
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
 - `sessions_spawn` supports `runtime: "subagent" | "acp"` (`subagent` default). For ACP runtime behavior, see [ACP Agents](/tools/acp-agents).
+- For ACP runtime, `streamTo: "parent"` routes initial-run progress summaries back to the requester session as system events instead of direct child delivery.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
   - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
   - If `thread: true` and `mode` is omitted, mode defaults to `session`.
@@ -496,6 +501,7 @@ Notes:
   - Configure limits via `tools.sessions_spawn.attachments` (`enabled`, `maxTotalBytes`, `maxFiles`, `maxFileBytes`, `retainOnSessionKeep`).
   - `attachAs.mountPath` is a reserved hint for future mount implementations.
 - `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
+- ACP `streamTo: "parent"` responses may include `streamLogPath` (session-scoped `*.acp-stream.jsonl`) for tailing progress history.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
 - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility: "spawned"`, OpenClaw clamps `tools.sessions.visibility` to `tree`.
