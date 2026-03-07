@@ -36,7 +36,6 @@ enum ToolResultTextFormatter {
         let status = (dict["status"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let errorText = self.firstString(in: dict, keys: ["error", "reason"])
         let stdoutText = self.firstString(in: dict, keys: ["stdout"])
-        let stderrText = self.firstString(in: dict, keys: ["stderr"])
         let messageText = self.firstString(in: dict, keys: ["message", "result", "detail"])
 
         if status?.lowercased() == "error" || errorText != nil {
@@ -53,12 +52,8 @@ enum ToolResultTextFormatter {
             return summary
         }
 
-        if let stdoutText {
+        if let stdoutText, !stdoutText.isEmpty {
             return stdoutText
-        }
-
-        if let stderrText {
-            return stderrText
         }
 
         if let message = messageText {
