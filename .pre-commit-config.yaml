@@ -61,6 +61,10 @@ repos:
           - '^src/gateway/client\.watchdog\.test\.ts$'
           - --exclude-files
           - '^apps/macos/Tests/OpenClawIPCTests/GatewayEndpointStoreTests\.swift$'
+          - --exclude-files
+          - '^src/agents/models-config\.fills-missing-provider-apikey-from-env-var\.test\.ts$'
+          - --exclude-files
+          - '^src/agents/models-config\.providers\.normalize-keys\.test\.ts$'
           - --exclude-lines
           - 'export CUSTOM_API_K[E]Y="your-key"'
           - --exclude-lines
