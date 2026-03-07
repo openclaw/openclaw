@@ -20,14 +20,26 @@ export type RecentDeliveredEntry = {
 };
 
 /**
- * Build a lightweight hash key from the first 200 normalised characters of
- * a delivered assistant text.  Using a prefix keeps comparison fast while
- * still catching the most common compaction-replay duplicates (identical
- * opening paragraphs).
+ * Build a collision-resistant hash from the full normalised text of a
+ * delivered assistant message.  Uses a fast non-cryptographic approach:
+ * the first 200 normalised chars (for quick prefix screening) combined
+ * with the total length and a simple 53-bit numeric hash of the full
+ * string.  This avoids false positives when two responses share the same
+ * opening paragraph but diverge later.
  */
 export function buildDeliveredTextHash(text: string): string {
   const normalized = normalizeTextForComparison(text);
-  return normalized.slice(0, 200);
+  if (normalized.length <= 200) {
+    return normalized;
+  }
+  // 53-bit FNV-1a-inspired hash (fits in a JS safe integer).
+  let h = 0x811c9dc5;
+  for (let i = 0; i < normalized.length; i++) {
+    h ^= normalized.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  // Combine prefix + length + full-text hash for uniqueness.
+  return `${normalized.slice(0, 200)}|${normalized.length}|${(h >>> 0).toString(36)}`;
 }
 
 /**

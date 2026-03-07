@@ -24,9 +24,18 @@ describe("cross-turn dedup", () => {
       expect(hash).toBe("hello world!");
     });
 
-    it("truncates at 200 chars", () => {
+    it("includes length and full-text hash for strings over 200 chars", () => {
       const long = "a".repeat(300);
-      expect(buildDeliveredTextHash(long).length).toBe(200);
+      const hash = buildDeliveredTextHash(long);
+      expect(hash).toContain("|300|");
+      expect(hash.startsWith("a".repeat(200))).toBe(true);
+    });
+
+    it("produces different hashes for texts with same prefix but different tails", () => {
+      const base = "x".repeat(200);
+      const textA = base + " ending alpha with more content here";
+      const textB = base + " ending beta with different content";
+      expect(buildDeliveredTextHash(textA)).not.toBe(buildDeliveredTextHash(textB));
     });
 
     it("returns empty for very short text", () => {
