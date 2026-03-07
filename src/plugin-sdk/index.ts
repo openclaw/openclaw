@@ -132,6 +132,16 @@ export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
+export {
+  mapBasicAllowlistResolutionEntries,
+  type BasicAllowlistResolutionEntry,
+} from "./allowlist-resolution.js";
+export { resolveRequestUrl } from "./request-url.js";
+export {
+  buildDiscordSendMediaOptions,
+  buildDiscordSendOptions,
+  tagDiscordChannelResult,
+} from "./discord-send.js";
 export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
 export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
@@ -167,7 +177,9 @@ export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
+  buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -178,6 +190,8 @@ export {
 } from "../channels/plugins/onboarding/helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { buildChannelSendResult } from "./channel-send-result.js";
+export type { ChannelSendRawResult } from "./channel-send-result.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
@@ -278,6 +292,7 @@ export {
   resolveInboundRouteEnvelopeBuilder,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-envelope.js";
+export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
   listConfiguredAccountIds,
   resolveAccountWithDefaultFallback,
@@ -288,17 +303,29 @@ export { extractToolSend } from "./tool-send.js";
 export {
   createNormalizedOutboundDeliverer,
   formatTextWithAttachmentLinks,
+  isNumericTargetId,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
+  sendPayloadWithChunkedTextAndMedia,
   sendMediaWithLeadingCaption,
 } from "./reply-payload.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
+export {
+  buildInboundReplyDispatchBase,
+  dispatchInboundReplyWithBase,
+  dispatchReplyFromConfigWithSettledDispatcher,
+  recordInboundSessionAndDispatchReply,
+} from "./inbound-reply-dispatch.js";
 export type { OutboundMediaLoadOptions } from "./outbound-media.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
-export { createLoggerBackedRuntime } from "./runtime.js";
+export {
+  createLoggerBackedRuntime,
+  resolveRuntimeEnv,
+  resolveRuntimeEnvWithUnavailableExit,
+} from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readBooleanParam } from "./boolean-param.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
@@ -487,6 +514,7 @@ export type { PollInput } from "../polls.js";
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
+  clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
@@ -589,12 +617,18 @@ export {
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
 export {
+  createAllowedChatSenderMatcher,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedChatTarget,
   resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedOrChatAllowTarget,
   resolveServicePrefixedTarget,
 } from "../imessage/target-parsing-helpers.js";
-export type { ParsedChatTarget } from "../imessage/target-parsing-helpers.js";
+export type {
+  ChatSenderAllowParams,
+  ParsedChatTarget,
+} from "../imessage/target-parsing-helpers.js";
 
 // Channel: Slack
 export {
