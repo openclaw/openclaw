@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **SMS (Aliyun + Tencent)** — Outbound SMS channel plugin for mainland-friendly delivery through Aliyun SMS or Tencent Cloud SMS templates.
+  npm: `@cyzlmh/openclaw-sms`
+  repo: `https://github.com/cyzlmh/openclaw-sms`
+  install: `openclaw plugins install @cyzlmh/openclaw-sms`
