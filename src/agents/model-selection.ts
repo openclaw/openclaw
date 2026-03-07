@@ -506,6 +506,10 @@ export function resolveAgentModelResolutionState(params: {
 
   const configuredProviders = collectConfiguredProviderIds(params.cfg);
   const providerKnownByConfig = configuredProviders.has(resolved.provider);
+  const configuredProvider = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    resolved.provider,
+  );
   const catalogProviders = new Set(
     (params.catalog ?? []).map((entry) => normalizeProviderId(entry.provider)),
   );
@@ -525,6 +529,24 @@ export function resolveAgentModelResolutionState(params: {
         entry.id.toLowerCase().trim() === resolved.model.toLowerCase().trim(),
     );
     if (!modelExistsInCatalog) {
+      return {
+        status: "blocked",
+        code: "model_not_found",
+        reason: `Model "${resolved.provider}/${resolved.model}" was not found.`,
+      };
+    }
+  }
+  if (
+    params.catalog &&
+    !providerKnownByCatalog &&
+    providerKnownByConfig &&
+    configuredProvider?.models &&
+    configuredProvider.models.length > 0
+  ) {
+    const modelExistsInConfiguredProvider = configuredProvider.models.some(
+      (entry) => entry.id.toLowerCase().trim() === resolved.model.toLowerCase().trim(),
+    );
+    if (!modelExistsInConfiguredProvider) {
       return {
         status: "blocked",
         code: "model_not_found",

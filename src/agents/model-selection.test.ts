@@ -777,6 +777,40 @@ describe("strict model resolution", () => {
     });
   });
 
+  it("blocks unknown models for config-known providers when catalog is missing that provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [strictTestModelDefinition("llama3.2:3b")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "ollama/not-installed",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "anthropic", id: "claude-opus-4-6", name: "claude-opus-4-6" }],
+    });
+
+    expect(state.status).toBe("blocked");
+    if (state.status === "blocked") {
+      expect(state.code).toBe("model_not_found");
+    }
+  });
+
   it("ignores non-model allowlist keys when inferring configured providers", () => {
     const cfg = {
       models: {
