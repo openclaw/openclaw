@@ -55,7 +55,11 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
       debounceMs?: number;
     };
   };
-  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  reload?: {
+    configPrefixes: string[];
+    noopPrefixes?: string[];
+    reloadGroups?: (params: { cfg: unknown; accountId: string }) => Promise<void>;
+  };
   // CLI onboarding wizard hooks for this channel.
   onboarding?: ChannelOnboardingAdapter;
   config: ChannelConfigAdapter<ResolvedAccount>;
