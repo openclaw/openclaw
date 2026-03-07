@@ -122,6 +122,13 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for wrapped fetch-failed without cause chain (e.g. @buape/carbon Discord plugin)", () => {
+    // Third-party libs may wrap TypeError("fetch failed") into a new Error
+    // without preserving the cause — the substring match must still detect it.
+    const error = new Error("Failed to get gateway information from Discord: fetch failed");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns false for regular errors without network codes", () => {
     expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(false);
     expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);

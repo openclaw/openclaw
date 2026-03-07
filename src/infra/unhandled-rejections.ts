@@ -58,6 +58,7 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "network is unreachable",
   "temporary failure in name resolution",
+  "fetch failed",
 ];
 
 function getErrorCause(err: unknown): unknown {
@@ -167,9 +168,6 @@ export function isTransientNetworkError(err: unknown): boolean {
       continue;
     }
     if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
-      return true;
-    }
-    if (message === "fetch failed") {
       return true;
     }
     if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
