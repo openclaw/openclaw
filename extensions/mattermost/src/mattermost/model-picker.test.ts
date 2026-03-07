@@ -76,6 +76,20 @@ describe("Mattermost model picker", () => {
     expect(modelTexts).toContain("Back to providers");
   });
 
+  it("renders unique alphanumeric action ids per button", () => {
+    const modelsView = renderMattermostModelsPickerView({
+      ownerUserId: "user-1",
+      data,
+      provider: "openai",
+      page: 1,
+      currentModel: "openai/gpt-5",
+    });
+
+    const ids = modelsView.buttons.flat().map((button) => button.id);
+    expect(ids.every((id) => typeof id === "string" && /^[a-z0-9]+$/.test(id))).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("parses signed picker contexts", () => {
     expect(
       parseMattermostModelPickerContext({

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { normalizeProviderId } from "../../../../src/agents/model-selection.js";
 import type { ModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../../../../src/auto-reply/reply/model-selection.js";
@@ -75,6 +76,11 @@ function buildContext(state: MattermostModelPickerState): Record<string, unknown
   };
 }
 
+function buildButtonId(state: MattermostModelPickerState): string {
+  const digest = createHash("sha256").update(JSON.stringify(state)).digest("hex").slice(0, 12);
+  return `${ACTION_IDS[state.action]}${digest}`;
+}
+
 function buildButton(params: {
   action: MattermostModelPickerState["action"];
   ownerUserId: string;
@@ -106,7 +112,8 @@ function buildButton(params: {
           };
 
   return {
-    callback_data: ACTION_IDS[params.action],
+    // Mattermost requires action IDs to be unique within a post.
+    id: buildButtonId(baseState),
     text: params.text,
     ...(params.style ? { style: params.style } : {}),
     context: buildContext(baseState),

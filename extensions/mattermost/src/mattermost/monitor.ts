@@ -40,6 +40,7 @@ import {
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   sendMattermostTyping,
+  updateMattermostPost,
   type MattermostChannel,
   type MattermostPost,
   type MattermostUser,
@@ -788,6 +789,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       buttons,
     });
 
+  const updateModelPickerPost = async (params: {
+    channelId: string;
+    postId: string;
+    message: string;
+    buttons?: Array<unknown>;
+  }): Promise<MattermostInteractionResponse> => {
+    const props = buildModelPickerProps(params.channelId, params.buttons ?? []) ?? {
+      attachments: [],
+    };
+    await updateMattermostPost(client, params.postId, {
+      message: params.message,
+      props,
+    });
+    return {};
+  };
+
   const runModelPickerCommand = async (params: {
     commandText: string;
     route: ReturnType<typeof core.channel.routing.resolveAgentRoute>;
@@ -931,11 +948,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const data = await buildModelsProviderData(cfg);
     if (data.providers.length === 0) {
-      return {
-        update: {
-          message: "No models available.",
-        },
-      };
+      return await updateModelPickerPost({
+        channelId: params.payload.channel_id,
+        postId: params.payload.post_id,
+        message: "No models available.",
+      });
     }
 
     const currentModel = resolveMattermostModelPickerCurrentModel({
@@ -950,12 +967,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         data,
         currentModel,
       });
-      return {
-        update: {
-          message: view.text,
-          props: buildModelPickerProps(params.payload.channel_id, view.buttons),
-        },
-      };
+      return await updateModelPickerPost({
+        channelId: params.payload.channel_id,
+        postId: params.payload.post_id,
+        message: view.text,
+        buttons: view.buttons,
+      });
     }
 
     if (pickerState.action === "list") {
@@ -966,12 +983,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         page: pickerState.page,
         currentModel,
       });
-      return {
-        update: {
-          message: view.text,
-          props: buildModelPickerProps(params.payload.channel_id, view.buttons),
-        },
-      };
+      return await updateModelPickerPost({
+        channelId: params.payload.channel_id,
+        postId: params.payload.post_id,
+        message: view.text,
+        buttons: view.buttons,
+      });
     }
 
     const targetModelRef = `${pickerState.provider}/${pickerState.model}`;
@@ -1013,12 +1030,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ? `Switched to ${targetModelRef}.`
         : `Current model: ${updatedModel}`);
 
-    return {
-      update: {
-        message: `${statusText}\n\n${view.text}`,
-        props: buildModelPickerProps(params.payload.channel_id, view.buttons),
-      },
-    };
+    return await updateModelPickerPost({
+      channelId: params.payload.channel_id,
+      postId: params.payload.post_id,
+      message: `${statusText}\n\n${view.text}`,
+      buttons: view.buttons,
+    });
   }
 
   const handlePost = async (
