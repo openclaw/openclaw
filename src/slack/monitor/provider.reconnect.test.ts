@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { __testing } from "./provider.js";
 
 class FakeEmitter {
@@ -22,6 +22,22 @@ class FakeEmitter {
 }
 
 describe("slack socket reconnect helpers", () => {
+  it("seeds event liveness when socket mode connects", () => {
+    const setStatus = vi.fn();
+
+    __testing.publishSlackConnectedStatus(setStatus);
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: true,
+        lastConnectedAt: expect.any(Number),
+        lastEventAt: expect.any(Number),
+        lastError: null,
+      }),
+    );
+  });
+
   it("resolves disconnect waiter on socket disconnect event", async () => {
     const client = new FakeEmitter();
     const app = { receiver: { client } };
