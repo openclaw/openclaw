@@ -32,7 +32,7 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 | Provider                  | Pros                                                                                          | Cons                                        | API Key                             |
 | ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------- |
 | **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                |
-| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                     |
+| **Brave Search API**      | Fast, structured results; domain, language, region, and freshness filters                     | AI-use terms apply                          | `BRAVE_API_KEY`                     |
 | **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
 | **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
 | **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
@@ -200,7 +200,7 @@ All parameters work for both Brave and Perplexity unless noted.
 | `date_after`          | Results after this date (YYYY-MM-DD)                  |
 | `date_before`         | Results before this date (YYYY-MM-DD)                 |
 | `ui_lang`             | UI language code (Brave only)                         |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
+| `domain_filter`       | Domain allowlist/denylist array (Brave, Perplexity)   |
 | `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
 | `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
 
@@ -227,13 +227,13 @@ await web_search({
   date_before: "2024-06-30",
 });
 
-// Domain filtering (Perplexity only)
+// Domain filtering (Brave, Perplexity)
 await web_search({
   query: "climate research",
   domain_filter: ["nature.com", "science.org", ".edu"],
 });
 
-// Exclude domains (Perplexity only)
+// Exclude domains (Brave, Perplexity)
 await web_search({
   query: "product reviews",
   domain_filter: ["-reddit.com", "-pinterest.com"],
