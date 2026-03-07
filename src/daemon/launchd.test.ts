@@ -102,6 +102,13 @@ describe("launchd runtime parsing", () => {
       lastExitReason: "exited",
     });
   });
+
+  it("rejects pid = 0 (no running process, consistent with systemd parser)", () => {
+    const output = ["state = waiting", "pid = 0"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.state).toBe("waiting");
+    expect(info.pid).toBeUndefined();
+  });
 });
 
 describe("launchctl list detection", () => {
