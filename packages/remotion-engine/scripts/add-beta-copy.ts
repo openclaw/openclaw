@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const dir = "brands/cutmv/datasets/motion/specs";
+const dir = "../../data/datasets/cutmv/motion/specs";
 const files = fs.readdirSync(dir).filter(f => f.endsWith(".json")).sort();
 
 // Rotating BETA CTA button texts

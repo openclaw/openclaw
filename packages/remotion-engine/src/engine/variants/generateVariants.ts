@@ -9,7 +9,7 @@ function clone<T>(x: T): T {
 
 export function generateVariants(
   baseSpec: MotionSpec,
-  outDir = "motion_specs/variants",
+  outDir = "../../data/datasets/cutmv/motion/specs/variants",
 ) {
   fs.mkdirSync(outDir, { recursive: true });
 

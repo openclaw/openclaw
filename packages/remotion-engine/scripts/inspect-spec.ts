@@ -1,5 +1,5 @@
 import fs from "node:fs";
-const s = JSON.parse(fs.readFileSync("brands/cutmv/datasets/motion/specs/cutmv_premium_v036.json", "utf-8"));
+const s = JSON.parse(fs.readFileSync("../../data/datasets/cutmv/motion/specs/cutmv_premium_v036.json", "utf-8"));
 console.log("Top keys:", Object.keys(s));
 console.log("format:", JSON.stringify(s.format));
 console.log("style:", JSON.stringify(s.style));
@@ -20,7 +20,7 @@ for (const sc of s.scenes) {
 }
 
 // Also check v032 which has BEFORE framing
-const s2 = JSON.parse(fs.readFileSync("brands/cutmv/datasets/motion/specs/cutmv_premium_v032.json", "utf-8"));
+const s2 = JSON.parse(fs.readFileSync("../../data/datasets/cutmv/motion/specs/cutmv_premium_v032.json", "utf-8"));
 console.log("\n--- v032 ---");
 for (const sc of s2.scenes) {
   console.log(`  scene ${sc.id} from:${sc.from} dur:${sc.duration} badge:${sc.contextBadge} env:${sc.environment?.type}`);

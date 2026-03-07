@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, readdirSync } from "fs";
 import { join } from "path";
 
-const dir = "./brands/cutmv/datasets/motion/specs";
+const dir = "../../data/datasets/cutmv/motion/specs";
 const files = readdirSync(dir)
   .filter((f) => f.startsWith("cutmv_premium_v") && f.endsWith(".json"))
   .sort();

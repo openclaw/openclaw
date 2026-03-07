@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const SPECS_DIR = path.join(process.cwd(), "brands/cutmv/datasets/motion/specs");
+const SPECS_DIR = path.join(process.cwd(), "../../data/datasets/cutmv/motion/specs");
 
 const files = fs
   .readdirSync(SPECS_DIR)

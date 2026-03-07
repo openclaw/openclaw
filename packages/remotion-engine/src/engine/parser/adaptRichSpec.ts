@@ -39,7 +39,7 @@ export function adaptRichSpec(raw: any): MotionSpec {
     assets: {
       primaryLogo:
         assets.primaryLogo ??
-        "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png",
+        "data/datasets/cutmv/static/brand_assets/logos/fd logo new.png",
       demoFrameDir: assets.demoFrameDir,
     },
     style: {

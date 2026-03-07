@@ -15,7 +15,7 @@ import { LogoOnlyTest } from "./LogoOnlyTest";
 // ── Legacy base engine spec ──
 import { CutmvPremiumAdEngine } from "./compositions/CutmvPremiumAdEngine";
 import { parseMotionSpec } from "./engine/parser/parseMotionSpec";
-import specRaw from "../motion_specs/cutmv_premium_ad.json";
+import specRaw from "../../data/datasets/cutmv/motion/specs/cutmv_premium_v001.json";
 const spec = parseMotionSpec(specRaw as Record<string, unknown>);
 
 export const RemotionRoot: React.FC = () => {

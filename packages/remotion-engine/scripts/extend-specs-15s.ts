@@ -1,7 +1,7 @@
 /**
  * extend-specs-15s.ts
  *
- * Extends all 36 JSON spec files in brands/cutmv/datasets/motion/specs/
+ * Extends all 36 JSON spec files in data/datasets/cutmv/motion/specs/
  * to reach approximately 450 frames (15s at 30fps).
  *
  * Algorithm:
@@ -20,7 +20,7 @@ import * as path from "path";
 
 const SPEC_DIR = path.resolve(
   __dirname,
-  "../brands/cutmv/datasets/motion/specs"
+  "../../../data/datasets/cutmv/motion/specs"
 );
 const TARGET_FRAMES = 450;
 const MIN_SCENE_DURATION = 45;

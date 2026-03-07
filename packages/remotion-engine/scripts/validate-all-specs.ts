@@ -3,7 +3,7 @@ import { join } from "path";
 import { adaptRichSpec } from "../src/engine/parser/adaptRichSpec";
 import { validateMotionSpec } from "../src/engine/parser/validateMotionSpec";
 
-const dir = "./brands/cutmv/datasets/motion/specs";
+const dir = "../../data/datasets/cutmv/motion/specs";
 const files = readdirSync(dir)
   .filter((f) => f.startsWith("cutmv_premium_v") && f.endsWith(".json"))
   .sort();

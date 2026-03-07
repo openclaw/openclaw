@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const SPECS_DIR = path.join(process.cwd(), "brands/cutmv/datasets/motion/specs");
+const SPECS_DIR = path.join(process.cwd(), "../../data/datasets/cutmv/motion/specs");
 
 type RawHeadline = { text: string; emphasis: boolean };
 
@@ -22,7 +22,7 @@ const shared = {
   brand: "CUTMV",
   format: { width: 1080, height: 1920, fps: 30, durationInFrames: 336 },
   assets: {
-    primaryLogo: "brands/cutmv/datasets/static/brand_assets/logos/fd logo new.png",
+    primaryLogo: "data/datasets/cutmv/static/brand_assets/logos/fd logo new.png",
   },
   style: {
     bg: "#0B0B0F",

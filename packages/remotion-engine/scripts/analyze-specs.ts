@@ -4,9 +4,11 @@ import * as path from "path";
 const SPECS_DIR = path.join(
   __dirname,
   "..",
-  "brands",
-  "cutmv",
+  "..",
+  "..",
+  "data",
   "datasets",
+  "cutmv",
   "motion",
   "specs"
 );

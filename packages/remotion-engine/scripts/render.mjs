@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/render.mjs                                                      # default
- *   node scripts/render.mjs --spec=brands/cutmv/datasets/motion/specs/cutmv_premium_v022.json
+ *   node scripts/render.mjs --spec=../../data/datasets/cutmv/motion/specs/cutmv_premium_v022.json
  *   node scripts/render.mjs --spec=cutmv_premium_v022                            # shorthand
  *   node scripts/render.mjs CutmvPremiumAd premium_clean h264                    # legacy positional
  */
@@ -41,7 +41,7 @@ if (!specPath) {
 
 // Resolve spec path shorthand
 if (specPath && !specPath.endsWith(".json")) {
-  specPath = `brands/cutmv/datasets/motion/specs/${specPath}.json`;
+  specPath = `../../data/datasets/cutmv/motion/specs/${specPath}.json`;
 }
 
 // Derive specId for unique naming
