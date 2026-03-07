@@ -531,12 +531,14 @@ and a separate channel account.
         default: {
           botToken: "TOKEN_FOR_ASSISTANT",
           groupPolicy: "open",
-          allowFrom: [YOUR_USER_ID],
+          allowFrom: [123456789],
+          groupAllowFrom: [123456789],
         },
         marketing: {
           botToken: "TOKEN_FOR_MARKETING_BOT",
           groupPolicy: "open",
-          allowFrom: [YOUR_USER_ID],
+          allowFrom: [123456789],
+          groupAllowFrom: [123456789],
         },
       },
     },
@@ -556,9 +558,11 @@ Important setup steps:
    the setting per-group and only applies changes on re-join.
 3. `groupPolicy` must be `"open"` (or `"allowlist"` with your user ID in
    `groupAllowFrom`). Note that `groupAllowFrom` filters by **sender user ID**,
-   not by group chat ID.
-4. Both top-level `channels.telegram.groupPolicy` and per-account `groupPolicy`
-   must allow group messages — the top-level setting is checked first.
+   not by group chat ID. `allowFrom` is for DM access; `groupAllowFrom` is for
+   group sender filtering (falls back to `allowFrom` when unset).
+4. Per-account `groupPolicy` overrides the top-level `channels.telegram.groupPolicy`.
+   If you only want one account open for groups, set `groupPolicy` on that
+   account and leave the top-level restrictive.
 
 ## Per-Agent Sandbox and Tool Configuration
 
