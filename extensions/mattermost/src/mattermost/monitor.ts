@@ -1749,13 +1749,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             await flushPendingPatch();
             // Wait for any in-flight interval patch to complete before issuing the
             // final patch, so Mattermost doesn't process a partial patch after the final.
-            while (patchSending) {
+            // Cap at 2 s so a stalled network call can't block deliver() indefinitely.
+            const patchWaitDeadline = Date.now() + 2000;
+            while (patchSending && Date.now() < patchWaitDeadline) {
               await new Promise<void>((r) => setTimeout(r, 20));
             }
           }
 
           // Final: patch the streamed message with the authoritative complete text,
           // or fall back to a new message (with orphan cleanup) if patching fails.
+          // Media attachments are sent as a follow-up message after the text patch.
           if (isFinal && streamMessageId && text) {
             try {
               await updateMattermostPost(blockStreamingClient!, streamMessageId, { message: text });
@@ -1775,10 +1778,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await sendMessageMattermost(to, text, {
                 accountId: account.accountId,
                 replyToId: threadRootId,
+                mediaUrl: mediaUrls[0],
               });
               return;
             }
             streamMessageId = null;
+            // Deliver any media attachments as follow-up messages after the text patch.
+            for (const mediaUrl of mediaUrls) {
+              await sendMessageMattermost(to, "", {
+                accountId: account.accountId,
+                replyToId: threadRootId,
+                mediaUrl,
+              });
+            }
             return;
           }
 
