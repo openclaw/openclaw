@@ -381,6 +381,13 @@ function generateZshCompletion(program: Command): string {
   const script = `
 #compdef ${rootCmd}
 
+# Ensure compinit is loaded so compdef is available. Without this guard,
+# sourcing the completion script before compinit causes:
+#   "command not found: compdef"  (Fixes #14289)
+if [[ -z "\${(k)functions[compdef]}" ]]; then
+  autoload -Uz compinit && compinit -i
+fi
+
 _${rootCmd}_root_completion() {
   local -a commands
   local -a options
