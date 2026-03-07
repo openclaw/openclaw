@@ -146,6 +146,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  // Guard: once streaming was used and closed for this dispatch cycle,
+  // prevent non-streaming fallback from sending duplicate messages.
+  let streamingWasUsed = false;
+  // Track text accumulated from completed generation blocks (before tool calls)
+  // and the last cumulative partial length to detect new-block boundaries.
+  let blockBaseText = "";
+  let lastCumulativeLen = 0;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const queueStreamingUpdate = (
@@ -165,8 +172,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       lastPartial = nextText;
     }
     const mode = options?.mode ?? "snapshot";
-    streamText =
-      mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
+    if (mode === "delta") {
+      streamText = `${streamText}${nextText}`;
+    } else {
+      // Snapshot mode: detect new generation block boundaries.
+      // When an agent makes a tool call, the cumulative partial resets.
+      // A significantly shorter snapshot that isn't a substring of the
+      // current text signals the start of a new block.
+      const currentBlock = blockBaseText ? streamText.slice(blockBaseText.length) : streamText;
+      if (
+        lastCumulativeLen > 0 &&
+        nextText.length < lastCumulativeLen * 0.5 &&
+        !currentBlock.includes(nextText)
+      ) {
+        // New block detected — preserve previous content as base.
+        blockBaseText = streamText;
+        streamText = blockBaseText + nextText;
+      } else {
+        const merged = mergeStreamingText(currentBlock, nextText);
+        streamText = blockBaseText + merged;
+      }
+      lastCumulativeLen = nextText.length;
+    }
     partialUpdateQueue = partialUpdateQueue.then(async () => {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -212,6 +239,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
+      streamingWasUsed = true;
       let text = streamText;
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
@@ -222,6 +250,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    blockBaseText = "";
+    lastCumulativeLen = 0;
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -260,7 +290,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            if (!(streamingEnabled && useCard) || streamingWasUsed) {
               return;
             }
             startStreaming();
@@ -269,7 +299,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
+          if (info?.kind === "final" && streamingEnabled && useCard && !streamingWasUsed) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;
@@ -288,6 +318,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
+            if (hasMedia) {
+              for (const mediaUrl of mediaList) {
+                await sendMediaFeishu({
+                  cfg,
+                  to: chatId,
+                  mediaUrl,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  accountId,
+                });
+              }
+            }
+            return;
+          }
+
+          // Guard: if streaming was active earlier in this dispatch cycle but is
+          // now closed (by onIdle, onError, or a prior final), skip the
+          // non-streaming fallback to avoid sending a duplicate card/message.
+          if (streamingWasUsed && info?.kind === "final") {
             if (hasMedia) {
               for (const mediaUrl of mediaList) {
                 await sendMediaFeishu({
