@@ -606,6 +606,9 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("LLM error: weekly/monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
+    // AWS Bedrock and other providers: tokens per day limits (#38822)
+    expect(classifyFailoverReason("Too many tokens per day")).toBe("rate_limit");
+    expect(classifyFailoverReason("tokens per day limit exceeded")).toBe("rate_limit");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");

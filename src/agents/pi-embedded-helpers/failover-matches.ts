@@ -14,6 +14,11 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    // AWS Bedrock and other providers: daily token limits
+    "too many tokens per day",
+    "too many tokens",
+    "tokens per day",
+    "quota exceeded",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,

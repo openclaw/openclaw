@@ -382,6 +382,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       lastStartAt: null,
       lastStopAt: null,
       lastError: null,
+      lastEventAt: null,
     },
     collectStatusIssues: collectTelegramStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
@@ -456,6 +457,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         probe,
         audit,
         allowUnmentionedGroups,
+        lastEventAt: runtime?.lastEventAt ?? null,
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
       };
@@ -506,6 +508,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookPath: account.config.webhookPath,
         webhookHost: account.config.webhookHost,
         webhookPort: account.config.webhookPort,
+        setStatus: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {

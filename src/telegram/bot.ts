@@ -62,6 +62,7 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  setStatus?: (status: { lastEventAt?: number | null; lastInboundAt?: number | null }) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -192,6 +193,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   bot.use(sequentialize(getTelegramSequentialKey));
+
+  // Track inbound events for channel liveness monitoring (like Discord/Slack)
+  const trackInboundEvent = opts.setStatus
+    ? () => {
+        const at = Date.now();
+        opts.setStatus?.({ lastEventAt: at, lastInboundAt: at });
+      }
+    : undefined;
+
+  bot.use(async (ctx, next) => {
+    // Track event on every inbound update
+    trackInboundEvent?.();
+    await next();
+  });
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
