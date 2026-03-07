@@ -29,6 +29,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
+import { registerModelsCompletionCli } from "./models-completion-cli.js";
 
 function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
@@ -49,6 +50,8 @@ export function registerModelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
+
+  registerModelsCompletionCli(models);
 
   models
     .command("list")

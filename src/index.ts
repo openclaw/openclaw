@@ -7,6 +7,11 @@ import { monitorWebChannel } from "./channel-web.js";
 import { createDefaultDeps } from "./cli/deps.js";
 import { promptYesNo } from "./cli/prompt.js";
 import { waitForever } from "./cli/wait.js";
+import { modelsCompletionCommand } from "./commands/models/completion.js";
+import type {
+  ModelsCompletionParams,
+  ModelsCompletionResult,
+} from "./commands/models/completion.js";
 import { loadConfig } from "./config/config.js";
 import {
   deriveSessionKey,
@@ -46,6 +51,22 @@ assertSupportedRuntime();
 import { buildProgram } from "./cli/program.js";
 
 const program = buildProgram();
+
+/**
+ * Public API: Run an LLM completion using configured models
+ *
+ * @example
+ * const result = await openclaw.completion({
+ *   model: 'anthropic/claude-sonnet-4',
+ *   input: 'What is 2+2?'
+ * });
+ * console.log(result.output); // "4"
+ */
+export async function completion(params: ModelsCompletionParams): Promise<ModelsCompletionResult> {
+  return modelsCompletionCommand(params, createDefaultDeps().runtime);
+}
+
+export type { ModelsCompletionParams, ModelsCompletionResult };
 
 export {
   assertWebChannel,

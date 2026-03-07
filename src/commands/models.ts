@@ -31,3 +31,5 @@ export { modelsListCommand, modelsStatusCommand } from "./models/list.js";
 export { modelsScanCommand } from "./models/scan.js";
 export { modelsSetCommand } from "./models/set.js";
 export { modelsSetImageCommand } from "./models/set-image.js";
+export { modelsCompletionCommand } from "./models/completion.js";
+export type { ModelsCompletionParams, ModelsCompletionResult } from "./models/completion.js";
