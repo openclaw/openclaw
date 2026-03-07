@@ -8,6 +8,8 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
+  readCronRunLogEntriesPageAll,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -310,6 +312,141 @@ describe("cron run log", () => {
 
       // Clean up
       await writePromise.catch(() => undefined);
+    });
+  });
+
+  it("readCronRunLogEntriesPage filters by query text", async () => {
+    await withRunLogDir("openclaw-cron-log-query-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        summary: "all done",
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "error",
+        error: "quota exceeded",
+      });
+
+      const page = await readCronRunLogEntriesPage(logPath, { query: "quota", limit: 10 });
+      expect(page.total).toBe(1);
+      expect(page.entries[0]?.ts).toBe(2);
+    });
+  });
+
+  it("readCronRunLogEntriesPage sorts ascending when sortDir is asc", async () => {
+    await withRunLogDir("openclaw-cron-log-sortdir-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      for (const ts of [3, 1, 2]) {
+        await appendCronRunLog(logPath, {
+          ts,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+      }
+
+      const page = await readCronRunLogEntriesPage(logPath, { sortDir: "asc", limit: 10 });
+      expect(page.entries.map((e) => e.ts)).toEqual([1, 2, 3]);
+    });
+  });
+
+  it("readCronRunLogEntriesPage filters by deliveryStatus", async () => {
+    await withRunLogDir("openclaw-cron-log-delivery-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        delivered: true,
+        deliveryStatus: "delivered",
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        delivered: false,
+        deliveryStatus: "not-delivered",
+      });
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        deliveryStatus: "delivered",
+        limit: 10,
+      });
+      expect(page.total).toBe(1);
+      expect(page.entries[0]?.ts).toBe(1);
+    });
+  });
+
+  it("readCronRunLogEntriesPage paginates with offset", async () => {
+    await withRunLogDir("openclaw-cron-log-offset-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      for (let i = 0; i < 5; i++) {
+        await appendCronRunLog(logPath, {
+          ts: i,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+      }
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        sortDir: "asc",
+        limit: 2,
+        offset: 2,
+      });
+      expect(page.entries).toHaveLength(2);
+      expect(page.offset).toBe(2);
+      expect(page.hasMore).toBe(true);
+      expect(page.nextOffset).toBe(4);
+    });
+  });
+
+  it("readCronRunLogEntriesPageAll merges entries from multiple job files", async () => {
+    await withRunLogDir("openclaw-cron-log-all-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      await fs.mkdir(path.join(dir, "runs"), { recursive: true });
+      const logPathA = path.join(dir, "runs", "a.jsonl");
+      const logPathB = path.join(dir, "runs", "b.jsonl");
+
+      await appendCronRunLog(logPathA, {
+        ts: 10,
+        jobId: "a",
+        action: "finished",
+        status: "ok",
+      });
+      await appendCronRunLog(logPathB, {
+        ts: 20,
+        jobId: "b",
+        action: "finished",
+        status: "error",
+        error: "oops",
+      });
+
+      const page = await readCronRunLogEntriesPageAll({
+        storePath,
+        sortDir: "asc",
+        limit: 50,
+      });
+      expect(page.total).toBe(2);
+      expect(page.entries.map((e) => e.jobId)).toEqual(["a", "b"]);
+    });
+  });
+
+  it("readCronRunLogEntriesPageAll returns empty result when runs dir is missing", async () => {
+    await withRunLogDir("openclaw-cron-log-nodir-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      const page = await readCronRunLogEntriesPageAll({ storePath });
+      expect(page.entries).toEqual([]);
+      expect(page.total).toBe(0);
+      expect(page.hasMore).toBe(false);
     });
   });
 });
