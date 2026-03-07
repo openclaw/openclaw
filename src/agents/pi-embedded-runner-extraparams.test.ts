@@ -1387,7 +1387,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
-  it("does not force store for models that declare supportsStore=false", () => {
+  it("strips store from payload for models that declare supportsStore=false", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-4o",
@@ -1405,7 +1405,28 @@ describe("applyExtraParamsToAgent", () => {
         compat: { supportsStore: false },
       } as unknown as Model<"openai-responses">,
     });
-    expect(payload.store).toBe(false);
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("strips store from payload for non-OpenAI responses providers with supportsStore=false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai-responses",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        id: "gemini-2.5-pro",
+        name: "gemini-2.5-pro",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 65_536,
+        compat: { supportsStore: false },
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("store");
   });
 
   it("auto-injects OpenAI Responses context_management compaction for direct OpenAI models", () => {
