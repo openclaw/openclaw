@@ -630,8 +630,8 @@ export function createNodesTool(options?: {
               throw new Error("command must be an array of strings (argv), e.g. ['echo', 'Hello']");
             }
             const command = commandRaw.map((c) => String(c));
-            if (command.length === 0) {
-              throw new Error("command must not be empty");
+            if (command.every((c) => c.trim().length === 0)) {
+              throw new Error("command must not be empty or whitespace-only");
             }
             const cwd =
               typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined;
