@@ -2,6 +2,7 @@ import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
+import { resetToolStream } from "../app-tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
@@ -69,23 +70,7 @@ export async function loadChatHistory(state: ChatState) {
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
-    // Also clear the underlying tool stream maps so the 80ms sync timer
-    // doesn't rebuild chatToolMessages after we clear it.
-    const toolHost = state as unknown as {
-      chatToolMessages: unknown[];
-      chatStreamSegments: Array<{ text: string; ts: number }>;
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    toolHost.chatToolMessages = [];
-    toolHost.chatStreamSegments = [];
-    toolHost.toolStreamById.clear();
-    toolHost.toolStreamOrder = [];
-    if (toolHost.toolStreamSyncTimer != null) {
-      clearTimeout(toolHost.toolStreamSyncTimer);
-      toolHost.toolStreamSyncTimer = null;
-    }
+    resetToolStream(state as unknown as Parameters<typeof resetToolStream>[0]);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
