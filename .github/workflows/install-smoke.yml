@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   docs-scope:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest # FORK-ONLY: swapped from blacksmith
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
     steps:
@@ -35,13 +35,13 @@ jobs:
   install-smoke:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest # FORK-ONLY: swapped from blacksmith
     steps:
       - name: Checkout CLI
         uses: actions/checkout@v4
 
       - name: Set up Docker Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: docker/setup-buildx-action@v3 # FORK-ONLY: swapped from useblacksmith/setup-docker-builder
 
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@v2
