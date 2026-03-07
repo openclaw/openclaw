@@ -91,14 +91,14 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
       "openai:default": {
         type: "api_key",
         provider: "openai",
-        key: "sk-openai-plaintext",
+        key: "sk-openai-plaintext", // pragma: allowlist secret
       },
     },
   });
   await writeJsonFile(fixture.authJsonPath, {
     openai: {
       type: "api_key",
-      key: "sk-openai-plaintext",
+      key: "sk-openai-plaintext", // pragma: allowlist secret
     },
   });
   await fs.writeFile(
