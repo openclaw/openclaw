@@ -1,7 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import {
+  supportsEffort,
+  supportsMaxEffort,
+  type EffortLevel,
+  type ThinkLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
@@ -1033,6 +1038,59 @@ function createZaiToolStreamWrapper(
   };
 }
 
+/** Map OpenClaw EffortLevel to Anthropic output_config.effort. */
+type AnthropicEffort = "low" | "medium" | "high" | "max";
+
+function mapEffortLevelToAnthropicEffort(level: EffortLevel): AnthropicEffort | undefined {
+  switch (level) {
+    case "off":
+      return undefined;
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "max":
+      return "max";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Create a streamFn wrapper that injects output_config.effort for Anthropic
+ * providers, independently of the thinking parameter.
+ */
+function createAnthropicEffortWrapper(
+  baseStreamFn: StreamFn | undefined,
+  effortLevel: EffortLevel,
+): StreamFn {
+  const anthropicEffort = mapEffortLevelToAnthropicEffort(effortLevel);
+  if (!anthropicEffort) {
+    return baseStreamFn ?? streamSimple;
+  }
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const existing = payloadObj.output_config;
+          if (existing && typeof existing === "object") {
+            (existing as Record<string, unknown>).effort = anthropicEffort;
+          } else {
+            payloadObj.output_config = { effort: anthropicEffort };
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -1047,6 +1105,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  effortLevel?: EffortLevel,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -1081,6 +1140,17 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  // Inject independent effort level for Anthropic 4.6 models (output_config.effort).
+  // This is separate from thinking — users can set effort without enabling thinking.
+  // Guard: only inject if the active model actually supports the effort parameter,
+  // and clamp "max" to "high" for non-Opus models (e.g. during fallback/retry).
+  if (effortLevel && effortLevel !== "off" && supportsEffort(provider, modelId)) {
+    const clampedEffort =
+      effortLevel === "max" && !supportsMaxEffort(provider, modelId) ? "high" : effortLevel;
+    log.debug(`applying Anthropic effort level ${clampedEffort} for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicEffortWrapper(agent.streamFn, clampedEffort);
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {

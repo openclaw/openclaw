@@ -7,7 +7,14 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  supportsMaxEffort,
+  type EffortLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
@@ -37,6 +44,7 @@ export type ReplyDirectiveContinuation = {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: ReturnType<typeof defaultGroupActivation>;
   resolvedThinkLevel: ThinkLevel | undefined;
+  resolvedEffortLevel: EffortLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -227,6 +235,7 @@ export async function resolveReplyDirectives(params: {
   }
   const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
+    parsedDirectives.hasEffortDirective ||
     parsedDirectives.hasVerboseDirective ||
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
@@ -259,12 +268,14 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        hasEffortDirective: false,
         hasVerboseDirective: false,
         hasReasoningDirective: false,
         hasStatusDirective: false,
         hasModelDirective: false,
         hasQueueDirective: false,
         queueReset: false,
+        effortLevel: undefined,
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   let cleanedBody = (() => {
@@ -340,6 +351,13 @@ export async function resolveReplyDirectives(params: {
   const defaultActivation = defaultGroupActivation(requireMention);
   const resolvedThinkLevel =
     directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
+
+  const rawEffortLevel =
+    directives.effortLevel ?? (sessionEntry?.effortLevel as EffortLevel | undefined);
+  // Clamp "max" effort to "high" when the resolved model does not support it
+  // (e.g. session stored /effort max on Opus then switched to Sonnet).
+  const resolvedEffortLevel =
+    rawEffortLevel === "max" && !supportsMaxEffort(provider, model) ? "high" : rawEffortLevel;
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -478,6 +496,7 @@ export async function resolveReplyDirectives(params: {
       elevatedFailures,
       defaultActivation,
       resolvedThinkLevel: resolvedThinkLevelWithDefault,
+      resolvedEffortLevel,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

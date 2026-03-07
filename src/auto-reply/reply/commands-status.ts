@@ -22,7 +22,13 @@ import type { MediaUnderstandingDecision } from "../../media-understanding/types
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  EffortLevel,
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
@@ -40,6 +46,7 @@ export async function buildStatusReply(params: {
   model: string;
   contextTokens: number;
   resolvedThinkLevel?: ThinkLevel;
+  resolvedEffortLevel?: EffortLevel;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
@@ -60,6 +67,7 @@ export async function buildStatusReply(params: {
     model,
     contextTokens,
     resolvedThinkLevel,
+    resolvedEffortLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -181,6 +189,7 @@ export async function buildStatusReply(params: {
     sessionStorePath: storePath,
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedEffort: resolvedEffortLevel,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,

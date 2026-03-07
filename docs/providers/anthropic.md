@@ -158,6 +158,43 @@ Note: Anthropic currently rejects `context-1m-*` beta requests when using
 OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
 context1m beta header for OAuth auth and keeps the required OAuth betas.
 
+## Independent effort control
+
+Claude Opus 4.6 and Sonnet 4.6 support **two independent parameters**:
+
+- **Thinking** (`/think`) controls whether the model uses extended thinking (chain of thought).
+- **Effort** (`/effort`) controls how much compute the model spends on the response, independent of thinking.
+
+This means you can run combinations like "thinking off + high effort" for fast, high-quality responses without visible chain-of-thought.
+
+### Usage
+
+```
+/effort high        Set effort to high
+/effort max         Set effort to max (Opus 4.6 only)
+/effort off         Reset to provider default
+/e low              Short alias
+```
+
+Available levels: `off`, `low`, `medium`, `high`, `max` (max is Opus 4.6 only).
+
+When effort is not set, the provider decides the default effort level.
+
+### Combining with thinking
+
+Effort and thinking are fully independent. Examples:
+
+| Command              | Thinking | Effort  |
+| -------------------- | -------- | ------- |
+| `/think off /e high` | off      | high    |
+| `/think low /e low`  | low      | low     |
+| `/think high`        | high     | default |
+| `/effort max`        | default  | max     |
+
+### Config
+
+Effort can also be set as a session default via inline directives. It persists on the session until changed or cleared with `/effort off`.
+
 ## Option B: Claude setup-token
 
 **Best for:** using your Claude subscription.

@@ -94,6 +94,7 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  effortLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

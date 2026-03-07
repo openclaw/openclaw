@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel } from "../thinking.js";
+import type { EffortLevel, ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildStatusReply } from "./commands.js";
 import {
@@ -150,6 +150,7 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,
+      currentEffortLevel,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
@@ -162,6 +163,7 @@ export async function applyInlineDirectiveOverrides(params: {
     const directiveReply = await handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       currentThinkLevel,
+      currentEffortLevel,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
@@ -169,6 +171,9 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
+      // Re-read effort level after handleDirectiveOnly may have mutated sessionEntry.
+      const postDirectiveEffortLevel =
+        (sessionEntry?.effortLevel as EffortLevel | undefined) ?? currentEffortLevel;
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -180,6 +185,7 @@ export async function applyInlineDirectiveOverrides(params: {
         model,
         contextTokens,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
+        resolvedEffortLevel: postDirectiveEffortLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",
         resolvedElevatedLevel,

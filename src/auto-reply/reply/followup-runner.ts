@@ -201,6 +201,7 @@ export function createFollowupRunner(params: {
               model,
               ...authProfile,
               thinkLevel: queued.run.thinkLevel,
+              effortLevel: queued.run.effortLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
               suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,

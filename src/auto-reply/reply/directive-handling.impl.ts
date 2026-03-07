@@ -10,7 +10,13 @@ import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import {
+  formatEffortLevels,
+  formatThinkingLevels,
+  formatXHighModelHint,
+  supportsMaxEffort,
+  supportsXHighThinking,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
@@ -78,6 +84,7 @@ export async function handleDirectiveOnly(
     initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
+    currentEffortLevel,
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
@@ -145,6 +152,20 @@ export async function handleDirectiveOnly(
     }
     return {
       text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+    };
+  }
+  if (directives.hasEffortDirective && !directives.effortLevel) {
+    if (!directives.rawEffortLevel) {
+      const level = currentEffortLevel ?? "off";
+      return {
+        text: withOptions(
+          `Current effort level: ${level}.`,
+          formatEffortLevels(resolvedProvider, resolvedModel),
+        ),
+      };
+    }
+    return {
+      text: `Unrecognized effort level "${directives.rawEffortLevel}". Valid levels: ${formatEffortLevels(resolvedProvider, resolvedModel)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -259,6 +280,15 @@ export async function handleDirectiveOnly(
       text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
     };
   }
+  if (
+    directives.hasEffortDirective &&
+    directives.effortLevel === "max" &&
+    !supportsMaxEffort(resolvedProvider, resolvedModel)
+  ) {
+    return {
+      text: `Effort level "max" is only supported for Opus 4.6 models.`,
+    };
+  }
 
   const nextThinkLevel = directives.hasThinkDirective
     ? directives.thinkLevel
@@ -286,6 +316,9 @@ export async function handleDirectiveOnly(
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";
+  }
+  if (directives.hasEffortDirective && directives.effortLevel) {
+    sessionEntry.effortLevel = directives.effortLevel;
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     applyVerboseOverride(sessionEntry, directives.verboseLevel);
@@ -378,6 +411,13 @@ export async function handleDirectiveOnly(
       directives.thinkLevel === "off"
         ? "Thinking disabled."
         : `Thinking level set to ${directives.thinkLevel}.`,
+    );
+  }
+  if (directives.hasEffortDirective && directives.effortLevel) {
+    parts.push(
+      directives.effortLevel === "off"
+        ? formatDirectiveAck("Effort level reset to default.")
+        : formatDirectiveAck(`Effort level set to ${directives.effortLevel}.`),
     );
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {

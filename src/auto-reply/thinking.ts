@@ -1,4 +1,5 @@
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type EffortLevel = "off" | "low" | "medium" | "high" | "max";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -128,6 +129,75 @@ export function formatXHighModelHint(): string {
     return `${refs[0]} or ${refs[1]}`;
   }
   return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
+}
+
+const EFFORT_MODEL_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
+
+const MAX_EFFORT_MODEL_PREFIXES = ["claude-opus-4-6", "claude-opus-4.6"] as const;
+
+// Normalize user-provided effort level strings to the canonical enum.
+export function normalizeEffortLevel(raw?: string | null): EffortLevel | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (["off", "none", "disable", "disabled", "default"].includes(key)) {
+    return "off";
+  }
+  if (["low", "min", "minimal"].includes(key)) {
+    return "low";
+  }
+  if (["mid", "med", "medium"].includes(key)) {
+    return "medium";
+  }
+  if (["high"].includes(key)) {
+    return "high";
+  }
+  if (["max", "maximum"].includes(key)) {
+    return "max";
+  }
+  return undefined;
+}
+
+export function supportsMaxEffort(provider?: string | null, model?: string | null): boolean {
+  const modelKey = model?.trim().toLowerCase();
+  if (!modelKey) {
+    return false;
+  }
+  return MAX_EFFORT_MODEL_PREFIXES.some((prefix) => modelKey.startsWith(prefix));
+}
+
+/** Check whether the resolved model supports the Anthropic effort parameter at all. */
+export function supportsEffort(provider?: string | null, model?: string | null): boolean {
+  if (!provider || provider.toLowerCase() !== "anthropic") {
+    return false;
+  }
+  const modelKey = model?.trim().toLowerCase();
+  if (!modelKey) {
+    return false;
+  }
+  return EFFORT_MODEL_PREFIXES.some((prefix) => modelKey.startsWith(prefix));
+}
+
+export function listEffortLevels(provider?: string | null, model?: string | null): EffortLevel[] {
+  const levels: EffortLevel[] = ["off", "low", "medium", "high"];
+  if (supportsMaxEffort(provider, model)) {
+    levels.push("max");
+  }
+  return levels;
+}
+
+export function formatEffortLevels(
+  provider?: string | null,
+  model?: string | null,
+  separator = ", ",
+): string {
+  return listEffortLevels(provider, model).join(separator);
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

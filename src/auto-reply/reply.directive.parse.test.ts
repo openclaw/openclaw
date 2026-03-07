@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractEffortDirective,
   extractElevatedDirective,
   extractExecDirective,
   extractQueueDirective,
@@ -220,5 +221,41 @@ describe("directive parsing", () => {
     const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
     expect(res.replyToId).toBe("msg-2");
     expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+  });
+
+  it("matches effort directive with level", () => {
+    const res = extractEffortDirective("/effort high run fast");
+    expect(res.hasDirective).toBe(true);
+    expect(res.effortLevel).toBe("high");
+    expect(res.cleaned).toBe("run fast");
+  });
+
+  it("matches effort directive with colon syntax", () => {
+    const res = extractEffortDirective("/effort:low do things");
+    expect(res.hasDirective).toBe(true);
+    expect(res.effortLevel).toBe("low");
+  });
+
+  it("matches /e alias", () => {
+    const res = extractEffortDirective("/e max go");
+    expect(res.hasDirective).toBe(true);
+    expect(res.effortLevel).toBe("max");
+  });
+
+  it("matches effort with no argument", () => {
+    const res = extractEffortDirective("/effort");
+    expect(res.hasDirective).toBe(true);
+    expect(res.effortLevel).toBeUndefined();
+  });
+
+  it("does not match /effortstuff", () => {
+    const res = extractEffortDirective("/effortstuff");
+    expect(res.hasDirective).toBe(false);
+  });
+
+  it("preserves spacing when stripping effort directives before paths", () => {
+    const res = extractEffortDirective("thats not /effort high/tmp/hello");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("thats not /tmp/hello");
   });
 });
