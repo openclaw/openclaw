@@ -393,6 +393,157 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("system.which")).toBe(false);
     expect(allow.has("device.info")).toBe(true);
   });
+
+  it("per-node denyCommands merges with global deny", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            denyCommands: ["camera.snap"],
+            overrides: {
+              "node-123": {
+                denyCommands: ["browser.proxy"],
+              },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "node-123" },
+    );
+    expect(allow.has("camera.snap")).toBe(false);
+    expect(allow.has("browser.proxy")).toBe(false);
+    expect(allow.has("system.run")).toBe(true);
+  });
+
+  it("per-node allowCommands merges with global allow", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            allowCommands: ["camera.snap"],
+            overrides: {
+              n1: {
+                allowCommands: ["screen.record"],
+              },
+            },
+          },
+        },
+      },
+      { platform: "ios", deviceFamily: "iPhone", nodeId: "n1" },
+    );
+    expect(allow.has("camera.snap")).toBe(true);
+    expect(allow.has("screen.record")).toBe(true);
+  });
+
+  it("ignores displayName-only overrides", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            overrides: {
+              "my-display": { denyCommands: ["system.run"] },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "node-abc" },
+    );
+    expect(allow.has("system.run")).toBe(true);
+  });
+
+  it("matches by nodeId prefix", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            overrides: {
+              "node-": { denyCommands: ["browser.proxy"] },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "node-lukin-20" },
+    );
+    expect(allow.has("browser.proxy")).toBe(false);
+    expect(allow.has("system.run")).toBe(true);
+  });
+
+  it("falls back to global config when no override matches", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            denyCommands: ["camera.snap"],
+            overrides: {
+              "other-node": { denyCommands: ["browser.proxy"] },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "my-node" },
+    );
+    // Global deny applies, per-node deny for "other-node" does not
+    expect(allow.has("camera.snap")).toBe(false);
+    expect(allow.has("browser.proxy")).toBe(true);
+  });
+
+  it("per-node allow and deny coexist; deny wins over allow", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            overrides: {
+              "my-node": {
+                allowCommands: ["camera.snap", "screen.record"],
+                denyCommands: ["camera.snap"],
+              },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "my-node" },
+    );
+    // camera.snap added by allow but removed by deny
+    expect(allow.has("camera.snap")).toBe(false);
+    // screen.record only in allow, not denied
+    expect(allow.has("screen.record")).toBe(true);
+  });
+
+  it("ignores empty-string override key", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            overrides: {
+              "": { denyCommands: ["system.run"] },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "any-node" },
+    );
+    // Empty key should not match — system.run stays allowed
+    expect(allow.has("system.run")).toBe(true);
+  });
+
+  it("prefix match picks longest matching key", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            overrides: {
+              "node-": { denyCommands: ["system.run", "browser.proxy"] },
+              "node-lukin-": { denyCommands: ["browser.proxy"] },
+            },
+          },
+        },
+      },
+      { platform: "linux", deviceFamily: "", nodeId: "node-lukin-20" },
+    );
+    // "node-lukin-" is the longest prefix → only browser.proxy denied
+    expect(allow.has("browser.proxy")).toBe(false);
+    expect(allow.has("system.run")).toBe(true);
+  });
 });
 
 describe("normalizeVoiceWakeTriggers", () => {
