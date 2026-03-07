@@ -30,7 +30,7 @@ const shouldEagerRegisterSubcommands = (_argv: string[]) => {
 
 const loadConfig = async (): Promise<OpenClawConfig> => {
   const mod = await import("../../config/config.js");
-  return mod.loadConfig();
+  return await mod.readBestEffortConfig();
 };
 
 // Note for humans and agents:

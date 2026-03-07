@@ -3,7 +3,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  readBestEffortConfig,
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+} from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -39,7 +43,7 @@ export async function statusAllCommand(
 ): Promise<void> {
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     progress.setLabel("Loading config…");
-    const loadedRaw = loadConfig();
+    const loadedRaw = await readBestEffortConfig();
     const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
       config: loadedRaw,
       commandName: "status --all",
