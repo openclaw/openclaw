@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
