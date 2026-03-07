@@ -112,9 +112,9 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "reset", description: "Reset the session" },
     {
       name: "theme",
-      description: "Switch color theme",
+      description: "Switch color theme (or open picker)",
       getArgumentCompletions: (prefix) =>
-        getThemeNames()
+        ["list", ...getThemeNames()]
           .filter((v) => v.startsWith(prefix.toLowerCase()))
           .map((value) => ({ value, label: value })),
     },
@@ -157,7 +157,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
-    "/theme <name> (or /theme for options)",
+    "/theme [name]  (/theme opens interactive picker, /theme list shows all)",
     "/new or /reset",
     "/abort",
     "/settings",

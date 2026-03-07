@@ -233,6 +233,44 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
+  const openThemeSelector = () => {
+    const availableThemes = getThemeNames();
+    if (availableThemes.length === 0) {
+      chatLog.addSystem("no themes available");
+      tui.requestRender();
+      return;
+    }
+
+    const originalTheme = currentThemeName;
+    const items = availableThemes.map((themeName) => ({
+      value: themeName,
+      label: themeName,
+      description: themeName === originalTheme ? "current" : "",
+    }));
+
+    const selector = createSearchableSelectList(items, 10);
+
+    selector.onSelectionChange = (item) => {
+      applyTheme(item.value, tui);
+      tui.requestRender();
+    };
+
+    selector.onSelect = (item) => {
+      applyTheme(item.value, tui);
+      chatLog.addSystem(`theme set to ${item.value}`);
+      void loadHistory();
+      closeOverlayAndRender();
+    };
+
+    selector.onCancel = () => {
+      applyTheme(originalTheme, tui);
+      closeOverlayAndRender();
+    };
+
+    openOverlay(selector as Component);
+    tui.requestRender();
+  };
+
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
@@ -444,14 +482,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "theme":
         if (!args) {
+          openThemeSelector();
+          break;
+        }
+        if (args === "list") {
           chatLog.addSystem(
-            `usage: /theme <${getThemeNames().join(", ")}>  (current: ${currentThemeName})`,
+            `themes: ${getThemeNames().join(", ")}  (current: ${currentThemeName})`,
           );
-        } else if (applyTheme(args, tui)) {
+          break;
+        }
+        if (applyTheme(args, tui)) {
           chatLog.addSystem(`theme set to ${args}`);
           await loadHistory();
         } else {
-          chatLog.addSystem(`unknown theme: ${args}. available: ${getThemeNames().join(", ")}`);
+          chatLog.addSystem(`unknown theme: ${args}. try /theme for picker or /theme list`);
         }
         break;
       case "settings":
