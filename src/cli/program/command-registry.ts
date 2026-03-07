@@ -154,6 +154,11 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
       {
+        name: "agent-ui",
+        description: "Launch an external CLI agent UI with OpenClaw memory bridge",
+        hasSubcommands: false,
+      },
+      {
         name: "agents",
         description: "Manage isolated agents (workspaces, auth, routing)",
         hasSubcommands: true,

@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentCliCommandMock = vi.fn();
+const agentUiCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
 const agentsBindingsCommandMock = vi.fn();
 const agentsBindCommandMock = vi.fn();
@@ -20,6 +21,10 @@ const runtime = {
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: agentCliCommandMock,
+}));
+
+vi.mock("../../commands/agent-ui.js", () => ({
+  agentUiCommand: agentUiCommandMock,
 }));
 
 vi.mock("../../commands/agents.js", () => ({
@@ -60,6 +65,7 @@ describe("registerAgentCommands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     agentCliCommandMock.mockResolvedValue(undefined);
+    agentUiCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
@@ -97,6 +103,40 @@ describe("registerAgentCommands", () => {
       }),
       runtime,
       { deps: true },
+    );
+  });
+
+  it("runs agent-ui command and forwards options", async () => {
+    await runCli([
+      "agent-ui",
+      "--command",
+      "codex",
+      "--arg",
+      "--profile",
+      "--arg",
+      "work",
+      "--cwd",
+      "/tmp/work",
+      "--agent",
+      "ops",
+      "--no-bridge-memory",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expect(agentUiCommandMock).toHaveBeenCalledWith(
+      {
+        command: "codex",
+        arg: ["--profile", "work"],
+        provider: undefined,
+        model: undefined,
+        cwd: "/tmp/work",
+        agent: "ops",
+        noBridgeMemory: true,
+        dryRun: true,
+        json: true,
+      },
+      runtime,
     );
   });
 
