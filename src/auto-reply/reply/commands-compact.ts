@@ -70,6 +70,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
 
+  const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
+
   const learnResult = await runLearnForSession({
     sessionId,
     sessionKey: params.sessionKey,
@@ -92,13 +94,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    thinkLevel,
     customFocus: "What insights and lessons should be remembered before context compaction?",
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
   if (learnResult.ok) {
     logVerbose(`Pre-compaction learning completed for session ${params.sessionKey}`);
+  } else {
+    logVerbose(`Pre-compaction learning failed for session ${params.sessionKey}: ${learnResult.message ?? "unknown error"}`);
   }
 
   const customInstructions = extractCompactInstructions({
@@ -130,7 +134,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    thinkLevel,
     bashElevated: {
       enabled: false,
       allowed: false,

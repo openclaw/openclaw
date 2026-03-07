@@ -13,7 +13,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
-import { handleLearnCommand } from "./commands-learn.js";
+import { handleLearnCommand, runLearnForSession } from "./commands-learn.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -41,7 +41,6 @@ import type {
   HandleCommandsParams,
 } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
-import { runLearnForSession } from "./commands-learn.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -213,40 +212,6 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     return { shouldContinue: false };
   }
 
-  // Trigger learning before reset/new commands
-  if (resetRequested && params.command.isAuthorizedSender && params.sessionEntry?.sessionId) {
-    const learnResult = await runLearnForSession({
-      sessionId: params.sessionEntry.sessionId,
-      sessionKey: params.sessionKey,
-      messageChannel: params.command.channel,
-      groupId: params.sessionEntry.groupId,
-      groupChannel: params.sessionEntry.groupChannel,
-      groupSpace: params.sessionEntry.space,
-      spawnedBy: params.sessionEntry.spawnedBy,
-      sessionFile: resolveSessionFilePath(
-        params.sessionEntry.sessionId,
-        params.sessionEntry,
-        resolveSessionFilePathOptions({
-          agentId: params.agentId,
-          storePath: params.storePath,
-        }),
-      ),
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      config: params.cfg,
-      skillsSnapshot: params.sessionEntry.skillsSnapshot,
-      provider: params.provider,
-      model: params.model,
-      thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-      customFocus: "What insights and lessons should be remembered before starting a new session?",
-      senderIsOwner: params.command.senderIsOwner,
-      ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
-    });
-    if (learnResult.ok) {
-      logVerbose(`Pre-reset learning completed for session ${params.sessionKey}`);
-    }
-  }
-
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
@@ -259,6 +224,48 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
         ? boundAcpSessionKey.trim()
         : undefined;
+
+    // Determine which session to learn from (after ACP resolution)
+    const targetSessionKey = boundAcpKey ?? params.sessionKey;
+    const targetSessionEntry = boundAcpKey
+      ? resolveSessionEntryForHookSessionKey(params.sessionStore, boundAcpKey)
+      : params.sessionEntry;
+
+    // Trigger learning before reset/new commands (after ACP target resolution)
+    if (targetSessionEntry?.sessionId) {
+      const learnResult = await runLearnForSession({
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: targetSessionKey,
+        messageChannel: params.command.channel,
+        groupId: targetSessionEntry.groupId,
+        groupChannel: targetSessionEntry.groupChannel,
+        groupSpace: targetSessionEntry.space,
+        spawnedBy: targetSessionEntry.spawnedBy,
+        sessionFile: resolveSessionFilePath(
+          targetSessionEntry.sessionId,
+          targetSessionEntry,
+          resolveSessionFilePathOptions({
+            agentId: params.agentId,
+            storePath: params.storePath,
+          }),
+        ),
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: params.cfg,
+        skillsSnapshot: targetSessionEntry.skillsSnapshot,
+        provider: params.provider,
+        model: params.model,
+        thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+        customFocus: "What insights and lessons should be remembered before starting a new session?",
+        senderIsOwner: params.command.senderIsOwner,
+        ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+      });
+      if (learnResult.ok) {
+        logVerbose(`Pre-reset learning completed for session ${targetSessionKey}`);
+      } else {
+        logVerbose(`Pre-reset learning failed for session ${targetSessionKey}: ${learnResult.message ?? "unknown error"}`);
+      }
+    }
     if (boundAcpKey) {
       const resetResult = await resetAcpSessionInPlace({
         cfg: params.cfg,

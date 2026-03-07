@@ -1,4 +1,4 @@
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
@@ -16,14 +16,8 @@ const LEARN_DEFAULT_PROMPT = [
   "What important insights, lessons, or information should be remembered from this session?",
 ].join(" ");
 
-function extractLearnFocus(params: {
-  rawBody?: string;
-  ctx: import("../templating.js").MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}): string | undefined {
-  const trimmed = params.rawBody?.trim() ?? "";
+function extractLearnFocus(rawBody?: string): string | undefined {
+  const trimmed = rawBody?.trim() ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -59,42 +53,50 @@ export async function runLearnForSession(params: {
   senderIsOwner: boolean;
   ownerNumbers?: string[];
 }): Promise<{ ok: boolean; message?: string }> {
-  const customInstructions = params.customFocus
+  const prompt = params.customFocus
     ? `Focus area: ${params.customFocus}. ${LEARN_DEFAULT_PROMPT}`
     : LEARN_DEFAULT_PROMPT;
 
-  const result = await compactEmbeddedPiSession({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    messageChannel: params.messageChannel,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    spawnedBy: params.spawnedBy,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    config: params.config,
-    skillsSnapshot: params.skillsSnapshot,
-    provider: params.provider,
-    model: params.model,
-    thinkLevel: params.thinkLevel ?? "medium",
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
-    },
-    customInstructions,
-    extraSystemPrompt: LEARN_SYSTEM_PROMPT,
-    trigger: "manual",
-    senderIsOwner: params.senderIsOwner,
-    ownerNumbers: params.ownerNumbers,
-  });
+  const sessionFilePath = resolveSessionFilePath(
+    params.sessionId,
+    { sessionId: params.sessionId, sessionFile: params.sessionFile },
+    resolveSessionFilePathOptions({ agentId: undefined, storePath: undefined }),
+  );
 
-  if (result.ok) {
+  try {
+    await runEmbeddedPiAgent({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: sessionFilePath,
+      messageChannel: params.messageChannel,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      config: params.config,
+      skillsSnapshot: params.skillsSnapshot,
+      provider: params.provider,
+      model: params.model,
+      thinkLevel: params.thinkLevel ?? "medium",
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      prompt,
+      extraSystemPrompt: LEARN_SYSTEM_PROMPT,
+      trigger: "memory",
+      senderIsOwner: params.senderIsOwner,
+      ownerNumbers: params.ownerNumbers,
+    });
+
     return { ok: true, message: "Learning completed. Insights saved to memory." };
+  } catch (err) {
+    logVerbose(`Learning failed for session ${params.sessionKey}: ${String(err)}`);
+    return { ok: false, message: String(err) };
   }
-  return { ok: false, message: result.reason ?? "Learning failed" };
 }
 
 export const handleLearnCommand = async (
@@ -123,13 +125,7 @@ export const handleLearnCommand = async (
   }
 
   const sessionId = params.sessionEntry.sessionId;
-  const customFocus = extractLearnFocus({
-    rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    isGroup: params.isGroup,
-  });
+  const customFocus = extractLearnFocus(params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body);
 
   const result = await runLearnForSession({
     sessionId,
