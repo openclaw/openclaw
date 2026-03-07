@@ -351,14 +351,7 @@ export function resolveCommandAuthorization(params: {
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
-  const isDirectChat = (ctx.ChatType ?? "").trim().toLowerCase() === "direct";
-  // In the default single-user direct-chat setup, allow an identified sender to
-  // keep ownerOnly tools even without an explicit owner allowlist.
-  const senderIsOwner =
-    senderIsOwnerByIdentity ||
-    senderIsOwnerByScope ||
-    ownerAllowAll ||
-    (!ownerAllowlistConfigured && isDirectChat && Boolean(senderId));
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
