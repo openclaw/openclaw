@@ -130,16 +130,21 @@ describe("redactImageDataForDiagnostics", () => {
   });
 
   describe("cycle handling", () => {
-    it("returns original cyclic payload when no image redaction is needed", () => {
+    it("replaces cycle back-references with a safe placeholder", () => {
       const payload: { self?: unknown; data: { type: string; text: string } } = {
         data: { type: "text", text: "hello" },
       };
       payload.self = payload;
 
-      expect(redactImageDataForDiagnostics(payload)).toBe(payload);
+      const result = redactImageDataForDiagnostics(payload) as {
+        self: unknown;
+        data: { type: string; text: string };
+      };
+      expect(result.self).toBe("[Circular]");
+      expect(result.data).toEqual(payload.data);
     });
 
-    it("redacts cyclic payloads without recursing infinitely", () => {
+    it("redacts cyclic payloads without leaking raw image data through back-edges", () => {
       const payload: {
         self?: unknown;
         options: { images: Array<{ type: string; data: string; mimeType: string }> };
@@ -150,6 +155,8 @@ describe("redactImageDataForDiagnostics", () => {
 
       const result = redactImageDataForDiagnostics(payload) as typeof payload;
       expect(result.options.images[0]).toEqual(redactedDirectImageBlock);
+      expect(result.self).toBe("[Circular]");
+      expect(JSON.stringify(result)).not.toContain("A".repeat(64));
     });
   });
 });

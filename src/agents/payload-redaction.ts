@@ -6,6 +6,8 @@
  * payload so log consumers can still inspect message roles, tool calls, etc.
  */
 
+const CIRCULAR_PLACEHOLDER = "[Circular]";
+
 function redactImageSource(source: Record<string, unknown>): Record<string, unknown> {
   if (source.type !== "base64" || typeof source.data !== "string") {
     return source;
@@ -83,7 +85,7 @@ function redactDeep(
     return memo.get(value);
   }
   if (seen.has(value)) {
-    return value;
+    return CIRCULAR_PLACEHOLDER;
   }
   seen.add(value);
   try {
