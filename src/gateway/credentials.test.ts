@@ -488,7 +488,7 @@ describe("resolveGatewayCredentialsFromValues", () => {
       configPassword: "${OPENCLAW_GATEWAY_PASSWORD}",
       env: {} as NodeJS.ProcessEnv,
       tokenPrecedence: "config-first",
-      passwordPrecedence: "config-first",
+      passwordPrecedence: "config-first", // pragma: allowlist secret
     });
     expect(resolved).toEqual({ token: undefined, password: undefined });
   });
@@ -499,7 +499,7 @@ describe("resolveGatewayCredentialsFromValues", () => {
       configPassword: "real-password", // pragma: allowlist secret
       env: {} as NodeJS.ProcessEnv,
       tokenPrecedence: "config-first",
-      passwordPrecedence: "config-first",
+      passwordPrecedence: "config-first", // pragma: allowlist secret
     });
     expect(resolved).toEqual({ token: "real-token-value", password: "real-password" });
   });
