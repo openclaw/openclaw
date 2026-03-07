@@ -144,4 +144,17 @@ ${SENDER_BLOCK}
 Hello from user`;
     expect(extractInboundSenderLabel(input)).toBe("Alice");
   });
+
+  it("continues searching after a malformed sender json block", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Alice"
+\`\`\`
+
+${SENDER_BLOCK}
+
+Hello from user`;
+    expect(extractInboundSenderLabel(input)).toBe("Alice");
+  });
 });

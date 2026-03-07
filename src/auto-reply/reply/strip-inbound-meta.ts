@@ -58,13 +58,19 @@ function parseInboundMetaBlock(lines: string[], sentinel: string): Record<string
       .join("\n")
       .trim();
     if (!jsonText) {
-      return null;
+      i = end;
+      continue;
     }
     try {
       const parsed = JSON.parse(jsonText);
-      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, unknown>;
+      }
+      i = end;
+      continue;
     } catch {
-      return null;
+      i = end;
+      continue;
     }
   }
   return null;
