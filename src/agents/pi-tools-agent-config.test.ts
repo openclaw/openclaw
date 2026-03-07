@@ -746,4 +746,117 @@ describe("Agent-specific tool filtering", () => {
     const details = result?.details as { status?: string } | undefined;
     expect(details?.status).toBe("completed");
   });
+
+  describe("tools.entries enable/disable", () => {
+    it("should exclude tools when entries.<name>.enabled is false", () => {
+      const cfg: OpenClawConfig = {
+        tools: {
+          profile: "coding",
+          entries: {
+            browser: { enabled: false },
+            nodes: { enabled: false },
+          },
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test-entries-disable",
+        agentDir: "/tmp/agent-entries-disable",
+      });
+
+      const toolNames = tools.map((t) => t.name);
+      expect(toolNames).not.toContain("browser");
+      expect(toolNames).not.toContain("nodes");
+      // read and exec should still be available
+      expect(toolNames).toContain("read");
+      expect(toolNames).toContain("exec");
+    });
+
+    it("should include tools when entries.<name>.enabled is true or undefined", () => {
+      const cfg: OpenClawConfig = {
+        tools: {
+          profile: "full", // Use full profile which includes browser and nodes
+          entries: {
+            browser: { enabled: true },
+            nodes: {}, // enabled is undefined, should be treated as enabled
+          },
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test-entries-enabled",
+        agentDir: "/tmp/agent-entries-enabled",
+      });
+
+      const toolNames = tools.map((t) => t.name);
+      expect(toolNames).toContain("browser");
+      expect(toolNames).toContain("nodes");
+    });
+
+    it("should work alongside allow/deny policies", () => {
+      const cfg: OpenClawConfig = {
+        tools: {
+          allow: ["read", "exec", "browser"],
+          entries: {
+            browser: { enabled: false }, // explicitly disabled
+          },
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test-entries-with-policy",
+        agentDir: "/tmp/agent-entries-with-policy",
+      });
+
+      const toolNames = tools.map((t) => t.name);
+      expect(toolNames).toContain("read");
+      expect(toolNames).toContain("exec");
+      // browser is in allowlist but disabled via entries
+      expect(toolNames).not.toContain("browser");
+    });
+
+    it("should allow disabling multiple tools to save tokens", () => {
+      const cfg: OpenClawConfig = {
+        tools: {
+          profile: "full",
+          entries: {
+            canvas: { enabled: false },
+            cron: { enabled: false },
+            tts: { enabled: false },
+            gateway: { enabled: false },
+            subagents: { enabled: false },
+            sessions_list: { enabled: false },
+            sessions_history: { enabled: false },
+            sessions_send: { enabled: false },
+          },
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test-entries-multiple",
+        agentDir: "/tmp/agent-entries-multiple",
+      });
+
+      const toolNames = tools.map((t) => t.name);
+      expect(toolNames).not.toContain("canvas");
+      expect(toolNames).not.toContain("cron");
+      expect(toolNames).not.toContain("tts");
+      expect(toolNames).not.toContain("gateway");
+      expect(toolNames).not.toContain("subagents");
+      expect(toolNames).not.toContain("sessions_list");
+      expect(toolNames).not.toContain("sessions_history");
+      expect(toolNames).not.toContain("sessions_send");
+      // Core tools should still be available
+      expect(toolNames).toContain("read");
+      expect(toolNames).toContain("exec");
+    });
+  });
 });

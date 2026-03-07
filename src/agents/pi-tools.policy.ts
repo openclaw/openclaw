@@ -196,6 +196,71 @@ function resolveProviderToolPolicy(params: {
   return undefined;
 }
 
+/**
+ * Resolves per-model tool policy by matching model id against configured keys.
+ *
+ * Keys can be:
+ * - Full model id: "openai/gpt-4o", "anthropic/claude-3-opus"
+ * - Model id only: "gpt-4o" (matches any provider with this model)
+ * - Pattern: "gpt-*" (glob pattern matching)
+ *
+ * Priority order:
+ * 1. Exact full model id match (provider/model)
+ * 2. Exact model id match (without provider)
+ * 3. Glob pattern match (first matching pattern)
+ */
+function resolveModelToolPolicy(params: {
+  byModel?: Record<string, ToolPolicyConfig>;
+  modelProvider?: string;
+  modelId?: string;
+}): ToolPolicyConfig | undefined {
+  const byModel = params.byModel;
+  if (!byModel || Object.keys(byModel).length === 0) {
+    return undefined;
+  }
+
+  const provider = params.modelProvider?.trim().toLowerCase();
+  const modelId = params.modelId?.trim().toLowerCase();
+  if (!modelId) {
+    return undefined;
+  }
+
+  // Build full model id: provider/model
+  const fullModelId = provider ? `${provider}/${modelId}` : modelId;
+
+  // Priority 1: Exact full model id match
+  const exactFullMatch = byModel[fullModelId];
+  if (exactFullMatch) {
+    return exactFullMatch;
+  }
+
+  // Priority 2: Exact model id match (without provider)
+  const exactModelMatch = byModel[modelId];
+  if (exactModelMatch) {
+    return exactModelMatch;
+  }
+
+  // Priority 3: Glob pattern match
+  // Use the existing glob pattern utilities from tool-policy.ts
+  const patternEntries = Object.entries(byModel).filter(([key]) => key.includes("*"));
+
+  for (const [pattern, policy] of patternEntries) {
+    const compiledPatterns = compileGlobPatterns({
+      raw: [pattern],
+      normalize: normalizeToolName,
+    });
+    if (matchesAnyGlobPattern(normalizeToolName(fullModelId), compiledPatterns)) {
+      return policy;
+    }
+    // Also try matching just the model id (without provider)
+    if (matchesAnyGlobPattern(normalizeToolName(modelId), compiledPatterns)) {
+      return policy;
+    }
+  }
+
+  return undefined;
+}
+
 export function resolveEffectiveToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -226,14 +291,30 @@ export function resolveEffectiveToolPolicy(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+
+  // Resolve per-model tool policy
+  const modelPolicy = resolveModelToolPolicy({
+    byModel: globalTools?.byModel,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const agentModelPolicy = resolveModelToolPolicy({
+    byModel: agentTools?.byModel,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+
   return {
     agentId,
     globalPolicy: pickSandboxToolPolicy(globalTools),
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
+    globalModelPolicy: pickSandboxToolPolicy(modelPolicy),
     agentPolicy: pickSandboxToolPolicy(agentTools),
     agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
+    agentModelPolicy: pickSandboxToolPolicy(agentModelPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
+    modelProfile: agentModelPolicy?.profile ?? modelPolicy?.profile,
     // alsoAllow is applied at the profile stage (to avoid being filtered out early).
     profileAlsoAllow: Array.isArray(agentTools?.alsoAllow)
       ? agentTools?.alsoAllow
@@ -244,6 +325,11 @@ export function resolveEffectiveToolPolicy(params: {
       ? agentProviderPolicy?.alsoAllow
       : Array.isArray(providerPolicy?.alsoAllow)
         ? providerPolicy?.alsoAllow
+        : undefined,
+    modelProfileAlsoAllow: Array.isArray(agentModelPolicy?.alsoAllow)
+      ? agentModelPolicy?.alsoAllow
+      : Array.isArray(modelPolicy?.alsoAllow)
+        ? modelPolicy?.alsoAllow
         : undefined,
   };
 }

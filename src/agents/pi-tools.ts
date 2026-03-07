@@ -63,6 +63,28 @@ function isOpenAIProvider(provider?: string) {
   return normalized === "openai" || normalized === "openai-codex";
 }
 
+/**
+ * Filter tools based on tools.entries.<name>.enabled configuration.
+ * When enabled is explicitly set to false, the tool is excluded.
+ */
+function applyToolEntriesConfig(
+  tools: AnyAgentTool[],
+  config: OpenClawConfig | undefined,
+): AnyAgentTool[] {
+  const entries = config?.tools?.entries;
+  if (!entries || typeof entries !== "object") {
+    return tools;
+  }
+  return tools.filter((tool) => {
+    const entry = entries[tool.name];
+    if (!entry || typeof entry !== "object") {
+      return true;
+    }
+    // Only filter out if explicitly disabled (enabled === false)
+    return entry.enabled !== false;
+  });
+}
+
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
@@ -262,12 +284,16 @@ export function createOpenClawCodingTools(options?: {
     agentId,
     globalPolicy,
     globalProviderPolicy,
+    globalModelPolicy,
     agentPolicy,
     agentProviderPolicy,
+    agentModelPolicy,
     profile,
     providerProfile,
+    modelProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
+    modelProfileAlsoAllow,
   } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
@@ -291,11 +317,16 @@ export function createOpenClawCodingTools(options?: {
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const modelProfilePolicy = resolveToolProfilePolicy(modelProfile);
 
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
+  );
+  const modelProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+    modelProfilePolicy,
+    modelProfileAlsoAllow,
   );
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
@@ -311,10 +342,13 @@ export function createOpenClawCodingTools(options?: {
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
     providerProfilePolicyWithAlsoAllow,
+    modelProfilePolicyWithAlsoAllow,
     globalPolicy,
     globalProviderPolicy,
+    globalModelPolicy,
     agentPolicy,
     agentProviderPolicy,
+    agentModelPolicy,
     groupPolicy,
     sandbox?.tools,
     subagentPolicy,
@@ -493,10 +527,13 @@ export function createOpenClawCodingTools(options?: {
       pluginToolAllowlist: collectExplicitAllowlist([
         profilePolicy,
         providerProfilePolicy,
+        modelProfilePolicy,
         globalPolicy,
         globalProviderPolicy,
+        globalModelPolicy,
         agentPolicy,
         agentProviderPolicy,
+        agentModelPolicy,
         groupPolicy,
         sandbox?.tools,
         subagentPolicy,
@@ -533,10 +570,14 @@ export function createOpenClawCodingTools(options?: {
         profile,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
+        modelProfilePolicy: modelProfilePolicyWithAlsoAllow,
+        modelProfile,
         globalPolicy,
         globalProviderPolicy,
+        globalModelPolicy,
         agentPolicy,
         agentProviderPolicy,
+        agentModelPolicy,
         groupPolicy,
         agentId,
       }),
@@ -544,10 +585,12 @@ export function createOpenClawCodingTools(options?: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
+  // Apply per-tool enable/disable from tools.entries configuration
+  const entriesFiltered = applyToolEntriesConfig(subagentFiltered, options?.config);
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = entriesFiltered.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
