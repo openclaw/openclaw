@@ -54,6 +54,7 @@ export function renderSchedulePanel(schedule: ScheduleData, today: TodayData): H
 
     ${sources ? `<div class="muted" style="margin-bottom:8px">${sources}</div>` : ""}
     ${deadlineHtml}
+    ${counts.total_active === 0 && !deadlineHtml ? `<div class="panel-empty">No active events or deadlines</div>` : ""}
   `;
 
   return panel;

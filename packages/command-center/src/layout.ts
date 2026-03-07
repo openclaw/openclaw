@@ -18,6 +18,10 @@ export function createLayout(): HTMLElement {
       <div class="cc-logo">OpenClaw</div>
       <div id="prompt-bar-mount"></div>
       <div class="cc-header-right">
+        <span class="connection-indicator" id="connection-indicator">
+          <span class="conn-dot" id="conn-dot"></span>
+          <span class="conn-label" id="conn-label">Connecting...</span>
+        </span>
         <label class="simple-toggle">
           <input type="checkbox" id="simple-mode-toggle" />
           <span>Simple</span>
@@ -39,8 +43,13 @@ export function createLayout(): HTMLElement {
     </div>
 
     <footer class="cc-footer">
-      <span class="muted">Last refresh: <span id="last-refresh">--</span></span>
-      <span class="muted" id="token-status"></span>
+      <div class="footer-left">
+        <span class="muted">Last refresh: <span id="last-refresh">--</span></span>
+        <button class="refresh-btn" id="refresh-btn" title="Refresh now">&#8635;</button>
+      </div>
+      <div class="footer-right">
+        <span class="muted" id="token-status"></span>
+      </div>
     </footer>
   `;
 

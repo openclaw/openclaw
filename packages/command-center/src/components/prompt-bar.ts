@@ -1,4 +1,5 @@
 import { submitPrompt, type PromptBarConfig } from "../api";
+import { logEvent } from "../logger";
 
 export function createPromptBar(config: PromptBarConfig): HTMLElement {
   const container = document.createElement("div");
@@ -72,8 +73,11 @@ export function createPromptBar(config: PromptBarConfig): HTMLElement {
     resultEl.style.display = "block";
     resultEl.innerHTML = `<div class="prompt-loading">Thinking...</div>`;
 
+    logEvent("prompt", `Submitted: ${text}`);
+
     try {
       const response = await submitPrompt(text);
+      logEvent("prompt", `Response: ${response.intent?.type ?? "no_intent"}`);
       resultEl.innerHTML = `
         <div class="prompt-reply">
           <div class="reply-text">${escapeHtml(response.reply)}</div>
@@ -81,6 +85,7 @@ export function createPromptBar(config: PromptBarConfig): HTMLElement {
         </div>
       `;
     } catch (err) {
+      logEvent("prompt_error", err instanceof Error ? err.message : "Unknown");
       resultEl.innerHTML = `<div class="prompt-error">Error: ${err instanceof Error ? err.message : "Unknown error"}</div>`;
     } finally {
       input.disabled = false;

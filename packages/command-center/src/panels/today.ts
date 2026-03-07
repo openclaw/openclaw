@@ -70,7 +70,7 @@ export function renderTodayPanel(data: TodayData): HTMLElement {
       ${cm.goal_chip ? `<span class="goal-chip">${cm.goal_chip}</span>` : ""}
     </div>
 
-    ${upNextHtml}
+    ${upNextHtml || `<div class="panel-empty">No upcoming events in focus window</div>`}
     ${overdueHtml}
 
     <div class="panel-actions">

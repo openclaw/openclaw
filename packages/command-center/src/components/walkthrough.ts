@@ -1,4 +1,5 @@
 import type { WalkthroughStep } from "../api";
+import { logEvent } from "../logger";
 
 const WALKTHROUGH_DONE_KEY = "openclaw_walkthrough_done";
 
@@ -67,6 +68,7 @@ export function startWalkthrough(steps: WalkthroughStep[]): void {
   function finish() {
     overlay.remove();
     localStorage.setItem(WALKTHROUGH_DONE_KEY, "1");
+    logEvent("walkthrough", `Completed (viewed ${current + 1}/${steps.length} steps)`);
     // Focus prompt bar after tour
     const input = document.querySelector<HTMLInputElement>(".prompt-input");
     input?.focus();

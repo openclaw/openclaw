@@ -37,6 +37,7 @@ export function renderApprovalsPanel(data: ApprovalsData): HTMLElement {
     </div>
 
     ${itemsHtml}
+    ${count === 0 ? `<div class="panel-empty">All clear — nothing needs your approval</div>` : ""}
   `;
 
   return panel;
