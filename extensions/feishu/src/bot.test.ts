@@ -1908,6 +1908,65 @@ describe("handleFeishuMessage command authorization", () => {
     });
   });
 
+  it("does not pin a wildcard allowFrom entry as a fake owner", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["feishu:*"],
+        },
+      },
+      session: {
+        dmScope: "main",
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-wildcard-owner",
+        },
+      },
+      message: {
+        message_id: "msg-dm-wildcard-owner",
+        chat_id: "oc-dm-wildcard-owner",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from wildcard sender" }),
+      },
+    };
+
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockRecordInboundSession).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-feishu-session-store.json",
+      sessionKey: "agent:main:main",
+      ctx: expect.objectContaining({
+        SessionKey: "agent:main:main",
+        OriginatingTo: "user:ou-wildcard-owner",
+      }),
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "feishu",
+        to: "user:ou-wildcard-owner",
+        accountId: "default",
+        mainDmOwnerPin: undefined,
+      },
+      onRecordError: expect.any(Function),
+    });
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

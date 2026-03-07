@@ -226,9 +226,6 @@ function resolvePinnedFeishuMainDmOwner(params: {
     return null;
   }
   const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
-  if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
-    return null;
-  }
   const normalizedOwners = Array.from(
     new Set(
       rawAllowFrom
@@ -244,6 +241,9 @@ function resolvePinnedFeishuMainDmOwner(params: {
         .filter(Boolean),
     ),
   );
+  if (normalizedOwners.includes("*")) {
+    return null;
+  }
   return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
 }
 
