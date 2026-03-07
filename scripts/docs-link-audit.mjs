@@ -117,6 +117,8 @@ const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
 /** @type {{file: string; line: number; link: string; reason: string}[]} */
 const broken = [];
+/** @type {{file: string; reason: string}[]} */
+const contentIssues = [];
 let checked = 0;
 
 for (const abs of markdownFiles) {
@@ -228,6 +230,46 @@ for (const item of broken) {
   console.log(`${item.file}:${item.line} :: ${item.link} :: ${item.reason}`);
 }
 
-if (broken.length > 0) {
+const requiredDocSnippets = [
+  {
+    file: "help/faq.md",
+    snippets: ["/gateway/troubleshooting#1008-invalid-request-frame-or-invalid-handshake"],
+  },
+  {
+    file: "gateway/troubleshooting.md",
+    snippets: [
+      "## 1008 invalid request frame or invalid handshake",
+      '`"type":"req"`',
+      '`"method":"connect"`',
+    ],
+  },
+];
+
+for (const requirement of requiredDocSnippets) {
+  const abs = path.join(DOCS_DIR, requirement.file);
+  if (!fs.existsSync(abs)) {
+    contentIssues.push({
+      file: requirement.file,
+      reason: "required docs check target is missing",
+    });
+    continue;
+  }
+  const text = fs.readFileSync(abs, "utf8");
+  for (const snippet of requirement.snippets) {
+    if (!text.includes(snippet)) {
+      contentIssues.push({
+        file: requirement.file,
+        reason: `missing required snippet: ${snippet}`,
+      });
+    }
+  }
+}
+
+console.log(`content_issues=${contentIssues.length}`);
+for (const issue of contentIssues) {
+  console.log(`${issue.file} :: ${issue.reason}`);
+}
+
+if (broken.length > 0 || contentIssues.length > 0) {
   process.exit(1);
 }

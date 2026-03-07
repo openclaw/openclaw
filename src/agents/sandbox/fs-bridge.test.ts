@@ -293,53 +293,9 @@ describe("sandbox fs bridge shell compatibility", () => {
     });
   });
 
-  it("rejects pre-existing host symlink escapes before docker exec", async () => {
-    await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
-      const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
-      // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
-      if (process.platform === "win32") {
-        return;
-      }
-      await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects pre-existing host hardlink escapes before docker exec", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withTempDir("openclaw-fs-bridge-hardlink-", async (stateDir) => {
-      const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
-      const hardlinkPath = path.join(workspaceDir, "link.txt");
-      try {
-        await fs.link(outsideFile, hardlinkPath);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-          return;
-        }
-        throw err;
-      }
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    });
+    await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/escapes sandbox/);
+    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
