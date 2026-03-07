@@ -10,6 +10,11 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("../../agents/bootstrap-cache.js", () => ({
   clearBootstrapSnapshot: vi.fn(),
+  clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
+    if (sessionKey && previousSessionId) {
+      clearBootstrapSnapshot(sessionKey);
+    }
+  }),
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";

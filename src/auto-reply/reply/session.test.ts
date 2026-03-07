@@ -851,15 +851,18 @@ describe("initSessionState RawBody", () => {
 });
 
 describe("initSessionState reset policy", () => {
-  let clearBootstrapSnapshotSpy: ReturnType<typeof vi.spyOn>;
+  let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    clearBootstrapSnapshotSpy = vi.spyOn(bootstrapCache, "clearBootstrapSnapshot");
+    clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
+      bootstrapCache,
+      "clearBootstrapSnapshotOnSessionRollover",
+    );
   });
 
   afterEach(() => {
-    clearBootstrapSnapshotSpy.mockRestore();
+    clearBootstrapSnapshotOnSessionRolloverSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -886,7 +889,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
-    expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith(sessionKey);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1063,7 +1069,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
-    expect(clearBootstrapSnapshotSpy).not.toHaveBeenCalled();
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: undefined,
+    });
   });
 });
 
