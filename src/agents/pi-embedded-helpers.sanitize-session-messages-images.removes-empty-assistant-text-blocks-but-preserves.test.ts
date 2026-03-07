@@ -5,15 +5,17 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
-import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessages,
+  makeAgentAssistantMessage,
+} from "./test-helpers/agent-message-fixtures.js";
 
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
 
 function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessage> {
   return [
-    {
-      role: "assistant",
+    makeAgentAssistantMessage({
       content: [
         {
           type: "toolCall",
@@ -22,20 +24,10 @@ function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessa
           arguments: { path: "package.json" },
         },
       ],
-      api: "openai-responses",
-      provider: "openai",
       model: "gpt-5.2",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
       stopReason: "toolUse",
       timestamp: nextTimestamp(),
-    },
+    }),
     {
       role: "toolResult",
       toolCallId: "call_123|fc_456",
@@ -45,6 +37,27 @@ function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessa
       timestamp: nextTimestamp(),
     },
   ];
+}
+
+function makeEmptyAssistantErrorMessage(): AssistantMessage {
+  return makeAgentAssistantMessage({
+    stopReason: "error",
+    content: [],
+    model: "gpt-5.2",
+    timestamp: nextTimestamp(),
+  }) satisfies AssistantMessage;
+}
+
+function makeOpenAiResponsesAssistantMessage(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "toolUse",
+): AssistantMessage {
+  return makeAgentAssistantMessage({
+    content,
+    model: "gpt-5.2",
+    stopReason,
+    timestamp: nextTimestamp(),
+  });
 }
 
 function expectToolCallAndResultIds(out: AgentMessage[], expectedId: string) {
@@ -95,23 +108,9 @@ describe("sanitizeSessionMessagesImages", () => {
 
   it("does not synthesize tool call input when missing", async () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: nextTimestamp(),
-      },
+      makeOpenAiResponsesAssistantMessage([
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ]),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -124,26 +123,10 @@ describe("sanitizeSessionMessagesImages", () => {
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "" },
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-        ],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: nextTimestamp(),
-      },
+      makeOpenAiResponsesAssistantMessage([
+        { type: "text", text: "" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ]),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -189,33 +172,7 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("sanitizes tool IDs in images-only mode when explicitly enabled", async () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_123|fc_456", name: "read", arguments: {} }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: nextTimestamp(),
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_456",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: nextTimestamp(),
-      },
-    ]);
+    const input = makeToolCallResultPairInput();
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeMode: "images-only",
@@ -297,39 +254,11 @@ describe("sanitizeSessionMessagesImages", () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
-        role: "assistant",
-        stopReason: "error",
-        content: [],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        timestamp: nextTimestamp(),
-      } satisfies AssistantMessage,
+        ...makeEmptyAssistantErrorMessage(),
+      },
       {
-        role: "assistant",
-        stopReason: "error",
-        content: [],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        timestamp: nextTimestamp(),
-      } satisfies AssistantMessage,
+        ...makeEmptyAssistantErrorMessage(),
+      },
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");

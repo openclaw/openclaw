@@ -9,9 +9,13 @@ import {
   formatUnavailableBatchError,
   normalizeBatchBaseUrl,
   postJsonWithRetry,
+  resolveBatchCompletionFromStatus,
+  resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
+  throwIfBatchTerminalFailure,
   type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
+  type BatchCompletionResult,
   type ProviderBatchOutputLine,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
@@ -146,7 +150,7 @@ async function waitForVoyageBatch(params: {
   timeoutMs: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: VoyageBatchStatus;
-}): Promise<{ outputFileId: string; errorFileId?: string }> {
+}): Promise<BatchCompletionResult> {
   const start = Date.now();
   let current: VoyageBatchStatus | undefined = params.initial;
   while (true) {
@@ -158,21 +162,21 @@ async function waitForVoyageBatch(params: {
       }));
     const state = status.status ?? "unknown";
     if (state === "completed") {
-      if (!status.output_file_id) {
-        throw new Error(`voyage batch ${params.batchId} completed without output file`);
-      }
-      return {
-        outputFileId: status.output_file_id,
-        errorFileId: status.error_file_id ?? undefined,
-      };
+      return resolveBatchCompletionFromStatus({
+        provider: "voyage",
+        batchId: params.batchId,
+        status,
+      });
     }
-    if (["failed", "expired", "cancelled", "canceled"].includes(state)) {
-      const detail = status.error_file_id
-        ? await readVoyageBatchError({ client: params.client, errorFileId: status.error_file_id })
-        : undefined;
-      const suffix = detail ? `: ${detail}` : "";
-      throw new Error(`voyage batch ${params.batchId} ${state}${suffix}`);
-    }
+    await throwIfBatchTerminalFailure({
+      provider: "voyage",
+      status: { ...status, id: params.batchId },
+      readError: async (errorFileId) =>
+        await readVoyageBatchError({
+          client: params.client,
+          errorFileId,
+        }),
+    });
     if (!params.wait) {
       throw new Error(`voyage batch ${params.batchId} still ${state}; wait disabled`);
     }
@@ -206,6 +210,7 @@ export async function runVoyageEmbeddingBatches(
       if (!batchInfo.id) {
         throw new Error("voyage batch create failed: missing batch id");
       }
+      const batchId = batchInfo.id;
 
       params.debug?.("memory embeddings: voyage batch created", {
         batchId: batchInfo.id,
@@ -215,30 +220,21 @@ export async function runVoyageEmbeddingBatches(
         requests: group.length,
       });
 
-      if (!params.wait && batchInfo.status !== "completed") {
-        throw new Error(
-          `voyage batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
-        );
-      }
-
-      const completed =
-        batchInfo.status === "completed"
-          ? {
-              outputFileId: batchInfo.output_file_id ?? "",
-              errorFileId: batchInfo.error_file_id ?? undefined,
-            }
-          : await waitForVoyageBatch({
-              client: params.client,
-              batchId: batchInfo.id,
-              wait: params.wait,
-              pollIntervalMs: params.pollIntervalMs,
-              timeoutMs: params.timeoutMs,
-              debug: params.debug,
-              initial: batchInfo,
-            });
-      if (!completed.outputFileId) {
-        throw new Error(`voyage batch ${batchInfo.id} completed without output file`);
-      }
+      const completed = await resolveCompletedBatchResult({
+        provider: "voyage",
+        status: batchInfo,
+        wait: params.wait,
+        waitForBatch: async () =>
+          await waitForVoyageBatch({
+            client: params.client,
+            batchId,
+            wait: params.wait,
+            pollIntervalMs: params.pollIntervalMs,
+            timeoutMs: params.timeoutMs,
+            debug: params.debug,
+            initial: batchInfo,
+          }),
+      });
 
       const baseUrl = normalizeBatchBaseUrl(params.client);
       const errors: string[] = [];

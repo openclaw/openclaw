@@ -66,9 +66,18 @@ export { evaluateSenderGroupAccess } from "./group-access.js";
 export type { SenderGroupAccessDecision } from "./group-access.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { buildChannelSendResult } from "./channel-send-result.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
-export { resolveOutboundMediaUrls, sendMediaWithLeadingCaption } from "./reply-payload.js";
-export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+export {
+  isNumericTargetId,
+  resolveOutboundMediaUrls,
+  sendMediaWithLeadingCaption,
+  sendPayloadWithChunkedTextAndMedia,
+} from "./reply-payload.js";
+export {
+  buildBaseAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+} from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { extractToolSend } from "./tool-send.js";
 export {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { createAccountListHelpers } from "./account-helpers.js";
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
@@ -49,6 +50,22 @@ describe("createAccountListHelpers", () => {
         "work",
         "personal",
       ]);
+    });
+  });
+
+  describe("with normalizeAccountId option", () => {
+    const normalized = createAccountListHelpers("testchannel", { normalizeAccountId });
+
+    it("normalizes and deduplicates configured account ids", () => {
+      expect(
+        normalized.listConfiguredAccountIds(
+          cfg({
+            "Router D": {},
+            "router-d": {},
+            "Personal A": {},
+          }),
+        ),
+      ).toEqual(["router-d", "personal-a"]);
     });
   });
 

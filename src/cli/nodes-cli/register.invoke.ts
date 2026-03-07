@@ -9,6 +9,8 @@ import {
   type ExecSecurity,
   maxAsk,
   minSecurity,
+  normalizeExecAsk,
+  normalizeExecSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
@@ -42,22 +44,6 @@ type ExecDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
 };
-
-function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return null;
-}
-
-function normalizeExecAsk(value?: string | null): ExecAsk | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized as ExecAsk;
-  }
-  return null;
-}
 
 function resolveExecDefaults(
   cfg: ReturnType<typeof loadConfig>,

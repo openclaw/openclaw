@@ -21,6 +21,12 @@ import {
   createThreadBindingManager,
 } from "./thread-bindings.js";
 
+type DiscordConfig = NonNullable<
+  import("../../config/config.js").OpenClawConfig["channels"]
+>["discord"];
+type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
+type DiscordClient = import("@buape/carbon").Client;
+
 function createThreadBinding(
   overrides?: Partial<
     import("../../infra/outbound/session-binding-service.js").SessionBindingRecord
@@ -46,6 +52,34 @@ function createThreadBinding(
     },
     ...overrides,
   } satisfies import("../../infra/outbound/session-binding-service.js").SessionBindingRecord;
+}
+
+function createPreflightArgs(params: {
+  cfg: import("../../config/config.js").OpenClawConfig;
+  discordConfig: DiscordConfig;
+  data: DiscordMessageEvent;
+  client: DiscordClient;
+}): Parameters<typeof preflightDiscordMessage>[0] {
+  return {
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    accountId: "default",
+    token: "token",
+    runtime: {} as import("../../runtime.js").RuntimeEnv,
+    botUserId: "openclaw-bot",
+    guildHistories: new Map(),
+    historyLimit: 0,
+    mediaMaxBytes: 1_000_000,
+    textLimit: 2_000,
+    replyToMode: "all",
+    dmEnabled: true,
+    groupDmEnabled: true,
+    ackReactionScope: "direct",
+    groupPolicy: "open",
+    threadBindings: createNoopThreadBindingManager("default"),
+    data: params.data,
+    client: params.client,
+  };
 }
 
 describe("resolvePreflightMentionRequirement", () => {
@@ -312,42 +346,30 @@ describe("preflightDiscordMessage", () => {
       resolveByConversation: (ref) => (ref.conversationId === threadId ? threadBinding : null),
     });
 
-    const result = await preflightDiscordMessage({
-      cfg: {
-        session: {
-          mainKey: "main",
-          scope: "per-sender",
-        },
-      } as import("../../config/config.js").OpenClawConfig,
-      discordConfig: {
-        allowBots: true,
-      } as NonNullable<import("../../config/config.js").OpenClawConfig["channels"]>["discord"],
-      accountId: "default",
-      token: "token",
-      runtime: {} as import("../../runtime.js").RuntimeEnv,
-      botUserId: "openclaw-bot",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 1_000_000,
-      textLimit: 2_000,
-      replyToMode: "all",
-      dmEnabled: true,
-      groupDmEnabled: true,
-      ackReactionScope: "direct",
-      groupPolicy: "open",
-      threadBindings: createNoopThreadBindingManager("default"),
-      data: {
-        channel_id: threadId,
-        guild_id: "guild-1",
-        guild: {
-          id: "guild-1",
-          name: "Guild One",
-        },
-        author: message.author,
-        message,
-      } as unknown as import("./listeners.js").DiscordMessageEvent,
-      client,
-    });
+    const result = await preflightDiscordMessage(
+      createPreflightArgs({
+        cfg: {
+          session: {
+            mainKey: "main",
+            scope: "per-sender",
+          },
+        } as import("../../config/config.js").OpenClawConfig,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: {
+          channel_id: threadId,
+          guild_id: "guild-1",
+          guild: {
+            id: "guild-1",
+            name: "Guild One",
+          },
+          author: message.author,
+          message,
+        } as unknown as DiscordMessageEvent,
+        client,
+      }),
+    );
 
     expect(result).not.toBeNull();
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
@@ -768,47 +790,33 @@ describe("preflightDiscordMessage", () => {
       },
     } as unknown as import("@buape/carbon").Message;
 
-    const result = await preflightDiscordMessage({
-      cfg: {
-        session: {
-          mainKey: "main",
-          scope: "per-sender",
-        },
-        messages: {
-          groupChat: {
-            mentionPatterns: ["openclaw"],
+    const result = await preflightDiscordMessage(
+      createPreflightArgs({
+        cfg: {
+          session: {
+            mainKey: "main",
+            scope: "per-sender",
           },
-        },
-      } as import("../../config/config.js").OpenClawConfig,
-      discordConfig: {} as NonNullable<
-        import("../../config/config.js").OpenClawConfig["channels"]
-      >["discord"],
-      accountId: "default",
-      token: "token",
-      runtime: {} as import("../../runtime.js").RuntimeEnv,
-      botUserId: "openclaw-bot",
-      guildHistories: new Map(),
-      historyLimit: 0,
-      mediaMaxBytes: 1_000_000,
-      textLimit: 2_000,
-      replyToMode: "all",
-      dmEnabled: true,
-      groupDmEnabled: true,
-      ackReactionScope: "direct",
-      groupPolicy: "open",
-      threadBindings: createNoopThreadBindingManager("default"),
-      data: {
-        channel_id: channelId,
-        guild_id: "guild-1",
-        guild: {
-          id: "guild-1",
-          name: "Guild One",
-        },
-        author: message.author,
-        message,
-      } as unknown as import("./listeners.js").DiscordMessageEvent,
-      client,
-    });
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("../../config/config.js").OpenClawConfig,
+        discordConfig: {} as DiscordConfig,
+        data: {
+          channel_id: channelId,
+          guild_id: "guild-1",
+          guild: {
+            id: "guild-1",
+            name: "Guild One",
+          },
+          author: message.author,
+          message,
+        } as unknown as DiscordMessageEvent,
+        client,
+      }),
+    );
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(

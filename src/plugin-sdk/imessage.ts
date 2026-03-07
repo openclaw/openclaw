@@ -47,3 +47,4 @@ export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessa
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { collectStatusIssuesFromLastError } from "./status-helpers.js";

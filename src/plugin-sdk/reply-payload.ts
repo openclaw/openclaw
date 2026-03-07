@@ -49,6 +49,55 @@ export function resolveOutboundMediaUrls(payload: {
   return [];
 }
 
+export async function sendPayloadWithChunkedTextAndMedia<
+  TContext extends { payload: object },
+  TResult,
+>(params: {
+  ctx: TContext;
+  textChunkLimit?: number;
+  chunker?: ((text: string, limit: number) => string[]) | null;
+  sendText: (ctx: TContext & { text: string }) => Promise<TResult>;
+  sendMedia: (ctx: TContext & { text: string; mediaUrl: string }) => Promise<TResult>;
+  emptyResult: TResult;
+}): Promise<TResult> {
+  const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+  const text = payload.text ?? "";
+  const urls = resolveOutboundMediaUrls(payload);
+  if (!text && urls.length === 0) {
+    return params.emptyResult;
+  }
+  if (urls.length > 0) {
+    let lastResult = await params.sendMedia({
+      ...params.ctx,
+      text,
+      mediaUrl: urls[0],
+    });
+    for (let i = 1; i < urls.length; i++) {
+      lastResult = await params.sendMedia({
+        ...params.ctx,
+        text: "",
+        mediaUrl: urls[i],
+      });
+    }
+    return lastResult;
+  }
+  const limit = params.textChunkLimit;
+  const chunks = limit && params.chunker ? params.chunker(text, limit) : [text];
+  let lastResult: TResult;
+  for (const chunk of chunks) {
+    lastResult = await params.sendText({ ...params.ctx, text: chunk });
+  }
+  return lastResult!;
+}
+
+export function isNumericTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^\d{3,}$/.test(trimmed);
+}
+
 export function formatTextWithAttachmentLinks(
   text: string | undefined,
   mediaUrls: string[],

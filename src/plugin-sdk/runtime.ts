@@ -22,3 +22,23 @@ export function createLoggerBackedRuntime(params: {
     },
   };
 }
+
+export function resolveRuntimeEnv(params: {
+  runtime?: RuntimeEnv;
+  logger: LoggerLike;
+  exitError?: (code: number) => Error;
+}): RuntimeEnv {
+  return params.runtime ?? createLoggerBackedRuntime(params);
+}
+
+export function resolveRuntimeEnvWithUnavailableExit(params: {
+  runtime?: RuntimeEnv;
+  logger: LoggerLike;
+  unavailableMessage?: string;
+}): RuntimeEnv {
+  return resolveRuntimeEnv({
+    runtime: params.runtime,
+    logger: params.logger,
+    exitError: () => new Error(params.unavailableMessage ?? "Runtime exit not available"),
+  });
+}

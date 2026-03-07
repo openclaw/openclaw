@@ -3,21 +3,25 @@ import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveNodeHostGatewayCredentials } from "./runner.js";
 
+function createRemoteGatewayTokenRefConfig(tokenId: string): OpenClawConfig {
+  return {
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+    gateway: {
+      mode: "remote",
+      remote: {
+        token: { source: "env", provider: "default", id: tokenId },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 describe("resolveNodeHostGatewayCredentials", () => {
   it("resolves remote token SecretRef values", async () => {
-    const config = {
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-        },
-      },
-    } as OpenClawConfig;
+    const config = createRemoteGatewayTokenRefConfig("REMOTE_GATEWAY_TOKEN");
 
     await withEnvAsync(
       {
@@ -32,19 +36,7 @@ describe("resolveNodeHostGatewayCredentials", () => {
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN over configured refs", async () => {
-    const config = {
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-        },
-      },
-    } as OpenClawConfig;
+    const config = createRemoteGatewayTokenRefConfig("REMOTE_GATEWAY_TOKEN");
 
     await withEnvAsync(
       {
@@ -59,19 +51,7 @@ describe("resolveNodeHostGatewayCredentials", () => {
   });
 
   it("throws when a configured remote token ref cannot resolve", async () => {
-    const config = {
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: {
-          token: { source: "env", provider: "default", id: "MISSING_REMOTE_GATEWAY_TOKEN" },
-        },
-      },
-    } as OpenClawConfig;
+    const config = createRemoteGatewayTokenRefConfig("MISSING_REMOTE_GATEWAY_TOKEN");
 
     await withEnvAsync(
       {

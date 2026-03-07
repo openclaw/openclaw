@@ -8,6 +8,7 @@ import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { redactImageDataForDiagnostics } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import { buildAgentTraceBase } from "./trace-base.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -173,15 +174,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
 
-  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    provider: params.provider,
-    modelId: params.modelId,
-    modelApi: params.modelApi,
-    workspaceDir: params.workspaceDir,
-  };
+  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
 
   const recordStage: CacheTrace["recordStage"] = (stage, payload = {}) => {
     const event: CacheTraceEvent = {

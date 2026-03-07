@@ -11,6 +11,14 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function createAgentListConfig(): OpenClawConfig {
+  return asConfig({
+    agents: {
+      list: [{ id: "a" }],
+    },
+  });
+}
+
 describe("secrets path utils", () => {
   it("deletePathStrict compacts arrays via splice", () => {
     const config = asConfig({});
@@ -30,11 +38,7 @@ describe("secrets path utils", () => {
   });
 
   it("setPathExistingStrict throws when path does not already exist", () => {
-    const config = asConfig({
-      agents: {
-        list: [{ id: "a" }],
-      },
-    });
+    const config = createAgentListConfig();
     expect(() =>
       setPathExistingStrict(
         config,
@@ -71,20 +75,5 @@ describe("secrets path utils", () => {
     const changed = setPathCreateStrict(config, ["talk", "apiKey"], "same");
     expect(changed).toBe(false);
     expect(getPath(config, ["talk", "apiKey"])).toBe("same");
-  });
-
-  it("setPathExistingStrict fails when intermediate segment is missing", () => {
-    const config = asConfig({
-      agents: {
-        list: [{ id: "a" }],
-      },
-    });
-    expect(() =>
-      setPathExistingStrict(
-        config,
-        ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
-        "x",
-      ),
-    ).toThrow(/Path segment does not exist/);
   });
 });

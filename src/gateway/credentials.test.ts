@@ -50,6 +50,27 @@ function resolveRemoteModeWithRemoteCredentials(
   );
 }
 
+function resolveLocalModeWithUnresolvedPassword(mode: "none" | "trusted-proxy") {
+  return resolveGatewayCredentialsFromConfig({
+    cfg: {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode,
+          password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig,
+    env: {} as NodeJS.ProcessEnv,
+    includeLegacyEnv: false,
+  });
+}
+
 describe("resolveGatewayCredentialsFromConfig", () => {
   it("prefers explicit credentials over config and environment", () => {
     const resolved = resolveGatewayCredentialsFor(
@@ -182,24 +203,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   });
 
   it("ignores unresolved local password ref when local auth mode is none", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "none",
-            password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
-    });
+    const resolved = resolveLocalModeWithUnresolvedPassword("none");
     expect(resolved).toEqual({
       token: undefined,
       password: undefined,
@@ -207,24 +211,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   });
 
   it("ignores unresolved local password ref when local auth mode is trusted-proxy", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "trusted-proxy",
-            password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      env: {} as NodeJS.ProcessEnv,
-      includeLegacyEnv: false,
-    });
+    const resolved = resolveLocalModeWithUnresolvedPassword("trusted-proxy");
     expect(resolved).toEqual({
       token: undefined,
       password: undefined,
