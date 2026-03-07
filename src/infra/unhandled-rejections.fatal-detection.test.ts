@@ -86,7 +86,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   describe("non-fatal errors", () => {
     it("does not exit on known transient network errors", () => {
-      const transientCases = [
+      const transientCases: unknown[] = [
         Object.assign(new TypeError("fetch failed"), {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
