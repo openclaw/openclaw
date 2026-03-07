@@ -393,6 +393,37 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
+  it("sends an in-thread fallback when only block replies were emitted", async () => {
+    setDirectMessageReplyMode("all");
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as {
+        onBlockReply?: (payload: { text?: string }) => Promise<void> | void;
+      };
+      await opts.onBlockReply?.({ text: "working..." });
+      return undefined;
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2600));
+
+    const fallbackText =
+      "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+    const statusText =
+      "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
+    const fallbackCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === fallbackText,
+    );
+    const delayedStatusCall = sendMock.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1] === statusText,
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(delayedStatusCall).toBeDefined();
+    expect(fallbackCall?.[2]).toMatchObject({ threadTs: "123" });
+    expect(delayedStatusCall?.[2]).toMatchObject({ threadTs: "123" });
+  });
+
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
     setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });

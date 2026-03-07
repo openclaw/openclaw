@@ -11,6 +11,7 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
+import { sleep } from "../../../utils.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -26,6 +27,12 @@ import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+const SLACK_NO_FINAL_STATUS_DELAY_MS = 2500;
+const SLACK_NO_FINAL_KEEPALIVE_TEXT =
+  "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+const SLACK_NO_FINAL_STATUS_TEXT =
+  "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
 
 function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -468,7 +475,41 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const shouldSendNoFinalFallback =
+    !queuedFinal &&
+    (counts.final ?? 0) === 0 &&
+    ((counts.block ?? 0) > 0 || (counts.tool ?? 0) > 0);
+  let sentEmptyFallback = false;
+  if (shouldSendNoFinalFallback) {
+    const fallbackThreadTs = usedReplyThreadTs ?? statusThreadTs;
+    try {
+      await deliverNormally(
+        {
+          text: SLACK_NO_FINAL_KEEPALIVE_TEXT,
+        },
+        fallbackThreadTs,
+      );
+      sentEmptyFallback = true;
+      void (async () => {
+        await sleep(SLACK_NO_FINAL_STATUS_DELAY_MS);
+        try {
+          await deliverNormally(
+            {
+              text: SLACK_NO_FINAL_STATUS_TEXT,
+            },
+            fallbackThreadTs,
+          );
+        } catch (err) {
+          runtime.error?.(danger(`slack delayed fallback status failed: ${String(err)}`));
+        }
+      })();
+    } catch (err) {
+      runtime.error?.(danger(`slack final fallback failed: ${String(err)}`));
+    }
+  }
+
+  const anyReplyDelivered =
+    queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0 || sentEmptyFallback;
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,

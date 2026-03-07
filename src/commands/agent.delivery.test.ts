@@ -260,6 +260,44 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("treats normalized-empty payload output as no reply", async () => {
+    await runDelivery({
+      resultText: "   ",
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "I hit an execution hiccup while composing the reply, but I am still here. Please resend that request and I will continue in this thread.",
+            mediaUrls: [],
+          },
+        ],
+      }),
+    );
+  });
+
+  it("keeps explicit silent payload behavior for normalized-empty output", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "NO_REPLY",
+      opts: {
+        message: "hello",
+        deliver: false,
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
   it("prefixes nested agent outputs with context", async () => {
     const runtime = createRuntime();
     await runDelivery({
