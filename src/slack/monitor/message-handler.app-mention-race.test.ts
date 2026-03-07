@@ -67,6 +67,23 @@ function createMarkMessageSeen() {
   };
 }
 
+function createTestHandler() {
+  return createSlackMessageHandler({
+    ctx: {
+      cfg: {},
+      accountId: "default",
+      app: { client: {} },
+      runtime: {},
+      markMessageSeen: createMarkMessageSeen(),
+    } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
+    account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
+  });
+}
+
+function createSlackEvent(params: { type: "message" | "app_mention"; ts: string; text: string }) {
+  return { type: params.type, channel: "C1", ts: params.ts, text: params.text } as never;
+}
+
 describe("createSlackMessageHandler app_mention race handling", () => {
   beforeEach(() => {
     prepareSlackMessageMock.mockReset();
@@ -81,39 +98,25 @@ describe("createSlackMessageHandler app_mention race handling", () => {
       return { ctxPayload: {} };
     });
 
-    const handler = createSlackMessageHandler({
-      ctx: {
-        cfg: {},
-        accountId: "default",
-        app: { client: {} },
-        runtime: {},
-        markMessageSeen: createMarkMessageSeen(),
-      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-    });
+    const handler = createTestHandler();
 
+    await handler(createSlackEvent({ type: "message", ts: "1700000000.000100", text: "hello" }), {
+      source: "message",
+    });
     await handler(
-      { type: "message", channel: "C1", ts: "1700000000.000100", text: "hello" } as never,
-      { source: "message" },
-    );
-    await handler(
-      {
+      createSlackEvent({
         type: "app_mention",
-        channel: "C1",
         ts: "1700000000.000100",
         text: "<@U_BOT> hello",
-      } as never,
+      }),
       { source: "app_mention", wasMentioned: true },
     );
     await handler(
-      {
+      createSlackEvent({
         type: "app_mention",
-        channel: "C1",
         ts: "1700000000.000100",
         text: "<@U_BOT> hello",
-      } as never,
+      }),
       { source: "app_mention", wasMentioned: true },
     );
 
@@ -133,32 +136,20 @@ describe("createSlackMessageHandler app_mention race handling", () => {
       return { ctxPayload: {} };
     });
 
-    const handler = createSlackMessageHandler({
-      ctx: {
-        cfg: {},
-        accountId: "default",
-        app: { client: {} },
-        runtime: {},
-        markMessageSeen: createMarkMessageSeen(),
-      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-    });
+    const handler = createTestHandler();
 
     const messagePending = handler(
-      { type: "message", channel: "C1", ts: "1700000000.000150", text: "hello" } as never,
+      createSlackEvent({ type: "message", ts: "1700000000.000150", text: "hello" }),
       { source: "message" },
     );
     await Promise.resolve();
 
     await handler(
-      {
+      createSlackEvent({
         type: "app_mention",
-        channel: "C1",
         ts: "1700000000.000150",
         text: "<@U_BOT> hello",
-      } as never,
+      }),
       { source: "app_mention", wasMentioned: true },
     );
 
@@ -166,12 +157,11 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     await messagePending;
 
     await handler(
-      {
+      createSlackEvent({
         type: "app_mention",
-        channel: "C1",
         ts: "1700000000.000150",
         text: "<@U_BOT> hello",
-      } as never,
+      }),
       { source: "app_mention", wasMentioned: true },
     );
 
@@ -191,32 +181,20 @@ describe("createSlackMessageHandler app_mention race handling", () => {
       return { ctxPayload: {} };
     });
 
-    const handler = createSlackMessageHandler({
-      ctx: {
-        cfg: {},
-        accountId: "default",
-        app: { client: {} },
-        runtime: {},
-        markMessageSeen: createMarkMessageSeen(),
-      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-    });
+    const handler = createTestHandler();
 
     const messagePending = handler(
-      { type: "message", channel: "C1", ts: "1700000000.000175", text: "hello" } as never,
+      createSlackEvent({ type: "message", ts: "1700000000.000175", text: "hello" }),
       { source: "message" },
     );
     await Promise.resolve();
 
     await handler(
-      {
+      createSlackEvent({
         type: "app_mention",
-        channel: "C1",
         ts: "1700000000.000175",
         text: "<@U_BOT> hello",
-      } as never,
+      }),
       { source: "app_mention", wasMentioned: true },
     );
 
@@ -230,30 +208,17 @@ describe("createSlackMessageHandler app_mention race handling", () => {
   it("keeps app_mention deduped when message event already dispatched", async () => {
     prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
 
-    const handler = createSlackMessageHandler({
-      ctx: {
-        cfg: {},
-        accountId: "default",
-        app: { client: {} },
-        runtime: {},
-        markMessageSeen: createMarkMessageSeen(),
-      } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-    });
+    const handler = createTestHandler();
 
+    await handler(createSlackEvent({ type: "message", ts: "1700000000.000200", text: "hello" }), {
+      source: "message",
+    });
     await handler(
-      { type: "message", channel: "C1", ts: "1700000000.000200", text: "hello" } as never,
-      { source: "message" },
-    );
-    await handler(
-      {
+      createSlackEvent({
         type: "app_mention",
-        channel: "C1",
         ts: "1700000000.000200",
         text: "<@U_BOT> hello",
-      } as never,
+      }),
       { source: "app_mention", wasMentioned: true },
     );
 
