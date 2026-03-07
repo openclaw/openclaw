@@ -9,6 +9,10 @@
           - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: dejoy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dejoy/**"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:

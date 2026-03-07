@@ -1,0 +1,5 @@
+{
+  "id": "dejoy",
+  "channels": ["dejoy"],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}
