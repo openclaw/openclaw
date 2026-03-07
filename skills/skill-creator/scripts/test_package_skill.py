@@ -155,6 +155,53 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("self-output-skill/script.py", names)
         self.assertNotIn("self-output-skill/self-output-skill.skill", names)
 
+    def test_deterministic_file_order(self):
+        """Test that files are packaged in deterministic (sorted) order."""
+        skill_dir = self.create_skill("deterministic-skill")
+        
+        # Create multiple files with names that would sort differently
+        # if ordering was non-deterministic
+        (skill_dir / "zebra.py").write_text("print('z')\n")
+        (skill_dir / "alpha.py").write_text("print('a')\n")
+        (skill_dir / "beta.py").write_text("print('b')\n")
+        nested = skill_dir / "subdir"
+        nested.mkdir()
+        (nested / "gamma.py").write_text("print('g')\n")
+        (nested / "delta.py").write_text("print('d')\n")
+        
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+        
+        # Package multiple times and verify order is consistent
+        results = []
+        for _ in range(3):
+            result = package_skill(str(skill_dir), str(out_dir))
+            self.assertIsNotNone(result)
+            skill_file = out_dir / "deterministic-skill.skill"
+            with zipfile.ZipFile(skill_file, "r") as archive:
+                # Get ordered list (not set) to preserve order
+                names = archive.namelist()
+            results.append(names)
+            # Remove the .skill file for next iteration
+            skill_file.unlink()
+        
+        # All runs should produce identical ordering
+        self.assertEqual(results[0], results[1], "First two runs produced different order")
+        self.assertEqual(results[1], results[2], "Second and third runs produced different order")
+        
+        # Verify the order is alphabetically sorted by relative path
+        # (zipfile doesn't add explicit directory entries, only files)
+        expected_order = [
+            "deterministic-skill/SKILL.md",
+            "deterministic-skill/alpha.py",
+            "deterministic-skill/beta.py",
+            "deterministic-skill/script.py",
+            "deterministic-skill/subdir/delta.py",
+            "deterministic-skill/subdir/gamma.py",
+            "deterministic-skill/zebra.py",
+        ]
+        self.assertEqual(results[0], expected_order, "Files not in expected sorted order")
+
 
 if __name__ == "__main__":
     main()
