@@ -80,7 +80,11 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
     rateLimitPerMinute:
       accountOverride.rateLimitPerMinute ??
       channelCfg.rateLimitPerMinute ??
-      (envRateLimit ? parseInt(envRateLimit, 10) ?? 30 : 30),
+      (envRateLimit
+        ? Number.isNaN(parseInt(envRateLimit, 10))
+          ? 30
+          : parseInt(envRateLimit, 10)
+        : 30),
     botName: accountOverride.botName ?? channelCfg.botName ?? envBotName,
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
   };
