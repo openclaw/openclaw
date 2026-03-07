@@ -1,55 +1,39 @@
 ---
 name: feishu-calendar
 description: |
-  飞书日历：创建日程、邀请参与人。
-  当用户提到创建日程、约会议、安排时间等意图时激活。
+  Create Feishu calendar events and invite attendees. Activate when user asks to schedule meetings, create events, or add people to calendar.
 ---
 
-# 飞书日历
+# Feishu Calendar Tool
 
-## 功能
+Tool `feishu_calendar` creates calendar events on the bot's calendar and invites attendees.
 
-创建日程并邀请参与人。日程在机器人日历中创建，自动同步到参与人日历。
+## Actions
 
-## 使用方法
+### Create Event
 
-### 1. 解析参与人
-
-用 `feishu-contacts` 按名字解析 open_id。
-
-### 2. 创建日程 + 添加参与人
-
-```typescript
-import { createCalendarEvent } from "./src/calendar.js";
-
-const result = await createCalendarEvent({
-  cfg,
-  event: {
-    summary: "团队周会",
-    description: "讨论本周工作进展",
-    startTimestamp: "1772614800", // 秒级 Unix 时间戳（字符串）
-    endTimestamp: "1772618400",
-    location: "创新阁会议室",
-    attendeeOpenIds: ["ou_xxx", "ou_yyy"], // 参与人 open_id
-  },
-});
-
-if ("error" in result) {
-  console.log(result.error); // 包含权限开启链接
-} else {
-  console.log(`日程已创建: ${result.eventId}`);
+```json
+{
+  "action": "create",
+  "summary": "Team Sync Meeting",
+  "start_timestamp": "1741402800",
+  "end_timestamp": "1741406400",
+  "description": "Weekly team sync",
+  "attendee_open_ids": ["ou_abc123", "ou_def456"]
 }
 ```
 
-## 注意事项
+- `start_timestamp` / `end_timestamp`: Unix timestamp in **seconds** (as string)
+- `attendee_open_ids`: Use `feishu_contacts` to resolve names to `open_id` first
 
-- 时间戳必须是**字符串格式**的秒级时间戳
-- `attendee_ability: "can_see_others"` — 参与者可看到其他参与者
-- 参与人自动收到飞书通知，可接受/拒绝
+## Workflow: Schedule Meeting with Attendees
 
-## 权限要求
+1. `feishu_contacts` → search each attendee name to get `open_id`
+2. `feishu_calendar` → create event with all `open_id`s
 
-| Scope                        | 说明              |
-| ---------------------------- | ----------------- |
-| `calendar:calendar`          | 创建/修改日历日程 |
-| `calendar:calendar:readonly` | 读取日历信息      |
+## Permissions
+
+| Scope | Description |
+|---|---|
+| `calendar:calendar` | Create/modify calendar events |
+| `calendar:calendar:readonly` | Read calendar info |

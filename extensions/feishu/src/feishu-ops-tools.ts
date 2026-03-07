@@ -89,8 +89,10 @@ export function registerFeishuOpsTools(api: OpenClawPluginApi) {
       name: "feishu_contacts",
       label: "Feishu Contacts",
       description:
-        "Search Feishu contacts by name, English name, or email. " +
-        "Automatically syncs contacts from API if not found locally.",
+        "Search Feishu organization contacts by name, English name, or email to get their open_id. " +
+        "Use this tool FIRST when the user asks to send a message to someone, schedule a meeting, " +
+        "or look up a person. Returns open_id needed by feishu_send and feishu_calendar. " +
+        "Auto-syncs from API if not found locally.",
       parameters: ContactsSchema,
       async execute(_toolCallId, params) {
         const p = params as ContactsParams;
@@ -116,9 +118,10 @@ export function registerFeishuOpsTools(api: OpenClawPluginApi) {
       name: "feishu_groups",
       label: "Feishu Groups",
       description:
-        "List or search groups/chats the bot is a member of. " +
-        "Returns chat_id, name, description, member_count. " +
-        "If search finds no match, provides guidance to add the bot to the group.",
+        "List or search Feishu groups (chats) the bot is a member of. " +
+        "Use this tool when the user wants to send a message to a group. " +
+        "Returns chat_id needed by feishu_send. " +
+        "If search finds no match, tells the user to add the bot to the target group first.",
       parameters: GroupsSchema,
       async execute(_toolCallId, params) {
         const p = params as GroupsParams;
@@ -157,9 +160,10 @@ export function registerFeishuOpsTools(api: OpenClawPluginApi) {
       name: "feishu_send",
       label: "Feishu Send",
       description:
-        "Send messages to Feishu users or groups. " +
-        "Actions: text (send text), file (upload and send file), mention_all (send text with @all in group). " +
-        "Use feishu_contacts to find user open_id, feishu_groups to find chat_id first.",
+        "Send messages to Feishu users or groups proactively. " +
+        "IMPORTANT: Before using this tool, resolve the recipient ID first: " +
+        "use feishu_contacts to get open_id (for users) or feishu_groups to get chat_id (for groups). " +
+        "Actions: text (send text), file (upload and send file), mention_all (send @all in group).",
       parameters: SendSchema,
       async execute(_toolCallId, params) {
         const p = params as SendParams;
@@ -215,9 +219,9 @@ export function registerFeishuOpsTools(api: OpenClawPluginApi) {
       name: "feishu_calendar",
       label: "Feishu Calendar",
       description:
-        "Create calendar events in Feishu. " +
-        "Supports setting title, time range, description, and inviting attendees by open_id. " +
-        "Use feishu_contacts to resolve names to open_ids first.",
+        "Create Feishu calendar events and invite attendees. " +
+        "Use feishu_contacts first to resolve attendee names to open_ids. " +
+        "Timestamps are Unix seconds as strings.",
       parameters: CalendarSchema,
       async execute(_toolCallId, params) {
         const p = params as CalendarParams;
