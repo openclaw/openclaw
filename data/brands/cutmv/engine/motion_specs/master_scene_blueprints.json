@@ -1,0 +1,203 @@
+{
+  "project": "CUTMV_SAAS_AD_MASTER_BLUEPRINTS",
+  "version": "2.0.0",
+  "description": "Master scene blueprints for CUTMV ads. Frames are layout references ONLY — UI is rebuilt from code components. Never embed or crop frames.",
+
+  "referenceDatasetPath": "/Users/da/my-video/brand-ai/brands/cutmv/datasets/motion/frames/cutmv - general - demo video - 1/",
+  "frameFormat": "png",
+  "frameNamingPattern": "cutmv - general - demo video - {number}.png",
+
+  "engine": "Remotion",
+  "resolution": { "width": 1080, "height": 1920 },
+  "fps": 30,
+  "durationFrames": 300,
+
+  "designSystem": {
+    "primaryGreen": "#94F33F",
+    "altGreen": "#7CFF3B",
+    "backgroundBlack": "#0B0B0F",
+    "charcoal": "#141414",
+    "cardColor": "#111318",
+    "white": "#FFFFFF",
+    "cornerRadius": 24,
+    "shadowDepth": 48,
+    "glowIntensity": 0.18
+  },
+
+  "globalMotion": {
+    "easing": "cubicBezier(0.4,0,0.2,1)",
+    "microFloat": true,
+    "parallaxDepth": true,
+    "shadowDepth": true,
+    "background": {
+      "type": "animatedGradient",
+      "colors": ["#0B0B0F", "#141414"],
+      "vignette": true,
+      "grain": { "opacity": 0.04, "animated": true },
+      "radialGlow": { "color": "#94F33F", "opacity": 0.12, "breathing": true },
+      "particles": { "count": 8, "subtle": true }
+    }
+  },
+
+  "availableComponents": [
+    "AmbientLayer",
+    "ConfigureOutputCard",
+    "GenerateCard",
+    "CutmvUIFrame",
+    "CutmvDashboardMock",
+    "CutmvOutputList",
+    "Captions"
+  ],
+
+  "sceneBlueprints": {
+    "hook_typography": {
+      "description": "Bold headline hook with camera push-in. Text-only, no UI.",
+      "referenceFrames": ["cutmv - general - demo video - 1677.png"],
+      "frames": [0, 60],
+      "camera": { "pushIn": true, "scaleFrom": 1.0, "scaleTo": 1.06 },
+      "elements": [
+        {
+          "type": "headline",
+          "text": "YOU EDIT FOR HOURS.",
+          "color": "#FFFFFF",
+          "animation": { "reveal": "fade_up", "staggerWords": true, "duration": 14 }
+        },
+        {
+          "type": "headline",
+          "text": "NOBODY WATCHES.",
+          "color": "#94F33F",
+          "animation": { "popIn": true, "underlineGrow": true, "delay": 8 }
+        }
+      ],
+      "alternateHooks": [
+        "ONE UPLOAD. EVERYTHING GENERATED.",
+        "GENERATED IN SECONDS.",
+        "YOUR CONTENT IS COSTING YOU FANS."
+      ]
+    },
+
+    "configure_panel": {
+      "description": "Reconstructed Configure Output Options card. Floating with 3D tilt, parallax depth, toggle glow.",
+      "referenceFrames": [
+        "cutmv - general - demo video - 1677.png",
+        "cutmv - general - demo video - 1733.png",
+        "cutmv - general - demo video - 1743.png"
+      ],
+      "extractedLayout": {
+        "header": "Configure Output Options",
+        "quickStart": { "label": "Quick Start", "sublabel": "Auto-generate clips based on video length" },
+        "autoGenerateButton": { "label": "Auto Generate", "icon": "sparkle" },
+        "timestampField": { "placeholder": "0:00–", "greenBorder": true },
+        "toggles": ["Video Cutdowns", "GIFs", "Thumbnails", "Spotify Canvas"]
+      },
+      "frames": [60, 150],
+      "component": "ConfigureOutputCard",
+      "motion": {
+        "entrance": "spring_slide_up",
+        "spring": { "damping": 16, "mass": 0.8 },
+        "float": { "amplitude": 3, "frequency": 0.06 },
+        "3D": { "tiltX": 6, "tiltY": -8 }
+      },
+      "animations": [
+        { "target": "card", "type": "floatInFromBottom", "duration": 24 },
+        { "target": "toggle", "type": "switchOn", "glowPulse": true, "color": "#94F33F" },
+        { "target": "autoGenerateButton", "type": "pulseScale", "scale": [1, 1.04], "loop": 2 }
+      ]
+    },
+
+    "floating_generate_card": {
+      "description": "Single tilted floating card showing output type (GIFs/Thumbnails/Canvas). Toggle with glow pulse.",
+      "referenceFrames": ["cutmv - general - demo video - 1733.png"],
+      "component": "GenerateCard",
+      "props": {
+        "title": "Generate Professional GIFs",
+        "subtitle": "Pack of 5 × 6-second GIFs",
+        "credits": "180 credits",
+        "note": "Professional quality with no watermarks",
+        "toggleOn": true,
+        "tiltDeg": -3
+      },
+      "motion": {
+        "entrance": "spring_scale_in",
+        "glowOnToggle": true,
+        "glowPulseFreq": 0.08,
+        "float": { "amplitude": 4, "inverted": true }
+      }
+    },
+
+    "stacked_output_cards": {
+      "description": "3D layered card stack with depth parallax, rim light, green edge glow. Fan rotation.",
+      "referenceFrames": [
+        "cutmv - general - demo video - 1752.png",
+        "cutmv - general - demo video - 1823.png",
+        "cutmv - general - demo video - 1854.png"
+      ],
+      "extractedLayout": {
+        "cards": [
+          { "title": "Generate Professional Spotify Canvas", "credits": "450 credits", "toggleOn": true },
+          { "title": "Generate Professional Thumbnails", "credits": "180 credits", "toggleOn": true },
+          { "title": "Generate Professional GIFs", "credits": "180 credits", "toggleOn": false }
+        ],
+        "stackStyle": "overlapping_fan",
+        "depthGap": 20,
+        "rotationSpread": 2
+      },
+      "frames": [150, 230],
+      "component": "GenerateCard",
+      "motion": {
+        "entrance": "spring_stagger",
+        "staggerFrames": 5,
+        "fanOut": true,
+        "zParallax": true,
+        "microFloat": true
+      },
+      "lighting": {
+        "rimLight": true,
+        "greenEdgeGlow": 0.18,
+        "depthShadow": { "base": 12, "perCard": 8 }
+      }
+    },
+
+    "impact_statement": {
+      "description": "Big centered statement with green underline draw. Slow scale breathing.",
+      "frames": [230, 260],
+      "elements": [
+        { "type": "headline", "text": "GENERATED IN", "color": "#FFFFFF", "animation": "fade_up" },
+        { "type": "headline", "text": "SECONDS.", "color": "#94F33F", "animation": { "scaleBounce": true, "underlineDraw": true } }
+      ],
+      "background": { "greenSweep": true, "duration": 12 }
+    },
+
+    "cta_green_flood": {
+      "description": "Green gradient flood CTA. CUTMV logo centered, tagline, FD logo small below.",
+      "referenceFrames": [
+        "cutmv - general - demo video - 1854.png",
+        "cutmv - general - demo video - 1863.png"
+      ],
+      "extractedLayout": {
+        "background": "green_gradient_top_dark_to_bottom_bright",
+        "logo": "CUTMV centered with grid icon",
+        "tagline": { "line1": "More content.", "line1_weight": "bold", "line2": "Less work.", "line2_opacity": 0.55 }
+      },
+      "frames": [260, 300],
+      "background": {
+        "type": "gradientFlood",
+        "gradient": "linear-gradient(180deg, #0d4a00 0%, #1a6b00 40%, #2d8a0e 70%, #4aaf1a 100%)",
+        "animateFromBlack": true
+      },
+      "logo": { "asset": "cutmv/logo.png", "widthPct": 0.6, "zIndex": 10, "glow": 0.2 },
+      "fd_logo": { "asset": "cutmv/fd-logo-2025-white.png", "widthPct": 0.18, "zIndex": 10 },
+      "text": [
+        { "value": "MORE CONTENT.", "color": "#FFFFFF" },
+        { "value": "LESS WORK.", "color": "rgba(255,255,255,0.55)", "fadeInDelay": 12 }
+      ]
+    }
+  },
+
+  "renderConfig": {
+    "script": "node scripts/render.mjs {compositionId} {styleProfile}",
+    "uniqueOutputs": true,
+    "outputPattern": "cutmv_{compositionId}_{timestamp}_{hex}.mp4",
+    "codec": "h264"
+  }
+}

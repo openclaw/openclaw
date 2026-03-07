@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/remotion-engine",
+  "version": "0.1.0",
+  "description": "CUTMV motion engine — Remotion-based video rendering pipeline",
+  "private": true,
+  "dependencies": {
+    "@remotion/cli": "4.0.421",
+    "@remotion/tailwind-v4": "4.0.421",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.421",
+    "tailwindcss": "4.0.0"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.421",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.19.0",
+    "prettier": "3.6.0",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "studio": "NODE_OPTIONS='--max-old-space-size=8192' remotion studio",
+    "dev": "NODE_OPTIONS='--max-old-space-size=8192' remotion studio",
+    "build": "remotion bundle",
+    "lint": "eslint src && tsc",
+    "gen": "tsx tools/generate-compositions.ts",
+    "validate": "tsx scripts/validate-all-specs.ts"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}
