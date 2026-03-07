@@ -1309,14 +1309,14 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore }) ??
     process.env.NVIDIA_API_KEY;
   const nvidiaProvider = await buildNvidiaProvider(nvidiaKey);
-  providers.nvidia = { ...nvidiaProvider, ...(nvidiaKey ? { apiKey: nvidiaKey } : {}) };
+  providers.nvidia = { ...nvidiaProvider, apiKey: nvidiaKey || "unconfigured" };
 
   const groqKey =
     resolveEnvApiKeyVarName("groq") ??
     resolveApiKeyFromProfiles({ provider: "groq", store: authStore }) ??
     process.env.GROQ_API_KEY;
   const groqProvider = await buildGroqProvider(groqKey);
-  providers.groq = { ...groqProvider, ...(groqKey ? { apiKey: groqKey } : {}) };
+  providers.groq = { ...groqProvider, apiKey: groqKey || "unconfigured" };
 
   const kilocodeKey =
     resolveEnvApiKeyVarName("kilocode") ??
