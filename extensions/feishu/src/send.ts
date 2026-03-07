@@ -85,14 +85,14 @@ export type FeishuMessageInfo = {
   createTime?: number;
 };
 
-function parseInteractiveCardContent(parsed: unknown): string {
+function parseInteractiveCardContent(parsed: unknown): string | undefined {
   if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
+    return undefined;
   }
 
   const candidate = parsed as { elements?: unknown };
   if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
+    return undefined;
   }
 
   const texts: string[] = [];
@@ -113,7 +113,8 @@ function parseInteractiveCardContent(parsed: unknown): string {
       texts.push(item.content);
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+  const extracted = texts.join("\n").trim();
+  return extracted || undefined;
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
@@ -138,7 +139,8 @@ function parseQuotedMessageContent(rawContent: string, msgType: string): string 
   }
 
   if (msgType === "interactive") {
-    return parseInteractiveCardContent(parsed);
+    const extracted = parseInteractiveCardContent(parsed);
+    return extracted ?? rawContent;
   }
 
   if (typeof parsed === "string") {
