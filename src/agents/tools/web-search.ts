@@ -1667,7 +1667,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "searxng"
+                  ? undefined
+                  : resolveSearchApiKey(search);
 
       if (!apiKey && provider !== "searxng") {
         return jsonResult(missingSearchKeyPayload(provider));
