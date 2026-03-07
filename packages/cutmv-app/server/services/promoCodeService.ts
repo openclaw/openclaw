@@ -196,7 +196,7 @@ class PromoCodeService {
     remainingUses: number;
   } | null {
     const promoCode = this.promoCodes.get(code.toUpperCase());
-    if (!promoCode) return null;
+    if (!promoCode) {return null;}
 
     return {
       totalUsage: promoCode.usageCount,

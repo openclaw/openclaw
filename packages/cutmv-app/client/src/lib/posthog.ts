@@ -18,7 +18,7 @@ class PostHogAnalytics {
   }
   
   private checkConsent(): void {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') {return;}
     
     const consent = localStorage.getItem('cutmv-cookie-consent');
     this.hasConsent = consent === 'accepted';
@@ -29,7 +29,7 @@ class PostHogAnalytics {
   }
   
   private initializePostHog() {
-    if (typeof window === 'undefined' || !this.hasConsent) return;
+    if (typeof window === 'undefined' || !this.hasConsent) {return;}
     
     // Check immediately
     if (window.posthog && typeof window.posthog.capture === 'function') {
@@ -226,7 +226,7 @@ class PostHogAnalytics {
 
   // Identify users (for logged-in users or email collection)
   identify(userId: string, userProperties?: Record<string, any>) {
-    if (!this.isEnabled || !window.posthog) return;
+    if (!this.isEnabled || !window.posthog) {return;}
     
     try {
       window.posthog.identify(userId, userProperties);
@@ -237,7 +237,7 @@ class PostHogAnalytics {
 
   // Set user properties
   setUserProperties(properties: Record<string, any>) {
-    if (!this.isEnabled || !window.posthog) return;
+    if (!this.isEnabled || !window.posthog) {return;}
     
     try {
       window.posthog.register(properties);

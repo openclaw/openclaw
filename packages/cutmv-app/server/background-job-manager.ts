@@ -299,7 +299,7 @@ class BackgroundJobManager {
         alternatives.push(`uploads/${video.filename}`);
         
         for (const altKey of alternatives) {
-          if (altKey === r2VideoKey) continue; // Skip already tried key
+          if (altKey === r2VideoKey) {continue;} // Skip already tried key
           try {
             await R2Storage.getSignedUrl(altKey, 60);
             console.log(`✅ Video file found with alternative path: ${altKey}`);
@@ -315,7 +315,7 @@ class BackgroundJobManager {
           await R2Storage.getSignedUrl(r2VideoKey, 60);
           console.log(`✅ Video verified on final check: ${r2VideoKey}`);
         } catch (finalError) {
-          throw new Error(`Video file not found in R2 storage with any known path structure. Tried: ${[r2VideoKey, ...alternatives].join(', ')}`);
+          throw new Error(`Video file not found in R2 storage with any known path structure. Tried: ${[r2VideoKey, ...alternatives].join(', ')}`, { cause: finalError });
         }
       }
 
@@ -467,7 +467,7 @@ class BackgroundJobManager {
   private async markJobCompleted(sessionId: string, downloadPath: string, r2DownloadUrl?: string | null) {
     try {
       const job = this.activeJobs.get(sessionId);
-      if (!job) return;
+      if (!job) {return;}
 
       // Clear timeout
       const timeout = this.jobTimeouts.get(sessionId);
@@ -488,7 +488,7 @@ class BackgroundJobManager {
 
       // Get video details for email
       const video = await storage.getVideo(job.videoId!);
-      if (!video) return;
+      if (!video) {return;}
 
       // Parse processing details
       const processingDetails = JSON.parse(job.processingDetails || '{}');
@@ -597,7 +597,7 @@ class BackgroundJobManager {
   private async markJobFailed(sessionId: string, errorMessage: string) {
     try {
       const job = this.activeJobs.get(sessionId);
-      if (!job) return;
+      if (!job) {return;}
 
       // Clear timeout
       const timeout = this.jobTimeouts.get(sessionId);
@@ -747,10 +747,10 @@ class BackgroundJobManager {
     let baseTime = 30; // Base 30 seconds
     
     // Add time based on features
-    if (options.generateCutdowns) baseTime += 60;
-    if (options.generateGif) baseTime += 45;
-    if (options.generateThumbnails) baseTime += 15;
-    if (options.generateCanvas) baseTime += 30;
+    if (options.generateCutdowns) {baseTime += 60;}
+    if (options.generateGif) {baseTime += 45;}
+    if (options.generateThumbnails) {baseTime += 15;}
+    if (options.generateCanvas) {baseTime += 30;}
     
     // Add time based on video duration
     if (duration) {
@@ -775,7 +775,7 @@ class BackgroundJobManager {
   // Get job status for user
   async getJobStatus(sessionId: string): Promise<BackgroundJob | null> {
     const job = this.activeJobs.get(sessionId);
-    if (job) return job;
+    if (job) {return job;}
 
     // Try to get from storage
     const storedJob = await storage.getBackgroundJob(sessionId);
@@ -798,7 +798,7 @@ class BackgroundJobManager {
   async cancelJob(sessionId: string): Promise<boolean> {
     try {
       const job = this.activeJobs.get(sessionId);
-      if (!job) return false;
+      if (!job) {return false;}
 
       // Clear timeout
       const timeout = this.jobTimeouts.get(sessionId);

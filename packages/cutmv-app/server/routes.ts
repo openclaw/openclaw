@@ -569,8 +569,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Use ffprobe on R2 signed URL (same as legacy endpoint)
         const metadata = await new Promise<any>((resolve, reject) => {
           ffmpeg.ffprobe(r2Url!, ['-v', 'quiet', '-show_format', '-show_streams'], (err, metadata) => {
-            if (err) reject(err);
-            else resolve(metadata);
+            if (err) {reject(err);}
+            else {resolve(metadata);}
           });
         });
 
@@ -839,7 +839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           code: (r2Error as any).code,
           stack: (r2Error as any).stack?.split('\n')[0]
         });
-        throw new Error(`Failed to upload to R2: ${(r2Error as any).message}`);
+        throw new Error(`Failed to upload to R2: ${(r2Error as any).message}`, { cause: r2Error });
       }
 
       // Create video record with user email for proper authentication
@@ -875,8 +875,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const metadata = await new Promise<any>((resolve, reject) => {
           ffmpeg.ffprobe(r2Url!, ['-v', 'quiet', '-show_format', '-show_streams'], (err, metadata) => {
-            if (err) reject(err);
-            else resolve(metadata);
+            if (err) {reject(err);}
+            else {resolve(metadata);}
           });
         });
 
@@ -1447,9 +1447,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (validatedBody.useFullPack && (validatedBody.generateGif || validatedBody.generateThumbnails || validatedBody.generateCanvas)) {
           totalAmount += 499; // $4.99 full pack
         } else {
-          if (validatedBody.generateGif) totalAmount += 199; // $1.99
-          if (validatedBody.generateThumbnails) totalAmount += 199; // $1.99  
-          if (validatedBody.generateCanvas) totalAmount += 499; // $4.99
+          if (validatedBody.generateGif) {totalAmount += 199;} // $1.99
+          if (validatedBody.generateThumbnails) {totalAmount += 199;} // $1.99  
+          if (validatedBody.generateCanvas) {totalAmount += 499;} // $4.99
         }
 
         // Apply promo code discount (simplified logic)

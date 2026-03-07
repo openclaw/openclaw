@@ -129,7 +129,7 @@ export class SubscriptionService {
       return customer.id;
     } catch (error) {
       console.error('Error getting or creating Stripe customer:', error);
-      throw new Error('Failed to create Stripe customer');
+      throw new Error('Failed to create Stripe customer', { cause: error });
     }
   }
 
@@ -191,7 +191,7 @@ export class SubscriptionService {
         planId,
         priceId: plan.priceId
       });
-      throw new Error(error?.message || 'Failed to create checkout session');
+      throw new Error(error?.message || 'Failed to create checkout session', { cause: error });
     }
   }
 

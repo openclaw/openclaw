@@ -76,9 +76,9 @@ export class TimeoutManager {
     totalMinutes *= (1 + TIMEOUT_CONFIG.bufferPercentage / 100);
     
     // Complexity adjustments
-    if (isBulkProcessing) totalMinutes *= 1.2; // 20% more for bulk
-    if (fileSizeGB > 5) totalMinutes *= 1.1;   // 10% more for large files
-    if (exportTypes.includes('canvas')) totalMinutes *= 1.15; // 15% more for Canvas
+    if (isBulkProcessing) {totalMinutes *= 1.2;} // 20% more for bulk
+    if (fileSizeGB > 5) {totalMinutes *= 1.1;}   // 10% more for large files
+    if (exportTypes.includes('canvas')) {totalMinutes *= 1.15;} // 15% more for Canvas
     
     // Apply absolute cap
     totalMinutes = Math.min(totalMinutes, TIMEOUT_CONFIG.maxCapMinutes);

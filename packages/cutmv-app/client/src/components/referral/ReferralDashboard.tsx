@@ -119,7 +119,7 @@ export function ReferralDashboard() {
 
   const shareOnPlatform = (platform: string) => {
     setSharingPlatform(platform);
-    if (!referralData) return;
+    if (!referralData) {return;}
 
     const { referralUrl, shareMessage } = referralData;
     

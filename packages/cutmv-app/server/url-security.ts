@@ -36,7 +36,7 @@ export class URLSecurityService {
       return combined.toString('base64url');
     } catch (error) {
       console.error('URL encryption failed:', error);
-      throw new Error('Failed to encrypt URL data');
+      throw new Error('Failed to encrypt URL data', { cause: error });
     }
   }
 
@@ -74,7 +74,7 @@ export class URLSecurityService {
       return decrypted;
     } catch (error) {
       console.error('URL decryption failed:', error);
-      throw new Error('Invalid or corrupted URL data');
+      throw new Error('Invalid or corrupted URL data', { cause: error });
     }
   }
 

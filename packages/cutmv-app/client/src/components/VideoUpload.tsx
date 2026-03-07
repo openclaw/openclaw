@@ -142,7 +142,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
 
   // AI metadata suggestion function - now returns the suggested values
   const generateAISuggestions = async (file: File): Promise<{ videoTitle: string; artistInfo: string } | null> => {
-    if (!file) return null;
+    if (!file) {return null;}
 
     setIsGeneratingSuggestions(true);
 
@@ -257,7 +257,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
     try {
       const key = `${UPLOAD_STATE_PREFIX}${fileName}`;
       const stored = localStorage.getItem(key);
-      if (!stored) return null;
+      if (!stored) {return null;}
 
       const state: UploadState = JSON.parse(stored);
 
@@ -681,7 +681,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
       return;
     }
     const file = acceptedFiles[0];
-    if (!file) return;
+    if (!file) {return;}
 
     console.log('Starting secure upload for file:', file.name, 'Size:', file.size, 'Type:', file.type);
     console.log('📋 Metadata will be set by user after upload completes');
@@ -743,16 +743,16 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
       
       if (isMobile) {
         // Mobile devices get smaller chunks for better reliability
-        if (fileSizeGB > 5) chunkSize = 2 * 1024 * 1024;   // 2MB for large files on mobile
-        else if (fileSizeMB > 500) chunkSize = 3 * 1024 * 1024;  // 3MB for medium files
-        else chunkSize = 5 * 1024 * 1024;  // 5MB for smaller files
+        if (fileSizeGB > 5) {chunkSize = 2 * 1024 * 1024;}   // 2MB for large files on mobile
+        else if (fileSizeMB > 500) {chunkSize = 3 * 1024 * 1024;}  // 3MB for medium files
+        else {chunkSize = 5 * 1024 * 1024;}  // 5MB for smaller files
       } else {
         // Desktop gets larger chunks for efficiency
-        if (fileSizeGB > 8) chunkSize = 5 * 1024 * 1024;   // 5MB for 8GB+ files
-        else if (fileSizeGB > 5) chunkSize = 8 * 1024 * 1024;   // 8MB for 5GB+ files
-        else if (fileSizeMB > 1000) chunkSize = 10 * 1024 * 1024;  // 10MB for 1GB+ files
-        else if (fileSizeMB > 500) chunkSize = 10 * 1024 * 1024;  // 10MB for 500MB+ files
-        else if (fileSizeMB > 200) chunkSize = 15 * 1024 * 1024;  // 15MB for 200MB+ files
+        if (fileSizeGB > 8) {chunkSize = 5 * 1024 * 1024;}   // 5MB for 8GB+ files
+        else if (fileSizeGB > 5) {chunkSize = 8 * 1024 * 1024;}   // 8MB for 5GB+ files
+        else if (fileSizeMB > 1000) {chunkSize = 10 * 1024 * 1024;}  // 10MB for 1GB+ files
+        else if (fileSizeMB > 500) {chunkSize = 10 * 1024 * 1024;}  // 10MB for 500MB+ files
+        else if (fileSizeMB > 200) {chunkSize = 15 * 1024 * 1024;}  // 15MB for 200MB+ files
       }
       
       // Lower threshold to avoid 413 errors - use chunked upload for most files
@@ -810,7 +810,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
           }
         } catch (diagError) {
           console.error('❌ Upload diagnostics failed:', diagError);
-          throw new Error('Upload service temporarily unavailable. Please refresh and try again.');
+          throw new Error('Upload service temporarily unavailable. Please refresh and try again.', { cause: diagError });
         }
 
         // Debug authentication before upload
@@ -935,7 +935,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
             stack: callbackError?.stack,
             video: video
           });
-          throw new Error(`Failed to update parent component with video data: ${callbackError?.message}`);
+          throw new Error(`Failed to update parent component with video data: ${callbackError?.message}`, { cause: callbackError });
         }
         
         setIsProcessingVideo(false);
@@ -1054,7 +1054,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
   });
 
   const handleRemoveVideo = async () => {
-    if (!uploadedVideo) return;
+    if (!uploadedVideo) {return;}
 
     try {
       // Delete the video from server
@@ -1081,7 +1081,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
   };
 
   const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0) {return '0 Bytes';}
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -1290,7 +1290,7 @@ export default function VideoUpload({ onVideoUpload, uploadedVideo }: VideoUploa
             style={{ backgroundColor: 'hsl(85, 70%, 55%)' }}
             onClick={() => {
               const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-              if (input) input.click();
+              if (input) {input.click();}
             }}
             type="button"
           >

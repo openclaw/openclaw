@@ -128,7 +128,7 @@ export default function ThankYou() {
 
   // AUTO-REFRESH: Poll for completion status every 5 seconds as fallback if WebSocket disconnects
   useEffect(() => {
-    if (isCompleted || !sessionId) return; // Stop polling if already completed or no session
+    if (isCompleted || !sessionId) {return;} // Stop polling if already completed or no session
 
     const pollInterval = setInterval(async () => {
       try {
@@ -185,7 +185,7 @@ export default function ThankYou() {
 
   // Handle bulk ZIP download
   const handleBulkDownload = async () => {
-    if (!sessionId) return;
+    if (!sessionId) {return;}
 
     setIsDownloadingZip(true);
     try {

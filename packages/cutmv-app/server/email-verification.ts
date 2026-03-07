@@ -127,9 +127,9 @@ class EmailVerificationService {
   }
 
   private getConfidenceLevel(data: KickboxResponse): 'high' | 'medium' | 'low' {
-    if (data.result === 'deliverable' && data.sendex >= 0.7) return 'high';
-    if (data.result === 'deliverable' && data.sendex >= 0.3) return 'medium';
-    if (data.result === 'risky') return 'medium';
+    if (data.result === 'deliverable' && data.sendex >= 0.7) {return 'high';}
+    if (data.result === 'deliverable' && data.sendex >= 0.3) {return 'medium';}
+    if (data.result === 'risky') {return 'medium';}
     return 'low';
   }
 

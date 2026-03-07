@@ -110,8 +110,8 @@ export function useTimeEstimation({ onEstimateUpdate, onError }: UseTimeEstimati
     
     let speedIndicator: 'faster' | 'on-track' | 'slower' = 'on-track';
     if (currentProgressPercent > 5) { // Only calculate after 5% progress
-      if (deviation > 15) speedIndicator = 'faster';
-      else if (deviation < -15) speedIndicator = 'slower';
+      if (deviation > 15) {speedIndicator = 'faster';}
+      else if (deviation < -15) {speedIndicator = 'slower';}
     }
 
     const formatDuration = (seconds: number): string => {
@@ -137,7 +137,7 @@ export function useTimeEstimation({ onEstimateUpdate, onError }: UseTimeEstimati
 
   // Get processing complexity indicators
   const getComplexityIndicators = useCallback(() => {
-    if (!estimate) return null;
+    if (!estimate) {return null;}
 
     const indicators = [];
 

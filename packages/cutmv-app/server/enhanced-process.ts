@@ -603,7 +603,7 @@ class EnhancedProcessor {
         
       } catch (r2Error: any) {
         console.error(`❌ R2 signed URL generation failed for ${r2Key}:`, r2Error);
-        throw new Error(`R2 download preparation failed: ${r2Error.message}`);
+        throw new Error(`R2 download preparation failed: ${r2Error.message}`, { cause: r2Error });
       }
       
       // Update job status
@@ -714,7 +714,7 @@ class EnhancedProcessor {
       } catch (cleanupError) {
         console.warn(`⚠️ Failed to cleanup temporary files:`, cleanupError);
       }
-      throw new Error(`R2 upload failed: ${r2Error}`);
+      throw new Error(`R2 upload failed: ${r2Error}`, { cause: r2Error });
     }
   }
 
@@ -782,7 +782,7 @@ class EnhancedProcessor {
       try {
         await fs.writeFile(localPath, fileBuffer);
       } catch (writeError) {
-        throw new Error(`Failed to write video file: ${writeError instanceof Error ? writeError.message : 'Unknown error'}`);
+        throw new Error(`Failed to write video file: ${writeError instanceof Error ? writeError.message : 'Unknown error'}`, { cause: writeError });
       }
       
       // Verify the file was written correctly
@@ -792,7 +792,7 @@ class EnhancedProcessor {
       return localPath;
     } catch (error) {
       console.error(`❌ Failed to download video for processing:`, error);
-      throw new Error(`Failed to download video: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to download video: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 
@@ -905,17 +905,17 @@ class EnhancedProcessor {
     // File size analysis (in GB)
     const fileSizeGB = (videoData.size || 0) / (1024 * 1024 * 1024);
     let fileSizeMultiplier = 1;
-    if (fileSizeGB > 8) fileSizeMultiplier = 4;       // 8-10GB files: 4x processing time
-    else if (fileSizeGB > 5) fileSizeMultiplier = 3;  // 5-8GB files: 3x processing time
-    else if (fileSizeGB > 2) fileSizeMultiplier = 2;  // 2-5GB files: 2x processing time
-    else if (fileSizeGB > 1) fileSizeMultiplier = 1.5; // 1-2GB files: 1.5x processing time
+    if (fileSizeGB > 8) {fileSizeMultiplier = 4;}       // 8-10GB files: 4x processing time
+    else if (fileSizeGB > 5) {fileSizeMultiplier = 3;}  // 5-8GB files: 3x processing time
+    else if (fileSizeGB > 2) {fileSizeMultiplier = 2;}  // 2-5GB files: 2x processing time
+    else if (fileSizeGB > 1) {fileSizeMultiplier = 1.5;} // 1-2GB files: 1.5x processing time
     
     // Video duration analysis (in minutes)
     const videoDurationMinutes = parseFloat(videoData.duration?.replace(/[^\d.]/g, '') || '0') / 60;
     let durationMultiplier = 1;
-    if (videoDurationMinutes > 60) durationMultiplier = 3;      // >1hr videos: 3x time
-    else if (videoDurationMinutes > 30) durationMultiplier = 2; // 30-60min videos: 2x time  
-    else if (videoDurationMinutes > 10) durationMultiplier = 1.5; // 10-30min videos: 1.5x time
+    if (videoDurationMinutes > 60) {durationMultiplier = 3;}      // >1hr videos: 3x time
+    else if (videoDurationMinutes > 30) {durationMultiplier = 2;} // 30-60min videos: 2x time  
+    else if (videoDurationMinutes > 10) {durationMultiplier = 1.5;} // 10-30min videos: 1.5x time
     
     // Export combination complexity analysis
     const exportTypes = [
@@ -970,15 +970,15 @@ class EnhancedProcessor {
     baseTimeout *= complexity.durationMultiplier;
     
     // Export type scaling
-    if (complexity.exportTypes === 4) baseTimeout += 8 * 60 * 1000;  // All types: +8 min
-    else if (complexity.exportTypes === 3) baseTimeout += 5 * 60 * 1000; // 3 types: +5 min
-    else if (complexity.exportTypes === 2) baseTimeout += 3 * 60 * 1000; // 2 types: +3 min
+    if (complexity.exportTypes === 4) {baseTimeout += 8 * 60 * 1000;}  // All types: +8 min
+    else if (complexity.exportTypes === 3) {baseTimeout += 5 * 60 * 1000;} // 3 types: +5 min
+    else if (complexity.exportTypes === 2) {baseTimeout += 3 * 60 * 1000;} // 2 types: +3 min
     
     // Timestamp scaling (2 min per timestamp beyond first)
     baseTimeout += (complexity.timestampCount - 1) * 2 * 60 * 1000;
     
     // Aspect ratio scaling (dual ratios require double processing)
-    if (complexity.aspectRatioCount === 2) baseTimeout += 4 * 60 * 1000;
+    if (complexity.aspectRatioCount === 2) {baseTimeout += 4 * 60 * 1000;}
     
     // Canvas special handling (most resource intensive)
     if (complexity.hasCanvas) {
@@ -987,8 +987,8 @@ class EnhancedProcessor {
     }
     
     // Quality and effects scaling
-    if (complexity.isHighQuality) baseTimeout += 2 * 60 * 1000;
-    if (complexity.hasFadeEffects) baseTimeout += 1 * 60 * 1000;
+    if (complexity.isHighQuality) {baseTimeout += 2 * 60 * 1000;}
+    if (complexity.hasFadeEffects) {baseTimeout += 1 * 60 * 1000;}
     
     // Maximum complexity scenarios (all exports + multiple timestamps + dual ratios)
     if (complexity.isMaxComplexity) {
@@ -997,9 +997,9 @@ class EnhancedProcessor {
     
     // Absolute caps aligned with FFmpeg maximum processing times
     let maxCap = 70 * 60 * 1000; // 70 minutes max (aligned with Canvas: 55min + buffer)
-    if (complexity.fileSizeGB > 8) maxCap = 80 * 60 * 1000;      // 80 min for 8-10GB files
-    else if (complexity.fileSizeGB > 5) maxCap = 75 * 60 * 1000; // 75 min for 5-8GB files  
-    else if (complexity.fileSizeGB > 2) maxCap = 70 * 60 * 1000; // 70 min for 2-5GB files
+    if (complexity.fileSizeGB > 8) {maxCap = 80 * 60 * 1000;}      // 80 min for 8-10GB files
+    else if (complexity.fileSizeGB > 5) {maxCap = 75 * 60 * 1000;} // 75 min for 5-8GB files  
+    else if (complexity.fileSizeGB > 2) {maxCap = 70 * 60 * 1000;} // 70 min for 2-5GB files
     
     return Math.min(baseTimeout, maxCap);
   }

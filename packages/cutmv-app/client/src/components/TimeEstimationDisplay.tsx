@@ -124,7 +124,7 @@ export default function TimeEstimationDisplay({
     );
   }
 
-  if (!estimate) return null;
+  if (!estimate) {return null;}
 
   const getExportTypeIcon = (type: string) => {
     switch (type) {

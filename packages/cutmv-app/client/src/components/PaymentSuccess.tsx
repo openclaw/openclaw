@@ -44,8 +44,8 @@ export default function PaymentSuccess({ sessionId, onPaymentVerified, onError }
           
           // Redirect to thank you page with user details
           const params = new URLSearchParams();
-          if (data.session.userEmail) params.append('email', data.session.userEmail);
-          if (data.session.videoName) params.append('video', data.session.videoName);
+          if (data.session.userEmail) {params.append('email', data.session.userEmail);}
+          if (data.session.videoName) {params.append('video', data.session.videoName);}
           
           setTimeout(() => {
             window.location.href = `/thank-you?${params.toString()}`;

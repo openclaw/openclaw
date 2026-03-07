@@ -79,7 +79,7 @@ export default function OnboardingModal({ isOpen, onComplete, userEmail }: Onboa
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
-                if (nameError) setNameError("");
+                if (nameError) {setNameError("");}
               }}
               className={`text-base ${nameError ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
             />

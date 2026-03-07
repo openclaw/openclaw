@@ -105,15 +105,15 @@ export class TimeEstimationService {
 
     // Calculate multipliers
     let fileSizeMultiplier = 1;
-    if (fileSizeGB > 8) fileSizeMultiplier = 5;
-    else if (fileSizeGB > 5) fileSizeMultiplier = 3.5;
-    else if (fileSizeGB > 2) fileSizeMultiplier = 2.2;
-    else if (fileSizeGB > 1) fileSizeMultiplier = 1.5;
+    if (fileSizeGB > 8) {fileSizeMultiplier = 5;}
+    else if (fileSizeGB > 5) {fileSizeMultiplier = 3.5;}
+    else if (fileSizeGB > 2) {fileSizeMultiplier = 2.2;}
+    else if (fileSizeGB > 1) {fileSizeMultiplier = 1.5;}
 
     let durationMultiplier = 1;
-    if (videoDurationMinutes > 60) durationMultiplier = 3;
-    else if (videoDurationMinutes > 30) durationMultiplier = 2;
-    else if (videoDurationMinutes > 10) durationMultiplier = 1.5;
+    if (videoDurationMinutes > 60) {durationMultiplier = 3;}
+    else if (videoDurationMinutes > 30) {durationMultiplier = 2;}
+    else if (videoDurationMinutes > 10) {durationMultiplier = 1.5;}
 
     const isBulkProcessing = totalOperations > 8 || exportTypes >= 3;
     const isMaxComplexity = exportTypes === 4 && timestamps >= 3 && aspectRatios === 2;
@@ -318,13 +318,13 @@ export class TimeEstimationService {
     actualElapsedSeconds: number,
     progressPercent: number
   ): 'faster' | 'on-track' | 'slower' {
-    if (progressPercent <= 5) return 'on-track'; // Too early to tell
+    if (progressPercent <= 5) {return 'on-track';} // Too early to tell
 
     const expectedProgressPercent = (actualElapsedSeconds / estimatedSeconds) * 100;
     const deviation = progressPercent - expectedProgressPercent;
 
-    if (deviation > 15) return 'faster';
-    if (deviation < -15) return 'slower';
+    if (deviation > 15) {return 'faster';}
+    if (deviation < -15) {return 'slower';}
     return 'on-track';
   }
 }

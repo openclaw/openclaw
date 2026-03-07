@@ -68,7 +68,7 @@ export function useWebSocketProgress({
   const maxReconnectAttempts = 5;
 
   const connect = useCallback(() => {
-    if (!videoId || wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!videoId || wsRef.current?.readyState === WebSocket.OPEN) {return;}
 
     try {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";

@@ -155,7 +155,7 @@ export default function DashboardPage() {
           const exportsArray = Array.isArray(exportsData.exports) ? exportsData.exports : [];
 
           // Sort exports by createdAt timestamp (newest first)
-          const sortedExports = exportsArray.sort((a: DashboardExport, b: DashboardExport) => {
+          const sortedExports = exportsArray.toSorted((a: DashboardExport, b: DashboardExport) => {
             return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
           });
 
@@ -210,7 +210,7 @@ export default function DashboardPage() {
           const uploadsArray = Array.isArray(uploadsData.uploads) ? uploadsData.uploads : [];
           
           // Sort uploads by uploadedAt timestamp (newest first)
-          const sortedUploads = uploadsArray.sort((a: DashboardUpload, b: DashboardUpload) => {
+          const sortedUploads = uploadsArray.toSorted((a: DashboardUpload, b: DashboardUpload) => {
             return new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime();
           });
           
@@ -251,7 +251,7 @@ export default function DashboardPage() {
           const exportsArray = Array.isArray(exportsData.exports) ? exportsData.exports : [];
           
           // Sort exports by createdAt timestamp (newest first)
-          const sortedExports = exportsArray.sort((a: DashboardExport, b: DashboardExport) => {
+          const sortedExports = exportsArray.toSorted((a: DashboardExport, b: DashboardExport) => {
             return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
           });
           

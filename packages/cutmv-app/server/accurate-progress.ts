@@ -68,7 +68,7 @@ class UniversalProgressTracker extends EventEmitter {
   // Broadcast progress to WebSocket clients
   private broadcastProgress(operationId: string, progressData: AccurateProgressData) {
     const connections = this.wsConnections.get(operationId);
-    if (!connections || connections.length === 0) return;
+    if (!connections || connections.length === 0) {return;}
 
     const message = JSON.stringify({
       type: 'accurate_progress',
@@ -129,7 +129,7 @@ class UniversalProgressTracker extends EventEmitter {
     stage?: string
   ): void {
     const operation = this.operations.get(operationId);
-    if (!operation || operation.operationType !== 'upload') return;
+    if (!operation || operation.operationType !== 'upload') {return;}
 
     const progress = Math.min((currentBytes / (operation.totalBytes || 1)) * 100, 100);
     const elapsedTime = Date.now() - operation.startTime;
@@ -322,7 +322,7 @@ class UniversalProgressTracker extends EventEmitter {
     stage?: string
   ): void {
     const operation = this.operations.get(operationId);
-    if (!operation || operation.operationType !== 'download') return;
+    if (!operation || operation.operationType !== 'download') {return;}
 
     const total = totalBytes || operation.totalBytes || currentBytes;
     const progress = Math.min((currentBytes / total) * 100, 100);
@@ -366,7 +366,7 @@ class UniversalProgressTracker extends EventEmitter {
 
     // Parse time in format HH:MM:SS.mmm
     const timeMatch = data.out_time.match(/(\d+):(\d+):(\d+)\.(\d+)/);
-    if (!timeMatch) return null;
+    if (!timeMatch) {return null;}
 
     const hours = parseInt(timeMatch[1]);
     const minutes = parseInt(timeMatch[2]);
@@ -422,7 +422,7 @@ class UniversalProgressTracker extends EventEmitter {
 
   // Utility function to format bytes
   private formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0) {return '0 Bytes';}
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));

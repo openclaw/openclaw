@@ -236,7 +236,7 @@ export default function ProcessingControls({
     const totalItems = (progressData.totalClips || 0) + (progressData.totalGifs || 0) + 
                       (progressData.totalThumbnails || 0) + (progressData.totalCanvas || 0);
     
-    if (totalItems === 0) return { aggregateProgress: 0, itemsCompleted: 0, totalItems: 0 };
+    if (totalItems === 0) {return { aggregateProgress: 0, itemsCompleted: 0, totalItems: 0 };}
 
     // Calculate items completed based on current progress
     let itemsCompleted = 0;
@@ -288,7 +288,7 @@ export default function ProcessingControls({
 
   // Estimate batch completion time
   const estimateBatchTime = (itemsCompleted: number, totalItems: number, startTime: number) => {
-    if (itemsCompleted <= 0 || !startTime) return null;
+    if (itemsCompleted <= 0 || !startTime) {return null;}
     
     const elapsed = Date.now() - startTime;
     const averageTimePerItem = elapsed / itemsCompleted;
@@ -605,10 +605,10 @@ export default function ProcessingControls({
             }));
 
             const outputs = [];
-            if (progressData.totalClips > 0) outputs.push(`${progressData.totalClips} clips`);
-            if (progressData.totalGifs > 0) outputs.push(`${progressData.totalGifs} GIFs`);
-            if (progressData.totalThumbnails > 0) outputs.push(`${progressData.totalThumbnails} thumbnails`);
-            if (progressData.totalCanvas > 0) outputs.push(`${progressData.totalCanvas} Canvas loops`);
+            if (progressData.totalClips > 0) {outputs.push(`${progressData.totalClips} clips`);}
+            if (progressData.totalGifs > 0) {outputs.push(`${progressData.totalGifs} GIFs`);}
+            if (progressData.totalThumbnails > 0) {outputs.push(`${progressData.totalThumbnails} thumbnails`);}
+            if (progressData.totalCanvas > 0) {outputs.push(`${progressData.totalCanvas} Canvas loops`);}
             
             toast({
               title: "Processing Complete!",
@@ -684,7 +684,7 @@ export default function ProcessingControls({
   };
 
   const handleCancel = async () => {
-    if (!video) return;
+    if (!video) {return;}
     
     try {
       await apiRequest('POST', `/api/cancel-processing/${video.id}`);
@@ -1001,10 +1001,10 @@ export default function ProcessingControls({
           <Scissors className="w-5 h-5 mr-2" />
           {(() => {
             const selectedTypes = [];
-            if (generateCutdowns) selectedTypes.push('Cutdowns');
-            if (generateGif) selectedTypes.push('GIFs');
-            if (generateThumbnails) selectedTypes.push('Thumbnails');
-            if (generateCanvas) selectedTypes.push('Spotify Canvas');
+            if (generateCutdowns) {selectedTypes.push('Cutdowns');}
+            if (generateGif) {selectedTypes.push('GIFs');}
+            if (generateThumbnails) {selectedTypes.push('Thumbnails');}
+            if (generateCanvas) {selectedTypes.push('Spotify Canvas');}
             
             if (selectedTypes.length === 0) {
               return 'Select content to generate';
@@ -1238,26 +1238,26 @@ export default function ProcessingControls({
             <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-green-800 mb-2">
               {(() => {
-                if (status.totalClips > 0) return 'All clips ready!';
+                if (status.totalClips > 0) {return 'All clips ready!';}
                 const activeTypes = [
                   (status.totalGifs || 0) > 0 && 'GIFs',
                   (status.totalThumbnails || 0) > 0 && 'thumbnails',
                   (status.totalCanvas || 0) > 0 && 'Canvas loops'
                 ].filter(Boolean);
-                if (activeTypes.length > 1) return 'All exports ready!';
-                if ((status.totalGifs || 0) > 0) return 'All GIFs ready!';
-                if ((status.totalThumbnails || 0) > 0) return 'All thumbnails ready!';
-                if ((status.totalCanvas || 0) > 0) return 'All Canvas loops ready!';
+                if (activeTypes.length > 1) {return 'All exports ready!';}
+                if ((status.totalGifs || 0) > 0) {return 'All GIFs ready!';}
+                if ((status.totalThumbnails || 0) > 0) {return 'All thumbnails ready!';}
+                if ((status.totalCanvas || 0) > 0) {return 'All Canvas loops ready!';}
                 return 'All content ready!';
               })()}
             </h3>
             <p className="text-green-700 mb-4">
               Successfully processed {(() => {
                 const outputs = [];
-                if (status.totalClips > 0) outputs.push(`${status.totalClips} clips`);
-                if ((status.totalGifs || 0) > 0) outputs.push(`${status.totalGifs || 0} GIFs`);
-                if ((status.totalThumbnails || 0) > 0) outputs.push(`${status.totalThumbnails || 0} thumbnails`);
-                if ((status.totalCanvas || 0) > 0) outputs.push(`${status.totalCanvas || 0} Canvas loops`);
+                if (status.totalClips > 0) {outputs.push(`${status.totalClips} clips`);}
+                if ((status.totalGifs || 0) > 0) {outputs.push(`${status.totalGifs || 0} GIFs`);}
+                if ((status.totalThumbnails || 0) > 0) {outputs.push(`${status.totalThumbnails || 0} thumbnails`);}
+                if ((status.totalCanvas || 0) > 0) {outputs.push(`${status.totalCanvas || 0} Canvas loops`);}
                 return outputs.length > 0 ? outputs.join(', ') : 'content';
               })()} and packaged them for download.
             </p>

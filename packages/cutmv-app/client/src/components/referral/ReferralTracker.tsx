@@ -18,7 +18,7 @@ export function ReferralTracker() {
         const urlParams = new URLSearchParams(window.location.search);
         const referralCode = urlParams.get('ref');
         
-        if (!referralCode) return;
+        if (!referralCode) {return;}
 
         // Generate or get session ID
         let sessionId = localStorage.getItem('cutmv-session-id');
@@ -29,7 +29,7 @@ export function ReferralTracker() {
 
         // Check if we've already tracked this referral
         const trackedReferral = localStorage.getItem(`cutmv-tracked-${referralCode}`);
-        if (trackedReferral) return;
+        if (trackedReferral) {return;}
 
         // Track the referral visit
         const response = await fetch('/api/referral/track', {
@@ -80,7 +80,7 @@ export function useReferralSignup() {
       const sessionId = localStorage.getItem('cutmv-session-id');
       const referralCode = localStorage.getItem('cutmv-referral-code');
       
-      if (!sessionId || !referralCode) return null;
+      if (!sessionId || !referralCode) {return null;}
 
       const response = await fetch('/api/referral/signup', {
         method: 'POST',

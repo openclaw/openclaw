@@ -288,7 +288,7 @@ export class CloudflareQueueManager {
     const timeRegex = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
     const match = cleaned.match(timeRegex);
     
-    if (!match) return null;
+    if (!match) {return null;}
     
     const [, minutes, seconds, extraSeconds] = match;
     

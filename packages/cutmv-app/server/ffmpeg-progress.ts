@@ -134,7 +134,7 @@ export class RealTimeFFmpegProcessor extends EventEmitter {
   // Broadcast progress to WebSocket clients
   private broadcastProgress(videoId: number, jobId: string, progressData: FFmpegProgressData, operation: string) {
     const connections = this.wsConnections.get(videoId);
-    if (!connections || connections.length === 0) return;
+    if (!connections || connections.length === 0) {return;}
 
     const message = JSON.stringify({
       type: 'ffmpeg_progress',
@@ -375,7 +375,7 @@ export class RealTimeFFmpegProcessor extends EventEmitter {
 
     // Parse time in format HH:MM:SS.mmm
     const timeMatch = data.out_time.match(/(\d+):(\d+):(\d+)\.(\d+)/);
-    if (!timeMatch) return null;
+    if (!timeMatch) {return null;}
 
     const hours = parseInt(timeMatch[1]);
     const minutes = parseInt(timeMatch[2]);
@@ -447,7 +447,7 @@ export class RealTimeFFmpegProcessor extends EventEmitter {
       console.log(`⏱️ Video duration: ${videoDuration}s`);
     } catch (error) {
       console.error(`❌ Failed to get video duration:`, error);
-      throw new Error(`Failed to get video duration: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get video duration: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
     
     const segmentDuration = videoDuration / count;
@@ -491,7 +491,7 @@ export class RealTimeFFmpegProcessor extends EventEmitter {
           
           if (progress) {
             const job = this.jobs.get(jobId);
-            if (job) job.currentProgress = progress;
+            if (job) {job.currentProgress = progress;}
             this.broadcastProgress(videoId, jobId, progress, operation);
           }
         } catch (error) {
@@ -729,7 +729,7 @@ export class RealTimeFFmpegProcessor extends EventEmitter {
       console.log(`📄 CANVAS DEBUG - Input file confirmed: ${stats.size} bytes`);
     } catch (fileError) {
       console.error(`❌ CANVAS DEBUG - Input file not found: ${inputPath}`, fileError);
-      throw new Error(`Canvas input file not found: ${inputPath}`);
+      throw new Error(`Canvas input file not found: ${inputPath}`, { cause: fileError });
     }
     
     const jobId = `${videoId}_${operation}_${Date.now()}`;
@@ -741,7 +741,7 @@ export class RealTimeFFmpegProcessor extends EventEmitter {
       console.log(`⏱️ Video duration: ${videoDuration}s`);
     } catch (error) {
       console.error(`❌ Failed to get video duration for Canvas:`, error);
-      throw new Error(`Failed to get video duration: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get video duration: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
     
     const segmentDuration = videoDuration / count;

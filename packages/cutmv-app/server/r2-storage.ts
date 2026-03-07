@@ -85,7 +85,7 @@ export class R2Storage {
       return publicUrl;
     } catch (error) {
       console.error(`❌ R2 upload failed for ${r2Key}:`, error);
-      throw new Error(`Failed to upload to R2: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to upload to R2: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 
@@ -122,7 +122,7 @@ export class R2Storage {
       return buffer;
     } catch (error: any) {
       console.error(`❌ Failed to download from R2: ${r2Key}`, error);
-      throw new Error(`R2 download failed: ${error.message}`);
+      throw new Error(`R2 download failed: ${error.message}`, { cause: error });
     }
   }
 
@@ -154,11 +154,11 @@ export class R2Storage {
         });
 
         if (errorCode === 'NotFound' || errorCode === 'NoSuchKey') {
-          throw new Error(`NoSuchKey: File not found in R2 storage: ${r2Key}`);
+          throw new Error(`NoSuchKey: File not found in R2 storage: ${r2Key}`, { cause: headError });
         } else if (errorCode === 'AccessDenied') {
-          throw new Error(`AccessDenied: Permission denied for R2 key: ${r2Key}`);
+          throw new Error(`AccessDenied: Permission denied for R2 key: ${r2Key}`, { cause: headError });
         } else {
-          throw new Error(`R2 verification failed (${errorCode}): ${headError.message}`);
+          throw new Error(`R2 verification failed (${errorCode}): ${headError.message}`, { cause: headError });
         }
       }
 
@@ -184,11 +184,11 @@ export class R2Storage {
       });
       
       if (errorCode === 'ExpiredRequest' || error.message?.includes('expired')) {
-        throw new Error(`ExpiredRequest: The request credentials have expired for ${r2Key}`);
+        throw new Error(`ExpiredRequest: The request credentials have expired for ${r2Key}`, { cause: error });
       } else if (errorCode === 'InvalidRequest') {
-        throw new Error(`InvalidRequest: Invalid R2 request parameters for ${r2Key}`);
+        throw new Error(`InvalidRequest: Invalid R2 request parameters for ${r2Key}`, { cause: error });
       } else {
-        throw new Error(`SignedURL generation failed (${errorCode}): ${error.message}`);
+        throw new Error(`SignedURL generation failed (${errorCode}): ${error.message}`, { cause: error });
       }
     }
   }
@@ -243,7 +243,7 @@ export class R2Storage {
         
       } catch (fallbackError) {
         console.error(`❌ Fallback also failed:`, fallbackError);
-        throw new Error(`Failed to upload buffer to R2: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        throw new Error(`Failed to upload buffer to R2: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: fallbackError });
       }
     }
   }
@@ -280,7 +280,7 @@ export class R2Storage {
       return response.UploadId;
     } catch (error) {
       console.error(`❌ Failed to create multipart upload for ${r2Key}:`, error);
-      throw new Error(`Failed to create multipart upload: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to create multipart upload: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 
@@ -322,7 +322,7 @@ export class R2Storage {
       return presignedUrls;
     } catch (error) {
       console.error(`❌ Failed to generate presigned URLs:`, error);
-      throw new Error(`Failed to generate presigned URLs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to generate presigned URLs: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 
@@ -362,7 +362,7 @@ export class R2Storage {
       return publicUrl;
     } catch (error) {
       console.error(`❌ Failed to complete multipart upload for ${r2Key}:`, error);
-      throw new Error(`Failed to complete multipart upload: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to complete multipart upload: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 
@@ -414,7 +414,7 @@ export class R2Storage {
       }
     } catch (error) {
       console.error(`❌ R2 deletion failed for ${r2Key}:`, error);
-      throw new Error(`Failed to delete from R2: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to delete from R2: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 

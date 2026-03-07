@@ -123,7 +123,7 @@ Make sure to:
 
     const items = posts
       .filter(post => post.published)
-      .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+      .toSorted((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
       .slice(0, 20)
       .map(post => `
     <item>

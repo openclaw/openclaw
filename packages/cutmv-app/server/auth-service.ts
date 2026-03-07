@@ -101,7 +101,7 @@ export class AuthService {
 
         // If this is the last attempt or an unrecoverable error, throw
         if (attempt === maxRetries) {
-          throw new Error(`Failed to create user: ${errorMessage}`);
+          throw new Error(`Failed to create user: ${errorMessage}`, { cause: error });
         }
       }
     }
@@ -279,7 +279,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return { success: true, messageId: emailResult.data?.id };
     } catch (error) {
       console.error('❌ Error sending magic link:', error);
-      throw new Error('Failed to send login email');
+      throw new Error('Failed to send login email', { cause: error });
     }
   }
 
@@ -502,7 +502,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return sessionToken;
     } catch (error) {
       console.error('❌ Error creating session:', error);
-      throw new Error('Failed to create session');
+      throw new Error('Failed to create session', { cause: error });
     }
   }
 
@@ -560,7 +560,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return { success: true };
     } catch (error) {
       console.error('❌ Error logging out:', error);
-      throw new Error('Failed to logout');
+      throw new Error('Failed to logout', { cause: error });
     }
   }
 
@@ -578,7 +578,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return updatedUser;
     } catch (error) {
       console.error('❌ Error updating user profile:', error);
-      throw new Error('Failed to update profile');
+      throw new Error('Failed to update profile', { cause: error });
     }
   }
 
@@ -599,7 +599,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return updatedUser;
     } catch (error) {
       console.error('❌ Error updating user:', error);
-      throw new Error('Failed to update user');
+      throw new Error('Failed to update user', { cause: error });
     }
   }
 
@@ -620,7 +620,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return updatedUser;
     } catch (error) {
       console.error('❌ Error completing onboarding:', error);
-      throw new Error('Failed to complete onboarding');
+      throw new Error('Failed to complete onboarding', { cause: error });
     }
   }
 
@@ -635,7 +635,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return result;
     } catch (error) {
       console.error('❌ Error cleaning up expired sessions:', error);
-      throw new Error('Failed to cleanup expired sessions');
+      throw new Error('Failed to cleanup expired sessions', { cause: error });
     }
   }
 
@@ -647,7 +647,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return { success: true };
     } catch (error) {
       console.error('❌ Error logging out all sessions:', error);
-      throw new Error('Failed to logout all sessions');
+      throw new Error('Failed to logout all sessions', { cause: error });
     }
   }
 
@@ -688,7 +688,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return userExports;
     } catch (error) {
       console.error('❌ Error getting user exports:', error);
-      throw new Error('Failed to get export history');
+      throw new Error('Failed to get export history', { cause: error });
     }
   }
 
@@ -716,7 +716,7 @@ This link and code will expire in 1 hour. If you didn't request this login link,
       return exportRecord;
     } catch (error) {
       console.error('❌ Error creating export:', error);
-      throw new Error('Failed to create export record');
+      throw new Error('Failed to create export record', { cause: error });
     }
   }
 

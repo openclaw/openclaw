@@ -28,7 +28,7 @@ class JobFailureMonitor {
   private isRunning = false;
 
   async start() {
-    if (this.isRunning) return;
+    if (this.isRunning) {return;}
     this.isRunning = true;
     
     console.log('🏥 Job Failure Monitor started - monitoring every minute');
@@ -219,12 +219,12 @@ class JobFailureMonitor {
           if (processingDetails.generateGif) {
             const videoDuration = parseFloat(video.duration?.replace(/[^\d.]/g, '') || '0');
             const gifCount = videoDuration < 40 ? 5 : 10;
-            for (let i = 0; i < gifCount; i++) operations.push({ type: 'gif' });
+            for (let i = 0; i < gifCount; i++) {operations.push({ type: 'gif' });}
           }
           if (processingDetails.generateThumbnails) {
             const videoDuration = parseFloat(video.duration?.replace(/[^\d.]/g, '') || '0');
             const thumbnailCount = videoDuration < 40 ? 5 : 10;
-            for (let i = 0; i < thumbnailCount; i++) operations.push({ type: 'thumbnail' });
+            for (let i = 0; i < thumbnailCount; i++) {operations.push({ type: 'thumbnail' });}
           }
           if (processingDetails.generateCanvas && processingDetails.timestamps?.length > 0) {
             for (let i = 0; i < processingDetails.timestamps.length; i++) {

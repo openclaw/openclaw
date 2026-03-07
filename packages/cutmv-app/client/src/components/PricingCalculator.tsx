@@ -263,7 +263,7 @@ export default function PricingCalculator({ onPaymentRequired, onFreeSessionCrea
 
   // Calculate total amount when config or discount code changes
   useEffect(() => {
-    if (!pricing) return;
+    if (!pricing) {return;}
 
     const calculateTotal = async () => {
       setIsCalculating(true);
@@ -525,9 +525,9 @@ export default function PricingCalculator({ onPaymentRequired, onFreeSessionCrea
         
         // Redirect to thank you page for free sessions
         const params = new URLSearchParams();
-        if (config.userEmail) params.append('email', config.userEmail);
-        if (uploadedVideo?.originalName) params.append('video', uploadedVideo.originalName);
-        if (data.sessionId) params.append('sessionId', data.sessionId);
+        if (config.userEmail) {params.append('email', config.userEmail);}
+        if (uploadedVideo?.originalName) {params.append('video', uploadedVideo.originalName);}
+        if (data.sessionId) {params.append('sessionId', data.sessionId);}
         
         setTimeout(() => {
           window.location.href = `/thank-you?${params.toString()}`;
@@ -737,7 +737,7 @@ export default function PricingCalculator({ onPaymentRequired, onFreeSessionCrea
   };
 
   const countTimestamps = (text: string): number => {
-    if (!text.trim()) return 0;
+    if (!text.trim()) {return 0;}
     return text.split('\n').filter(line => line.trim() && line.includes('-')).length;
   };
 

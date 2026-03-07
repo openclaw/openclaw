@@ -195,7 +195,7 @@ export default function CookieConsent({ onAccept, onDecline }: CookieConsentProp
     }
   };
 
-  if (!isVisible) return null;
+  if (!isVisible) {return null;}
 
   return (
     <div className="fixed bottom-4 left-4 z-50 bg-white border border-gray-200 rounded-lg shadow-lg max-w-sm">
@@ -286,7 +286,7 @@ export default function CookieConsent({ onAccept, onDecline }: CookieConsentProp
 
 // Helper function to check consent status with extended validity
 export function getCookieConsent(): 'accepted' | 'declined' | 'essential-only' | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined') {return null;}
   
   try {
     const consent = localStorage.getItem('cutmv-cookie-consent');

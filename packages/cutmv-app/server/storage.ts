@@ -118,7 +118,7 @@ export class MemStorage implements IStorage {
 
   async updateVideo(id: number, updates: Partial<Video>): Promise<Video | undefined> {
     const video = this.videos.get(id);
-    if (!video) return undefined;
+    if (!video) {return undefined;}
     
     const updatedVideo = { ...video, ...updates };
     this.videos.set(id, updatedVideo);
@@ -149,7 +149,7 @@ export class MemStorage implements IStorage {
 
   async updateClip(id: number, updates: Partial<Clip>): Promise<Clip | undefined> {
     const clip = this.clips.get(id);
-    if (!clip) return undefined;
+    if (!clip) {return undefined;}
     
     const updatedClip = { ...clip, ...updates };
     this.clips.set(id, updatedClip);
@@ -198,7 +198,7 @@ export class MemStorage implements IStorage {
 
   async updateEmailDelivery(id: number, updates: Partial<EmailDelivery>): Promise<EmailDelivery | undefined> {
     const delivery = this.emailDeliveries.get(id);
-    if (!delivery) return undefined;
+    if (!delivery) {return undefined;}
     
     const updatedDelivery = { ...delivery, ...updates };
     this.emailDeliveries.set(id, updatedDelivery);
@@ -241,7 +241,7 @@ export class MemStorage implements IStorage {
 
   async updateBackgroundJob(sessionId: string, updates: Partial<BackgroundJob>): Promise<BackgroundJob | undefined> {
     const job = this.backgroundJobs.get(sessionId);
-    if (!job) return undefined;
+    if (!job) {return undefined;}
     
     const updatedJob = { 
       ...job, 
@@ -339,7 +339,7 @@ export class MemStorage implements IStorage {
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
     const user = this.users.get(id);
-    if (!user) return undefined;
+    if (!user) {return undefined;}
     
     const updatedUser = { ...user, ...updates };
     this.users.set(id, updatedUser);
