@@ -2594,6 +2594,15 @@ Service/supervisor logs (when the gateway runs via launchd/systemd):
 - macOS: `$OPENCLAW_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.openclaw/logs/...`; profiles use `~/.openclaw-<profile>/logs/...`)
 - Linux: `journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST`
+- macOS app-bundled launcher stdout/err: `/tmp/openclaw/openclaw-gateway.log`
+
+If the macOS service logs have grown unexpectedly and you already fixed the underlying error, rotate/truncate them manually:
+
+```bash
+mkdir -p "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs"
+: > "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.log"
+: > "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.err.log"
+```
 
 See [Troubleshooting](/gateway/troubleshooting#log-locations) for more.
 

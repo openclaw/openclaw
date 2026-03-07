@@ -58,6 +58,8 @@ export function buildSystemdUnit({
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
+    // systemd already has burst protection; keep a shorter retry than launchd so
+    // supervised restart requests still relaunch promptly on Linux.
     "RestartSec=5",
     // Keep service children in the same lifecycle so restarts do not leave
     // orphan ACP/runtime workers behind.

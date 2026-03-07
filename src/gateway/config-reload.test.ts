@@ -415,4 +415,56 @@ describe("startGatewayConfigReloader", () => {
       await reloader.stop();
     }
   });
+
+  it("dedupes unchanged invalid snapshots and re-logs when the invalid payload changes", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          issues: [
+            { path: "plugins.entries.discord", message: "plugin disabled but config is present" },
+          ],
+          hash: "invalid-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          issues: [
+            { path: "plugins.entries.discord", message: "plugin disabled but config is present" },
+          ],
+          hash: "invalid-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          issues: [
+            { path: "plugins.entries.slack", message: "plugin disabled but config is present" },
+          ],
+          hash: "invalid-2",
+        }),
+      );
+    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(log.warn).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenNthCalledWith(
+      1,
+      "config reload skipped (invalid config): plugins.entries.discord: plugin disabled but config is present",
+    );
+    expect(log.warn).toHaveBeenNthCalledWith(
+      2,
+      "config reload skipped (invalid config): plugins.entries.slack: plugin disabled but config is present",
+    );
+
+    await reloader.stop();
+  });
 });

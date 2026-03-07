@@ -21,6 +21,16 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("KillMode=control-group");
   });
 
+  it("keeps restart always for supervised restarts", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {},
+    });
+    expect(unit).toContain("Restart=always");
+    expect(unit).not.toContain("Restart=on-failure");
+  });
+
   it("rejects environment values with line breaks", () => {
     expect(() =>
       buildSystemdUnit({

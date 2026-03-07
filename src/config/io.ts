@@ -13,6 +13,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -81,7 +82,12 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
-const loggedInvalidConfigs = new Set<string>();
+type ConfigLogFingerprintState = {
+  invalid?: string;
+  warnings?: string;
+};
+
+const configLogFingerprintByPath = new Map<string, ConfigLogFingerprintState>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -544,19 +550,73 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
 };
 
-function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
-  if (!raw || typeof raw !== "object") {
+function getConfigLogFingerprintState(configPath: string): ConfigLogFingerprintState {
+  let state = configLogFingerprintByPath.get(configPath);
+  if (!state) {
+    state = {};
+    configLogFingerprintByPath.set(configPath, state);
+  }
+  return state;
+}
+
+function logConfigMessageOnce(params: {
+  configPath: string;
+  kind: keyof ConfigLogFingerprintState;
+  message: string;
+  logger: Pick<typeof console, "error" | "warn">;
+}): void {
+  const state = getConfigLogFingerprintState(params.configPath);
+  const fingerprint = hashConfigRaw(`${params.kind}:${params.message}`);
+  if (state[params.kind] === fingerprint) {
     return;
+  }
+  state[params.kind] = fingerprint;
+  if (params.kind === "invalid") {
+    params.logger.error(params.message);
+    return;
+  }
+  params.logger.warn(params.message);
+}
+
+function clearConfigMessageFingerprint(
+  configPath: string,
+  kind: keyof ConfigLogFingerprintState,
+): void {
+  const state = configLogFingerprintByPath.get(configPath);
+  if (!state) {
+    return;
+  }
+  delete state[kind];
+  if (!state.invalid && !state.warnings) {
+    configLogFingerprintByPath.delete(configPath);
+  }
+}
+
+function formatConfigIssueDetails(issues: Array<{ path: string; message: string }>): string {
+  return issues
+    .map((iss) => {
+      const safePath = sanitizeTerminalText(iss.path || "<root>");
+      const safeMessage = sanitizeTerminalText(iss.message);
+      return `- ${safePath}: ${safeMessage}`;
+    })
+    .join("\n");
+}
+
+function getConfigMiskeyWarnings(raw: unknown): string[] {
+  const warnings: string[] = [];
+  if (!raw || typeof raw !== "object") {
+    return warnings;
   }
   const gateway = (raw as Record<string, unknown>).gateway;
   if (!gateway || typeof gateway !== "object") {
-    return;
+    return warnings;
   }
   if ("token" in (gateway as Record<string, unknown>)) {
-    logger.warn(
+    warnings.push(
       'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
     );
   }
+  return warnings;
 }
 
 function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
@@ -571,20 +631,19 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
+function getFutureVersionWarning(cfg: OpenClawConfig): string | null {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
-    return;
+    return null;
   }
   const cmp = compareOpenClawVersions(VERSION, touched);
   if (cmp === null) {
-    return;
+    return null;
   }
   if (cmp < 0) {
-    logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
-    );
+    return `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`;
   }
+  return null;
 }
 
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
@@ -683,6 +742,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     try {
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
+        clearConfigMessageFingerprint(configPath, "invalid");
+        clearConfigMessageFingerprint(configPath, "warnings");
         if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
           loadShellEnvFallback({
             enabled: true,
@@ -700,8 +761,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
       );
-      warnOnConfigMiskeys(resolvedConfig, deps.logger);
+      const warningMessages = getConfigMiskeyWarnings(resolvedConfig);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
+        clearConfigMessageFingerprint(configPath, "invalid");
+        clearConfigMessageFingerprint(configPath, "warnings");
         return {};
       }
       const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
@@ -713,25 +776,40 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const validated = validateConfigObjectWithPlugins(resolvedConfig);
       if (!validated.ok) {
-        const details = validated.issues
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
-          .join("\n");
-        if (!loggedInvalidConfigs.has(configPath)) {
-          loggedInvalidConfigs.add(configPath);
-          deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
-        }
-        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
+        const details = formatConfigIssueDetails(validated.issues);
+        clearConfigMessageFingerprint(configPath, "warnings");
+        logConfigMessageOnce({
+          configPath,
+          kind: "invalid",
+          message: `Invalid config at ${sanitizeTerminalText(configPath)}:\\n${details}`,
+          logger: deps.logger,
+        });
+        const error = new Error(
+          `Invalid config at ${sanitizeTerminalText(configPath)}:\n${details}`,
+        );
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
         throw error;
       }
+      clearConfigMessageFingerprint(configPath, "invalid");
       if (validated.warnings.length > 0) {
-        const details = validated.warnings
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
-          .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        const details = formatConfigIssueDetails(validated.warnings);
+        warningMessages.push(`Config warnings:\\n${details}`);
       }
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      const futureVersionWarning = getFutureVersionWarning(validated.config);
+      if (futureVersionWarning) {
+        warningMessages.push(futureVersionWarning);
+      }
+      if (warningMessages.length > 0) {
+        logConfigMessageOnce({
+          configPath,
+          kind: "warnings",
+          message: warningMessages.join("\n"),
+          logger: deps.logger,
+        });
+      } else {
+        clearConfigMessageFingerprint(configPath, "warnings");
+      }
       const cfg = applyTalkConfigNormalization(
         applyModelDefaults(
           applyCompactionDefaults(
@@ -948,7 +1026,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      const futureVersionWarning = getFutureVersionWarning(validated.config);
       const snapshotConfig = normalizeConfigPaths(
         applyTalkApiKey(
           applyTalkConfigNormalization(
@@ -974,7 +1052,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: snapshotConfig,
           hash,
           issues: [],
-          warnings: validated.warnings,
+          warnings: futureVersionWarning
+            ? [
+                ...validated.warnings,
+                { path: "meta.lastTouchedVersion", message: futureVersionWarning },
+              ]
+            : validated.warnings,
           legacyIssues,
         },
         envSnapshotForRestore: readResolution.envSnapshotForRestore,

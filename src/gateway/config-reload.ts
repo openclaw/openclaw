@@ -89,6 +89,7 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let invalidSnapshotFingerprint: string | null = null;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -140,10 +141,15 @@ export function startGatewayConfigReloader(opts: {
 
   const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.valid) {
+      invalidSnapshotFingerprint = null;
       return false;
     }
     const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
-    opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    const fingerprint = snapshot.hash ?? issues;
+    if (invalidSnapshotFingerprint !== fingerprint) {
+      invalidSnapshotFingerprint = fingerprint;
+      opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    }
     return true;
   };
 

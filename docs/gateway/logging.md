@@ -15,6 +15,10 @@ OpenClaw has two log “surfaces”:
 - **Console output** (what you see in the terminal / Debug UI).
 - **File logs** (JSON lines) written by the gateway logger.
 
+Supervised installs add a third surface:
+
+- **Service stdout/stderr logs** written by the launcher itself (for example launchd or systemd).
+
 ## File-based logger
 
 - Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`
@@ -39,6 +43,17 @@ openclaw logs --follow
   raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or
   `trace`.
+- `openclaw logs --follow` tails this rolling file logger, not service stdout/stderr logs.
+
+## Service stdout/stderr logs
+
+When the gateway runs under a service manager, startup failures and uncaught stderr can also land in supervisor-managed logs:
+
+- macOS CLI LaunchAgent: `$OPENCLAW_STATE_DIR/logs/gateway.log` and `$OPENCLAW_STATE_DIR/logs/gateway.err.log`
+- macOS app bundle launcher: `/tmp/openclaw/openclaw-gateway.log`
+- Linux systemd user service: `journalctl --user -u openclaw-gateway.service -n 200 --no-pager`
+
+These logs are separate from the rolling `/tmp/openclaw/openclaw-YYYY-MM-DD.log` file logger. If disk usage grows on macOS, inspect both surfaces.
 
 ## Console capture
 
