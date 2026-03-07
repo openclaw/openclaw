@@ -27,6 +27,48 @@ require_cmd() {
   fi
 }
 
+is_writable_dir() {
+  local dir="$1"
+  [[ -n "$dir" && -d "$dir" && ! -L "$dir" && -w "$dir" && -x "$dir" ]]
+}
+
+is_safe_tmp_base() {
+  local dir="$1"
+  local mode=""
+  local owner=""
+  is_writable_dir "$dir" || return 1
+  mode="$(stat -Lc '%a' "$dir" 2>/dev/null || true)"
+  if [[ -n "$mode" ]]; then
+    local perm=$((8#$mode))
+    if (( (perm & 0022) != 0 && (perm & 01000) == 0 )); then
+      return 1
+    fi
+  fi
+  if is_root; then
+    owner="$(stat -Lc '%u' "$dir" 2>/dev/null || true)"
+    if [[ -n "$owner" && "$owner" != "0" ]]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+resolve_image_tmp_dir() {
+  if ! is_root && is_safe_tmp_base "${TMPDIR:-}"; then
+    printf '%s' "$TMPDIR"
+    return 0
+  fi
+  if is_safe_tmp_base "/var/tmp"; then
+    printf '%s' "/var/tmp"
+    return 0
+  fi
+  if is_safe_tmp_base "/tmp"; then
+    printf '%s' "/tmp"
+    return 0
+  fi
+  printf '%s' "/tmp"
+}
+
 is_root() { [[ "$(id -u)" -eq 0 ]]; }
 
 run_root() {
@@ -215,12 +257,18 @@ BUILD_ARGS=()
 podman build ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
 
 echo "Loading image into $OPENCLAW_USER's Podman store..."
-TMP_IMAGE="$(mktemp -p /tmp openclaw-image.XXXXXX.tar)"
-trap 'rm -f "$TMP_IMAGE"' EXIT
+TMP_IMAGE_DIR="$(resolve_image_tmp_dir)"
+echo "Using temporary image dir: $TMP_IMAGE_DIR"
+TMP_STAGE_DIR="$(mktemp -d -p "$TMP_IMAGE_DIR" openclaw-image.XXXXXX)"
+TMP_IMAGE="$TMP_STAGE_DIR/image.tar"
+chmod 700 "$TMP_STAGE_DIR"
+trap 'rm -rf "$TMP_STAGE_DIR"' EXIT
 podman save openclaw:local -o "$TMP_IMAGE"
-chmod 644 "$TMP_IMAGE"
-(cd /tmp && run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load -i "$TMP_IMAGE")
-rm -f "$TMP_IMAGE"
+chmod 600 "$TMP_IMAGE"
+# Stream the image into the target user's podman load so private temp directories
+# do not need to be traversable by $OPENCLAW_USER.
+cat "$TMP_IMAGE" | run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load
+rm -rf "$TMP_STAGE_DIR"
 trap - EXIT
 
 echo "Copying launch script to $LAUNCH_SCRIPT_DST..."
