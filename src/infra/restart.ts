@@ -7,10 +7,11 @@ import {
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 export type RestartAttempt = {
   ok: boolean;
-  method: "launchctl" | "systemd" | "supervisor";
+  method: "launchctl" | "systemd" | "schtasks" | "supervisor";
   detail?: string;
   tried?: string[];
 };
@@ -296,36 +297,41 @@ export function triggerOpenClawRestart(): RestartAttempt {
   cleanStaleGatewayProcessesSync();
 
   const tried: string[] = [];
-  if (process.platform !== "darwin") {
-    if (process.platform === "linux") {
-      const unit = normalizeSystemdUnit(
-        process.env.OPENCLAW_SYSTEMD_UNIT,
-        process.env.OPENCLAW_PROFILE,
-      );
-      const userArgs = ["--user", "restart", unit];
-      tried.push(`systemctl ${userArgs.join(" ")}`);
-      const userRestart = spawnSync("systemctl", userArgs, {
-        encoding: "utf8",
-        timeout: SPAWN_TIMEOUT_MS,
-      });
-      if (!userRestart.error && userRestart.status === 0) {
-        return { ok: true, method: "systemd", tried };
-      }
-      const systemArgs = ["restart", unit];
-      tried.push(`systemctl ${systemArgs.join(" ")}`);
-      const systemRestart = spawnSync("systemctl", systemArgs, {
-        encoding: "utf8",
-        timeout: SPAWN_TIMEOUT_MS,
-      });
-      if (!systemRestart.error && systemRestart.status === 0) {
-        return { ok: true, method: "systemd", tried };
-      }
-      const detail = [
-        `user: ${formatSpawnDetail(userRestart)}`,
-        `system: ${formatSpawnDetail(systemRestart)}`,
-      ].join("; ");
-      return { ok: false, method: "systemd", detail, tried };
+  if (process.platform === "linux") {
+    const unit = normalizeSystemdUnit(
+      process.env.OPENCLAW_SYSTEMD_UNIT,
+      process.env.OPENCLAW_PROFILE,
+    );
+    const userArgs = ["--user", "restart", unit];
+    tried.push(`systemctl ${userArgs.join(" ")}`);
+    const userRestart = spawnSync("systemctl", userArgs, {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    if (!userRestart.error && userRestart.status === 0) {
+      return { ok: true, method: "systemd", tried };
     }
+    const systemArgs = ["restart", unit];
+    tried.push(`systemctl ${systemArgs.join(" ")}`);
+    const systemRestart = spawnSync("systemctl", systemArgs, {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    if (!systemRestart.error && systemRestart.status === 0) {
+      return { ok: true, method: "systemd", tried };
+    }
+    const detail = [
+      `user: ${formatSpawnDetail(userRestart)}`,
+      `system: ${formatSpawnDetail(systemRestart)}`,
+    ].join("; ");
+    return { ok: false, method: "systemd", detail, tried };
+  }
+
+  if (process.platform === "win32") {
+    return relaunchGatewayScheduledTask(process.env);
+  }
+
+  if (process.platform !== "darwin") {
     return {
       ok: false,
       method: "supervisor",
