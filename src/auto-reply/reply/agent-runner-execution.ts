@@ -393,10 +393,14 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts?.onToolStart?.({ name, phase });
                   }
                 }
-                // Track auto-compaction completion
+                // Track auto-compaction and notify user
                 if (evt.stream === "compaction") {
                   const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "end") {
+                  if (phase === "start") {
+                    // Notify the user that compaction is beginning so the
+                    // silence during the compaction pause isn't alarming.
+                    await params.opts?.onBlockReply?.({ text: "🧹 Compacting context..." });
+                  } else if (phase === "end") {
                     autoCompactionCompleted = true;
                   }
                 }
