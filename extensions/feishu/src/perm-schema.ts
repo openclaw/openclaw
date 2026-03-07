@@ -29,12 +29,12 @@ const Permission = Type.Union([
 export const FeishuPermSchema = Type.Union([
   Type.Object({
     action: Type.Literal("list"),
-    token: Type.String({ description: "File token" }),
+    file_token: Type.String({ description: "File token" }),
     type: TokenType,
   }),
   Type.Object({
     action: Type.Literal("add"),
-    token: Type.String({ description: "File token" }),
+    file_token: Type.String({ description: "File token" }),
     type: TokenType,
     member_type: MemberType,
     member_id: Type.String({ description: "Member ID (email, open_id, user_id, etc.)" }),
@@ -42,7 +42,7 @@ export const FeishuPermSchema = Type.Union([
   }),
   Type.Object({
     action: Type.Literal("remove"),
-    token: Type.String({ description: "File token" }),
+    file_token: Type.String({ description: "File token" }),
     type: TokenType,
     member_type: MemberType,
     member_id: Type.String({ description: "Member ID to remove" }),

@@ -97,6 +97,7 @@ pnpm gateway:watch
 ```
 
 `gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
+On native Windows, it automatically switches to a compatible gateway start path.
 
 ### 2) Point the macOS app at your running Gateway
 
