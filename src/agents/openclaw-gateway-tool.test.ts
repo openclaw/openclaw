@@ -12,6 +12,27 @@ vi.mock("./tools/gateway.js", () => ({
     if (method === "config.get") {
       return { hash: "hash-1" };
     }
+    if (method === "config.schema.lookup") {
+      return {
+        path: "gateway.auth",
+        schema: {
+          type: "object",
+        },
+        hint: { label: "Gateway Auth" },
+        hintPath: "gateway.auth",
+        children: [
+          {
+            key: "token",
+            path: "gateway.auth.token",
+            type: "string",
+            required: true,
+            hasChildren: false,
+            hint: { label: "Token", sensitive: true },
+            hintPath: "gateway.auth.token",
+          },
+        ],
+      };
+    }
     return { ok: true };
   }),
   readGatewayCallOptions: vi.fn(() => ({})),
@@ -249,5 +270,37 @@ describe("gateway tool", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
       restartTesting.resetSigusr1State();
     }
+  });
+
+  it("returns a path-scoped schema lookup result", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call5", {
+      action: "config.schema.lookup",
+      path: "gateway.auth",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith("config.schema.lookup", expect.any(Object), {
+      path: "gateway.auth",
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: {
+        path: "gateway.auth",
+        hintPath: "gateway.auth",
+        children: [
+          expect.objectContaining({
+            key: "token",
+            path: "gateway.auth.token",
+            required: true,
+            hintPath: "gateway.auth.token",
+          }),
+        ],
+      },
+    });
+    const schema = (result.details as { result?: { schema?: { properties?: unknown } } }).result
+      ?.schema;
+    expect(schema?.properties).toBeUndefined();
   });
 });
