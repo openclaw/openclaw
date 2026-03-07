@@ -477,18 +477,15 @@ function resolveAnnounceOrigin(
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
   if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
-    // Ignore internal channel hints (webchat) so a valid persisted route
-    // can still be used for outbound delivery. Non-standard channels that
-    // are not in the deliverable list should NOT be stripped here — doing
-    // so causes the session entry's stale lastChannel (often WhatsApp) to
-    // override the actual requester origin, leading to delivery failures.
-    return mergeDeliveryContext(
-      {
-        accountId: normalizedRequester.accountId,
-        threadId: normalizedRequester.threadId,
-      },
-      normalizedEntry,
-    );
+    // Preserve the internal channel (webchat) in the returned origin so
+    // downstream code sees it is not a deliverable channel and avoids
+    // external delivery. Previously, stripping the webchat channel caused
+    // the session entry's stale lastChannel (e.g. Telegram) to be used
+    // for announce delivery — routing the announce to the wrong channel.
+    // We still merge accountId/threadId from the requester, and fill in
+    // any missing fields from the session entry, but the channel stays
+    // "webchat" which isDeliverableMessageChannel correctly rejects.
+    return mergeDeliveryContext(normalizedRequester, normalizedEntry);
   }
   // requesterOrigin (captured at spawn time) reflects the channel the user is
   // actually on and must take priority over the session entry, which may carry
@@ -585,6 +582,12 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  // When the origin channel is internal (webchat), skip external delivery.
+  // Without this guard, the gateway resolves a fallback channel (e.g. the
+  // session's last external channel) and delivers there instead (#38566).
+  const originIsInternal =
+    typeof origin?.channel === "string" && isInternalMessageChannel(origin.channel);
+  const shouldDeliver = !requesterIsSubagent && !originIsInternal;
   const idempotencyKey = buildAnnounceIdempotencyKey(
     resolveQueueAnnounceId({
       announceId: item.announceId,
@@ -601,7 +604,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
       threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      deliver: shouldDeliver,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -767,8 +770,14 @@ async function sendSubagentAnnounceDirectly(params: {
       typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+    // When the origin channel is internal (webchat), never deliver
+    // externally — the announce should stay internal to prevent leaking
+    // to a stale external channel (e.g. Telegram) (#38566).
+    const directOriginIsInternal =
+      typeof directOrigin?.channel === "string" && isInternalMessageChannel(directOrigin.channel);
     const shouldDeliverExternally =
       !params.requesterIsSubagent &&
+      !directOriginIsInternal &&
       (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
 
     const threadId =

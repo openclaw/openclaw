@@ -212,6 +212,8 @@ describe("delivery-queue", () => {
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
       "Outbound not configured for channel: msteams",
+      "Unknown Channel",
+      "DiscordAPIError: Unknown Channel (code 10003)",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
