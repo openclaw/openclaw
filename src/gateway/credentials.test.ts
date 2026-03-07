@@ -446,6 +446,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
     expect(resolved).toEqual({ token: undefined, password: undefined });
   });
+
 });
 
 describe("resolveGatewayCredentialsFromValues", () => {

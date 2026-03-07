@@ -711,7 +711,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfig = readResolution.resolvedConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
-          `Config: missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
         );
       }
       warnOnConfigMiskeys(resolvedConfig, deps.logger);

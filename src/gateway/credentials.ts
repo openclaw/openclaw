@@ -57,8 +57,14 @@ export function trimToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`). */
-function trimCredentialToUndefined(value: unknown): string | undefined {
+/**
+ * Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`).
+ * This prevents literal placeholder strings like `${OPENCLAW_GATEWAY_TOKEN}` from being
+ * accepted as valid credentials when the referenced env var is missing.
+ * Note: legitimate credential values containing literal `${UPPER_CASE}` patterns will
+ * also be rejected, but this is an extremely unlikely edge case.
+ */
+export function trimCredentialToUndefined(value: unknown): string | undefined {
   const trimmed = trimToUndefined(value);
   if (trimmed && containsEnvVarReference(trimmed)) {
     return undefined;
