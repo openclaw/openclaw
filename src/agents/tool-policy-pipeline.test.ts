@@ -45,6 +45,28 @@ describe("tool-policy-pipeline", () => {
     expect(warnings[0]).toContain("unknown entries (wat)");
   });
 
+  test("warns when known core tools are unavailable in the active runtime context", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }, { name: "read" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["read", "apply_patch", "cron"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(warnings).toEqual([
+      "tools: tools.profile (coding) allowlist includes known tools unavailable in this runtime context (apply_patch, cron).",
+    ]);
+  });
+
   test("applies allowlist filtering when core tools are explicitly listed", () => {
     const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({

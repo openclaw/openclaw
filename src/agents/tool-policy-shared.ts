@@ -1,5 +1,6 @@
 import {
   CORE_TOOL_GROUPS,
+  isKnownCoreToolId,
   resolveCoreToolProfilePolicy,
   type ToolProfileId,
 } from "./tool-catalog.js";
@@ -46,4 +47,5 @@ export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | 
   return resolveCoreToolProfilePolicy(profile);
 }
 
+export { isKnownCoreToolId };
 export type { ToolProfileId };
