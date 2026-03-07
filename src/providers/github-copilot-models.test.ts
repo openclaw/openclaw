@@ -11,6 +11,10 @@ describe("github-copilot-models", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
     });
 
+    it("includes gpt-5.4", () => {
+      expect(getDefaultCopilotModelIds()).toContain("gpt-5.4");
+    });
+
     it("returns a mutable copy", () => {
       const a = getDefaultCopilotModelIds();
       const b = getDefaultCopilotModelIds();
