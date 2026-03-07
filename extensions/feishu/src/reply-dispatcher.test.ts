@@ -25,40 +25,27 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", () => ({
-  mergeStreamingText: (previousText: string | undefined, nextText: string | undefined) => {
-    const previous = typeof previousText === "string" ? previousText : "";
-    const next = typeof nextText === "string" ? nextText : "";
-    if (!next) {
-      return previous;
-    }
-    if (!previous || next === previous) {
-      return next;
-    }
-    if (next.startsWith(previous)) {
-      return next;
-    }
-    if (previous.startsWith(next)) {
-      return previous;
-    }
-    return `${previous}${next}`;
-  },
-  FeishuStreamingSession: class {
-    active = false;
-    start = vi.fn(async () => {
-      this.active = true;
-    });
-    update = vi.fn(async () => {});
-    close = vi.fn(async () => {
-      this.active = false;
-    });
-    isActive = vi.fn(() => this.active);
+vi.mock("./streaming-card.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./streaming-card.js")>();
+  return {
+    mergeStreamingText: actual.mergeStreamingText,
+    FeishuStreamingSession: class {
+      active = false;
+      start = vi.fn(async () => {
+        this.active = true;
+      });
+      update = vi.fn(async () => {});
+      close = vi.fn(async () => {
+        this.active = false;
+      });
+      isActive = vi.fn(() => this.active);
 
-    constructor() {
-      streamingInstances.push(this);
-    }
-  },
-}));
+      constructor() {
+        streamingInstances.push(this);
+      }
+    },
+  };
+});
 
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -281,14 +268,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
-    await options.deliver({ text: "```md\n完整回复第一段\n```" }, { kind: "final" });
-    await options.deliver({ text: "```md\n完整回复第一段 + 第二段\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\nFirst part of full reply\n```" }, { kind: "final" });
+    await options.deliver(
+      { text: "```md\nFirst part of full reply + second part\n```" },
+      { kind: "final" },
+    );
 
     expect(streamingInstances).toHaveLength(2);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "```md\nFirst part of full reply\n```",
+    );
     expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(streamingInstances[1].close).toHaveBeenCalledWith(
+      "```md\nFirst part of full reply + second part\n```",
+    );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
@@ -302,12 +296,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
-    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
-    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\nsame reply\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\nsame reply\n```" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\nsame reply\n```");
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
@@ -385,7 +379,38 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("treats block updates as delta chunks", async () => {
+  it("merges block payloads as snapshots to avoid duplication (e.g. ACP coalescer, tool calls)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // Block-only: sequential deltas "hello" + " world" append to "hello world"
+    await options.deliver({ text: "hello" }, { kind: "block" });
+    await options.deliver({ text: " world" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("hello world");
+  });
+
+  it("appends first block when merge would drop it (partial ABCDEF + block ABC)", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -406,13 +431,226 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.onReplyStart?.();
-    await result.replyOptions.onPartialReply?.({ text: "hello" });
-    await options.deliver({ text: "lo world" }, { kind: "block" });
+    await result.replyOptions.onPartialReply?.({ text: "ABCDEF" });
+    await options.deliver({ text: "ABC" }, { kind: "block" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world");
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toBe("ABCDEFABC");
+  });
+
+  it("does not duplicate when block payloads are cumulative (tool-call scenario, #38938)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // Simulate cumulative block payloads from ACP coalescer (e.g. after tool call)
+    await options.deliver({ text: "Looks like" }, { kind: "block" });
+    await options.deliver({ text: "Looks like XX's Actions" }, { kind: "block" });
+    await options.deliver(
+      { text: "Looks like XX's Actions are all fine, last 10 runs succeeded ✅" },
+      { kind: "block" },
+    );
+    await options.deliver(
+      {
+        text: "Looks like XX's Actions are all fine, last 10 runs succeeded ✅\n\nLatest was yesterday (Mar 6) v3.0.2 release, took 4m42s.",
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toContain("Looks like XX's Actions are all fine, last 10 runs succeeded ✅");
+    expect(closedText).toContain("Latest was yesterday (Mar 6) v3.0.2 release, took 4m42s.");
+    expect(closedText).not.toMatch(/Looks like.*Looks like/);
+  });
+
+  it("preserves delta and repeated block chunks from coalescer (no truncation)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // Simulate coalescer output: deltas + repeated chunks (no final payload)
+    await options.deliver({ text: "Hello" }, { kind: "block" });
+    await options.deliver({ text: " world" }, { kind: "block" });
+    await options.deliver({ text: "!" }, { kind: "block" });
+    await options.deliver({ text: "Line 1" }, { kind: "block" });
+    await options.deliver({ text: "Line 1" }, { kind: "block" }); // repeated chunk
+    await options.deliver({ text: "\nLine 2" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toBe("Hello world!Line 1Line 1\nLine 2");
+  });
+
+  it("preserves prior text when block delta starts with previous (abc,abcd->abcabcd)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // mergeStreamingText returns next when next.startsWith(previous); we must append to avoid
+    // truncation (e.g. coalescer emits "abc" then "abcd", full="abcabcd").
+    await options.deliver({ text: "abc" }, { kind: "block" });
+    await options.deliver({ text: "abcd" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toBe("abcabcd");
+  });
+
+  it("preserves longer prefix-matching block deltas (abc,abcXYZ->abcabcXYZ)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // Coalescer emits independent deltas; "abc" then "abcXYZ" must append to "abcabcXYZ".
+    // mergeStreamingText would return "abcXYZ" (next), dropping prior "abc" without this fix.
+    await options.deliver({ text: "abc" }, { kind: "block" });
+    await options.deliver({ text: "abcXYZ" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toBe("abcabcXYZ");
+  });
+
+  it("preserves suffix-overlap block deltas (abcd,bcdx->abcdbcdx)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // mergeStreamingText overlap-merge would produce "abcdx", dropping "bcd". Coalescer emits
+    // independent deltas; we must append to get "abcdbcdx" when onIdle closes with no final.
+    await options.deliver({ text: "abcd" }, { kind: "block" });
+    await options.deliver({ text: "bcdx" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toBe("abcdbcdx");
+  });
+
+  it("preserves non-suffix repeated block deltas (ABC,DEF,ABC)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    // mergeStreamingText would drop "ABC" when previous="ABCDEF" (previous.startsWith(next));
+    // we must append to avoid missing text when onIdle closes with no final payload.
+    await options.deliver({ text: "ABC" }, { kind: "block" });
+    await options.deliver({ text: "DEF" }, { kind: "block" });
+    await options.deliver({ text: "ABC" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closedText = streamingInstances[0].close.mock.calls[0]?.[0] as string;
+    expect(closedText).toBe("ABCDEFABC");
   });
 
   it("sends media-only payloads as attachments", async () => {
