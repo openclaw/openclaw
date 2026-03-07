@@ -120,8 +120,8 @@ describe("acp cli option collisions", () => {
   });
 
   it("rejects mixed password flags and file flags", async () => {
-    await withSecretFiles({ password: "pw_file\n" }, async (files) => {
-      // pragma: allowlist secret
+    const passwordFileValue = "pw_file\n"; // pragma: allowlist secret
+    await withSecretFiles({ password: passwordFileValue }, async (files) => {
       await parseAcp(["--password", "pw_inline", "--password-file", files.passwordFile ?? ""]);
     });
 

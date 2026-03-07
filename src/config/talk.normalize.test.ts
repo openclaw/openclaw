@@ -102,8 +102,8 @@ describe("talk normalization", () => {
 
   it("merges ELEVENLABS_API_KEY into normalized defaults for legacy configs", async () => {
     // pragma: allowlist secret
-    await withEnvAsync({ [elevenLabsApiKeyEnv]: "env-eleven-key" }, async () => {
-      // pragma: allowlist secret
+    const elevenLabsApiKey = "env-eleven-key"; // pragma: allowlist secret
+    await withEnvAsync({ [elevenLabsApiKeyEnv]: elevenLabsApiKey }, async () => {
       await withTempConfig(
         {
           talk: {
@@ -115,16 +115,16 @@ describe("talk normalization", () => {
           const snapshot = await io.readConfigFileSnapshot();
           expect(snapshot.config.talk?.provider).toBe("elevenlabs");
           expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
-          expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe("env-eleven-key");
-          expect(snapshot.config.talk?.apiKey).toBe("env-eleven-key");
+          expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe(elevenLabsApiKey);
+          expect(snapshot.config.talk?.apiKey).toBe(elevenLabsApiKey);
         },
       );
     });
   });
 
   it("does not apply ELEVENLABS_API_KEY when active provider is not elevenlabs", async () => {
-    await withEnvAsync({ [elevenLabsApiKeyEnv]: "env-eleven-key" }, async () => {
-      // pragma: allowlist secret
+    const elevenLabsApiKey = "env-eleven-key"; // pragma: allowlist secret
+    await withEnvAsync({ [elevenLabsApiKeyEnv]: elevenLabsApiKey }, async () => {
       await withTempConfig(
         {
           talk: {
