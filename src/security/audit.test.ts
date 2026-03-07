@@ -2533,6 +2533,47 @@ description: test skill
     });
   });
 
+  it("does not throw when channel account resolution fails on unresolved SecretRef", async () => {
+    const throwingTelegramPlugin = stubChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ config: {} }),
+    });
+
+    Object.assign(throwingTelegramPlugin.config, {
+      inspectAccount: () => ({}),
+      isConfigured: () => {
+        throw new Error(
+          'channels.telegram.accounts.default.botToken: unresolved SecretRef "env:default:TG_TOKEN"',
+        );
+      },
+    });
+
+    const res = await runSecurityAudit({
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [throwingTelegramPlugin],
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "channels.telegram.account.resolve_failed",
+          severity: "warn",
+          detail: expect.stringContaining("unresolved SecretRef"),
+        }),
+      ]),
+    );
+  });
+
   it("adds probe_failed warnings for deep probe failure modes", async () => {
     const cfg: OpenClawConfig = { gateway: { mode: "local" } };
     const cases: Array<{
