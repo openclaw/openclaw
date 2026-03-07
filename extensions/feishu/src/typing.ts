@@ -6,7 +6,7 @@ import { getFeishuRuntime } from "./runtime.js";
 // Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
-const TYPING_EMOJI = "Typing"; // Typing indicator emoji
+const TYPING_EMOJI = "GOTIT"; // [了解] emoji as typing indicator
 
 /**
  * Feishu API error codes that indicate the caller should back off.

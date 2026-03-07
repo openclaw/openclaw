@@ -892,6 +892,24 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
+  // Content-level dedup: Feishu's at-least-once delivery may re-push the same
+  // user message with a DIFFERENT message_id on retries (15s, 5min, 1h, 6h).
+  // Official docs recommend event_id for dedup, but the SDK doesn't expose it.
+  // Fall back to (sender + chat + content hash + 5min window) as a safety net.
+  {
+    const senderId =
+      event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim() || "unknown";
+    const chatId = event.message.chat_id?.trim() || "unknown";
+    const content = event.message.content?.trim() || "";
+    const contentKey = `content:${senderId}:${chatId}:${content}`;
+    if (!tryRecordMessage(contentKey)) {
+      log(
+        `feishu: skipping duplicate message ${messageId} (content dedup: same sender+chat+content within TTL)`,
+      );
+      return;
+    }
+  }
+
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName, log);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
