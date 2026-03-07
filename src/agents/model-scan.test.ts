@@ -85,50 +85,21 @@ describe("scanOpenRouterModels", () => {
 describe("scanCommonstackModels", () => {
   it("lists models without probing", async () => {
     const fetchImpl = createFetchFixture({
-      code: 0,
-      msg: "ok",
-      data: {
-        models: [
-          {
-            ID: "ed056bb9-d522-4f18-bf4c-ef31c8603b36",
-            name: "GPT OSS 120b",
-            model_id: "openai/gpt-oss-120b",
-            description: "GPT oss 120b for coding, reasoning, and agentic tasks",
-            category: "chat",
-            context_length: 400_000,
-            function_calling: false,
-            supported_parameters: ["temperature", "top_p", "max_tokens", "stop"],
-            provider: "OpenAI",
-            runtime_params: [
-              {
-                pricing: {
-                  inputTokenUnitCost: "0.05",
-                  outputTokenUnitCost: "0.25",
-                  cacheCreationInputTokenUnitCost: "0",
-                  cacheReadInputTokenUnitCost: "0.125",
-                },
-              },
-            ],
-          },
-          {
-            ID: "abc123",
-            name: "Claude Sonnet 4.5 dd",
-            model_id: "anthropic/claude-sonnet-4.5-dd",
-            context_length: 200_000,
-            supported_parameters: ["temperature", "max_tokens", "tools"],
-            provider: "Anthropic",
-            runtime_params: [
-              {
-                pricing: {
-                  inputTokenUnitCost: "0",
-                  outputTokenUnitCost: "0",
-                },
-              },
-            ],
-          },
-        ],
-        total: 2,
-      },
+      data: [
+        {
+          created: 1763447647,
+          id: "openai/gpt-oss-120b",
+          object: "model",
+          owned_by: "OpenAI",
+        },
+        {
+          created: 1770383826,
+          id: "anthropic/claude-sonnet-4-5",
+          object: "model",
+          owned_by: "Anthropic",
+        },
+      ],
+      object: "list",
     });
 
     const results = await scanCommonstackModels({
@@ -139,7 +110,7 @@ describe("scanCommonstackModels", () => {
 
     expect(results.map((entry) => entry.id)).toEqual([
       "openai/gpt-oss-120b",
-      "anthropic/claude-sonnet-4.5-dd",
+      "anthropic/claude-sonnet-4-5",
     ]);
 
     const [first, second] = results;
@@ -149,12 +120,10 @@ describe("scanCommonstackModels", () => {
     }
     expect(first.provider).toBe("commonstack");
     expect(first.modelRef).toBe("commonstack/openai/gpt-oss-120b");
-    expect(first.name).toBe("GPT OSS 120b");
-    expect(first.contextLength).toBe(400_000);
-    expect(first.supportsToolsMeta).toBe(false);
-    expect(first.pricing?.prompt).toBe(0.05);
-    expect(first.pricing?.completion).toBe(0.25);
-    expect(first.isFree).toBe(false);
+    expect(first.name).toBe("openai/gpt-oss-120b");
+    expect(first.contextLength).toBeNull();
+    expect(first.pricing).toBeNull();
+    expect(first.createdAtMs).toBe(1763447647000);
     expect(first.tool.skipped).toBe(true);
 
     expect(second).toBeTruthy();
@@ -162,11 +131,11 @@ describe("scanCommonstackModels", () => {
       throw new Error("Expected second model result.");
     }
     expect(second.provider).toBe("commonstack");
-    expect(second.isFree).toBe(true);
+    expect(second.createdAtMs).toBe(1770383826000);
   });
 
   it("requires an API key", async () => {
-    const fetchImpl = createFetchFixture({ code: 0, data: { models: [], total: 0 } });
+    const fetchImpl = createFetchFixture({ data: [], object: "list" });
     const prev = process.env.COMMONSTACK_API_KEY;
     try {
       delete process.env.COMMONSTACK_API_KEY;

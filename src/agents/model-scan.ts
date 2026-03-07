@@ -11,7 +11,7 @@ import { Type } from "@sinclair/typebox";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-const COMMONSTACK_MODELS_URL = "https://api.commonstack.ai/api/v1/ai/public/model/query";
+const COMMONSTACK_MODELS_URL = "https://api.commonstack.ai/api/v1/ai/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
 
@@ -48,20 +48,10 @@ type OpenRouterModelPricing = {
 };
 
 type CommonstackModelMeta = {
-  ID: string;
-  name: string;
-  model_id: string;
-  context_length: number;
-  supported_parameters: string[];
-  provider: string;
-  runtime_params: Array<{
-    pricing: {
-      inputTokenUnitCost: string;
-      outputTokenUnitCost: string;
-      cacheCreationInputTokenUnitCost?: string;
-      cacheReadInputTokenUnitCost?: string;
-    };
-  }>;
+  id: string;
+  created: number | null;
+  object: string;
+  owned_by: string;
 };
 
 export type ProbeResult = {
@@ -526,20 +516,19 @@ async function fetchCommonstackModels(
   apiKey: string,
 ): Promise<CommonstackModelMeta[]> {
   const res = await fetchImpl(COMMONSTACK_MODELS_URL, {
-    method: "POST",
+    method: "GET",
     headers: {
-      "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
     },
-    body: JSON.stringify({ page: 0, limit: 200 }),
   });
 
   if (!res.ok) {
-    throw new Error(`CommonStack /model/query failed: HTTP ${res.status}`);
+    throw new Error(`CommonStack /models failed: HTTP ${res.status}`);
   }
 
-  const payload = (await res.json()) as { data?: { models?: unknown } };
-  const entries = Array.isArray(payload?.data?.models) ? payload.data.models : [];
+  const payload = (await res.json()) as { data?: unknown };
+  const entries = Array.isArray(payload?.data) ? payload.data : [];
 
   return entries
     .map((entry) => {
@@ -547,66 +536,16 @@ async function fetchCommonstackModels(
         return null;
       }
       const obj = entry as Record<string, unknown>;
-      const ID = typeof obj.ID === "string" ? obj.ID.trim() : "";
-      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : "";
-      const model_id =
-        typeof obj.model_id === "string" && obj.model_id.trim() ? obj.model_id.trim() : "";
-      if (!model_id) {
+      const id = typeof obj.id === "string" ? obj.id.trim() : "";
+      if (!id) {
         return null;
       }
-      const context_length =
-        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-          ? obj.context_length
-          : 0;
-      const supported_parameters = Array.isArray(obj.supported_parameters)
-        ? obj.supported_parameters
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : [];
-      const provider =
-        typeof obj.provider === "string" && obj.provider.trim() ? obj.provider.trim() : "";
-      const runtime_params = Array.isArray(obj.runtime_params) ? obj.runtime_params : [];
+      const created =
+        typeof obj.created === "number" && Number.isFinite(obj.created) ? obj.created : null;
+      const object = typeof obj.object === "string" ? obj.object.trim() : "model";
+      const owned_by = typeof obj.owned_by === "string" ? obj.owned_by.trim() : "";
 
-      return {
-        ID,
-        name,
-        model_id,
-        context_length,
-        supported_parameters,
-        provider,
-        runtime_params: runtime_params.map((param) => {
-          if (!param || typeof param !== "object") {
-            return { pricing: { inputTokenUnitCost: "0", outputTokenUnitCost: "0" } };
-          }
-          const paramObj = param as Record<string, unknown>;
-          const pricing = paramObj.pricing as Record<string, unknown> | undefined;
-          const cacheCreationCost =
-            typeof pricing?.cacheCreationInputTokenUnitCost === "string"
-              ? pricing.cacheCreationInputTokenUnitCost
-              : undefined;
-          const cacheReadCost =
-            typeof pricing?.cacheReadInputTokenUnitCost === "string"
-              ? pricing.cacheReadInputTokenUnitCost
-              : undefined;
-          return {
-            pricing: {
-              inputTokenUnitCost:
-                typeof pricing?.inputTokenUnitCost === "string" ? pricing.inputTokenUnitCost : "0",
-              outputTokenUnitCost:
-                typeof pricing?.outputTokenUnitCost === "string"
-                  ? pricing.outputTokenUnitCost
-                  : "0",
-              ...(cacheCreationCost !== undefined
-                ? { cacheCreationInputTokenUnitCost: cacheCreationCost }
-                : {}),
-              ...(cacheReadCost !== undefined
-                ? { cacheReadInputTokenUnitCost: cacheReadCost }
-                : {}),
-            },
-          };
-        }),
-      } satisfies CommonstackModelMeta;
+      return { id, created, object, owned_by } satisfies CommonstackModelMeta;
     })
     .filter((entry): entry is CommonstackModelMeta => Boolean(entry));
 }
@@ -641,11 +580,11 @@ export async function scanCommonstackModels(
     async (entry) => {
       const model: OpenAIModel = {
         ...baseModel,
-        id: entry.model_id,
-        name: entry.name || entry.model_id,
+        id: entry.id,
+        name: entry.id,
         provider: "commonstack",
         baseUrl: "https://api.commonstack.ai/v1",
-        contextWindow: entry.context_length || baseModel.contextWindow,
+        contextWindow: baseModel.contextWindow,
         input: ["text"],
       };
 
@@ -655,34 +594,22 @@ export async function scanCommonstackModels(
 
       const imageResult = { ok: false, latencyMs: null, skipped: true };
 
-      const inputCost = Number.parseFloat(
-        entry.runtime_params[0]?.pricing?.inputTokenUnitCost || "0",
-      );
-      const outputCost = Number.parseFloat(
-        entry.runtime_params[0]?.pricing?.outputTokenUnitCost || "0",
-      );
+      const createdAtMs = entry.created ? entry.created * 1000 : null;
 
       return {
-        id: entry.model_id,
-        name: entry.name,
+        id: entry.id,
+        name: entry.id,
         provider: "commonstack",
-        modelRef: `commonstack/${entry.model_id}`,
-        contextLength: entry.context_length || null,
+        modelRef: `commonstack/${entry.id}`,
+        contextLength: null,
         maxCompletionTokens: null,
-        supportedParametersCount: entry.supported_parameters?.length ?? 0,
-        supportsToolsMeta: entry.supported_parameters?.includes("tools") ?? false,
+        supportedParametersCount: 0,
+        supportsToolsMeta: false,
         modality: "text",
-        inferredParamB: null,
-        createdAtMs: null,
-        pricing: {
-          prompt: inputCost,
-          completion: outputCost,
-          request: 0,
-          image: 0,
-          webSearch: 0,
-          internalReasoning: 0,
-        },
-        isFree: inputCost === 0 && outputCost === 0,
+        inferredParamB: inferParamBFromIdOrName(entry.id),
+        createdAtMs,
+        pricing: null,
+        isFree: false,
         tool: toolResult,
         image: imageResult,
       } satisfies ModelScanResult;
