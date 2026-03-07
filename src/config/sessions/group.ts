@@ -20,6 +20,35 @@ function shortenGroupId(value?: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
+function resolveDiscordChannelIdFromTarget(raw?: string): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutProvider = trimmed.replace(/^discord:/i, "").trim();
+  if (!withoutProvider) {
+    return undefined;
+  }
+  const withoutChannelPrefix = withoutProvider.replace(/^channel:/i, "").trim();
+  if (!withoutChannelPrefix) {
+    return undefined;
+  }
+  // Accept bare numeric IDs and channel-prefixed numeric IDs.
+  return /^\d+$/.test(withoutChannelPrefix) ? withoutChannelPrefix : undefined;
+}
+
+function resolveGroupIdHintFromTargets(ctx: MsgContext, provider?: string): string | undefined {
+  if (provider !== "discord") {
+    return undefined;
+  }
+  return (
+    resolveDiscordChannelIdFromTarget(ctx.ThreadParentId) ??
+    resolveDiscordChannelIdFromTarget(ctx.NativeChannelId) ??
+    resolveDiscordChannelIdFromTarget(ctx.OriginatingTo) ??
+    resolveDiscordChannelIdFromTarget(ctx.To)
+  );
+}
+
 export function buildGroupDisplayName(params: {
   provider?: string;
   subject?: string;
@@ -88,10 +117,13 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     : from.includes(":channel:") || normalizedChatType === "channel"
       ? "channel"
       : "group";
+  const targetHintId = resolveGroupIdHintFromTargets(ctx, provider);
   const id = headIsSurface
     ? secondIsKind
       ? parts.slice(2).join(":")
-      : parts.slice(1).join(":")
+      : kind === "channel"
+        ? (targetHintId ?? parts.slice(1).join(":"))
+        : parts.slice(1).join(":")
     : from;
   const finalId = id.trim().toLowerCase();
   if (!finalId) {
