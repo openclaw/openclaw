@@ -176,6 +176,16 @@ const VLLM_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const SGLANG_BASE_URL = "http://127.0.0.1:30000/v1";
+const SGLANG_DEFAULT_CONTEXT_WINDOW = 128000;
+const SGLANG_DEFAULT_MAX_TOKENS = 8192;
+const SGLANG_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -216,6 +226,12 @@ interface OllamaTagsResponse {
 }
 
 type VllmModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
+
+type SglangModelsResponse = {
   data?: Array<{
     id?: string;
   }>;
@@ -380,6 +396,58 @@ async function discoverVllmModels(
       });
   } catch (error) {
     log.warn(`Failed to discover vLLM models: ${String(error)}`);
+    return [];
+  }
+}
+
+async function discoverSglangModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = apiKey?.trim();
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn(`Failed to discover SGLang models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as SglangModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      log.warn("No SGLang models found on local instance");
+      return [];
+    }
+
+    return models
+      .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "" }))
+      .filter((m) => Boolean(m.id))
+      .map((m) => {
+        const modelId = m.id;
+        const lower = modelId.toLowerCase();
+        const isReasoning =
+          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: SGLANG_DEFAULT_COST,
+          contextWindow: SGLANG_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: SGLANG_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    log.warn(`Failed to discover SGLang models: ${String(error)}`);
     return [];
   }
 }
@@ -841,6 +909,19 @@ async function buildVllmProvider(params?: {
   };
 }
 
+async function buildSglangProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || SGLANG_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverSglangModels(baseUrl, params?.apiKey);
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -1083,6 +1164,23 @@ export async function resolveImplicitProviders(params: {
       providers.vllm = {
         ...(await buildVllmProvider({ apiKey: discoveryApiKey || undefined })),
         apiKey: vllmKey,
+      };
+    }
+  }
+
+  // SGLang provider - OpenAI-compatible local server (opt-in via env/profile).
+  // If explicitly configured, keep user-defined models/settings as-is.
+  if (!params.explicitProviders?.sglang) {
+    const sglangEnvVar = resolveEnvApiKeyVarName("sglang");
+    const sglangProfileKey = resolveApiKeyFromProfiles({ provider: "sglang", store: authStore });
+    const sglangKey = sglangEnvVar ?? sglangProfileKey;
+    if (sglangKey) {
+      const discoveryApiKey = sglangEnvVar
+        ? (process.env[sglangEnvVar]?.trim() ?? "")
+        : (sglangProfileKey ?? "");
+      providers.sglang = {
+        ...(await buildSglangProvider({ apiKey: discoveryApiKey || undefined })),
+        apiKey: sglangKey,
       };
     }
   }

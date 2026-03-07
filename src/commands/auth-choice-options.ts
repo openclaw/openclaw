@@ -48,6 +48,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["vllm"],
   },
   {
+    value: "sglang",
+    label: "SGLang",
+    hint: "Local/self-hosted OpenAI-compatible",
+    choices: ["sglang"],
+  },
+  {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
@@ -226,6 +232,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "vllm",
     label: "vLLM (custom URL + model)",
+    hint: "Local/self-hosted OpenAI-compatible server",
+  },
+  {
+    value: "sglang",
+    label: "SGLang (custom URL + model)",
     hint: "Local/self-hosted OpenAI-compatible server",
   },
   ...buildProviderAuthChoiceOptions(),
