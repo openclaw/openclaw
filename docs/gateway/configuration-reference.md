@@ -914,7 +914,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 | -------------- | ------------------------------- |
 | `opus`         | `anthropic/claude-opus-4-6`     |
 | `sonnet`       | `anthropic/claude-sonnet-4-5`   |
-| `gpt`          | `openai/gpt-5.2`                |
+| `gpt`          | `openai/gpt-5.4`                |
 | `gpt-mini`     | `openai/gpt-5-mini`             |
 | `gemini`       | `google/gemini-3-pro-preview`   |
 | `gemini-flash` | `google/gemini-3-flash-preview` |
