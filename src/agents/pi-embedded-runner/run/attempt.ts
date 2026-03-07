@@ -2396,15 +2396,17 @@ export async function runEmbeddedAttempt(
       // Mutable ref so the wrapper always reads the current iteration count.
       const hookIterationRef = { current: 0 };
 
-      // Wrap streamFn for before_llm_call hooks — must be the outermost
-      // wrapper so it sees the final context after all other transforms.
-      if (hookRunner?.hasHooks("before_llm_call")) {
+      // Wrap streamFn for before_llm_call and after_llm_call hooks — must be
+      // the outermost wrapper so it sees the final context after all other
+      // transforms (before_llm_call) and the complete response (after_llm_call).
+      if (hookRunner?.hasHooks("before_llm_call") || hookRunner?.hasHooks("after_llm_call")) {
         const { wrapStreamFnWithHooks } = await import("./hook-stream-wrapper.js");
         activeSession.agent.streamFn = wrapStreamFnWithHooks(activeSession.agent.streamFn, {
           hookRunner,
           agentCtx: hookCtx,
           iterationRef: hookIterationRef,
           modelId: params.modelId,
+          sessionId: params.sessionId,
         });
       }
 
@@ -2549,16 +2551,22 @@ export async function runEmbeddedAttempt(
         });
       };
 
-      // Track LLM call iteration for hook context.
-      // Subscribes to turn_start to increment the mutable ref that the
-      // streamFn wrapper reads for before_llm_call event.iteration.
-      const hookIterationUnsub = hookRunner?.hasHooks("before_llm_call")
-        ? activeSession.subscribe((event) => {
-            if (event.type === "turn_start") {
-              hookIterationRef.current++;
-            }
-          })
-        : undefined;
+      // Track LLM call iteration and clear after_llm_call gate at turn boundaries.
+      // Subscribes to turn_start to:
+      // 1. Increment the iteration ref for before_llm_call/after_llm_call event.iteration
+      // 2. Clear the after_llm_call gate to prevent stale decisions leaking between turns
+      const hookIterationUnsub =
+        hookRunner?.hasHooks("before_llm_call") || hookRunner?.hasHooks("after_llm_call")
+          ? activeSession.subscribe(async (event) => {
+              if (event.type === "turn_start") {
+                hookIterationRef.current++;
+                if (params.sessionId && hookRunner?.hasHooks("after_llm_call")) {
+                  const { clearAfterLlmCallGate } = await import("./after-llm-call-gate.js");
+                  clearAfterLlmCallGate(params.sessionId);
+                }
+              }
+            })
+          : undefined;
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,

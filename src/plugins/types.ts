@@ -1403,7 +1403,8 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
-  | "before_llm_call";
+  | "before_llm_call"
+  | "after_llm_call";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1432,6 +1433,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_llm_call",
+  "after_llm_call",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -1899,6 +1901,29 @@ export type PluginHookBeforeLlmCallResult = {
   blockReason?: string;
 };
 
+// after_llm_call hook (modifying — sequential)
+// Runs after the LLM response is received. Plugins can block all tool execution
+// or filter individual tool calls. Decisions are stored as a Promise and
+// enforced deterministically by the tool wrapper before each tool executes.
+export type PluginHookAfterLlmCallEvent = {
+  response: AgentMessage;
+  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  iteration: number;
+  model: string;
+  /** Wall-clock LLM call duration. Reserved for future use — not yet populated. */
+  latencyMs?: number;
+  /** Token usage for this call. Reserved for future use — not yet populated. */
+  tokenUsage?: { input: number; output: number };
+};
+
+export type PluginHookAfterLlmCallResult = {
+  /** If true, block ALL tool execution for this turn. */
+  block?: boolean;
+  blockReason?: string;
+  /** Filtered tool calls — only these will be allowed to execute. Omit to allow all. */
+  toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -2005,6 +2030,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeLlmCallEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeLlmCallResult | void> | PluginHookBeforeLlmCallResult | void;
+  after_llm_call: (
+    event: PluginHookAfterLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookAfterLlmCallResult | void> | PluginHookAfterLlmCallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
