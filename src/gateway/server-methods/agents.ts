@@ -165,19 +165,19 @@ async function resolveWorkspaceRealPath(workspaceDir: string): Promise<string> {
   }
 }
 
-/** Normalize a path prefix to end with '/' to prevent prefix collisions. */
-function normalizePrefixPath(p: string): string {
-  return p.endsWith("/") ? p : `${p}/`;
+/**
+ * Return true if `child` is within `parent` (or is `parent` itself).
+ * Uses path.relative() to avoid hardcoded separator assumptions, making
+ * this safe on both POSIX and Windows.
+ */
+function isWithinPath(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-/** Return true if realPath starts with at least one of the normalized prefixes. */
+/** Return true if realPath is within at least one of the allowed prefix directories. */
 function isWithinAllowedPrefixes(realPath: string, prefixes: string[]): boolean {
-  for (const prefix of prefixes) {
-    if (realPath.startsWith(normalizePrefixPath(prefix))) {
-      return true;
-    }
-  }
-  return false;
+  return prefixes.some((prefix) => isWithinPath(realPath, prefix));
 }
 
 /** Merge default + per-agent allowedExternalPaths (union, no duplicates). */
@@ -238,14 +238,14 @@ async function resolveAgentWorkspaceFilePath(params: {
     // Security check before stat: the resolved target must be within the workspace
     // or within an operator-approved external prefix. This prevents reading external
     // files even when they don't exist yet (target ENOENT would otherwise show as "missing").
-    const withinWorkspace = targetReal.startsWith(`${workspaceReal}/`);
+    const withinWorkspace = isWithinPath(targetReal, workspaceReal) && targetReal !== workspaceReal;
     const allowedPrefixes = params.allowedExternalPaths ?? [];
     if (!withinWorkspace && !isWithinAllowedPrefixes(targetReal, allowedPrefixes)) {
       return {
         kind: "invalid",
         requestPath,
         reason:
-          "symlink target is outside workspace root (add the target directory to workspace.allowedExternalPaths to permit)",
+          "symlink target is outside workspace root (add the target directory to workspaceConfig.allowedExternalPaths to permit)",
       };
     }
 
