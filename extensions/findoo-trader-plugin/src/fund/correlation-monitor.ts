@@ -5,6 +5,12 @@ import type { CorrelationPair } from "./types.js";
  * Used to detect overlapping strategies and enforce diversification constraints.
  */
 export class CorrelationMonitor {
+  private readonly threshold: number;
+
+  constructor(threshold = 0.7) {
+    this.threshold = threshold;
+  }
+
   /**
    * Compute pairwise correlations between strategies.
    *
@@ -36,7 +42,7 @@ export class CorrelationMonitor {
         matrix.get(idA)!.set(idB, corr);
         matrix.get(idB)!.set(idA, corr);
 
-        if (Math.abs(corr) >= 0.7) {
+        if (Math.abs(corr) >= this.threshold) {
           highCorrelation.push({
             strategyA: idA,
             strategyB: idB,

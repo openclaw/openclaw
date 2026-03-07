@@ -335,7 +335,32 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     maxPositionPct: riskConfig.maxPositionPct,
   };
 
-  return { ...mc, config, topStrategies, alertSummary, riskDetails };
+  // Pipeline breakdown by level (for Overview dashboard)
+  const pipeline = {
+    l0: strategies.filter((s) => s.level === "L0_INCUBATE").length,
+    l1: strategies.filter((s) => s.level === "L1_BACKTEST").length,
+    l2: strategies.filter((s) => s.level === "L2_PAPER").length,
+    l3: strategies.filter((s) => s.level === "L3_LIVE").length,
+    total: strategies.filter((s) => s.level !== "KILLED").length,
+  };
+
+  // Alpha Factory stats
+  const alphaFactoryService = runtime.services?.get?.("fin-alpha-factory") as
+    | { getStats?: () => Record<string, unknown> }
+    | undefined;
+  const alphaFactory = alphaFactoryService?.getStats?.() ?? {
+    running: false,
+    ideationCount: 0,
+    screeningPassed: 0,
+    screeningFailed: 0,
+    validationPassed: 0,
+    validationFailed: 0,
+    gcKilled: 0,
+    evolutionCycles: 0,
+    lastCycleAt: 0,
+  };
+
+  return { ...mc, config, topStrategies, alertSummary, riskDetails, pipeline, alphaFactory };
 }
 
 /** Gather strategy lab data (strategies + backtests + fund allocations). */

@@ -357,6 +357,41 @@
           </div>
         </div>
 
+        <!-- Alpha Factory Funnel -->
+        <div class="panel-card fade-up d5" id="alphaFactoryCard">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Alpha Factory</div>
+            <span class="card__badge num" id="afStatus">--</span>
+          </div>
+          <div class="pipeline" id="alphaFactoryFunnel" style="justify-content:space-between">
+            <div class="pipe-stage">
+              <div class="pipe-stage__label" style="color:var(--accent)">Screened</div>
+              <div class="pipe-stage__count" id="afScreened">0</div>
+              <div class="pipe-stage__name">passed</div>
+            </div>
+            <div class="pipe-stage">
+              <div class="pipe-stage__label" style="color:var(--warning,#f59e0b)">Failed</div>
+              <div class="pipe-stage__count" id="afScreenFailed">0</div>
+              <div class="pipe-stage__name">screening</div>
+            </div>
+            <div class="pipe-stage">
+              <div class="pipe-stage__label" style="color:var(--l2)">Validated</div>
+              <div class="pipe-stage__count" id="afValidated">0</div>
+              <div class="pipe-stage__name">passed</div>
+            </div>
+            <div class="pipe-stage">
+              <div class="pipe-stage__label" style="color:var(--danger,#ef4444)">GC</div>
+              <div class="pipe-stage__count" id="afGcKilled">0</div>
+              <div class="pipe-stage__name">killed</div>
+            </div>
+            <div class="pipe-stage">
+              <div class="pipe-stage__label" style="color:var(--l3)">Evolved</div>
+              <div class="pipe-stage__count" id="afEvolution">0</div>
+              <div class="pipe-stage__name">cycles</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Row 3: Daily Brief -->
         <div class="panel-card fade-up d5 daily-brief-card" id="dailyBriefCard">
           <div class="panel-card__head">
@@ -789,6 +824,7 @@
           fund: pageData.fund || {},
           config: pageData.config || {},
           topStrategies: pageData.topStrategies || [],
+          alphaFactory: pageData.alphaFactory || null,
           feedFilter: "all",
         };
 
@@ -1222,6 +1258,18 @@
           el.innerHTML = html;
         }
 
+        // ── Render: Alpha Factory ──
+        function renderAlphaFactory(af) {
+          if (!af) return;
+          var s = function(id, v) { var el = $(id); if (el) el.textContent = v; };
+          s("afStatus", af.running ? "Running" : "Stopped");
+          s("afScreened", af.screeningPassed || 0);
+          s("afScreenFailed", af.screeningFailed || 0);
+          s("afValidated", af.validationPassed || 0);
+          s("afGcKilled", af.gcKilled || 0);
+          s("afEvolution", af.evolutionCycles || 0);
+        }
+
         // ── Master render ──
         function renderAll() {
           var t = state.trading || {};
@@ -1244,6 +1292,7 @@
           renderMarketStatus(t);
           renderMacro(t.macro);
           renderDailyBrief(state.events);
+          renderAlphaFactory(state.alphaFactory);
           checkEmptyState(t, state.config);
         }
 

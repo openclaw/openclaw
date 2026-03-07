@@ -31,10 +31,21 @@ export type SettingRouteDeps = {
 export function registerSettingRoutes(deps: SettingRouteDeps): void {
   const { api, registry, healthStore, riskController, eventStore, runtime } = deps;
 
-  // ── POST /api/v1/finance/exchanges — Add exchange ──
+  // ── GET/POST /api/v1/finance/exchanges — List or add exchange ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchanges",
     handler: async (req: HttpReq, res: HttpRes) => {
+      if (req.method === "GET") {
+        const exchanges = registry.listExchanges().map((e) => ({
+          id: e.id,
+          exchange: e.exchange,
+          testnet: e.testnet ?? false,
+        }));
+        const health = healthStore.listAll();
+        jsonResponse(res, 200, { exchanges, health });
+        return;
+      }
       try {
         const body = await parseJsonBody(req);
         const parsed = addExchangeSchema.safeParse(body);
@@ -83,6 +94,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── POST /api/v1/finance/exchanges/:id/test — Test exchange connection ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchanges/test",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -164,6 +176,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── POST /api/v1/finance/exchanges/update — Update exchange credentials ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchanges/update",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -214,6 +227,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
   // ── DELETE /api/v1/finance/exchanges/:id — Remove exchange ──
   // (Using POST with body since some routers don't support DELETE well)
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchanges/remove",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -245,10 +259,15 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
     },
   });
 
-  // ── PUT /api/v1/finance/config/trading — Update risk/trading config ──
+  // ── GET/PUT /api/v1/finance/config/trading — Read or update risk/trading config ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/trading",
     handler: async (req: HttpReq, res: HttpRes) => {
+      if (req.method === "GET") {
+        jsonResponse(res, 200, riskController.getConfig());
+        return;
+      }
       try {
         const body = await parseJsonBody(req);
         const parsed = riskConfigSchema.safeParse(body);
@@ -273,10 +292,18 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
     },
   });
 
-  // ── PUT /api/v1/finance/config/agent — Update agent behavior config ──
+  // ── GET/PUT /api/v1/finance/config/agent — Read or update agent behavior config ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/agent",
     handler: async (req: HttpReq, res: HttpRes) => {
+      if (req.method === "GET") {
+        const configStore = runtime.services?.get?.("fin-agent-config") as
+          | { getConfig?: () => Record<string, unknown> }
+          | undefined;
+        jsonResponse(res, 200, configStore?.getConfig?.() ?? {});
+        return;
+      }
       try {
         const body = await parseJsonBody(req);
         const parsed = agentBehaviorSchema.safeParse(body);
@@ -307,10 +334,18 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
     },
   });
 
-  // ── PUT /api/v1/finance/config/gates — Update promotion gate thresholds ──
+  // ── GET/PUT /api/v1/finance/config/gates — Read or update promotion gate thresholds ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/gates",
     handler: async (req: HttpReq, res: HttpRes) => {
+      if (req.method === "GET") {
+        const configStore = runtime.services?.get?.("fin-gate-config") as
+          | { getConfig?: () => Record<string, unknown> }
+          | undefined;
+        jsonResponse(res, 200, configStore?.getConfig?.() ?? {});
+        return;
+      }
       try {
         const body = await parseJsonBody(req);
         const parsed = promotionGateSchema.safeParse(body);
@@ -343,6 +378,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── PUT /api/v1/finance/config/notifications — Update notification config ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/notifications",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -396,6 +432,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── PUT /api/v1/finance/config/notification-filters — Update notification event filters ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/notification-filters",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -433,6 +470,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── GET /api/v1/finance/config/export — Export full finance configuration ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/export",
     handler: async (_req: HttpReq, res: HttpRes) => {
       try {
@@ -470,6 +508,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── POST /api/v1/finance/config/import — Import finance configuration ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/import",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -534,6 +573,7 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
 
   // ── POST /api/v1/finance/config/reset — Reset all config to defaults ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config/reset",
     handler: async (_req: HttpReq, res: HttpRes) => {
       try {

@@ -65,6 +65,7 @@ export class IdeationEngine {
     snapshot: MarketSnapshot,
     existingStrategyNames: string[],
     maxStrategies: number,
+    failurePatterns?: string,
   ): string {
     const parts: string[] = [];
 
@@ -118,6 +119,12 @@ export class IdeationEngine {
       for (const name of existingStrategyNames) {
         parts.push(`- ${name}`);
       }
+      parts.push("");
+    }
+
+    // Failure feedback (injected by Alpha Factory)
+    if (failurePatterns) {
+      parts.push(failurePatterns);
       parts.push("");
     }
 
