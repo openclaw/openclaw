@@ -13,6 +13,11 @@ export const FeishuChatSchema = Type.Object({
   chat_id: Type.Optional(
     Type.String({ description: "Chat ID (required for members/info, not needed for list)" }),
   ),
+  accountId: Type.Optional(
+    Type.String({
+      description: "Feishu account ID to use (defaults to the calling agent's bound account)",
+    }),
+  ),
   page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
   page_token: Type.Optional(Type.String({ description: "Pagination token" })),
   member_id_type: Type.Optional(

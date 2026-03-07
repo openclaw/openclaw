@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
+import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
+  createFeishuClient: (...args: unknown[]) => createFeishuClientMock(...args),
 }));
 
 describe("registerFeishuChatTools", () => {
@@ -22,35 +23,39 @@ describe("registerFeishuChatTools", () => {
     });
   });
 
-  function registerAndGetTool() {
-    const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret",
-            tools: { chat: true },
+  function registerAndGetTool(agentAccountId?: string) {
+    const { api, resolveTool } = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            default: {
+              appId: "app_default",
+              appSecret: "secret_default",
+            },
+            jim: {
+              appId: "app_jim",
+              appSecret: "secret_jim",
+            },
           },
+          tools: { chat: true },
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
+      },
     } as any);
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    return registerTool.mock.calls[0]?.[0];
+
+    registerFeishuChatTools(api);
+    return resolveTool("feishu_chat", { agentAccountId });
   }
 
   it("registers feishu_chat and handles info/members actions", async () => {
     const tool = registerAndGetTool();
-    expect(tool?.name).toBe("feishu_chat");
+    expect(tool.name).toBe("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
       code: 0,
       data: { name: "group name", user_count: 3 },
     });
-    const infoResult = await tool.execute("tc_1", { action: "info", chat_id: "oc_1" });
+    const infoResult = (await tool.execute("tc_1", { action: "info", chat_id: "oc_1" })) as any;
     expect(infoResult.details).toEqual(
       expect.objectContaining({ chat_id: "oc_1", name: "group name", user_count: 3 }),
     );
@@ -63,7 +68,10 @@ describe("registerFeishuChatTools", () => {
         items: [{ member_id: "ou_1", name: "member1", member_id_type: "open_id" }],
       },
     });
-    const membersResult = await tool.execute("tc_2", { action: "members", chat_id: "oc_1" });
+    const membersResult = (await tool.execute("tc_2", {
+      action: "members",
+      chat_id: "oc_1",
+    })) as any;
     expect(membersResult.details).toEqual(
       expect.objectContaining({
         chat_id: "oc_1",
@@ -73,21 +81,24 @@ describe("registerFeishuChatTools", () => {
   });
 
   it("skips registration when chat tool is disabled", () => {
-    const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret",
-            tools: { chat: false },
+    const { api } = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            default: {
+              appId: "app_id",
+              appSecret: "app_secret",
+              tools: { chat: false },
+            },
           },
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
+      },
     } as any);
+
+    const registerTool = vi.fn();
+    const wrappedApi = { ...api, registerTool };
+    registerFeishuChatTools(wrappedApi as any);
     expect(registerTool).not.toHaveBeenCalled();
   });
 
@@ -116,7 +127,7 @@ describe("registerFeishuChatTools", () => {
       },
     });
 
-    const result = await tool.execute("tc_3", { action: "list" });
+    const result = (await tool.execute("tc_3", { action: "list" })) as any;
     expect(result.details).toEqual({
       has_more: true,
       page_token: "next_page",
@@ -171,19 +182,50 @@ describe("registerFeishuChatTools", () => {
       msg: "permission denied",
     });
 
-    const result = await tool.execute("tc_5", { action: "list" });
+    const result = (await tool.execute("tc_5", { action: "list" })) as any;
     expect(result.details).toEqual({ error: "permission denied" });
   });
 
   it("members action returns error when chat_id is missing", async () => {
     const tool = registerAndGetTool();
-    const result = await tool.execute("tc_6", { action: "members" });
+    const result = (await tool.execute("tc_6", { action: "members" })) as any;
     expect(result.details).toEqual({ error: "chat_id is required for members action" });
   });
 
   it("info action returns error when chat_id is missing", async () => {
     const tool = registerAndGetTool();
-    const result = await tool.execute("tc_7", { action: "info" });
+    const result = (await tool.execute("tc_7", { action: "info" })) as any;
     expect(result.details).toEqual({ error: "chat_id is required for info action" });
+  });
+
+  it("uses agent's bound account for API calls", async () => {
+    const tool = registerAndGetTool("jim");
+
+    chatListMock.mockResolvedValueOnce({
+      code: 0,
+      data: { has_more: false, page_token: "", items: [] },
+    });
+
+    await tool.execute("tc_8", { action: "list" });
+
+    // createFeishuClient should have been called with jim's account credentials
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ appId: "app_jim", appSecret: "secret_jim" }),
+    );
+  });
+
+  it("explicit accountId overrides agent's default account", async () => {
+    const tool = registerAndGetTool("jim");
+
+    chatListMock.mockResolvedValueOnce({
+      code: 0,
+      data: { has_more: false, page_token: "", items: [] },
+    });
+
+    await tool.execute("tc_9", { action: "list", accountId: "default" });
+
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ appId: "app_default", appSecret: "secret_default" }),
+    );
   });
 });
