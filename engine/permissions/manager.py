@@ -73,13 +73,13 @@ class PermissionManager:
                     return PermissionDecision.REQUIRES_APPROVAL
             return PermissionDecision.ALLOWED
         
-        elif risk_level == RiskLevel.ANALYSIS:
+        elif risk_level == RiskLevel.LOW:
             # Analysis agents can perform data processing
             if action_type in [ActionType.HTTP, ActionType.DATABASE]:
                 return PermissionDecision.ALLOWED
             return PermissionDecision.REQUIRES_APPROVAL
         
-        elif risk_level == RiskLevel.AUTOMATION:
+        elif risk_level in [RiskLevel.MEDIUM, RiskLevel.HIGH]:
             # Automation agents can execute most actions
             if action_type in [ActionType.HTTP, ActionType.DATABASE, ActionType.SCRIPT]:
                 return PermissionDecision.ALLOWED
