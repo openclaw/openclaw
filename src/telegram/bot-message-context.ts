@@ -32,7 +32,6 @@ import {
   type StatusReactionController,
 } from "../channels/status-reactions.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type {
   DmPolicy,
@@ -43,6 +42,7 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { transcribeFirstAudio } from "../media-understanding/audio-preflight.js";
 import {
   buildAgentSessionKey,
   pickFirstExistingAgentId,
@@ -213,8 +213,8 @@ export const buildTelegramMessageContext = async ({
     ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
     : resolveTelegramDirectPeerId({ chatId, senderId });
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
-  // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const freshCfg = loadConfig();
+  // Reuse the cfg passed from bot.ts; the config cache already handles staleness.
+  const freshCfg = cfg;
   let route: ResolvedAgentRoute = resolveAgentRoute({
     cfg: freshCfg,
     channel: "telegram",
@@ -521,7 +521,6 @@ export const buildTelegramMessageContext = async ({
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
       // Build a minimal context for transcription
       const tempCtx: MsgContext = {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,

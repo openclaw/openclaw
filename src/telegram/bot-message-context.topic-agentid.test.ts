@@ -144,15 +144,17 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   });
 
   it("falls back to default agent when topic agentId does not exist", async () => {
-    vi.mocked(loadConfig).mockReturnValue({
+    const cfg = {
       agents: {
         list: [{ id: "main", default: true }, { id: "zu" }],
+        defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
       },
       channels: { telegram: {} },
       messages: { groupChat: { mentionPatterns: [] } },
-    } as never);
+    };
 
     const ctx = await buildTelegramMessageContextForTest({
+      cfg,
       message: {
         message_id: 1,
         chat: {

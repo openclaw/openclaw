@@ -62,6 +62,23 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
     .trim();
 }
 
+// Cache Intl.DateTimeFormat instances by timezone to avoid repeated constructor cost (~70us -> ~0.05us).
+const weekdayFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getWeekdayFormatter(timeZone?: string): Intl.DateTimeFormat {
+  const key = timeZone ?? "__local__";
+  let fmt = weekdayFormatterCache.get(key);
+  if (!fmt) {
+    const opts: Intl.DateTimeFormatOptions = { weekday: "short" };
+    if (timeZone) {
+      opts.timeZone = timeZone;
+    }
+    fmt = new Intl.DateTimeFormat("en-US", opts);
+    weekdayFormatterCache.set(key, fmt);
+  }
+  return fmt;
+}
+
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
   return {
@@ -122,15 +139,13 @@ function formatTimestamp(
   // (small models are notoriously unreliable at that).
   const weekday = (() => {
     try {
-      if (zone.mode === "utc") {
-        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
-      }
-      if (zone.mode === "local") {
-        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
-      }
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
-        date,
-      );
+      const formatter =
+        zone.mode === "utc"
+          ? getWeekdayFormatter("UTC")
+          : zone.mode === "local"
+            ? getWeekdayFormatter()
+            : getWeekdayFormatter(zone.timeZone);
+      return formatter.format(date);
     } catch {
       return undefined;
     }
