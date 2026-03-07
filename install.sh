@@ -58,7 +58,8 @@ elif [[ "$PLATFORM" == "macos" ]]; then
         launchctl unload "$PLIST_DST" 2>/dev/null || true
     fi
 
-    cp "$SCRIPT_DIR/scripts/launchd/$PLIST_NAME" "$PLIST_DST"
+    # Replace HOME_PLACEHOLDER with actual home directory
+    sed "s|HOME_PLACEHOLDER|$HOME|g" "$SCRIPT_DIR/scripts/launchd/$PLIST_NAME" > "$PLIST_DST"
     launchctl load "$PLIST_DST"
 
     echo "[chrome-cleanup] launchd agent loaded: com.openclaw.chrome-cleanup"

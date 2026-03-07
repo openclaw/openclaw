@@ -27,11 +27,12 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
 
-    <!-- Redirect stdout/stderr to private log directory (not world-readable /tmp) -->
+    <!-- Redirect stdout/stderr to private log directory (not world-readable /tmp).
+         install.sh replaces HOME_PLACEHOLDER with the actual home directory. -->
     <key>StandardOutPath</key>
-    <string>/Users/USERNAME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.out.log</string>
+    <string>HOME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/USERNAME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.err.log</string>
+    <string>HOME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.err.log</string>
 
     <!-- Run as the current user (LaunchAgent, not LaunchDaemon) -->
     <key>RunAtLoad</key>

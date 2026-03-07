@@ -186,8 +186,8 @@ has_active_cdp() {
         # macOS: use lsof
         lsof -nP -iTCP:"$port" -sTCP:ESTABLISHED 2>/dev/null | grep -q "ESTABLISHED" && return 0
     else
-        # Linux: use ss (ESTAB appears in State column before Local Address:Port)
-        ss -tnp 2>/dev/null | grep -q "ESTAB.*:${port}" && return 0
+        # Linux: use ss; match port in the Local Address column (4th field)
+        ss -tnp 2>/dev/null | awk -v p=":${port}" '$1 == "ESTAB" && index($4, p) { found=1; exit } END { exit !found }' && return 0
     fi
     return 1
 }
