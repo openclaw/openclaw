@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -73,6 +74,16 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Timestamp (ms) for the most recent message-tool send fingerprint (cross-run dedupe). */
+  lastMessagingToolSentAt?: number;
+  /** Session id that produced the most recent message-tool dedupe fingerprint. */
+  lastMessagingToolSessionId?: string;
+  /** Recently sent message-tool text payloads for short-window cross-run dedupe. */
+  lastMessagingToolSentTexts?: string[];
+  /** Recently sent message-tool media urls for short-window cross-run dedupe. */
+  lastMessagingToolSentMediaUrls?: string[];
+  /** Recently sent message-tool routing targets for short-window cross-run dedupe. */
+  lastMessagingToolSentTargets?: MessagingToolSend[];
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
