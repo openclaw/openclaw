@@ -228,7 +228,7 @@ describe("memory search config", () => {
           memorySearch: {
             provider: "openai",
             remote: {
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
               headers: { "X-Default": "on" },
             },
           },

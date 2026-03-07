@@ -93,8 +93,8 @@ describe("acp cli option collisions", () => {
   });
 
   it("loads gateway token/password from files", async () => {
-    // pragma: allowlist secret
     await withSecretFiles({ token: "tok_file\n", [passwordKey()]: "pw_file\n" }, async (files) => {
+      // pragma: allowlist secret
       await parseAcp([
         "--token-file",
         files.tokenFile ?? "",
@@ -121,8 +121,6 @@ describe("acp cli option collisions", () => {
 
   it("rejects mixed password flags and file flags", async () => {
     await withSecretFiles({ password: "pw_file\n" }, async (files) => {
-      // pragma: allowlist secret
-      // pragma: allowlist secret
       // pragma: allowlist secret
       await parseAcp(["--password", "pw_inline", "--password-file", files.passwordFile ?? ""]);
     });

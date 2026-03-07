@@ -165,20 +165,18 @@ describe("shouldRequireGatewayTokenForInstall", () => {
   });
 
   it("requires token in inferred mode when password env exists only in shell", async () => {
-    await withEnvAsync(
-      { [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" },
-      async () => {
-        const required = shouldRequireGatewayTokenForInstall(
-          {
-            gateway: {
-              auth: {},
-            },
-          } as OpenClawConfig,
-          process.env,
-        );
-        expect(required).toBe(true);
-      },
-    );
+    await withEnvAsync({ [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" }, async () => {
+      // pragma: allowlist secret
+      const required = shouldRequireGatewayTokenForInstall(
+        {
+          gateway: {
+            auth: {},
+          },
+        } as OpenClawConfig,
+        process.env,
+      );
+      expect(required).toBe(true);
+    });
   });
 
   it("does not require token in inferred mode when password is configured", () => {

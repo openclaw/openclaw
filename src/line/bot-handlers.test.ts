@@ -354,7 +354,7 @@ describe("handleLineWebhookEvents", () => {
       account: {
         accountId: "work",
         enabled: true,
-        channelAccessToken: "token-work",
+        channelAccessToken: "token-work", // pragma: allowlist secret
         channelSecret: "secret-work", // pragma: allowlist secret
         tokenSource: "config",
         config: { dmPolicy: "pairing" },

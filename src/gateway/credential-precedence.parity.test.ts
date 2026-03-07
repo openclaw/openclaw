@@ -20,7 +20,7 @@ type TestCase = {
 };
 
 const gatewayEnv = {
-  OPENCLAW_GATEWAY_TOKEN: "env-token",
+  OPENCLAW_GATEWAY_TOKEN: "env-token", // pragma: allowlist secret
   OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
 } as NodeJS.ProcessEnv;
 
@@ -82,7 +82,7 @@ describe("gateway credential precedence parity", () => {
         },
       } as OpenClawConfig,
       env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_TOKEN: "env-token", // pragma: allowlist secret
         OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
       expected: {
@@ -128,7 +128,7 @@ describe("gateway credential precedence parity", () => {
         },
       } as OpenClawConfig,
       env: {
-        CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
+        CLAWDBOT_GATEWAY_TOKEN: "legacy-token", // pragma: allowlist secret
         CLAWDBOT_GATEWAY_PASSWORD: "legacy-password", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
       expected: {

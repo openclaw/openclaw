@@ -16,7 +16,7 @@ describe("secrets configure plan helpers", () => {
       },
       channels: {
         telegram: {
-          botToken: "token",
+          botToken: "token", // pragma: allowlist secret
         },
       },
     } as OpenClawConfig;
@@ -125,7 +125,7 @@ describe("secrets configure plan helpers", () => {
           existingRef: {
             source: "env",
             provider: "default",
-            id: "OPENAI_API_KEY",
+            id: "OPENAI_API_KEY", // pragma: allowlist secret
           },
         }),
       ]),
