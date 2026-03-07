@@ -8,6 +8,25 @@ import {
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
+/**
+ * Compute effective sandbox scope from raw config records.
+ * Mirrors `resolveSandboxScope` logic: agent scope > agent perSession > defaults scope > defaults perSession > "agent".
+ */
+function computeEffectiveSandboxScope(
+  agentSandbox: Record<string, unknown> | undefined,
+  defaultsSandbox: Record<string, unknown> | undefined,
+): string {
+  const scope = agentSandbox?.scope ?? defaultsSandbox?.scope;
+  if (typeof scope === "string" && scope.length > 0) {
+    return scope;
+  }
+  const perSession = agentSandbox?.perSession ?? defaultsSandbox?.perSession;
+  if (typeof perSession === "boolean") {
+    return perSession ? "session" : "shared";
+  }
+  return "agent";
+}
+
 type ProviderLike = {
   apiKey?: unknown;
   headers?: unknown;
@@ -439,13 +458,20 @@ function collectAgentSandboxDockerEnvAssignments(params: {
     const env = isRecord(docker?.env) ? docker.env : undefined;
     if (env) {
       const enabled = rawAgent.enabled !== false;
+      const effectiveScope = computeEffectiveSandboxScope(sandbox, defaultsSandbox);
+      // When scope is "shared", agent-level docker settings are ignored by
+      // resolveSandboxDockerConfig, so these refs are never used.
+      const active = enabled && effectiveScope !== "shared";
+      const inactiveReason = !enabled
+        ? "agent is disabled."
+        : "agent sandbox scope is shared; agent-level docker env is ignored.";
       collectSandboxDockerEnvAssignments({
         env,
         pathPrefix: `agents.list.${index}.sandbox.docker.env`,
         defaults: params.defaults,
         context: params.context,
-        active: enabled,
-        inactiveReason: "agent is disabled.",
+        active,
+        inactiveReason,
       });
     }
   });

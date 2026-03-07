@@ -2267,6 +2267,76 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats sandbox.docker.env refs as inactive on shared-scope agents", async () => {
+    const config = asConfig({
+      agents: {
+        list: [
+          {
+            id: "shared-agent",
+            sandbox: {
+              scope: "shared",
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_SHARED_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    // Should not throw — scope is shared, agent-level docker env is ignored
+    expect(
+      (snapshot.config.agents?.list?.[0]?.sandbox?.docker?.env as Record<string, unknown>)?.SECRET,
+    ).toEqual({ source: "env", provider: "default", id: "MISSING_SHARED_SECRET" });
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats sandbox.docker.env refs as inactive when defaults scope is shared", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            scope: "shared",
+          },
+        },
+        list: [
+          {
+            id: "inherits-shared",
+            sandbox: {
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_INHERITED_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
   it("resolves defaults sandbox.docker.env refs even when agents define their own env", async () => {
     // Sandbox env is merged key-by-key (global + agent), not replaced wholesale.
     // Defaults refs must stay active even when agents have their own env maps,
