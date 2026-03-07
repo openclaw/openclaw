@@ -76,8 +76,19 @@ export function ensureMemoryIndexSchema(params: {
 
   ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
   ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  const addedSourceDate = ensureColumn(params.db, "chunks", "source_date", "TEXT");
+  const addedEntities = ensureColumn(params.db, "chunks", "entities", "TEXT");
+
+  // B4: Trigger full reindex when metadata columns are first added,
+  // so existing chunks get source_date/entities backfilled.
+  if (addedSourceDate || addedEntities) {
+    try {
+      params.db.exec(`UPDATE files SET hash = '' WHERE hash != ''`);
+    } catch {}
+  }
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source_date ON chunks(source_date);`);
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
@@ -87,10 +98,11 @@ function ensureColumn(
   table: "files" | "chunks",
   column: string,
   definition: string,
-): void {
+): boolean {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (rows.some((row) => row.name === column)) {
-    return;
+    return false;
   }
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
 }
