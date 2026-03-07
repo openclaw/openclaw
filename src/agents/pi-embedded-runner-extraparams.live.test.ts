@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model, Api } from "@mariozechner/pi-ai";
 import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -101,7 +101,7 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
     oneByOneRedPngBase64: string;
     includeImage?: boolean;
     prompt: string;
-    onPayload?: (payload: Record<string, unknown>) => void;
+    onPayload?: (payload: Record<string, unknown>, model: Model<Api>) => void;
   }): Promise<{ sawDone: boolean; stopReason?: string; errorMessage?: string }> {
     const userContent: Array<
       { type: "text"; text: string } | { type: "image"; mimeType: string; data: string }
@@ -129,8 +129,8 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
         apiKey: params.apiKey,
         reasoning: "high",
         maxTokens: 64,
-        onPayload: (payload) => {
-          params.onPayload?.(payload as Record<string, unknown>);
+        onPayload: (payload, model) => {
+          params.onPayload?.(payload as Record<string, unknown>, model);
         },
       },
     );
@@ -169,7 +169,7 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
       oneByOneRedPngBase64,
       includeImage: true,
       prompt: "What color is this image? Reply with one word.",
-      onPayload: (payload) => {
+      onPayload: (payload, _model) => {
         capturedPayload = payload;
       },
     });
