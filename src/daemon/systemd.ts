@@ -423,7 +423,16 @@ export async function restartSystemdService({
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  const serviceName = resolveSystemdServiceName(args.env ?? {});
+  try {
+    await fs.access(resolveSystemdUnitPath(env));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   const res = await execSystemctlUser(env, ["is-enabled", unitName]);
   if (res.code === 0) {
