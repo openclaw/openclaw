@@ -120,9 +120,9 @@ Example:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
-streaming speech on calls. You can override it under the plugin config with the
-same shape — overrides deep-merge with `messages.tts`.
+Voice Call uses **only** `plugins.entries.voice-call.config.tts` for call speech.
+It does **not** read or merge the core `messages.tts` configuration (which is intended
+for messaging-channel TTS).
 
 ```json5
 {
@@ -130,6 +130,7 @@ same shape — overrides deep-merge with `messages.tts`.
     provider: "openai",
     openai: {
       voice: "alloy",
+      // apiKey can be set here, or via OPENAI_API_KEY
     },
   },
 }
