@@ -104,14 +104,35 @@ describe("delivery-queue", () => {
       });
       expect(entry.payloads).toEqual([{ text: "hello" }]);
 
-      // Ack removes the file.
+      // Ack removes the file (via rename + unlink).
       await ackDelivery(id, tmpDir);
       const remaining = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
       expect(remaining).toHaveLength(0);
+      const delivered = fs.readdirSync(queueDir).filter((f) => f.endsWith(".delivered"));
+      expect(delivered).toHaveLength(0);
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
+    });
+
+    it("loadPendingDeliveries cleans up .delivered markers without re-delivery", async () => {
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "123", payloads: [{ text: "crash test" }] },
+        tmpDir,
+      );
+      // Simulate crash between rename and unlink: manually rename to .delivered
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      fs.renameSync(
+        path.join(queueDir, `${id}.json`),
+        path.join(queueDir, `${id}.delivered`),
+      );
+      // loadPendingDeliveries should clean up the marker and return no entries
+      const { loadPendingDeliveries } = await import("./delivery-queue.js");
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(0);
+      const markers = fs.readdirSync(queueDir).filter((f) => f.endsWith(".delivered"));
+      expect(markers).toHaveLength(0);
     });
   });
 

@@ -107,21 +107,35 @@ export async function enqueueDelivery(
   return id;
 }
 
-/** Remove a successfully delivered entry from the queue. */
+/**
+ * Remove a successfully delivered entry from the queue.
+ *
+ * Uses a two-phase approach for crash safety: first atomically rename
+ * the queue file to a `.delivered` marker, then delete it. If the process
+ * crashes between rename and unlink, the `.delivered` file is cleaned up
+ * on the next startup by {@link loadPendingDeliveries} without re-delivery.
+ */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const queueDir = resolveQueueDir(stateDir);
+  const filePath = path.join(queueDir, `${id}.json`);
+  const deliveredPath = path.join(queueDir, `${id}.delivered`);
   try {
-    await fs.promises.unlink(filePath);
+    // Phase 1: Atomically mark as delivered (rename is atomic on POSIX).
+    await fs.promises.rename(filePath, deliveredPath);
   } catch (err) {
     const code =
       err && typeof err === "object" && "code" in err
         ? String((err as { code?: unknown }).code)
         : null;
-    if (code !== "ENOENT") {
-      throw err;
+    if (code === "ENOENT") {
+      // Already removed or already renamed — try cleaning up the marker.
+      await fs.promises.unlink(deliveredPath).catch(() => {});
+      return;
     }
-    // Already removed — no-op.
+    throw err;
   }
+  // Phase 2: Remove the marker. If this fails, cleanup happens on next startup.
+  await fs.promises.unlink(deliveredPath).catch(() => {});
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -156,6 +170,18 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
     }
     throw err;
   }
+  // Clean up any `.delivered` markers left by a previous crash between
+  // ackDelivery's rename and unlink phases.
+  for (const file of files) {
+    if (file.endsWith(".delivered")) {
+      try {
+        await fs.promises.unlink(path.join(queueDir, file));
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  }
+
   const entries: QueuedDelivery[] = [];
   for (const file of files) {
     if (!file.endsWith(".json")) {
