@@ -619,7 +619,7 @@ export async function compactEmbeddedPiSessionDirect(
         const providerBaseUrl =
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
-        session.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+        session.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl, model.headers);
       }
 
       try {

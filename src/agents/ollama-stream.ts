@@ -557,7 +557,11 @@ export function ensureOllamaApiRegistered(): void {
       typeof model.baseUrl === "string" && model.baseUrl.trim()
         ? model.baseUrl
         : OLLAMA_NATIVE_BASE_URL;
-    return createOllamaStreamFn(baseUrl)(model, context, options);
+    const modelHeaders =
+      typeof (model as { headers?: Record<string, string> }).headers === "object"
+        ? (model as { headers?: Record<string, string> }).headers
+        : undefined;
+    return createOllamaStreamFn(baseUrl, modelHeaders)(model, context, options);
   };
 
   // The SDK's generic types for registerApiProvider don't include "ollama"
