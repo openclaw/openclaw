@@ -170,6 +170,51 @@ describe("AcpSessionManager", () => {
     expect(resolved.error.message).toContain("ACP metadata is missing");
   });
 
+  it("canonicalizes main alias session keys before ACP lookup and runtime rehydrate", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+      if (sessionKey !== "agent:main:main") {
+        return null;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
+      };
+    });
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    await manager.runTurn({
+      cfg,
+      sessionKey: "main",
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-main",
+    });
+
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

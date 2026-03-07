@@ -196,6 +196,32 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("uses canonical ACP session keys returned by the manager", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath, "main");
+      mockConfigWithAcpOverrides(home, storePath, {
+        allowedAgents: ["main"],
+      });
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: () => resolveReadySession("agent:main:acp:test", "main"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "main" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:acp:test",
+          text: "ping",
+        }),
+      );
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

@@ -3,13 +3,19 @@ import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
+import {
+  canonicalizeMainSessionAlias,
+  loadSessionStore,
+  resolveMainSessionKey,
+  resolveStorePath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
 
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
@@ -41,12 +47,40 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   return lower;
 }
 
+function canonicalizeAcpSessionKey(params: { cfg: OpenClawConfig; sessionKey: string }): string {
+  const normalized = params.sessionKey.trim();
+  if (!normalized) {
+    return "";
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
+  }
+  const parsed = parseAgentSessionKey(lowered);
+  if (parsed) {
+    return canonicalizeMainSessionAlias({
+      cfg: params.cfg,
+      agentId: parsed.agentId,
+      sessionKey: lowered,
+    });
+  }
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  if (lowered === "main" || lowered === mainKey) {
+    return resolveMainSessionKey(params.cfg);
+  }
+  return lowered;
+}
+
 export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
 }): { cfg: OpenClawConfig; storePath: string } {
   const cfg = params.cfg ?? loadConfig();
-  const parsed = parseAgentSessionKey(params.sessionKey);
+  const canonicalKey = canonicalizeAcpSessionKey({
+    cfg,
+    sessionKey: params.sessionKey,
+  });
+  const parsed = parseAgentSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: parsed?.agentId,
   });
@@ -57,13 +91,17 @@ export function readAcpSessionEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
 }): AcpSessionStoreEntry | null {
-  const sessionKey = params.sessionKey.trim();
+  const cfg = params.cfg ?? loadConfig();
+  const sessionKey = canonicalizeAcpSessionKey({
+    cfg,
+    sessionKey: params.sessionKey,
+  });
   if (!sessionKey) {
     return null;
   }
-  const { cfg, storePath } = resolveSessionStorePathForAcp({
+  const { storePath } = resolveSessionStorePathForAcp({
     sessionKey,
-    cfg: params.cfg,
+    cfg,
   });
   let store: Record<string, SessionEntry>;
   let storeReadFailed = false;
@@ -128,13 +166,17 @@ export async function upsertAcpSessionMeta(params: {
     entry: SessionEntry | undefined,
   ) => SessionAcpMeta | null | undefined;
 }): Promise<SessionEntry | null> {
-  const sessionKey = params.sessionKey.trim();
+  const cfg = params.cfg ?? loadConfig();
+  const sessionKey = canonicalizeAcpSessionKey({
+    cfg,
+    sessionKey: params.sessionKey,
+  });
   if (!sessionKey) {
     return null;
   }
   const { storePath } = resolveSessionStorePathForAcp({
     sessionKey,
-    cfg: params.cfg,
+    cfg,
   });
   return await updateSessionStore(
     storePath,
