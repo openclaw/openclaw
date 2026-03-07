@@ -198,7 +198,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     )[0]?.[0];
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
     expect(call?.ctx?.Provider).toBe("telegram");
-    expect(call?.sessionKey).toBeDefined();
+    expect(call?.sessionKey).toBe("agent:main:telegram:slash:200");
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
