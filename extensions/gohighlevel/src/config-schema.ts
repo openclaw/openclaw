@@ -17,6 +17,16 @@ const GoHighLevelDmSchema = z
   .strict()
   .optional();
 
+/** Escalation tagging: auto-tag a GHL contact when a reply matches trigger phrases. */
+const GoHighLevelEscalationSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    tag: z.string().optional().default("escalation"),
+    patterns: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 export const GoHighLevelAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -28,6 +38,7 @@ export const GoHighLevelAccountSchemaBase = z
     webhookUrl: z.string().optional(),
     webhookSecret: z.string().optional(),
     dm: GoHighLevelDmSchema,
+    escalation: GoHighLevelEscalationSchema,
     dmPolicy: DmPolicySchema.optional().default("open"),
     groupPolicy: GroupPolicySchema.optional().default("open"),
     allowFrom: z.array(z.string()).optional(),

@@ -14,6 +14,15 @@ export type GHLWebhookPayload = {
   attachments?: GHLAttachment[];
   from?: string;
   to?: string;
+  // GHL Workflow "Customer Replied" webhook fields (snake_case, contact-centric)
+  contact_id?: string;
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
+  email?: string;
+  phone?: string;
+  event_type?: string;
+  location?: { id?: string; name?: string };
 };
 
 export type GHLAttachment = {

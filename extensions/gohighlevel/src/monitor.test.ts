@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { GoHighLevelAccountSchemaBase } from "./config-schema.js";
 
 // Mock the runtime and API before importing
 vi.mock("./runtime.js", () => ({
@@ -96,6 +97,58 @@ function createMockRes(): ServerResponse & { _status: number; _body: string } {
   });
   return res;
 }
+
+describe("escalation config schema", () => {
+  it("accepts escalation config with custom patterns and tag", () => {
+    const result = GoHighLevelAccountSchemaBase.safeParse({
+      escalation: {
+        enabled: true,
+        tag: "needs-human",
+        patterns: ["please hold", "transferring you"],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.escalation?.tag).toBe("needs-human");
+      expect(result.data.escalation?.patterns).toEqual(["please hold", "transferring you"]);
+    }
+  });
+
+  it("defaults escalation.enabled to true when omitted", () => {
+    const result = GoHighLevelAccountSchemaBase.safeParse({
+      escalation: { tag: "custom-tag" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.escalation?.enabled).toBe(true);
+    }
+  });
+
+  it("allows disabling escalation", () => {
+    const result = GoHighLevelAccountSchemaBase.safeParse({
+      escalation: { enabled: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.escalation?.enabled).toBe(false);
+    }
+  });
+
+  it("accepts config without escalation section", () => {
+    const result = GoHighLevelAccountSchemaBase.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.escalation).toBeUndefined();
+    }
+  });
+
+  it("rejects unknown fields inside escalation", () => {
+    const result = GoHighLevelAccountSchemaBase.safeParse({
+      escalation: { unknown: true },
+    });
+    expect(result.success).toBe(false);
+  });
+});
 
 describe("handleGoHighLevelWebhookRequest", () => {
   const account = {

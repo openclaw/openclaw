@@ -142,9 +142,66 @@ export async function handleGoHighLevelWebhookRequest(
   return true;
 }
 
+/**
+ * Normalize a GHL Workflow "Customer Replied" payload into the standard
+ * InboundMessage shape so the rest of the pipeline can handle it uniformly.
+ *
+ * Workflow payloads are contact-centric (snake_case fields, no `direction`,
+ * no `conversationId`). We map them to the canonical format and default
+ * `direction` to `"inbound"` when the event_type signals a customer reply.
+ */
+function normalizeWorkflowPayload(payload: GHLWebhookPayload): void {
+  // Already in standard format
+  if (payload.type === "InboundMessage" || payload.direction === "inbound") {
+    return;
+  }
+
+  // Detect Workflow payload by presence of snake_case fields or event_type
+  const isWorkflow =
+    payload.event_type === "customer.replied" || (payload.contact_id && !payload.contactId);
+
+  if (!isWorkflow) {
+    return;
+  }
+
+  // Map snake_case → camelCase
+  if (!payload.contactId && payload.contact_id) {
+    payload.contactId = payload.contact_id;
+  }
+  // Workflow payloads lack conversationId; use contactId as fallback
+  // (GHL Conversations API accepts contactId for sending)
+  if (!payload.conversationId && payload.contactId) {
+    payload.conversationId = payload.contactId;
+  }
+  if (!payload.from) {
+    payload.from =
+      payload.phone ||
+      payload.full_name ||
+      [payload.first_name, payload.last_name].filter(Boolean).join(" ") ||
+      "";
+  }
+  if (!payload.direction) {
+    payload.direction = "inbound";
+  }
+  if (!payload.messageType) {
+    payload.messageType = "SMS";
+  }
+  if (!payload.locationId && payload.location?.id) {
+    payload.locationId = payload.location.id;
+  }
+}
+
 async function processGHLWebhook(payload: GHLWebhookPayload, target: WebhookTarget) {
+  // Normalize Workflow payloads into the standard InboundMessage shape
+  normalizeWorkflowPayload(payload);
+
   // Only process inbound messages
   if (payload.direction !== "inbound") {
+    logVerbose(
+      target.core,
+      target.runtime,
+      `ignoring non-inbound GHL payload (direction=${payload.direction ?? "undefined"})`,
+    );
     return;
   }
 
@@ -152,12 +209,18 @@ async function processGHLWebhook(payload: GHLWebhookPayload, target: WebhookTarg
   const hasAttachments = (payload.attachments?.length ?? 0) > 0;
   const rawBody = body || (hasAttachments ? "<media:attachment>" : "");
   if (!rawBody) {
+    logVerbose(target.core, target.runtime, `ignoring GHL payload with empty body`);
     return;
   }
 
   const contactId = payload.contactId ?? "";
   const conversationId = payload.conversationId ?? "";
   if (!contactId || !conversationId) {
+    logVerbose(
+      target.core,
+      target.runtime,
+      `ignoring GHL payload without contactId/conversationId`,
+    );
     return;
   }
 
@@ -360,18 +423,31 @@ async function processMessageWithPipeline(params: {
   });
 }
 
-const ESCALATION_PATTERNS = [
+const DEFAULT_ESCALATION_PATTERNS = [
   "let me look into that for you",
   "i'll get back to you shortly",
   "let me check on that",
-  // Legacy patterns in case prompt changes
-  "connect you with robert",
-  "reach him at (619) 602-9713",
 ];
 
-function isEscalationReply(text: string): boolean {
+function resolveEscalationPatterns(account: ResolvedGoHighLevelAccount): string[] {
+  const configured = account.config.escalation?.patterns;
+  if (configured && configured.length > 0) {
+    return configured.map((p) => p.toLowerCase().trim()).filter(Boolean);
+  }
+  return DEFAULT_ESCALATION_PATTERNS;
+}
+
+function resolveEscalationTag(account: ResolvedGoHighLevelAccount): string {
+  return account.config.escalation?.tag?.trim() || "escalation";
+}
+
+function isEscalationEnabled(account: ResolvedGoHighLevelAccount): boolean {
+  return account.config.escalation?.enabled !== false;
+}
+
+function isEscalationReply(text: string, patterns: string[]): boolean {
   const lower = text.toLowerCase();
-  return ESCALATION_PATTERNS.some((p) => lower.includes(p));
+  return patterns.some((p) => lower.includes(p));
 }
 
 async function deliverGHLReply(params: {
@@ -405,11 +481,15 @@ async function deliverGHLReply(params: {
       }
     }
 
-    // Tag contact for escalation when the bot defers to Robert
-    if (isEscalationReply(payload.text)) {
-      addGHLContactTag({ account, contactId, tag: "escalation" }).catch((err) => {
-        runtime.error?.(`GHL escalation tag failed: ${String(err)}`);
-      });
+    // Tag contact for escalation when the reply matches configured trigger phrases
+    if (isEscalationEnabled(account)) {
+      const patterns = resolveEscalationPatterns(account);
+      if (isEscalationReply(payload.text, patterns)) {
+        const tag = resolveEscalationTag(account);
+        addGHLContactTag({ account, contactId, tag }).catch((err) => {
+          runtime.error?.(`GHL escalation tag failed: ${String(err)}`);
+        });
+      }
     }
   }
 }
