@@ -15,7 +15,11 @@ export type {
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
+export {
+  addWildcardAllowFrom,
+  promptAccountId,
+  resolveAccountIdForConfigure,
+} from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type { BaseProbeResult } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
