@@ -697,8 +697,16 @@ export async function runReplyAgent(params: {
           });
       }
 
+      // Always notify the user when compaction completes — not just in verbose
+      // mode. The "🧹 Compacting context..." notice was already sent at start,
+      // so the completion message closes the loop for every user regardless of
+      // their verbose setting.
+      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      verboseNotices.push({ text: `✅ Context compacted${suffix}.` });
       if (verboseEnabled) {
-        const suffix = typeof count === "number" ? ` (count ${count})` : "";
+        // Verbose mode already gets the completion — keep the legacy notice
+        // text only for verbose so power users see the traditional wording.
+        verboseNotices.pop();
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }

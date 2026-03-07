@@ -394,11 +394,17 @@ export async function runAgentTurnWithFallback(params: {
                       await params.opts?.onToolStart?.({ name, phase });
                     }
                   }
-                  // Track auto-compaction completion and notify UI layer.
+                  // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
                     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                     if (phase === "start") {
-                      await params.opts?.onCompactionStart?.();
+                      if (params.opts?.onCompactionStart) {
+                        await params.opts.onCompactionStart();
+                      } else {
+                        // Use the universal in-run block reply path so every
+                        // channel sees a notice while compaction is pausing the run.
+                        await params.opts?.onBlockReply?.({ text: "🧹 Compacting context..." });
+                      }
                     }
                     const completed = evt.data?.completed === true;
                     if (phase === "end" && completed) {
