@@ -308,6 +308,211 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.enabled).toBe(true);
     expect(result.plugins?.deny).toEqual(["denied-plugin"]);
   });
+
+  it("removes channel config for installed extension plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          timbot: { enabled: true },
+        },
+        installs: {
+          timbot: { source: "npm", spec: "timbot@1.0.0" },
+        },
+      },
+      channels: {
+        timbot: { sdkAppId: "123", secretKey: "abc" },
+        telegram: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "timbot");
+
+    expect((result.channels as Record<string, unknown>)?.timbot).toBeUndefined();
+    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not remove channel config for built-in channel without install record", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+      channels: {
+        telegram: { enabled: true },
+        discord: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "telegram");
+
+    // Built-in channels have no install record, so channel config must be preserved.
+    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("cleans up channels object when removing the only channel config", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          timbot: { enabled: true },
+        },
+        installs: {
+          timbot: { source: "npm", spec: "timbot@1.0.0" },
+        },
+      },
+      channels: {
+        timbot: { sdkAppId: "123" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "timbot");
+
+    expect(result.channels).toBeUndefined();
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not set channelConfig action when no channel config exists", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+        installs: {
+          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+        },
+      },
+    };
+
+    const { actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("does not remove channel config when plugin has no install record", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+      channels: {
+        discord: { enabled: true, token: "abc" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "discord");
+
+    // No install record means this is a built-in channel; config must stay.
+    expect((result.channels as Record<string, unknown>)?.discord).toEqual({
+      enabled: true,
+      token: "abc",
+    });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("removes channel config using explicit channelIds when pluginId differs", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "timbot-plugin": { enabled: true },
+        },
+        installs: {
+          "timbot-plugin": { source: "npm", spec: "timbot-plugin@1.0.0" },
+        },
+      },
+      channels: {
+        timbot: { sdkAppId: "123" },
+        "timbot-v2": { sdkAppId: "456" },
+        telegram: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "timbot-plugin", {
+      channelIds: ["timbot", "timbot-v2"],
+    });
+
+    const ch = result.channels as Record<string, unknown> | undefined;
+    expect(ch?.timbot).toBeUndefined();
+    expect(ch?.["timbot-v2"]).toBeUndefined();
+    expect(ch?.telegram).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("preserves shared channel keys (defaults, modelByChannel)", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          timbot: { enabled: true },
+        },
+        installs: {
+          timbot: { source: "npm", spec: "timbot@1.0.0" },
+        },
+      },
+      channels: {
+        defaults: { groupPolicy: "opt-in" },
+        modelByChannel: { timbot: "gpt-3.5" } as Record<string, string>,
+        timbot: { sdkAppId: "123" },
+      } as unknown as OpenClawConfig["channels"],
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "timbot");
+
+    const ch = result.channels as Record<string, unknown> | undefined;
+    expect(ch?.timbot).toBeUndefined();
+    expect(ch?.defaults).toEqual({ groupPolicy: "opt-in" });
+    expect(ch?.modelByChannel).toEqual({ timbot: "gpt-3.5" });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not remove shared keys even when passed as channelIds", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "bad-plugin": { enabled: true },
+        },
+        installs: {
+          "bad-plugin": { source: "npm", spec: "bad-plugin@1.0.0" },
+        },
+      },
+      channels: {
+        defaults: { groupPolicy: "opt-in" },
+      } as unknown as OpenClawConfig["channels"],
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "bad-plugin", {
+      channelIds: ["defaults"],
+    });
+
+    const ch = result.channels as Record<string, unknown> | undefined;
+    expect(ch?.defaults).toEqual({ groupPolicy: "opt-in" });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("skips channel cleanup when channelIds is empty array (non-channel plugin)", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+        installs: {
+          telegram: { source: "npm", spec: "telegram@1.0.0" },
+        },
+      },
+      channels: {
+        telegram: { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "telegram", {
+      channelIds: [],
+    });
+
+    // Empty channelIds means the plugin declares no channels, so channel config must stay.
+    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expect(actions.channelConfig).toBe(false);
+  });
 });
 
 describe("uninstallPlugin", () => {

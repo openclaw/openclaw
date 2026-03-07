@@ -642,6 +642,16 @@ export function registerPluginsCli(program: Command) {
       if (cfg.plugins?.slots?.memory === pluginId) {
         preview.push(`memory slot (will reset to "memory-core")`);
       }
+      const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+      const channelKeysToRemove = channelIds && channelIds.length > 0 ? channelIds : [pluginId];
+      const channels = cfg.channels as Record<string, unknown> | undefined;
+      if (hasInstall && channels) {
+        for (const key of channelKeysToRemove) {
+          if (Object.hasOwn(channels, key)) {
+            preview.push(`channel config (channels.${key})`);
+          }
+        }
+      }
       const deleteTarget = !keepFiles
         ? resolveUninstallDirectoryTarget({
             pluginId,
@@ -676,6 +686,7 @@ export function registerPluginsCli(program: Command) {
       const result = await uninstallPlugin({
         config: cfg,
         pluginId,
+        channelIds,
         deleteFiles: !keepFiles,
         extensionsDir,
       });
@@ -705,6 +716,9 @@ export function registerPluginsCli(program: Command) {
       }
       if (result.actions.memorySlot) {
         removed.push("memory slot");
+      }
+      if (result.actions.channelConfig) {
+        removed.push("channel config");
       }
       if (result.actions.directory) {
         removed.push("directory");
