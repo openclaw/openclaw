@@ -224,6 +224,22 @@ function resolveFeishuDebounceMentions(params: {
   return undefined;
 }
 
+/** Max age (ms) for a message to be considered fresh in a debounce batch.
+ * Messages older than this relative to the newest message in the batch are
+ * dropped and their IDs recorded in dedup so Feishu retries are permanently
+ * ignored. Matches TYPING_INDICATOR_MAX_AGE_MS from reply-dispatcher. */
+const MESSAGE_STALE_AGE_MS = 2 * 60_000;
+const MS_EPOCH_FLOOR = 1_000_000_000_000;
+
+function parseCreateTimeMs(event: FeishuMessageEvent): number | undefined {
+  const raw = event.message.create_time;
+  if (!raw) return undefined;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  // Feishu may send seconds or milliseconds — normalise to ms
+  return n < MS_EPOCH_FLOOR ? n * 1000 : n;
+}
+
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
@@ -335,6 +351,41 @@ function registerEventHandlers(
           freshEntries.push(entry);
         }
       }
+
+      // --- Stale message filtering ---
+      // When the batch contains messages with a large time gap (e.g. network
+      // drop followed by reconnect), drop old messages and record their IDs
+      // in dedup so future Feishu retries are permanently ignored.
+      if (freshEntries.length > 1) {
+        const newestTime = Math.max(
+          ...freshEntries.map((e) => parseCreateTimeMs(e) ?? 0),
+        );
+        if (newestTime > 0) {
+          const staleEntries = freshEntries.filter((e) => {
+            const ct = parseCreateTimeMs(e);
+            return ct !== undefined && newestTime - ct > MESSAGE_STALE_AGE_MS;
+          });
+          if (staleEntries.length > 0 && staleEntries.length < freshEntries.length) {
+            const staleIds = new Set(
+              staleEntries.map((e) => e.message.message_id?.trim()).filter(Boolean),
+            );
+            log(
+              `feishu[${accountId}]: dropping ${staleEntries.length} stale message(s) ` +
+              `superseded by newer messages in debounce batch`,
+            );
+            // Record stale IDs in dedup so Feishu retries are permanently rejected
+            await recordSuppressedMessageIds(staleEntries);
+            // Remove stale entries from the batch
+            for (let i = freshEntries.length - 1; i >= 0; i--) {
+              const mid = freshEntries[i].message.message_id?.trim();
+              if (mid && staleIds.has(mid)) {
+                freshEntries.splice(i, 1);
+              }
+            }
+          }
+        }
+      }
+
       const dispatchEntry = freshEntries.at(-1);
       if (!dispatchEntry) {
         return;
