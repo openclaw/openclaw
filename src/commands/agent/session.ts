@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
@@ -143,6 +144,10 @@ export function resolveSession(opts: {
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !opts.sessionId;
+
+  if (isNewSession && sessionEntry?.sessionId && sessionKey) {
+    clearBootstrapSnapshot(sessionKey);
+  }
 
   const persistedThinking =
     fresh && sessionEntry?.thinkingLevel

@@ -5,6 +5,7 @@ import {
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -358,6 +359,9 @@ export async function initSessionState(params: {
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
   const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  if (previousSessionEntry?.sessionId) {
+    clearBootstrapSnapshot(sessionKey);
+  }
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;

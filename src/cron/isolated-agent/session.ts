@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
@@ -56,6 +57,10 @@ export function resolveCronSession(params: {
     sessionId = crypto.randomUUID();
     isNewSession = true;
     systemSent = false;
+  }
+
+  if (isNewSession && entry?.sessionId) {
+    clearBootstrapSnapshot(params.sessionKey);
   }
 
   const sessionEntry: SessionEntry = {
