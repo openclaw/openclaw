@@ -23,6 +23,18 @@ describe("avatar policy", () => {
     expect(isPathWithinRoot(root, path.resolve("/tmp/root/../outside.png"))).toBe(false);
   });
 
+  it("accepts mixed Windows namespaced paths under the same workspace", () => {
+    const namespacedRoot = "\\\\?\\C:\\Users\\me\\workspace-gaia";
+    const driveRoot = "C:\\Users\\me\\workspace-gaia";
+    const insidePath = "C:\\Users\\me\\workspace-gaia\\avatars\\gaia.png";
+    const namespacedInsidePath = "\\\\?\\C:\\Users\\me\\workspace-gaia\\avatars\\gaia.png";
+    const outsidePath = "C:\\Users\\me\\outside.png";
+
+    expect(isPathWithinRoot(namespacedRoot, insidePath)).toBe(true);
+    expect(isPathWithinRoot(driveRoot, namespacedInsidePath)).toBe(true);
+    expect(isPathWithinRoot(namespacedRoot, outsidePath)).toBe(false);
+  });
+
   it("detects avatar-like path strings", () => {
     expect(looksLikeAvatarPath("avatars/openclaw.svg")).toBe(true);
     expect(looksLikeAvatarPath("openclaw.webp")).toBe(true);

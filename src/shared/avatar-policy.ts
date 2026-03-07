@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -21,6 +22,7 @@ export const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
 export const AVATAR_HTTP_RE = /^https?:\/\//i;
 export const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
+export const WINDOWS_NAMESPACE_PREFIX_RE = /^\\\\\?\\/;
 
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
 
@@ -49,6 +51,10 @@ export function isWindowsAbsolutePath(value: string): boolean {
   return WINDOWS_ABS_RE.test(value);
 }
 
+function usesWindowsPathSemantics(value: string): boolean {
+  return WINDOWS_NAMESPACE_PREFIX_RE.test(value) || isWindowsAbsolutePath(value);
+}
+
 export function isWorkspaceRelativeAvatarPath(value: string): boolean {
   if (!value) {
     return false;
@@ -63,6 +69,20 @@ export function isWorkspaceRelativeAvatarPath(value: string): boolean {
 }
 
 export function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
+  if (
+    process.platform === "win32" ||
+    usesWindowsPathSemantics(rootDir) ||
+    usesWindowsPathSemantics(targetPath)
+  ) {
+    const rootForCompare = normalizeWindowsPathForComparison(path.win32.resolve(rootDir));
+    const targetForCompare = normalizeWindowsPathForComparison(path.win32.resolve(targetPath));
+    const relative = path.win32.relative(rootForCompare, targetForCompare);
+    if (relative === "") {
+      return true;
+    }
+    return !relative.startsWith("..") && !path.win32.isAbsolute(relative);
+  }
+
   const relative = path.relative(rootDir, targetPath);
   if (relative === "") {
     return true;
