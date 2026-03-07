@@ -49,6 +49,8 @@ async function createAdapterHarness(params?: {
 }
 
 describe("createChildAdapter", () => {
+  const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+
   beforeAll(async () => {
     ({ createChildAdapter } = await import("./child.js"));
   });
@@ -56,6 +58,11 @@ describe("createChildAdapter", () => {
   beforeEach(() => {
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
+    if (originalServiceMarker === undefined) {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    } else {
+      process.env.OPENCLAW_SERVICE_MARKER = originalServiceMarker;
+    }
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
@@ -88,6 +95,19 @@ describe("createChildAdapter", () => {
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
     expect(killMock).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("disables detached mode in service-managed runtime", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+
+    await createAdapterHarness({ pid: 7777 });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { detached?: boolean };
+      fallbacks?: Array<{ options?: { detached?: boolean } }>;
+    };
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.fallbacks ?? []).toEqual([]);
   });
 
   it("keeps inherited env when no override env is provided", async () => {
