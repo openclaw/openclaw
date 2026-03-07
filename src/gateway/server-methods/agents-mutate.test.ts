@@ -7,7 +7,9 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
-  listAgentEntries: vi.fn(() => [] as Array<{ agentId: string }>),
+  listAgentEntries: vi.fn(
+    () => [] as Array<{ id: string; workspaceConfig?: { allowedExternalPaths?: string[] } }>,
+  ),
   findAgentEntryIndex: vi.fn(() => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
@@ -675,4 +677,235 @@ describe("agents.files.get/set symlink safety", () => {
       }
     },
   );
+});
+
+describe("agents.files.get allowedExternalPaths", () => {
+  const workspace = "/workspace/test-agent";
+  const candidate = path.resolve(workspace, "AGENTS.md");
+  const externalTarget = "/home/clawd/shared/context.md";
+  const externalTargetStat = makeFileStat({ size: 42, mtimeMs: 9999 });
+
+  function setupExternalSymlink(target: string, targetStat?: ReturnType<typeof makeFileStat>) {
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      if (p === candidate) {
+        return target;
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeSymlinkStat();
+      }
+      // readLocalFileSafely also calls lstat on the resolved (real) path.
+      if (targetStat && p === target) {
+        return targetStat;
+      }
+      throw createEnoentError();
+    });
+    if (targetStat) {
+      mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
+        const p = typeof args[0] === "string" ? args[0] : "";
+        if (p === target) {
+          return targetStat;
+        }
+        throw createEnoentError();
+      });
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+    mocks.fsMkdir.mockResolvedValue(undefined);
+    mocks.fsOpen.mockImplementation(
+      async () =>
+        ({
+          stat: async () => externalTargetStat,
+          readFile: async () => Buffer.from("shared content\n"),
+          truncate: async () => {},
+          writeFile: async () => {},
+          close: async () => {},
+        }) as unknown,
+    );
+  });
+
+  it("allows agents.files.get when symlink resolves within an allowed prefix", async () => {
+    setupExternalSymlink(externalTarget, externalTargetStat);
+    mocks.loadConfigReturn = {
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared/"] } } },
+    };
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: expect.objectContaining({ missing: false, content: "shared content\n" }),
+      }),
+      undefined,
+    );
+  });
+
+  it("rejects agents.files.get when symlink target is outside all allowed prefixes (target exists)", async () => {
+    setupExternalSymlink("/home/clawd/shared-other/secret.txt", externalTargetStat);
+    mocks.loadConfigReturn = {
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared/"] } } },
+    };
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("rejects agents.files.get when symlink target exists but no allowedExternalPaths configured", async () => {
+    setupExternalSymlink(externalTarget, externalTargetStat);
+    mocks.loadConfigReturn = {};
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("rejects agents.files.get when allowedExternalPaths is present but empty", async () => {
+    setupExternalSymlink(externalTarget, externalTargetStat);
+    mocks.loadConfigReturn = {
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: [] } } },
+    };
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("resolves symlink chains fully and allows if final target is within prefix", async () => {
+    // Simulate symlink chain: AGENTS.md -> /tmp/link2 -> /home/clawd/shared/context.md
+    // fs.realpath() resolves the full chain to the final target.
+    const finalTarget = "/home/clawd/shared/context.md";
+    const finalStat = makeFileStat({ size: 55 });
+
+    setupExternalSymlink(finalTarget, finalStat);
+    mocks.loadConfigReturn = {
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared"] } } },
+    };
+    mocks.fsOpen.mockImplementation(
+      async () =>
+        ({
+          stat: async () => finalStat,
+          readFile: async () => Buffer.from("chain content\n"),
+          truncate: async () => {},
+          writeFile: async () => {},
+          close: async () => {},
+        }) as unknown,
+    );
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: expect.objectContaining({ missing: false, content: "chain content\n" }),
+      }),
+      undefined,
+    );
+  });
+
+  it("normalizes prefix without trailing slash to prevent collision attacks", async () => {
+    // '/home/clawd/shared' should NOT match '/home/clawd/shared-other/secret.txt'
+    setupExternalSymlink("/home/clawd/shared-other/secret.txt", externalTargetStat);
+    mocks.loadConfigReturn = {
+      // prefix without trailing slash: normalize to '/home/clawd/shared/'
+      agents: { defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared"] } } },
+    };
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("merges per-agent allowedExternalPaths with defaults", async () => {
+    setupExternalSymlink("/home/clawd/agent-only/doc.md", makeFileStat({ size: 10 }));
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { workspaceConfig: { allowedExternalPaths: ["/home/clawd/shared/"] } },
+        list: [
+          {
+            id: "main",
+            workspaceConfig: { allowedExternalPaths: ["/home/clawd/agent-only/"] },
+          },
+        ],
+      },
+    };
+    // listAgentEntries mock returns the per-agent config
+    mocks.listAgentEntries.mockReturnValue([
+      { id: "main", workspaceConfig: { allowedExternalPaths: ["/home/clawd/agent-only/"] } },
+    ]);
+    mocks.fsOpen.mockImplementation(
+      async () =>
+        ({
+          stat: async () => makeFileStat({ size: 10 }),
+          readFile: async () => Buffer.from("agent doc\n"),
+          truncate: async () => {},
+          writeFile: async () => {},
+          close: async () => {},
+        }) as unknown,
+    );
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: expect.objectContaining({ missing: false, content: "agent doc\n" }),
+      }),
+      undefined,
+    );
+  });
 });

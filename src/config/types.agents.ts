@@ -64,6 +64,13 @@ export type AgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
+  /**
+   * Per-agent workspace security settings. Paths here are unioned with defaults.workspaceConfig.
+   */
+  workspaceConfig?: {
+    /** Additional allowed path prefixes for symlinked context files (merged with defaults). */
+    allowedExternalPaths?: string[];
+  };
   model?: AgentModelConfig;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];

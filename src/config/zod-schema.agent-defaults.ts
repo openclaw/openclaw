@@ -36,6 +36,12 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
+    workspaceConfig: z
+      .object({
+        allowedExternalPaths: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),

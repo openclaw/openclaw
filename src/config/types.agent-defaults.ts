@@ -132,6 +132,19 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
+  /**
+   * Workspace security settings (distinct from the workspace directory path above).
+   * Controls which external paths symlinked context files may resolve into.
+   */
+  workspaceConfig?: {
+    /**
+     * Allowlist of absolute path prefixes. Symlinked workspace context files
+     * whose realpath() resolves within one of these prefixes are permitted.
+     * Paths should end with '/' (e.g. '/home/clawd/shared/').
+     * Applies to all agents unless overridden per-agent (per-agent adds to, not replaces).
+     */
+    allowedExternalPaths?: string[];
+  };
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
