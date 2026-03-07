@@ -400,9 +400,13 @@ run_profile() {
       "openai/gpt-4.1-mini")"
   else
     agent_model="$(set_agent_model "$profile" \
+      "anthropic/claude-opus-4-6" \
+      "claude-opus-4-6" \
       "anthropic/claude-opus-4-5" \
       "claude-opus-4-5")"
     image_model="$(set_image_model "$profile" \
+      "anthropic/claude-opus-4-6" \
+      "claude-opus-4-6" \
       "anthropic/claude-opus-4-5" \
       "claude-opus-4-5")"
   fi

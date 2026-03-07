@@ -34,7 +34,7 @@ openclaw plugins install ./extensions/matrix
 If you choose Matrix during configure/onboarding and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## Setup
 
@@ -74,7 +74,7 @@ Details: [Plugins](/plugin)
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
 5. Restart the gateway (or finish onboarding).
 6. Start a DM with the bot or invite it to a room from any Matrix client
-   (Element, Beeper, etc.; see https://matrix.org/ecosystem/clients/). Beeper requires E2EE,
+   (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requires E2EE,
    so set `channels.matrix.encryption: true` and verify the device.
 
 Minimal config (access token, user ID auto-fetched):
@@ -136,6 +136,47 @@ When E2EE is enabled, the bot will request verification from your other sessions
 Open Element (or another client) and approve the verification request to establish trust.
 Once verified, the bot can decrypt messages in encrypted rooms.
 
+## Multi-account
+
+Multi-account support: use `channels.matrix.accounts` with per-account credentials and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
+Each account runs as a separate Matrix user on any homeserver. Per-account config
+inherits from the top-level `channels.matrix` settings and can override any option
+(DM policy, groups, encryption, etc.).
+
+```json5
+{
+  channels: {
+    matrix: {
+      enabled: true,
+      dm: { policy: "pairing" },
+      accounts: {
+        assistant: {
+          name: "Main assistant",
+          homeserver: "https://matrix.example.org",
+          accessToken: "syt_assistant_***",
+          encryption: true,
+        },
+        alerts: {
+          name: "Alerts bot",
+          homeserver: "https://matrix.example.org",
+          accessToken: "syt_alerts_***",
+          dm: { policy: "allowlist", allowFrom: ["@admin:example.org"] },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Account startup is serialized to avoid race conditions with concurrent module imports.
+- Env variables (`MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, etc.) only apply to the **default** account.
+- Base channel settings (DM policy, group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Use `bindings[].match.accountId` to route each account to a different agent.
+- Crypto state is stored per account + access token (separate key stores per account).
+
 ## Routing model
 
 - Replies always go back to Matrix.
@@ -148,12 +189,14 @@ Once verified, the bot can decrypt messages in encrypted rooms.
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
-- `channels.matrix.dm.allowFrom` accepts user IDs or display names. The wizard resolves display names to user IDs when directory search is available.
+- `channels.matrix.dm.allowFrom` accepts full Matrix user IDs (example: `@user:server`). The wizard resolves display names to user IDs when directory search finds a single exact match.
+- Do not use display names or bare localparts (example: `"Alice"` or `"alice"`). They are ambiguous and are ignored for allowlist matching. Use full `@user:server` IDs.
 
 ## Rooms (groups)
 
 - Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
-- Allowlist rooms with `channels.matrix.groups` (room IDs, aliases, or names):
+- Runtime note: if `channels.matrix` is completely missing, runtime falls back to `groupPolicy="allowlist"` for room checks (even if `channels.defaults.groupPolicy` is set).
+- Allowlist rooms with `channels.matrix.groups` (room IDs or aliases; names are resolved to IDs when directory search finds a single exact match):
 
 ```json5
 {
@@ -172,10 +215,10 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 
 - `requireMention: false` enables auto-reply in that room.
 - `groups."*"` can set defaults for mention gating across rooms.
-- `groupAllowFrom` restricts which senders can trigger the bot in rooms (optional).
-- Per-room `users` allowlists can further restrict senders inside a specific room.
-- The configure wizard prompts for room allowlists (room IDs, aliases, or names) and resolves names when possible.
-- On startup, OpenClaw resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- `groupAllowFrom` restricts which senders can trigger the bot in rooms (full Matrix user IDs).
+- Per-room `users` allowlists can further restrict senders inside a specific room (use full Matrix user IDs).
+- The configure wizard prompts for room allowlists (room IDs, aliases, or names) and resolves names only on an exact, unique match.
+- On startup, OpenClaw resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are ignored for allowlist matching.
 - Invites are auto-joined by default; control with `channels.matrix.autoJoin` and `channels.matrix.autoJoinAllowlist`.
 - To allow **no rooms**, set `channels.matrix.groupPolicy: "disabled"` (or keep an empty allowlist).
 - Legacy key: `channels.matrix.rooms` (same shape as `groups`).
@@ -202,6 +245,32 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 | Location        | ✅ Supported (geo URI; altitude ignored)                                              |
 | Native commands | ✅ Supported                                                                          |
 
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+openclaw channels status --probe
+```
+
+Then confirm DM pairing state if needed:
+
+```bash
+openclaw pairing list matrix
+```
+
+Common failures:
+
+- Logged in but room messages ignored: room blocked by `groupPolicy` or room allowlist.
+- DMs ignored: sender pending approval when `channels.matrix.dm.policy="pairing"`.
+- Encrypted rooms fail: crypto support or encryption settings mismatch.
+
+For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
+
 ## Configuration reference (Matrix)
 
 Full configuration: [Configuration](/gateway/configuration)
@@ -220,9 +289,9 @@ Provider options:
 - `channels.matrix.textChunkLimit`: outbound text chunk size (chars).
 - `channels.matrix.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.matrix.dm.allowFrom`: DM allowlist (user IDs or display names). `open` requires `"*"`. The wizard resolves names to IDs when possible.
+- `channels.matrix.dm.allowFrom`: DM allowlist (full Matrix user IDs). `open` requires `"*"`. The wizard resolves names to IDs when possible.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (default: allowlist).
-- `channels.matrix.groupAllowFrom`: allowlisted senders for group messages.
+- `channels.matrix.groupAllowFrom`: allowlisted senders for group messages (full Matrix user IDs).
 - `channels.matrix.allowlistOnly`: force allowlist rules for DMs + rooms.
 - `channels.matrix.groups`: group allowlist + per-room settings map.
 - `channels.matrix.rooms`: legacy group allowlist/config.
@@ -230,4 +299,5 @@ Provider options:
 - `channels.matrix.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.matrix.autoJoin`: invite handling (`always | allowlist | off`, default: always).
 - `channels.matrix.autoJoinAllowlist`: allowed room IDs/aliases for auto-join.
+- `channels.matrix.accounts`: multi-account configuration keyed by account ID (each account inherits top-level settings).
 - `channels.matrix.actions`: per-action tool gating (reactions/messages/pins/memberInfo/channelInfo).

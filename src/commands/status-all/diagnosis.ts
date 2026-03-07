@@ -1,11 +1,12 @@
 import type { ProgressReporter } from "../../cli/progress.js";
+import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { formatAge, redactSecrets } from "./format.js";
+import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
 type ConfigIssueLike = { path: string; message: string };
@@ -88,7 +89,7 @@ export async function appendStatusAllDiagnosis(params: {
         issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
     );
     for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  - ${issue.path}: ${issue.message}`);
+      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
     }
     if (uniqueIssues.length > 12) {
       lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
@@ -106,7 +107,7 @@ export async function appendStatusAllDiagnosis(params: {
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
     lines.push(
-      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatAge(Date.now() - params.sentinel.payload.ts)}`)}`,
+      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
   } else {
     emitCheck("Restart sentinel: none", "ok");

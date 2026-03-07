@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLineAccount,
-  listLineAccountIds,
   resolveDefaultLineAccountId,
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
@@ -100,62 +99,38 @@ describe("LINE accounts", () => {
     });
   });
 
-  describe("listLineAccountIds", () => {
-    it("returns default account when configured at base level", () => {
+  describe("resolveDefaultLineAccountId", () => {
+    it("prefers channels.line.defaultAccount when configured", () => {
       const cfg: OpenClawConfig = {
         channels: {
           line: {
-            channelAccessToken: "test-token",
-          },
-        },
-      };
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
-    });
-
-    it("returns named accounts", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
+            defaultAccount: "business",
             accounts: {
               business: { enabled: true },
-              personal: { enabled: true },
+              support: { enabled: true },
             },
           },
         },
       };
 
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain("business");
-      expect(ids).toContain("personal");
+      const id = resolveDefaultLineAccountId(cfg);
+      expect(id).toBe("business");
     });
 
-    it("returns default from env", () => {
-      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
-      const cfg: OpenClawConfig = {};
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
-    });
-  });
-
-  describe("resolveDefaultLineAccountId", () => {
-    it("returns default when configured", () => {
+    it("normalizes channels.line.defaultAccount before lookup", () => {
       const cfg: OpenClawConfig = {
         channels: {
           line: {
-            channelAccessToken: "test-token",
+            defaultAccount: "Business Ops",
+            accounts: {
+              "business-ops": { enabled: true },
+            },
           },
         },
       };
 
       const id = resolveDefaultLineAccountId(cfg);
-
-      expect(id).toBe(DEFAULT_ACCOUNT_ID);
+      expect(id).toBe("business-ops");
     });
 
     it("returns first named account when default not configured", () => {
@@ -173,27 +148,27 @@ describe("LINE accounts", () => {
 
       expect(id).toBe("business");
     });
+
+    it("falls back when channels.line.defaultAccount is missing", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            defaultAccount: "missing",
+            accounts: {
+              business: { enabled: true },
+            },
+          },
+        },
+      };
+
+      const id = resolveDefaultLineAccountId(cfg);
+      expect(id).toBe("business");
+    });
   });
 
   describe("normalizeAccountId", () => {
-    it("normalizes undefined to default", () => {
-      expect(normalizeAccountId(undefined)).toBe(DEFAULT_ACCOUNT_ID);
-    });
-
-    it("normalizes 'default' to DEFAULT_ACCOUNT_ID", () => {
-      expect(normalizeAccountId("default")).toBe(DEFAULT_ACCOUNT_ID);
-    });
-
-    it("preserves other account ids", () => {
-      expect(normalizeAccountId("business")).toBe("business");
-    });
-
-    it("lowercases account ids", () => {
-      expect(normalizeAccountId("Business")).toBe("business");
-    });
-
-    it("trims whitespace", () => {
-      expect(normalizeAccountId("  business  ")).toBe("business");
+    it("trims and lowercases account ids", () => {
+      expect(normalizeAccountId("  Business  ")).toBe("business");
     });
   });
 });

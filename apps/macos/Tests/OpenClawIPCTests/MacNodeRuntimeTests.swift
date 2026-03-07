@@ -1,6 +1,6 @@
-import OpenClawKit
 import CoreLocation
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -65,8 +65,14 @@ struct MacNodeRuntimeTests {
                 return (path: url.path, hasAudio: false)
             }
 
-            func locationAuthorizationStatus() -> CLAuthorizationStatus { .authorizedAlways }
-            func locationAccuracyAuthorization() -> CLAccuracyAuthorization { .fullAccuracy }
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .authorizedAlways
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .fullAccuracy
+            }
+
             func currentLocation(
                 desiredAccuracy: OpenClawLocationAccuracy,
                 maxAgeMs: Int?,

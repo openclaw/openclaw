@@ -1,26 +1,26 @@
 ---
 read_when:
   - 学习如何配置 OpenClaw
-  - 查找配置示例
+  - 寻找配置示例
   - 首次设置 OpenClaw
-summary: 常见 OpenClaw 设置的符合 Schema 的配置示例
+summary: 符合模式的常见 OpenClaw 设置配置示例
 title: 配置示例
 x-i18n:
-  generated_at: "2026-02-01T20:26:09Z"
+  generated_at: "2026-02-03T07:48:39Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: 00e9286722653f2748137d5bc641d528b160de16a58015ca7674a3a302f4b2c3
   source_path: gateway/configuration-examples.md
-  workflow: 14
+  workflow: 15
 ---
 
 # 配置示例
 
-以下示例与当前配置 Schema 保持一致。如需完整参考和各字段说明，请参阅[配置](/gateway/configuration)。
+以下示例与当前配置模式一致。有关详尽的参考和每个字段的说明，请参阅[配置](/gateway/configuration)。
 
 ## 快速开始
 
-### 最简配置
+### 绝对最小配置
 
 ```json5
 {
@@ -29,7 +29,7 @@ x-i18n:
 }
 ```
 
-保存到 `~/.openclaw/openclaw.json`，即可从该号码私信机器人。
+保存到 `~/.openclaw/openclaw.json`，你就可以从该号码私信机器人了。
 
 ### 推荐的入门配置
 
@@ -55,11 +55,11 @@ x-i18n:
 
 ## 扩展示例（主要选项）
 
-> JSON5 允许使用注释和尾随逗号。普通 JSON 同样适用。
+> JSON5 允许你使用注释和尾随逗号。普通 JSON 也可以使用。
 
 ```json5
 {
-  // 环境变量 + shell
+  // 环境 + shell
   env: {
     OPENROUTER_API_KEY: "sk-or-...",
     vars: {
@@ -71,7 +71,7 @@ x-i18n:
     },
   },
 
-  // 认证配置文件元数据（密钥存放在 auth-profiles.json 中）
+  // 认证配置文件元数据（密钥存储在 auth-profiles.json 中）
   auth: {
     profiles: {
       "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
@@ -141,7 +141,7 @@ x-i18n:
         maxBytes: 20971520,
         models: [
           { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          // 可选的 CLI 回退（Whisper 二进制文件）：
+          // 可选的 CLI 回退（Whisper 二进制）：
           // { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }
         ],
         timeoutSeconds: 120,
@@ -346,14 +346,14 @@ x-i18n:
     },
   },
 
-  // 定时任务
+  // Cron 作业
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/cron.json",
     maxConcurrentRuns: 2,
   },
 
-  // Webhook
+  // Webhooks
   hooks: {
     enabled: true,
     path: "/hooks",
@@ -393,7 +393,7 @@ x-i18n:
     },
   },
 
-  // Gateway网关 + 网络
+  // Gateway 网关 + 网络
   gateway: {
     mode: "local",
     port: 18789,
@@ -453,7 +453,7 @@ x-i18n:
 }
 ```
 
-### OAuth 加 API 密钥回退
+### OAuth 带 API 密钥回退
 
 ```json5
 {
@@ -522,7 +522,7 @@ x-i18n:
 }
 ```
 
-### 工作机器人（限制访问）
+### 工作机器人（受限访问）
 
 ```json5
 {
@@ -547,7 +547,7 @@ x-i18n:
 }
 ```
 
-### 仅使用本地模型
+### 仅本地模型
 
 ```json5
 {
@@ -581,7 +581,7 @@ x-i18n:
 
 ## 提示
 
-- 如果设置了 `dmPolicy: "open"`，对应的 `allowFrom` 列表必须包含 `"*"`。
-- 各提供商的 ID 格式不同（电话号码、用户 ID、频道 ID）。请查阅对应提供商的文档确认格式。
-- 可稍后添加的可选部分：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。
-- 更详细的设置说明请参阅[提供商](/channels/whatsapp)和[故障排除](/gateway/troubleshooting)。
+- 如果你设置 `dmPolicy: "open"`，匹配的 `allowFrom` 列表必须包含 `"*"`。
+- 提供商 ID 各不相同（电话号码、用户 ID、频道 ID）。使用提供商文档确认格式。
+- 稍后添加的可选部分：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。
+- 参阅[提供商](/channels/whatsapp)和[故障排除](/gateway/troubleshooting)了解更深入的设置说明。

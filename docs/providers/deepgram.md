@@ -15,8 +15,8 @@ When enabled, OpenClaw uploads the audio file to Deepgram and injects the transc
 into the reply pipeline (`{{Transcript}}` + `[Audio]` block). This is **not streaming**;
 it uses the pre-recorded transcription endpoint.
 
-Website: https://deepgram.com  
-Docs: https://developers.deepgram.com
+Website: [https://deepgram.com](https://deepgram.com)  
+Docs: [https://developers.deepgram.com](https://developers.deepgram.com)
 
 ## Quick start
 

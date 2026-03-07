@@ -28,7 +28,7 @@ x-i18n:
 - 任务持久化存储在 `~/.openclaw/cron/` 下，因此重启不会丢失计划。
 - 两种执行方式：
   - **主会话**：入队一个系统事件，然后在下一次心跳时运行。
-  - **隔离式**：在 `cron:<jobId>` 中运行专用智能体轮次，可选择投递输出。
+  - **隔离式**：在 `cron:<jobId>` 中运行专用智能体轮次，可投递摘要（默认 announce）或不投递。
 - 唤醒是一等功能：任务可以请求"立即唤醒"或"下次心跳时"。
 
 ## 快速开始（可操作）
@@ -58,7 +58,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize overnight updates." \
-  --deliver \
+  --announce \
   --channel slack \
   --to "channel:C1234567890"
 ```
@@ -88,7 +88,8 @@ openclaw cron add \
    - 主会话 → `payload.kind = "systemEvent"`
    - 隔离会话 → `payload.kind = "agentTurn"`
 
-可选：`deleteAfterRun: true` 会在一次性任务成功运行后将其从存储中删除。
+可选：一次性任务（`schedule.kind = "at"`）默认会在成功运行后删除。设置
+`deleteAfterRun: false` 可保留它（成功后会禁用）。
 
 ## 概念
 
@@ -103,13 +104,13 @@ openclaw cron add \
 
 任务通过稳定的 `jobId` 标识（用于 CLI/Gateway网关 API）。
 在智能体工具调用中，`jobId` 是规范字段；旧版 `id` 仍可兼容使用。
-任务可以通过 `deleteAfterRun: true` 在一次性任务成功运行后自动删除。
+一次性任务默认会在成功运行后自动删除；设置 `deleteAfterRun: false` 可保留它。
 
 ### 调度计划
 
 定时任务支持三种调度类型：
 
-- `at`：一次性时间戳（自纪元起的毫秒数）。Gateway网关接受 ISO 8601 格式并转换为 UTC。
+- `at`：一次性时间戳（ISO 8601 字符串）。
 - `every`：固定间隔（毫秒）。
 - `cron`：5 字段 cron 表达式，可选 IANA 时区。
 
@@ -134,9 +135,8 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 
 - 提示以 `[cron:<jobId> <任务名称>]` 为前缀，便于追踪。
 - 每次运行都会启动一个**全新的会话 ID**（不继承之前的对话）。
-- 摘要会发布到主会话（前缀 `Cron`，可配置）。
-- `wakeMode: "now"` 在发布摘要后触发立即心跳。
-- 如果 `payload.deliver: true`，输出会投递到渠道；否则保留在内部。
+- 如果未指定 `delivery`，隔离任务会默认以“announce”方式投递摘要。
+- `delivery.mode` 可选 `announce`（投递摘要）或 `none`（内部运行）。
 
 对于嘈杂、频繁或"后台杂务"类任务，使用隔离任务可以避免污染你的主聊天记录。
 
@@ -152,16 +152,6 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 - `message`：必填文本提示。
 - `model` / `thinking`：可选覆盖（见下文）。
 - `timeoutSeconds`：可选超时覆盖。
-- `deliver`：设为 `true` 以将输出发送到渠道目标。
-- `channel`：`last` 或特定渠道。
-- `to`：渠道特定目标（电话/聊天/频道 ID）。
-- `bestEffortDeliver`：投递失败时避免任务失败。
-
-隔离选项（仅适用于 `session=isolated`）：
-
-- `postToMainPrefix`（CLI：`--post-prefix`）：主会话中系统事件的前缀。
-- `postToMainMode`：`summary`（默认）或 `full`。
-- `postToMainMaxChars`：当 `postToMainMode=full` 时的最大字符数（默认 8000）。
 
 ### 模型和思维覆盖
 
@@ -180,18 +170,16 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 
 ### 投递（渠道 + 目标）
 
-隔离任务可以将输出投递到渠道。任务负载可以指定：
+隔离任务可以通过顶层 `delivery` 配置投递输出：
 
-- `channel`：`whatsapp` / `telegram` / `discord` / `slack` / `mattermost`（插件）/ `signal` / `imessage` / `last`
-- `to`：渠道特定的接收目标
+- `delivery.mode`：`announce`（投递摘要）或 `none`
+- `delivery.channel`：`whatsapp` / `telegram` / `discord` / `slack` / `mattermost`（插件）/ `signal` / `imessage` / `last`
+- `delivery.to`：渠道特定的接收目标
+- `delivery.bestEffort`：投递失败时避免任务失败
 
-如果省略 `channel` 或 `to`，定时任务可以回退到主会话的"最后路由"（智能体最后回复的位置）。
+当启用 announce 投递时，该轮次会抑制消息工具发送；请使用 `delivery.channel`/`delivery.to` 来指定目标。
 
-投递说明：
-
-- 如果设置了 `to`，即使省略 `deliver`，定时任务也会自动投递智能体的最终输出。
-- 当你需要最后路由投递但不指定明确 `to` 时，使用 `deliver: true`。
-- 使用 `deliver: false` 即使存在 `to` 也保持输出为内部使用。
+如果省略 `delivery.channel` 或 `delivery.to`，定时任务会回退到主会话的“最后路由”（智能体最后回复的位置）。
 
 目标格式提醒：
 
@@ -212,7 +200,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
 
 ## 工具调用的 JSON 模式
 
-直接调用 Gateway网关 `cron.*` 工具（智能体工具调用或 RPC）时使用这些结构。CLI 标志接受人类可读的时间格式如 `20m`，但工具调用对 `atMs` 和 `everyMs` 使用纪元毫秒数（`at` 时间接受 ISO 时间戳）。
+直接调用 Gateway网关 `cron.*` 工具（智能体工具调用或 RPC）时使用这些结构。CLI 标志接受人类可读的时间格式如 `20m`，但工具调用应使用 ISO 8601 字符串作为 `schedule.at`，并使用毫秒作为 `schedule.everyMs`。
 
 ### cron.add 参数
 
@@ -221,7 +209,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
 ```json
 {
   "name": "Reminder",
-  "schedule": { "kind": "at", "atMs": 1738262400000 },
+  "schedule": { "kind": "at", "at": "2026-02-01T16:00:00Z" },
   "sessionTarget": "main",
   "wakeMode": "now",
   "payload": { "kind": "systemEvent", "text": "Reminder text" },
@@ -239,22 +227,24 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
   "wakeMode": "next-heartbeat",
   "payload": {
     "kind": "agentTurn",
-    "message": "Summarize overnight updates.",
-    "deliver": true,
+    "message": "Summarize overnight updates."
+  },
+  "delivery": {
+    "mode": "announce",
     "channel": "slack",
     "to": "channel:C1234567890",
-    "bestEffortDeliver": true
-  },
-  "isolation": { "postToMainPrefix": "Cron", "postToMainMode": "summary" }
+    "bestEffort": true
+  }
 }
 ```
 
 说明：
 
-- `schedule.kind`：`at`（`atMs`）、`every`（`everyMs`）或 `cron`（`expr`，可选 `tz`）。
-- `atMs` 和 `everyMs` 为纪元毫秒数。
+- `schedule.kind`：`at`（`at`）、`every`（`everyMs`）或 `cron`（`expr`，可选 `tz`）。
+- `schedule.at` 接受 ISO 8601（可省略时区；省略时按 UTC 处理）。
+- `everyMs` 为毫秒数。
 - `sessionTarget` 必须为 `"main"` 或 `"isolated"`，且必须与 `payload.kind` 匹配。
-- 可选字段：`agentId`、`description`、`enabled`、`deleteAfterRun`、`isolation`。
+- 可选字段：`agentId`、`description`、`enabled`、`deleteAfterRun`、`delivery`。
 - `wakeMode` 省略时默认为 `"next-heartbeat"`。
 
 ### cron.update 参数
@@ -341,7 +331,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize inbox + calendar for today." \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```
@@ -355,7 +345,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize today; send to the nightly topic." \
-  --deliver \
+  --announce \
   --channel telegram \
   --to "-1001234567890:topic:123"
 ```
@@ -371,7 +361,7 @@ openclaw cron add \
   --message "Weekly deep analysis of project progress." \
   --model "opus" \
   --thinking high \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```
