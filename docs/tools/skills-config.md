@@ -75,3 +75,24 @@ Use one of:
 - bake the env into your custom sandbox image
 
 Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.
+
+`docker.env` values support SecretRef objects (`{ source, provider, id }`) so
+credentials are resolved at runtime instead of stored as plaintext:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          env: {
+            SKILL_API_KEY: { source: "env", provider: "default", id: "SKILL_API_KEY" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+See [Secrets Management](/gateway/secrets) for env, file, and exec provider setup (including 1Password).

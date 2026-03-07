@@ -214,6 +214,29 @@ Common pitfalls:
 - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
 - Sandbox exec does **not** inherit host `process.env`. Use
   `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
+  Values support SecretRef objects so credentials are never stored as plaintext:
+
+  ```json5
+  {
+    agents: {
+      defaults: {
+        sandbox: {
+          docker: {
+            env: {
+              LANG: "C.UTF-8",
+              // env var reference
+              API_KEY: { source: "env", provider: "default", id: "SANDBOX_API_KEY" },
+              // 1Password CLI via exec provider
+              DB_PASSWORD: { source: "exec", provider: "onepassword_db", id: "value" },
+            },
+          },
+        },
+      },
+    },
+  }
+  ```
+
+  See [Secrets Management](/gateway/secrets) for provider setup.
 
 ## Tool policy + escape hatches
 
