@@ -374,6 +374,7 @@ export {
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigAllowSendTo,
   resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 export {

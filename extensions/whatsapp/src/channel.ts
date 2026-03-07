@@ -22,6 +22,7 @@ import {
   resolveDefaultGroupPolicy,
   resolveWhatsAppAccount,
   resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigAllowSendTo,
   resolveWhatsAppConfigDefaultTo,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupIntroHint,
@@ -114,8 +115,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       linked: Boolean(account.authDir),
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
+      allowSendTo: account.allowSendTo,
     }),
     resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+    resolveAllowSendTo: ({ cfg, accountId }) =>
+      resolveWhatsAppConfigAllowSendTo({ cfg, accountId }),
     formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
     resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
   },
@@ -284,8 +288,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     pollMaxOptions: 12,
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+    resolveTarget: ({ to, allowFrom, allowSendTo, mode }) =>
+      resolveWhatsAppOutboundTarget({ to, allowFrom, allowSendTo, mode }),
     sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
@@ -417,6 +421,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         lastError: runtime?.lastError ?? null,
         dmPolicy: account.dmPolicy,
         allowFrom: account.allowFrom,
+        allowSendTo: account.allowSendTo,
       };
     },
     resolveAccountState: ({ configured }) => (configured ? "linked" : "not linked"),
