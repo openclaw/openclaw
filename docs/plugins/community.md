@@ -49,3 +49,7 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+- **wecom** — OpenClaw Enterprise WeCom Channel Plugin
+  npm: `@yanhaidao/wecom`
+  repo: `https://github.com/TencentCloud-Lighthouse/wecom`
+  install: `openclaw plugins install @yanhaidao/wecom`
