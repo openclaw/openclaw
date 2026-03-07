@@ -66,7 +66,8 @@ describe("CronService", () => {
 
   it("does not spawn duplicate sessions when watchdog recheck timer fires near job completion", async () => {
     // Regression: avoid duplicate isolated spawns from watchdog recheck race.
-    // We force a long-running job so the recheck fires mid-run, then assert only one spawn.
+    // We schedule a one-shot job 60s in the future, then simulate a long-running
+    // job that exceeds the watchdog interval (60s) to trigger recheck mid-run.
     const store = await makeStorePath();
     const runIsolatedAgentJob = vi.fn(async () => {
       // Exceed watchdog interval to trigger recheck while running.
@@ -86,25 +87,26 @@ describe("CronService", () => {
     });
 
     await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
     await cron.add({
       name: "long isolated job",
       enabled: true,
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      schedule: { kind: "at", at: "2025-12-13T00:01:00.000Z" },
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "run task" },
     });
 
-    // Advance time past the job's scheduled fire time.
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-    // Run all pending timers (fires the scheduler tick + watchdog recheck).
-    await vi.runAllTimersAsync();
+    // Advance time to when the job should fire and run all timers.
+    // The job runs for 65s, triggering the watchdog recheck timer during execution.
+    vi.setSystemTime(new Date("2025-12-13T00:01:00.000Z"));
 
-    // The isolated job should have been spawned exactly once.
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-
-    cron.stop();
-    await store.cleanup();
+    try {
+      await vi.runAllTimersAsync();
+      // The isolated job should have been spawned exactly once.
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
   });
 });
