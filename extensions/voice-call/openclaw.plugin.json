@@ -249,6 +249,10 @@
         "type": "integer",
         "minimum": 1
       },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
+      },
       "silenceTimeoutMs": {
         "type": "integer",
         "minimum": 1
@@ -310,6 +314,23 @@
           },
           "allowNgrokFreeTierLoopbackBypass": {
             "type": "boolean"
+          }
+        }
+      },
+      "webhookSecurity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedHosts": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "trustForwardingHeaders": {
+            "type": "boolean"
+          },
+          "trustedProxyIPs": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
           }
         }
       },
