@@ -5,6 +5,10 @@ import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pluginCommandsModule from "../../plugins/commands.js";
 import { createDiscordNativeCommand } from "./native-command.js";
+import {
+  createMockCommandInteraction,
+  type MockCommandInteraction,
+} from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type ResolveConfiguredAcpBindingRecordFn =
@@ -29,52 +33,22 @@ vi.mock("../../acp/persistent-bindings.js", async (importOriginal) => {
   };
 });
 
-type MockCommandInteraction = {
-  user: { id: string; username: string; globalName: string };
-  channel: { type: ChannelType; id: string };
-  guild: { id: string; name?: string } | null;
-  rawData: { id: string; member: { roles: string[] } };
-  options: {
-    getString: ReturnType<typeof vi.fn>;
-    getNumber: ReturnType<typeof vi.fn>;
-    getBoolean: ReturnType<typeof vi.fn>;
-  };
-  reply: ReturnType<typeof vi.fn>;
-  followUp: ReturnType<typeof vi.fn>;
-  client: object;
-};
-
 function createInteraction(params?: {
   channelType?: ChannelType;
   channelId?: string;
   guildId?: string;
   guildName?: string;
 }): MockCommandInteraction {
-  const guild = params?.guildId ? { id: params.guildId, name: params.guildName } : null;
-  return {
-    user: {
-      id: "owner",
-      username: "tester",
-      globalName: "Tester",
-    },
-    channel: {
-      type: params?.channelType ?? ChannelType.DM,
-      id: params?.channelId ?? "dm-1",
-    },
-    guild,
-    rawData: {
-      id: "interaction-1",
-      member: { roles: [] },
-    },
-    options: {
-      getString: vi.fn().mockReturnValue(null),
-      getNumber: vi.fn().mockReturnValue(null),
-      getBoolean: vi.fn().mockReturnValue(null),
-    },
-    reply: vi.fn().mockResolvedValue({ ok: true }),
-    followUp: vi.fn().mockResolvedValue({ ok: true }),
-    client: {},
-  };
+  return createMockCommandInteraction({
+    userId: "owner",
+    username: "tester",
+    globalName: "Tester",
+    channelType: params?.channelType ?? ChannelType.DM,
+    channelId: params?.channelId ?? "dm-1",
+    guildId: params?.guildId ?? null,
+    guildName: params?.guildName,
+    interactionId: "interaction-1",
+  });
 }
 
 function createConfig(): OpenClawConfig {
