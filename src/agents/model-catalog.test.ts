@@ -167,7 +167,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("merges configured models for opted-in non-pi-native providers", async () => {
+  it("merges configured models from custom providers", async () => {
     mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
@@ -203,7 +203,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("does not merge configured models for providers that are not opted in", async () => {
+  it("merges configured models for providers that are not pi-native", async () => {
     mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
@@ -230,9 +230,13 @@ describe("loadModelCatalog", () => {
       } as OpenClawConfig,
     });
 
-    expect(
-      result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
-    ).toBe(false);
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "qianfan",
+        id: "deepseek-v3.2",
+        name: "DEEPSEEK V3.2",
+      }),
+    );
   });
 
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
