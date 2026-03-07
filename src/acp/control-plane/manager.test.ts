@@ -170,6 +170,182 @@ describe("AcpSessionManager", () => {
     expect(resolved.error.message).toContain("ACP metadata is missing");
   });
 
+  it("canonicalizes main alias session keys before ACP lookup and runtime rehydrate", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+      if (sessionKey !== "agent:main:main") {
+        return null;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
+      };
+    });
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    await manager.runTurn({
+      cfg,
+      sessionKey: "main",
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-main",
+    });
+
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        rawSessionKey: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("preserves explicit raw alias keys when ACP turn dispatch is already canonicalized", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        return null;
+      }
+      return {
+        sessionKey: "agent:helper:desk",
+        storeSessionKey: "agent:helper:main",
+        acp: {
+          ...readySessionMeta(),
+          agent: "helper",
+          runtimeSessionName: "legacy-helper-main",
+        },
+      };
+    });
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "desk" },
+      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+    } as OpenClawConfig;
+
+    await manager.runTurn({
+      cfg,
+      sessionKey: "agent:helper:desk",
+      rawSessionKey: "agent:helper:main",
+      text: "after alias preserve",
+      mode: "prompt",
+      requestId: "r-helper-main",
+    });
+
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        rawSessionKey: "agent:helper:main",
+        sessionKey: "agent:helper:desk",
+      }),
+    );
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "helper",
+        sessionKey: "agent:helper:desk",
+      }),
+    );
+  });
+
+  it("reuses legacy store keys for ACP metadata writes after canonical dispatch", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      agent: "helper",
+      runtimeSessionName: "legacy-helper-main",
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        return null;
+      }
+      return {
+        sessionKey: "agent:helper:desk",
+        storeSessionKey: "agent:helper:main",
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey?: string;
+        rawSessionKey?: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        throw new Error("expected ACP metadata writes to preserve the legacy helper alias");
+      }
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-helper-main",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "desk" },
+      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+    } as OpenClawConfig;
+
+    await manager.runTurn({
+      cfg,
+      sessionKey: "agent:helper:desk",
+      rawSessionKey: "agent:helper:main",
+      text: "persist helper alias",
+      mode: "prompt",
+      requestId: "r-helper-write",
+    });
+
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(
+      hoisted.upsertAcpSessionMetaMock.mock.calls.every(
+        ([firstArg]) =>
+          (firstArg as { rawSessionKey?: string }).rawSessionKey === "agent:helper:main",
+      ),
+    ).toBe(true);
+  });
+
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -783,6 +959,82 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("preserves legacy store keys when updating runtime options", async () => {
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        return null;
+      }
+      return {
+        sessionKey: "agent:helper:desk",
+        storeSessionKey: "agent:helper:main",
+        acp: {
+          ...readySessionMeta(),
+          agent: "helper",
+          runtimeSessionName: "legacy-helper-main",
+        },
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey?: string;
+        rawSessionKey?: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      if (
+        params.sessionKey !== "agent:helper:desk" ||
+        params.rawSessionKey !== "agent:helper:main"
+      ) {
+        throw new Error("expected runtime option writes to preserve the legacy helper alias");
+      }
+      return {
+        sessionId: "session-helper-main",
+        updatedAt: Date.now(),
+        acp:
+          params.mutate(
+            {
+              ...readySessionMeta(),
+              agent: "helper",
+              runtimeSessionName: "legacy-helper-main",
+            },
+            {
+              acp: {
+                ...readySessionMeta(),
+                agent: "helper",
+                runtimeSessionName: "legacy-helper-main",
+              },
+            },
+          ) ?? undefined,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "desk" },
+      agents: { list: [{ id: "main", default: true }, { id: "helper" }] },
+    } as OpenClawConfig;
+
+    await manager.updateSessionRuntimeOptions({
+      cfg,
+      sessionKey: "agent:helper:main",
+      patch: { cwd: "/tmp/helper" },
+    });
+
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawSessionKey: "agent:helper:main",
+        sessionKey: "agent:helper:desk",
+      }),
+    );
+  });
+
   it("reapplies persisted controls on next turn after runtime option updates", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -990,6 +1242,97 @@ describe("AcpSessionManager", () => {
     expect(currentMeta.identity?.acpxRecordId).toBe("acpx-record-1");
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-session-1");
     expect(currentMeta.identity?.agentSessionId).toBe("agent-session-1");
+  });
+
+  it("reuses canonical runtime handles after startup reconcile of legacy alias keys", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      acpxRecordId: "acpx-record-1",
+      backendSessionId: "acpx-session-1",
+      agentSessionId: "agent-session-1",
+      details: { status: "alive" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      agent: "main",
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey: "main",
+        storeSessionKey: "main",
+        entry: {
+          sessionId: "session-main",
+          updatedAt: Date.now(),
+          acp: currentMeta,
+        },
+        acp: currentMeta,
+      },
+    ]);
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string; rawSessionKey?: string };
+      if (params.sessionKey !== "agent:main:main" || params.rawSessionKey !== "main") {
+        return null;
+      }
+      return {
+        sessionKey: "agent:main:main",
+        storeSessionKey: "main",
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-main",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const reconcile = await manager.reconcilePendingSessionIdentities({ cfg });
+    await manager.runTurn({
+      cfg,
+      sessionKey: "main",
+      text: "after startup",
+      mode: "prompt",
+      requestId: "run-main",
+    });
+
+    expect(reconcile).toEqual({ checked: 1, resolved: 1, failed: 0 });
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
   });
 
   it("skips startup identity reconciliation for already resolved sessions", async () => {

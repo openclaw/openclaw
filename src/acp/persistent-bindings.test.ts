@@ -446,6 +446,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey,
+      storeSessionKey: sessionKey,
       meta: {
         backend: "acpx",
         agent: "codex",
@@ -480,6 +481,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey,
+      storeSessionKey: sessionKey,
       meta: {
         backend: "acpx",
         agent: "codex",

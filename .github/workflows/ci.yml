@@ -295,6 +295,13 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -313,21 +320,25 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          GHA_REF: ${{ github.ref }}
+          GHA_EVENT_NAME: ${{ github.event_name }}
+          GHA_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GHA_REF" = "refs/heads/main" ]; then
             echo "Skipping detect-secrets on main until the allowlist cleanup lands."
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GHA_EVENT_NAME" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE="$GHA_PR_BASE_SHA"
           changed_files=()
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
@@ -349,13 +360,17 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          GHA_EVENT_NAME: ${{ github.event_name }}
+          GHA_PUSH_BEFORE: ${{ github.event.before }}
+          GHA_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+          if [ "$GHA_EVENT_NAME" = "push" ]; then
+            BASE="$GHA_PUSH_BEFORE"
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="$GHA_PR_BASE_SHA"
           fi
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')

@@ -559,9 +559,10 @@ async function agentCommandInternal(
     }
 
     if (acpResolution?.kind === "ready" && sessionKey) {
+      const acpSessionKey = acpResolution.sessionKey;
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
-        sessionKey,
+        sessionKey: acpSessionKey,
       });
       emitAgentEvent({
         runId,
@@ -580,7 +581,7 @@ async function agentCommandInternal(
           throw dispatchPolicyError;
         }
         const acpAgent = normalizeAgentId(
-          acpResolution.meta.agent || resolveAgentIdFromSessionKey(sessionKey),
+          acpResolution.meta.agent || resolveAgentIdFromSessionKey(acpSessionKey),
         );
         const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
         if (agentPolicyError) {
@@ -589,7 +590,8 @@ async function agentCommandInternal(
 
         await acpManager.runTurn({
           cfg,
-          sessionKey,
+          sessionKey: acpSessionKey,
+          rawSessionKey: sessionKey,
           text: body,
           mode: "prompt",
           requestId: runId,

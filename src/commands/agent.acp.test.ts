@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -96,6 +97,7 @@ function resolveReadySession(
   return {
     kind: "ready",
     sessionKey,
+    storeSessionKey: sessionKey,
     meta: {
       backend: "acpx",
       agent,
@@ -193,6 +195,201 @@ describe("agentCommand ACP runtime routing", () => {
         .mocked(runtime.log)
         .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
       expect(hasAckLog).toBe(true);
+    });
+  });
+
+  it("uses canonical ACP session keys returned by the manager", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath, "main");
+      mockConfigWithAcpOverrides(home, storePath, {
+        allowedAgents: ["main"],
+      });
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: () => resolveReadySession("agent:main:acp:test", "main"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "main" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rawSessionKey: "main",
+          sessionKey: "agent:main:acp:test",
+          text: "ping",
+        }),
+      );
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves raw non-default agent aliases when the manager resolves a canonical ACP key", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify({}, null, 2));
+
+      const cfg = createAcpEnabledConfig(home, storePath);
+      cfg.session = { store: storePath, mainKey: "desk" };
+      cfg.acp = {
+        ...cfg.acp,
+        allowedAgents: ["helper"],
+      };
+      loadConfigSpy.mockReturnValue(cfg);
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: () => resolveReadySession("agent:helper:desk", "helper"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:helper:main" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rawSessionKey: "agent:helper:main",
+          sessionKey: "agent:helper:desk",
+          text: "ping",
+        }),
+      );
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reads ACP metadata from legacy main alias keys before canonical migration", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const now = Date.now();
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            main: {
+              sessionId: "acp-main-legacy",
+              updatedAt: now,
+              acp: {
+                backend: "acpx",
+                agent: "main",
+                runtimeSessionName: "legacy-main",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: now,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const cfg = createAcpEnabledConfig(home, storePath);
+
+      const entry = readAcpSessionEntry({
+        cfg,
+        sessionKey: "main",
+      });
+
+      expect(entry?.sessionKey).toBe("agent:main:main");
+      expect(entry?.storeSessionKey).toBe("main");
+      expect(entry?.acp?.backend).toBe("acpx");
+    });
+  });
+
+  it("clears ACP metadata stored under legacy main alias keys", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const now = Date.now();
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            main: {
+              sessionId: "acp-main-legacy",
+              updatedAt: now,
+              acp: {
+                backend: "acpx",
+                agent: "main",
+                runtimeSessionName: "legacy-main",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: now,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const cfg = createAcpEnabledConfig(home, storePath);
+
+      await upsertAcpSessionMeta({
+        cfg,
+        sessionKey: "main",
+        mutate: () => null,
+      });
+
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as {
+        main?: { acp?: unknown };
+      };
+      expect(store.main?.acp).toBeUndefined();
+    });
+  });
+
+  it("updates ACP metadata in place for legacy non-default main aliases", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const now = Date.now();
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:helper:main": {
+              sessionId: "acp-helper-legacy",
+              updatedAt: now,
+              acp: {
+                backend: "acpx",
+                agent: "helper",
+                runtimeSessionName: "legacy-helper-main",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: now,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const cfg = createAcpEnabledConfig(home, storePath);
+      cfg.session = { store: storePath, mainKey: "desk" };
+      cfg.acp = {
+        ...cfg.acp,
+        allowedAgents: ["helper"],
+      };
+
+      await upsertAcpSessionMeta({
+        cfg,
+        sessionKey: "agent:helper:desk",
+        rawSessionKey: "agent:helper:main",
+        mutate: (current, entry) => ({
+          ...(current ?? entry?.acp),
+          backend: "acpx",
+          agent: "helper",
+          runtimeSessionName: "legacy-helper-main",
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: now + 1,
+        }),
+      });
+
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { acp?: { state?: string } }
+      >;
+      expect(Object.keys(store)).toEqual(["agent:helper:main"]);
+      expect(store["agent:helper:main"]?.acp?.state).toBe("running");
+      expect(store["agent:helper:desk"]).toBeUndefined();
     });
   });
 

@@ -35,6 +35,7 @@ export type AcpSessionResolution =
   | {
       kind: "ready";
       sessionKey: string;
+      storeSessionKey: string;
       meta: SessionAcpMeta;
     };
 
@@ -50,6 +51,7 @@ export type AcpInitializeSessionInput = {
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  rawSessionKey?: string;
   text: string;
   mode: AcpRuntimePromptMode;
   requestId: string;
