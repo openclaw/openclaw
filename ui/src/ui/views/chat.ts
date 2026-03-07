@@ -163,6 +163,98 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve({
+        id: generateAttachmentId(),
+        dataUrl: reader.result as string,
+        mimeType: file.type,
+      });
+    });
+    reader.addEventListener("error", () => {
+      reject(new Error(`Failed to read file: ${file.name}`));
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
+const MAX_FILE_BYTES = 5_000_000; // 5 MB — must match gateway parseMessageWithAttachments maxBytes
+
+function addAttachments(files: File[], props: ChatProps) {
+  const imageFiles = files.filter((f) => f.type.startsWith("image/") && f.size <= MAX_FILE_BYTES);
+  if (imageFiles.length === 0 || !props.onAttachmentsChange) {
+    return;
+  }
+
+  void Promise.allSettled(imageFiles.map((f) => readFileAsDataUrl(f))).then((results) => {
+    const newAttachments = results
+      .filter((r): r is PromiseFulfilledResult<ChatAttachment> => r.status === "fulfilled")
+      .map((r) => r.value);
+    if (newAttachments.length > 0) {
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, ...newAttachments]);
+    }
+  });
+}
+
+function handleFileSelect(e: Event, props: ChatProps) {
+  const input = e.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+
+  addAttachments(Array.from(files), props);
+
+  // Reset so the same file can be re-selected
+  input.value = "";
+}
+
+function handleDragOver(e: DragEvent, props: ChatProps) {
+  if (!props.connected) {
+    return;
+  }
+  if (!e.dataTransfer?.types.includes("Files")) {
+    return; // Only handle file drags, let text drags fall through
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
+  compose?.classList.add("chat-compose--dragover");
+}
+
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
+  // Only remove dragover when leaving the compose area entirely,
+  // not when moving between child elements (e.g. textarea)
+  if (compose && !compose.contains(e.relatedTarget as Node)) {
+    compose.classList.remove("chat-compose--dragover");
+  }
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
+  compose?.classList.remove("chat-compose--dragover");
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) {
+    return; // Let non-file drops (text, URLs) fall through to default behavior
+  }
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (!props.connected) {
+    return;
+  }
+
+  addAttachments(Array.from(files), props);
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -183,25 +275,14 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 
   e.preventDefault();
 
+  const files: File[] = [];
   for (const item of imageItems) {
     const file = item.getAsFile();
-    if (!file) {
-      continue;
+    if (file) {
+      files.push(file);
     }
-
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
   }
+  addAttachments(files, props);
 }
 
 function renderAttachmentPreview(props: ChatProps) {
@@ -421,9 +502,36 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div
+        class="chat-compose"
+        @dragover=${(e: DragEvent) => handleDragOver(e, props)}
+        @dragleave=${handleDragLeave}
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <input
+            type="file"
+            accept="image/*"
+            ?multiple=${true}
+            class="chat-compose__file-input"
+            @change=${(e: Event) => handleFileSelect(e, props)}
+          />
+          <button
+            class="btn chat-compose__attach"
+            type="button"
+            title="Attach images"
+            ?disabled=${!props.connected}
+            @click=${(e: Event) => {
+              const btn = e.currentTarget as HTMLElement;
+              const fileInput = btn.parentElement?.querySelector<HTMLInputElement>(
+                ".chat-compose__file-input",
+              );
+              fileInput?.click();
+            }}
+          >
+            ${icons.paperclip}
+          </button>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
