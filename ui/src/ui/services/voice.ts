@@ -62,6 +62,7 @@ export async function startRecording(
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((t) => t.stop());
     } catch (err) {
+      recognition = null;
       return Promise.reject(new Error(`Microphone access denied: ${String(err)}`));
     }
     recognition.start();
