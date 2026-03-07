@@ -6,6 +6,8 @@ describe("classifyContinuitySource", () => {
   it("classifies direct, grouped, and agent-scoped continuity sources", () => {
     expect(classifyContinuitySource()).toBe("main_direct");
     expect(classifyContinuitySource("main")).toBe("main_direct");
+    expect(classifyContinuitySource("agent:alpha:main:thread:42")).toBe("main_direct");
+    expect(classifyContinuitySource("agent:alpha:main:topic:alpha")).toBe("main_direct");
     expect(classifyContinuitySource("telegram:direct:alice")).toBe("paired_direct");
     expect(classifyContinuitySource("agent:alpha:direct:bob")).toBe("paired_direct");
     expect(classifyContinuitySource("discord:group:team-room")).toBe("group");
@@ -57,6 +59,9 @@ describe("isContinuityScopeAllowed", () => {
 
     expect(isContinuityScopeAllowed(scope, "agent:alpha:direct:bob")).toBe(true);
     expect(isContinuityScopeAllowed(scope, "agent:alpha:dm:bob")).toBe(true);
+    expect(isContinuityScopeAllowed(scope, "agent:alpha:main")).toBe(true);
+    expect(isContinuityScopeAllowed(scope, "agent:alpha:main:thread:42")).toBe(true);
+    expect(isContinuityScopeAllowed(scope, "agent:alpha:main:topic:ops")).toBe(true);
   });
 
   it("supports raw-key matching and legacy raw keyPrefix rules", () => {
