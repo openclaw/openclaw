@@ -1,0 +1,22 @@
+# OpenClaw cluster SSH config
+# Copy these entries into ~/.ssh/config on the M1 controller (10.0.0.145)
+#
+# After adding, verify with:
+#   ssh claw-m4 "hostname"
+#   ssh claw-i7 "hostname"
+
+Host claw-m4
+  HostName 10.0.0.10
+  User fdclaw-m4
+  IdentitiesOnly yes
+  IdentityFile ~/.ssh/id_ed25519
+  ServerAliveInterval 30
+  ServerAliveCountMax 3
+
+Host claw-i7
+  HostName 10.0.0.11
+  User fdclaw-i7
+  IdentitiesOnly yes
+  IdentityFile ~/.ssh/id_ed25519
+  ServerAliveInterval 30
+  ServerAliveCountMax 3
