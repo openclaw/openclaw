@@ -52,7 +52,9 @@ function expectPrimaryProbeSuccess(
 ) {
   expect(result.result).toBe(expectedResult);
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+    allowTransientCooldownProbe: true,
+  });
 }
 
 describe("runWithModelFallback – probe logic", () => {
@@ -197,8 +199,50 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(result.result).toBe("fallback-ok");
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("attempts non-primary fallbacks during overloaded cooldown after primary probe failure", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    mockedIsProfileInCooldown.mockReturnValue(true);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("overloaded");
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("service overloaded"), { status: 503 }))
+      .mockResolvedValue("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("throttles probe when called within 30s interval", async () => {
@@ -319,7 +363,11 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 });

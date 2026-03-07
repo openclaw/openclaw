@@ -83,6 +83,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Config JSON endpoint ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherFinanceConfigData(gatherDeps));
@@ -91,7 +92,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Finance Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/finance",
+=======
+    auth: "gateway",
+    path: "/dashboard/finance",
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/overview" });
       res.end();
@@ -100,14 +106,119 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Exchange Health ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchange-health",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, { exchanges: healthStore.listAll() });
     },
   });
 
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
+=======
+  // ── Test Exchange Connection ──
+  // Validates exchange credentials by attempting to fetch balance via CCXT.
+  api.registerHttpRoute({
+    auth: "gateway",
+    path: "/api/v1/finance/exchanges/test",
+    handler: async (req: HttpReq, res: HttpRes) => {
+      try {
+        const body = await parseJsonBody(req);
+        const { exchange, apiKey, secret, passphrase, testnet } = body as {
+          exchange?: string;
+          apiKey?: string;
+          secret?: string;
+          passphrase?: string;
+          testnet?: boolean;
+        };
+
+        if (!exchange || !apiKey || !secret) {
+          errorResponse(res, 400, "Missing required fields: exchange, apiKey, secret");
+          return;
+        }
+
+        const supportedExchanges = ["binance", "okx", "bybit", "hyperliquid"];
+        if (!supportedExchanges.includes(exchange)) {
+          errorResponse(
+            res,
+            400,
+            `Unsupported exchange: ${exchange}. Supported: ${supportedExchanges.join(", ")}`,
+          );
+          return;
+        }
+
+        // Dynamically import ccxt to avoid startup cost
+        const ccxt = await import("ccxt");
+        const ExchangeClass = (ccxt as Record<string, unknown>)[exchange];
+        if (typeof ExchangeClass !== "function") {
+          errorResponse(res, 400, `Exchange class not found: ${exchange}`);
+          return;
+        }
+
+        const instance = new (ExchangeClass as new (
+          opts: Record<string, unknown>,
+        ) => Record<string, unknown>)({
+          apiKey,
+          secret,
+          password: passphrase,
+          enableRateLimit: true,
+          timeout: 15000,
+        });
+
+        // Enable sandbox/testnet mode if requested
+        if (testnet && typeof instance.setSandboxMode === "function") {
+          (instance as { setSandboxMode: (v: boolean) => void }).setSandboxMode(true);
+        }
+
+        try {
+          const balance = await (
+            instance as { fetchBalance: () => Promise<Record<string, unknown>> }
+          ).fetchBalance();
+
+          // Extract non-zero balances for display (hide full API key from response)
+          const total = (balance.total ?? {}) as Record<string, number>;
+          const nonZero: Record<string, number> = {};
+          for (const [currency, amount] of Object.entries(total)) {
+            if (typeof amount === "number" && amount > 0) {
+              nonZero[currency] = Math.round(amount * 1e6) / 1e6;
+            }
+          }
+
+          jsonResponse(res, 200, { ok: true, balances: nonZero });
+        } catch (err) {
+          const message = (err as Error).message || "Unknown error";
+          // Classify error type without leaking sensitive details
+          const isAuth =
+            message.includes("AuthenticationError") ||
+            message.includes("Invalid") ||
+            message.includes("Signature") ||
+            message.includes("key") ||
+            message.includes("permission");
+          jsonResponse(res, 200, {
+            ok: false,
+            error: isAuth
+              ? "Authentication failed: check API key and secret"
+              : "Connection failed: " + message,
+          });
+        } finally {
+          // Best-effort cleanup
+          try {
+            if (typeof instance.close === "function") {
+              await (instance as { close: () => Promise<void> }).close();
+            }
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
   // ── Trading JSON endpoint ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/trading",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherTradingData(gatherDeps));
@@ -116,7 +227,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Trading Dashboard → redirect to unified trader ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/trading",
+=======
+    auth: "gateway",
+    path: "/dashboard/trading",
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/trader" });
       res.end();
@@ -125,6 +241,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Place Order (unified: paper + live) ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/orders",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -302,6 +419,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Cancel Order ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/orders/cancel",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -329,6 +447,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Close Position ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/positions/close",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -436,6 +555,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Emergency Stop ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/emergency-stop",
     handler: async (_req: unknown, res: HttpRes) => {
       try {
@@ -475,6 +595,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Events List ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/events",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, {
@@ -486,6 +607,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Approval Flow ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/events/approve",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -536,6 +658,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Risk Evaluation ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/risk/evaluate",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -561,6 +684,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherCommandCenterData(gatherDeps));
@@ -569,7 +693,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center Dashboard → redirect to unified trader ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/command-center",
+=======
+    auth: "gateway",
+    path: "/dashboard/command-center",
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/trader" });
       res.end();
@@ -578,6 +707,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherMissionControlData(gatherDeps));
@@ -586,7 +716,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/mission-control",
+=======
+    auth: "gateway",
+    path: "/dashboard/mission-control",
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/overview" });
       res.end();
@@ -595,7 +730,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Overview ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/overview",
+=======
+    auth: "gateway",
+    path: "/dashboard/overview",
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherOverviewData(gatherDeps);
       const html = renderUnifiedDashboard(templates.overview, data);
@@ -610,7 +750,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Strategy (merged Arena + Lab) ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/strategy",
+=======
+    auth: "gateway",
+    path: "/dashboard/trading-desk",
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherStrategyData(gatherDeps);
       const html = renderUnifiedDashboard(templates.strategy, data);
@@ -625,6 +770,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Trader (with domain switching) ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/trader",
     handler: async (req: unknown, res: HttpRes) => {
       // Extract domain from query string if available
@@ -633,6 +779,13 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
       const domain = (match?.[1] ?? "paper") as "live" | "paper" | "backtest";
       const data = await gatherTraderData(gatherDeps, { domain });
       const html = renderUnifiedDashboard(templates.trader, data);
+=======
+    auth: "gateway",
+    path: "/dashboard/strategy-arena",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherStrategyArenaData(gatherDeps);
+      const html = renderUnifiedDashboard(templates.strategyArena, data);
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
       if (!html) {
         jsonResponse(res, 200, data);
         return;
@@ -644,10 +797,27 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Setting ──
   api.registerHttpRoute({
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/route-handlers.ts
     path: "/plugins/findoo-trader/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherSettingData({ ...gatherDeps, healthStore });
       const html = renderUnifiedDashboard(templates.setting, data);
+=======
+    auth: "gateway",
+    path: "/api/v1/finance/strategy-arena",
+    handler: async (_req: unknown, res: HttpRes) => {
+      jsonResponse(res, 200, gatherStrategyArenaData(gatherDeps));
+    },
+  });
+
+  // ── Unified Dashboard: Strategy Lab ──
+  api.registerHttpRoute({
+    auth: "gateway",
+    path: "/dashboard/strategy-lab",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherStrategyLabData(gatherDeps);
+      const html = renderUnifiedDashboard(templates.strategyLab, data);
+>>>>>>> main:extensions/fin-core/src/route-handlers.ts
       if (!html) {
         jsonResponse(res, 200, data);
         return;
@@ -922,6 +1092,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     ["/plugins/findoo-trader/dashboard/strategy-lab", "/plugins/findoo-trader/dashboard/strategy"],
   ] as const) {
     api.registerHttpRoute({
+      auth: "gateway",
       path: from,
       handler: async (_req: unknown, res: HttpRes) => {
         res.writeHead(302, { Location: to });

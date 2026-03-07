@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { isDangerousHostEnvVarName } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
@@ -10,6 +11,19 @@ const log = createSubsystemLogger("env-overrides");
 
 type EnvUpdate = { key: string; prev: string | undefined };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
+
+/**
+ * Tracks env var keys that are currently injected by skill overrides.
+ * Used by ACP harness spawn to strip skill-injected keys so they don't
+ * leak to child processes (e.g., OPENAI_API_KEY leaking to Codex CLI).
+ * @see https://github.com/openclaw/openclaw/issues/36280
+ */
+const activeSkillEnvKeys = new Set<string>();
+
+/** Returns a snapshot of env var keys currently injected by skill overrides. */
+export function getActiveSkillEnvKeys(): ReadonlySet<string> {
+  return activeSkillEnvKeys;
+}
 
 type SanitizedSkillEnvOverrides = {
   allowed: Record<string, string>;
@@ -105,7 +119,11 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  const resolvedApiKey = typeof skillConfig.apiKey === "string" ? skillConfig.apiKey.trim() : "";
+  const resolvedApiKey =
+    normalizeResolvedSecretInputString({
+      value: skillConfig.apiKey,
+      path: `skills.entries.${skillKey}.apiKey`,
+    }) ?? "";
   if (normalizedPrimaryEnv && resolvedApiKey && !process.env[normalizedPrimaryEnv]) {
     if (!pendingOverrides[normalizedPrimaryEnv]) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
@@ -130,12 +148,14 @@ function applySkillConfigEnvOverrides(params: {
     }
     updates.push({ key: envKey, prev: process.env[envKey] });
     process.env[envKey] = envValue;
+    activeSkillEnvKeys.add(envKey);
   }
 }
 
 function createEnvReverter(updates: EnvUpdate[]) {
   return () => {
     for (const update of updates) {
+      activeSkillEnvKeys.delete(update.key);
       if (update.prev === undefined) {
         delete process.env[update.key];
       } else {

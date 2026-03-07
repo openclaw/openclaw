@@ -17,6 +17,7 @@ export function registerStrategyRoutes(
 ): void {
   // GET /api/v1/finance/strategies -- List all strategies
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies",
     handler: async (_req: unknown, res: HttpRes) => {
       const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
@@ -32,6 +33,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/pause -- Pause a strategy
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies/pause",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -75,6 +77,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/resume -- Resume a paused strategy
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies/resume",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -104,6 +107,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/kill -- Kill a strategy
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies/kill",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -148,6 +152,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/promote -- Promote a strategy to next level
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies/promote",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -218,6 +223,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/pause-all -- Pause all active strategies
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies/pause-all",
     handler: async (_req: unknown, res: HttpRes) => {
       try {
@@ -254,6 +260,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/backtest-all -- Run backtests for all strategies
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategies/backtest-all",
     handler: async (_req: HttpReq, res: HttpRes) => {
       try {
@@ -293,6 +300,7 @@ export function registerStrategyRoutes(
         for (const s of strategies) {
           try {
             const detail = registry.get?.(s.id);
+<<<<<<< HEAD:extensions/findoo-trader-plugin/src/core/routes-strategies.ts
             const definition = (
               detail as { definition?: import("../shared/types.js").StrategyDefinition } | undefined
             )?.definition;
@@ -306,6 +314,13 @@ export function registerStrategyRoutes(
               slippageBps: 5,
               market: "crypto",
             });
+=======
+            const symbol = (detail as { symbol?: string } | undefined)?.symbol ?? "BTC/USDT";
+            const definition =
+              (detail as { definition?: Record<string, unknown> } | undefined)?.definition ?? {};
+            const ohlcv = await dataProvider.getOHLCV(symbol, "1d", 365);
+            const result = backtestEngine.run(definition, ohlcv, { initialCapital: 10000 });
+>>>>>>> main:extensions/fin-core/src/routes-strategies.ts
             registry.updateBacktest?.(s.id, result as unknown as Record<string, unknown>);
             results.push({
               id: s.id,
