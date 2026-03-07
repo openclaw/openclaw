@@ -96,4 +96,27 @@ describe("active-listener", () => {
     setActiveWebListener("work", null);
     expect(getActiveWebListener("work")).toBeNull();
   });
+
+  describe("getActiveWebListener fallback", () => {
+    it("returns sole listener when no explicit account is given", () => {
+      const listener = stubListener();
+      setActiveWebListener("custom", listener);
+      expect(getActiveWebListener()).toBe(listener);
+    });
+
+    it("returns null when no listeners are registered", () => {
+      expect(getActiveWebListener()).toBeNull();
+    });
+
+    it("returns null for explicit account mismatch even with sole listener", () => {
+      setActiveWebListener("custom", stubListener());
+      expect(getActiveWebListener("work")).toBeNull();
+    });
+
+    it("returns null when multiple listeners exist and no default", () => {
+      setActiveWebListener("custom", stubListener());
+      setActiveWebListener("work", stubListener());
+      expect(getActiveWebListener()).toBeNull();
+    });
+  });
 });

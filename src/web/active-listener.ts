@@ -87,5 +87,14 @@ export function setActiveWebListener(
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return listeners.get(id) ?? null;
+  const listener = listeners.get(id) ?? null;
+  if (listener) {
+    return listener;
+  }
+  // Same sole-listener fallback as requireActiveWebListener — see comment there.
+  if (!accountId?.trim() && listeners.size === 1) {
+    const [[, soleListener]] = listeners;
+    return soleListener;
+  }
+  return null;
 }
