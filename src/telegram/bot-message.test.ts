@@ -97,4 +97,28 @@ describe("telegram bot message processor", () => {
     );
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
   });
+
+  it("swallows fallback delivery failures after dispatch throws", async () => {
+    const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
+    const runtimeError = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      route: { sessionKey: "agent:main:main" },
+    });
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Something went wrong while processing your request. Please try again.",
+      undefined,
+    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+  });
 });
