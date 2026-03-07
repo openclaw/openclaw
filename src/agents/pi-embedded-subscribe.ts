@@ -202,6 +202,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           text,
         );
         rememberAssistantText(text);
+        recordDeliveredText(text, state.recentDeliveredTexts);
       } else {
         pushAssistantText(text);
       }
@@ -515,6 +516,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
     rememberAssistantText(chunk);
+    recordDeliveredText(chunk, state.recentDeliveredTexts);
     if (!params.onBlockReply) {
       return;
     }
