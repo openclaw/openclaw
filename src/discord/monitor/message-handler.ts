@@ -5,6 +5,7 @@ import {
 } from "../../channels/inbound-debounce-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordInboundWorker } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -38,7 +39,7 @@ export function createDiscordMessageHandler(
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
-  const ackReactionScope =
+  const ack {ReactionScope =
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
@@ -111,7 +112,15 @@ export function createDiscordMessageHandler(
         return;
       }
       const combinedBaseText = entries
-        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: false }))
+        .map((entry) => {
+          let text = resolveDiscordMessageText(entry.data.message, { includeForwarded: false });
+          // Fix Issue #38581: Sanitize provider error payloads
+          if (text?.startsWith("Codex error:")) {
+            const errorPayload = text.slice("Codex error:".length).trim();
+            text = sanitizeUserFacingText(errorPayload, { errorContext: true });
+          }
+          return text;
+        })
         .filter(Boolean)
         .join("\n");
       const syntheticMessage = {

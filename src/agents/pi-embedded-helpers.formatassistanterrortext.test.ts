@@ -5,6 +5,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  formatProviderErrorForGateway,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -35,7 +36,7 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
-  it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
+  it("returns a reason-required message for mandatory reasoning endpoint errors", () => {
     const msg = makeAssistantError(
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
     );
@@ -145,11 +146,54 @@ describe("formatRawAssistantErrorForUi", () => {
     const htmlError = `521 <!DOCTYPE html>
 <html lang="en-US">
   <head><title>Web server is down | example.com | Cloudflare</title></head>
-  <body>Ray ID: abc123</body>
+需要的 <body>Ray ID: abc123</body>
 </html>`;
 
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("formatProviderErrorForGateway", () => {
+  it("summarizes server_error with request ID from OpenAI-style payload", () => {
+    const payload =
+      '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID c9e1c124-513b-4593-a530-d51127ca2359 in your message.","param":null},"sequence_number":2}';
+    const result = formatProviderErrorForGateway(payload);
+    expect(result).toBe(
+      "Provider error (server_error): An error occurred while processing your request. Request ID: c9e1c124-513b-4593-a530-d51127ca2359",
+    );
+  });
+
+  it("summarizes rate_limit_error with request ID", () => {
+    const payload =
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"},"request_id":"req_123"}';
+    const result = formatProviderErrorForGateway(payload);
+    expect(result).toBe("Provider error (rate_limit_error): Rate limit exceeded. Request ID: req_123");
+  });
+
+  it("handles error without request ID", () => {
+    const payload =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Invalid request"}}';
+    const result = formatProviderErrorForGateway(payload);
+    expect(result).toBe("Provider error (invalid_request_error): Invalid request");
+  });
+
+  it("handles malformed JSON gracefully", () => {
+    const payload = "not valid json";
+    const result = formatProviderErrorForGateway(payload);
+    expect(result).toBe("not valid json");
+  });
+
+  it("handles empty error object", () => {
+    const payload = '{"type":"error","error":{}}';
+    const result = formatProviderErrorForGateway(payload);
+    expect(result).toBe("Provider error");
+  });
+
+  it("handles payload with missing error type", () => {
+    const payload = '{"type":"error","error":{"message":"Something went wrong"}}';
+    const result = formatProviderErrorForGateway(payload);
+    expect(result).toBe("Provider error: Something went wrong");
   });
 });

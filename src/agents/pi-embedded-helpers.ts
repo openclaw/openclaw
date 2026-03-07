@@ -16,6 +16,7 @@ export {
   classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
+  formatProviderErrorForGateway,
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
