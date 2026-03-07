@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "../config/types.secrets.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import { resolveAccountWithDefaultFallback } from "../plugin-sdk/account-resolution.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -57,7 +61,7 @@ function inspectTokenFile(pathValue: unknown): {
 
 function inspectTokenValue(value: unknown): {
   token: string;
-  tokenSource: "config" | "none";
+  tokenSource: "config" | "env" | "none";
   tokenStatus: TelegramCredentialStatus;
 } | null {
   const token = normalizeSecretInputString(value);
@@ -66,6 +70,23 @@ function inspectTokenValue(value: unknown): {
       token,
       tokenSource: "config",
       tokenStatus: "available",
+    };
+  }
+  // Try to resolve env-based SecretRefs from process.env for read-only inspection
+  const ref = coerceSecretRef(value);
+  if (ref?.source === "env") {
+    const envValue = process.env[ref.id];
+    if (envValue && envValue.trim()) {
+      return {
+        token: envValue.trim(),
+        tokenSource: "env",
+        tokenStatus: "available",
+      };
+    }
+    return {
+      token: "",
+      tokenSource: "env",
+      tokenStatus: "configured_unavailable",
     };
   }
   if (hasConfiguredSecretInput(value)) {
