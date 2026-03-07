@@ -152,7 +152,7 @@ openclaw onboard --non-interactive \
     Ref-mode variant:
 
     ```bash
-    export CUSTOM_API_KEY="your-key" <!-- pragma: allowlist secret -->
+    export CUSTOM_API_KEY="your-key"
     openclaw onboard --non-interactive \
       --mode local \
       --auth-choice custom-api-key \

@@ -24,7 +24,7 @@ openclaw onboard --mistral-api-key "$MISTRAL_API_KEY"
 
 ```json5
 {
-  env: { MISTRAL_API_KEY: "sk-..." }, <!-- pragma: allowlist secret -->
+  env: { MISTRAL_API_KEY: "sk-..." },
   agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
 }
 ```

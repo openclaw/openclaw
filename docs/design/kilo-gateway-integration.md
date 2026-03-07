@@ -455,7 +455,7 @@ const needsNonImageSanitize =
     "providers": {
       "kilocode": {
         "baseUrl": "https://api.kilo.ai/api/gateway/",
-        "apiKey": "xxxxx", <!-- pragma: allowlist secret -->
+        "apiKey": "xxxxx",
         "api": "openai-completions",
         "models": [
           {

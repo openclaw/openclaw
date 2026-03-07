@@ -132,7 +132,7 @@ which returns AI-synthesized answers backed by live Google Search results with c
         provider: "gemini",
         gemini: {
           // API key (optional if GEMINI_API_KEY is set)
-          apiKey: "AIza...", <!-- pragma: allowlist secret -->
+          apiKey: "AIza...",
           // Model (defaults to "gemini-2.5-flash")
           model: "gemini-2.5-flash",
         },
