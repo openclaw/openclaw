@@ -214,13 +214,14 @@ export function loadPluginManifestRegistry(params: {
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         // Only treat as same plugin if both realpath calls succeeded AND returned the same path.
         // If either realpath fails (returns null), we can't determine equality - be conservative
-        // and suppress the warning to avoid false positives (especially on Windows with
-        // symlinks/junctions that realpath may not resolve correctly).
+        // and treat as different to avoid silently dropping plugins (which could cause
+        // real duplicates to go undetected).
         if (existingReal && candidateReal) {
           return existingReal === candidateReal;
         }
-        // Can't determine if realpath failed for either path - assume same to avoid false positive
-        return true;
+        // Realpath failed for one or both paths - treat as different to surface the issue
+        // rather than silently skipping a potentially valid plugin.
+        return false;
       })();
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
@@ -233,8 +234,10 @@ export function loadPluginManifestRegistry(params: {
             schemaCacheKey,
             configSchema,
           });
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         }
+        // Always update seenIds to track the latest candidate for proper duplicate detection.
+        // This ensures subsequent duplicates compare against the current candidate, not an older one.
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         continue;
       }
       // Only warn about duplicates when origins are the same (e.g., two global plugins).
