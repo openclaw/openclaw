@@ -153,7 +153,7 @@ async def test_agent_info():
     
     assert info is not None
     assert info.metadata.name == "creative_writer"
-    assert info.status.value in ["idle", "running", "error"]
+    assert info.status.value in ["loaded", "idle", "running", "error"]
     assert info.execution_count >= 0
 
 

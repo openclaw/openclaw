@@ -7,7 +7,7 @@ Manages agent loading, lifecycle, and discovery.
 import importlib.util
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from engine.agents.base import BaseAgent
@@ -187,6 +187,23 @@ class AgentRegistry:
             manifest_data = json.load(f)
         
         return AgentMetadata(**manifest_data)
+        
+    async def get_agent_capabilities(self, agent_name: str) -> List[str]:
+        """
+        Get capabilities of an agent.
+        
+        Args:
+            agent_name: Name of the agent
+            
+        Returns:
+            List of capability names
+        """
+        if agent_name in self._agents:
+            return self._agents[agent_name].get_capabilities()
+        elif agent_name in self._metadata:
+            return self._metadata[agent_name].capabilities
+        else:
+            raise ValueError(f"Agent {agent_name} not found or metadata not loaded")
     
     # ========================================================================
     # Agent Access
@@ -268,7 +285,7 @@ class AgentRegistry:
         agent_name: str, 
         task: str, 
         context: Optional[Dict] = None
-    ) -> any:
+    ) -> Any:
         """
         Execute a task on an agent.
         

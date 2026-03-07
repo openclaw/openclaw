@@ -4,8 +4,8 @@ SotyBot Configuration System
 Pydantic-based settings management with environment variable loading.
 """
 
-from typing import List, Optional
-from pydantic import Field
+from typing import List, Optional, Any
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,10 +31,12 @@ class SecuritySettings(BaseSettings):
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     
+    @field_validator("allowed_origins", mode="before")
     @classmethod
-    def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
-        # Custom parsing for comma-separated list
-        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",")]
+        return v
 
 
 class AgentSettings(BaseSettings):
@@ -107,6 +109,8 @@ class AuditSettings(BaseSettings):
     
     enabled: bool = Field(default=True, alias="SOTYBOT_AUDIT_ENABLED")
     log_file: str = Field(default="./logs/audit.log", alias="SOTYBOT_AUDIT_LOG_FILE")
+    log_directory: str = Field(default="./logs", alias="SOTYBOT_AUDIT_LOG_DIR")
+    enable_database_logging: bool = Field(default=False, alias="SOTYBOT_AUDIT_DB_LOGGING")
     retention_days: int = Field(default=90, alias="SOTYBOT_AUDIT_RETENTION_DAYS")
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

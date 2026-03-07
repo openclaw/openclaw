@@ -29,7 +29,7 @@ class ActionExecutor:
     
     def __init__(self) -> None:
         self.session: Optional[aiohttp.ClientSession] = None
-        self.max_timeout = settings.action.max_execution_time
+        self.max_timeout = settings.action.action_timeout
     
     async def initialize(self) -> None:
         """Initialize executor resources"""
