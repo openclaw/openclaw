@@ -58,6 +58,35 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
+  it("drops only invalid media when reply media normalization fails", async () => {
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string }) => {
+      if (payload.mediaUrl === "./bad.png") {
+        throw new Error("Path escapes sandbox root");
+      }
+      return payload;
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [
+        { text: "keep text", mediaUrl: "./bad.png", audioAsVoice: true },
+        { text: "keep second" },
+      ],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "keep text",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
+    expect(replyPayloads[1]).toMatchObject({
+      text: "keep second",
+    });
+  });
+
   it("applies media filter after text filter", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
