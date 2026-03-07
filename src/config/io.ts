@@ -704,10 +704,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
-      const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
+      const readResolution = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
       );
+      const resolvedConfig = readResolution.resolvedConfigRaw;
+      for (const w of readResolution.envWarnings) {
+        deps.logger.warn(
+          `Config: missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+        );
+      }
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
