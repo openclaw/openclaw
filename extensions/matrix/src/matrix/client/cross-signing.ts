@@ -265,7 +265,10 @@ export async function bootstrapCrossSigningFromRecoveryKey(params: {
       });
       if (!defaultKeyData.key) throw new Error("m.secret_storage.default has no 'key' field");
       keyId = defaultKeyData.key;
-    } catch {
+    } catch (err) {
+      // Only fall back to extracting keyId from the secret if the account data is truly absent
+      // (HTTP 404). Propagate network errors, 5xx, etc. so they aren't silently hidden.
+      if (!(err instanceof Error && /HTTP 404/.test(err.message))) throw err;
       const keys = Object.keys(sskEncrypted.encrypted ?? {});
       if (keys.length === 0)
         throw new Error("No encrypted entries found in m.cross_signing.self_signing");
@@ -334,7 +337,7 @@ export async function bootstrapCrossSigningFromRecoveryKey(params: {
               ...(deviceKey.signatures ?? {}),
               [userId]: {
                 ...(deviceKey.signatures?.[userId] ?? {}),
-                [sskSigKey]: signature.toString("base64"),
+                [sskSigKey]: signature.toString("base64").replace(/=+$/, ""),
               },
             },
           },
