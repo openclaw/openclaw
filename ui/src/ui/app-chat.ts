@@ -3,14 +3,18 @@ import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
+import { executeSlashCommand } from "./chat/slash-command-executor.ts";
+import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
-import type { GatewayHelloOk } from "./gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type ChatHost = {
+  client: GatewayBrowserClient | null;
+  chatMessages: unknown[];
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -22,9 +26,9 @@ export type ChatHost = {
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
   refreshSessionsAfterChat: Set<string>;
+  /** Callback for slash-command side effects that need app-level access. */
+  onSlashAction?: (action: string) => void;
 };
-
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -170,7 +174,6 @@ export async function handleSendChat(
   const attachmentsToSend = messageOverride == null ? attachments : [];
   const hasAttachments = attachmentsToSend.length > 0;
 
-  // Allow sending with just attachments (no message text required)
   if (!message && !hasAttachments) {
     return;
   }
@@ -180,10 +183,24 @@ export async function handleSendChat(
     return;
   }
 
+  // Intercept local slash commands (/status, /model, /compact, etc.)
+  const parsed = parseSlashCommand(message);
+  if (parsed?.command.executeLocal) {
+    const prevDraft = messageOverride == null ? previousDraft : undefined;
+    if (messageOverride == null) {
+      host.chatMessage = "";
+      host.chatAttachments = [];
+    }
+    await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
+      previousDraft: prevDraft,
+      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+    });
+    return;
+  }
+
   const refreshSessions = isChatResetCommand(message);
   if (messageOverride == null) {
     host.chatMessage = "";
-    // Clear attachments when sending
     host.chatAttachments = [];
   }
 
@@ -202,11 +219,80 @@ export async function handleSendChat(
   });
 }
 
+// ── Slash Command Dispatch ──
+
+async function dispatchSlashCommand(
+  host: ChatHost,
+  name: string,
+  args: string,
+  sendOpts?: { previousDraft?: string; restoreDraft?: boolean },
+) {
+  switch (name) {
+    case "stop":
+      await handleAbortChat(host);
+      return;
+    case "new":
+      await sendChatMessageNow(host, "/new", {
+        refreshSessions: true,
+        previousDraft: sendOpts?.previousDraft,
+        restoreDraft: sendOpts?.restoreDraft,
+      });
+      return;
+    case "reset":
+      await sendChatMessageNow(host, "/reset", {
+        refreshSessions: true,
+        previousDraft: sendOpts?.previousDraft,
+        restoreDraft: sendOpts?.restoreDraft,
+      });
+      return;
+    case "clear":
+      host.chatMessages = [];
+      scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+      return;
+    case "focus":
+      host.onSlashAction?.("toggle-focus");
+      return;
+    case "export":
+      host.onSlashAction?.("export");
+      return;
+  }
+
+  if (!host.client) {
+    return;
+  }
+
+  const result = await executeSlashCommand(host.client, host.sessionKey, name, args);
+
+  if (result.content) {
+    injectCommandResult(host, result.content);
+  }
+
+  if (result.action === "refresh") {
+    await refreshChat(host);
+  }
+
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+}
+
+function injectCommandResult(host: ChatHost, content: string) {
+  host.chatMessages = [
+    ...host.chatMessages,
+    {
+      role: "system",
+      content,
+      timestamp: Date.now(),
+    },
+  ];
+}
+
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: false,
+      includeUnknown: false,
     }),
     refreshChatAvatar(host),
   ]);

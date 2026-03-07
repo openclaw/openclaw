@@ -1,15 +1,43 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.hoisted(() => {
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+      clear: () => storage.clear(),
+    },
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { language: "en-US" },
+  });
+  return {};
+});
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveSessionOptionGroups,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
+}
+
+function testState(overrides: Partial<AppViewState> = {}): AppViewState {
+  return {
+    agentsList: null,
+    sessionsHideCron: true,
+    ...overrides,
+  } as AppViewState;
 }
 
 /* ================================================================
@@ -282,5 +310,42 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveSessionOptionGroups", () => {
+  const sessions: SessionsListResult = {
+    sessions: [
+      row({ key: "agent:main:main" }),
+      row({ key: "agent:main:cron:daily" }),
+      row({ key: "agent:main:discord:direct:user-1" }),
+    ],
+  };
+
+  it("filters cron sessions from options when the hide toggle is enabled", () => {
+    const groups = resolveSessionOptionGroups(
+      testState({ sessionsHideCron: true }),
+      "agent:main:main",
+      sessions,
+    );
+
+    expect(groups.flatMap((group) => group.options.map((option) => option.key))).toEqual([
+      "agent:main:main",
+      "agent:main:discord:direct:user-1",
+    ]);
+  });
+
+  it("retains the active cron session even when cron sessions are hidden", () => {
+    const groups = resolveSessionOptionGroups(
+      testState({ sessionsHideCron: true }),
+      "agent:main:cron:daily",
+      sessions,
+    );
+
+    expect(groups.flatMap((group) => group.options.map((option) => option.key))).toEqual([
+      "agent:main:main",
+      "agent:main:cron:daily",
+      "agent:main:discord:direct:user-1",
+    ]);
   });
 });

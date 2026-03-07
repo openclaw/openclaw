@@ -1,8 +1,12 @@
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import { renderConfig } from "./config.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderConfig, resetConfigViewStateForTests } from "./config.ts";
 
 describe("config view", () => {
+  beforeEach(() => {
+    resetConfigViewStateForTests();
+  });
+
   const baseProps = () => ({
     raw: "{\n}\n",
     originalRaw: "{\n}\n",
@@ -20,11 +24,13 @@ describe("config view", () => {
     schemaLoading: false,
     uiHints: {},
     formMode: "form" as const,
+    showModeToggle: true,
     formValue: {},
     originalValue: {},
     searchQuery: "",
     activeSection: null,
     activeSubsection: null,
+    streamMode: false,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onFormPatch: vi.fn(),
@@ -35,6 +41,13 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    version: "",
+    theme: "claw" as const,
+    themeMode: "system" as const,
+    setTheme: vi.fn(),
+    setThemeMode: vi.fn(),
+    gatewayUrl: "",
+    assistantName: "",
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -134,6 +147,102 @@ describe("config view", () => {
     expect(applyButton?.disabled).toBe(false);
   });
 
+  it("keeps raw secrets out of the DOM while stream mode is enabled", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        formMode: "raw",
+        streamMode: true,
+        raw: '{\n  gateway: { auth: { token: "secret-123" } }\n}\n',
+        originalRaw: "{\n}\n",
+        formValue: { gateway: { auth: { token: "secret-123" } } },
+        uiHints: {
+          "gateway.auth.token": { sensitive: true },
+        },
+      }),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toBe("");
+    expect(textarea?.getAttribute("placeholder")).toContain("redacted");
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle raw config redaction"]',
+    );
+    expect(toggle?.disabled).toBe(true);
+  });
+
+  it("reveals raw secrets only after explicit toggle when stream mode is off", () => {
+    const container = document.createElement("div");
+    const props = {
+      ...baseProps(),
+      formMode: "raw" as const,
+      streamMode: false,
+      raw: '{\n  gateway: { auth: { token: "secret-123" } }\n}\n',
+      originalRaw: "{\n}\n",
+      formValue: { gateway: { auth: { token: "secret-123" } } },
+      uiHints: {
+        "gateway.auth.token": { sensitive: true },
+      },
+    };
+
+    render(renderConfig(props), container);
+    const initialTextarea = container.querySelector("textarea");
+    expect(initialTextarea?.value).toBe("");
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle raw config redaction"]',
+    );
+    expect(toggle?.disabled).toBe(false);
+    toggle?.click();
+
+    render(renderConfig(props), container);
+    const revealedTextarea = container.querySelector("textarea");
+    expect(revealedTextarea?.value).toContain("secret-123");
+  });
+
+  it("reveals env values through the peek control instead of CSS-only masking", () => {
+    const container = document.createElement("div");
+    const props = {
+      ...baseProps(),
+      activeSection: "env" as const,
+      formMode: "form" as const,
+      streamMode: false,
+      schema: {
+        type: "object",
+        properties: {
+          env: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+      },
+      formValue: {
+        env: {
+          OPENAI_API_KEY: "secret-123",
+        },
+      },
+    };
+
+    render(renderConfig(props), container);
+    const hiddenInput = container.querySelector<HTMLInputElement>(".cfg-input:not(.cfg-input--sm)");
+    expect(hiddenInput?.value).toBe("");
+
+    const peekButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("Peek"),
+    );
+    peekButton?.click();
+
+    render(renderConfig(props), container);
+    const revealedInput = container.querySelector<HTMLInputElement>(
+      ".cfg-input:not(.cfg-input--sm)",
+    );
+    expect(revealedInput?.value).toBe("secret-123");
+  });
+
   it("switches mode via the sidebar toggle", () => {
     const container = document.createElement("div");
     const onFormModeChange = vi.fn();
@@ -204,12 +313,7 @@ describe("config view", () => {
     const container = document.createElement("div");
     render(renderConfig(baseProps()), container);
 
-    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
-      (option) => option.textContent?.trim(),
-    );
-    expect(options).toContain("tag:security");
-    expect(options).toContain("tag:advanced");
-    expect(options).toHaveLength(15);
+    expect(container.querySelectorAll(".config-search__tag-option")).toHaveLength(0);
   });
 
   it("updates search query when toggling a tag option", () => {
@@ -226,8 +330,7 @@ describe("config view", () => {
     const option = container.querySelector<HTMLButtonElement>(
       '.config-search__tag-option[data-tag="security"]',
     );
-    expect(option).toBeTruthy();
-    option?.click();
-    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
+    expect(option).toBeNull();
+    expect(onSearchChange).not.toHaveBeenCalled();
   });
 });

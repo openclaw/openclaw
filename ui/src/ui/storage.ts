@@ -2,18 +2,20 @@ const KEY = "openclaw.control.settings.v1";
 
 import { isSupportedLocale } from "../i18n/index.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
-import type { ThemeMode } from "./theme.ts";
+import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
-  theme: ThemeMode;
+  theme: ThemeName;
+  themeMode: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
+  navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
 };
@@ -36,11 +38,13 @@ export function loadSettings(): UiSettings {
     token: "",
     sessionKey: "main",
     lastActiveSessionKey: "main",
-    theme: "system",
+    theme: "claw",
+    themeMode: "system",
     chatFocusMode: false,
     chatShowThinking: true,
     splitRatio: 0.6,
     navCollapsed: false,
+    navWidth: 220,
     navGroupsCollapsed: {},
   };
 
@@ -50,6 +54,10 @@ export function loadSettings(): UiSettings {
       return defaults;
     }
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
+    const { theme, mode } = parseThemeSelection(
+      (parsed as { theme?: unknown }).theme,
+      (parsed as { themeMode?: unknown }).themeMode,
+    );
     return {
       gatewayUrl:
         typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
@@ -65,10 +73,8 @@ export function loadSettings(): UiSettings {
           ? parsed.lastActiveSessionKey.trim()
           : (typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()) ||
             defaults.lastActiveSessionKey,
-      theme:
-        parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
-          ? parsed.theme
-          : defaults.theme,
+      theme,
+      themeMode: mode,
       chatFocusMode:
         typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
@@ -83,6 +89,10 @@ export function loadSettings(): UiSettings {
           : defaults.splitRatio,
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
+      navWidth:
+        typeof parsed.navWidth === "number" && parsed.navWidth >= 200 && parsed.navWidth <= 400
+          ? parsed.navWidth
+          : defaults.navWidth,
       navGroupsCollapsed:
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed

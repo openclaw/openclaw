@@ -40,16 +40,22 @@ export function renderSkills(props: SkillsProps) {
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Skills</div>
-          <div class="card-sub">Bundled, managed, and workspace skills.</div>
+          <div class="card-sub">Installed skills and their status.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
-      <div class="filters" style="margin-top: 14px;">
-        <label class="field" style="flex: 1;">
-          <span>Filter</span>
+      <div class="filters" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px;">
+        <a
+          class="btn"
+          href="https://clawhub.com"
+          target="_blank"
+          rel="noreferrer"
+          title="Browse skills on ClawHub"
+        >Browse Skills Store</a>
+        <label class="field" style="flex: 1; min-width: 180px;">
           <input
             .value=${props.filter}
             @input=${(e: Event) => props.onFilterChange((e.target as HTMLInputElement).value)}

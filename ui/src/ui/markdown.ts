@@ -7,8 +7,11 @@ const allowedTags = [
   "b",
   "blockquote",
   "br",
+  "button",
   "code",
   "del",
+  "details",
+  "div",
   "em",
   "h1",
   "h2",
@@ -20,7 +23,9 @@ const allowedTags = [
   "ol",
   "p",
   "pre",
+  "span",
   "strong",
+  "summary",
   "table",
   "tbody",
   "td",
@@ -31,7 +36,19 @@ const allowedTags = [
   "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const allowedAttrs = [
+  "class",
+  "href",
+  "rel",
+  "target",
+  "title",
+  "start",
+  "src",
+  "alt",
+  "data-code",
+  "type",
+  "aria-label",
+];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
@@ -44,6 +61,7 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const markdownCache = new Map<string, string>();
+const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -82,6 +100,9 @@ function installHooks() {
     }
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
+    if (href.toLowerCase().includes("tail")) {
+      node.classList.add(TAIL_LINK_BLUR_CLASS);
+    }
   });
 }
 
@@ -137,6 +158,43 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
 // pages) as formatted output is confusing UX (#13937).
 const htmlEscapeRenderer = new marked.Renderer();
 htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
+
+htmlEscapeRenderer.code = ({
+  text,
+  lang,
+  escaped,
+}: {
+  text: string;
+  lang?: string;
+  escaped?: boolean;
+}) => {
+  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+  const safeText = escaped ? text : escapeHtml(text);
+  const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
+  const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
+  const attrSafe = text
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
+
+  const trimmed = text.trim();
+  const isJson =
+    lang === "json" ||
+    (!lang &&
+      ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))));
+
+  if (isJson) {
+    const lineCount = text.split("\n").length;
+    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
+    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
+  }
+
+  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+};
 
 function escapeHtml(value: string): string {
   return value

@@ -209,6 +209,50 @@ describe("applyConfig", () => {
     expect(params.baseHash).toBe("hash-apply-1");
     expect(params.sessionKey).toBe("agent:main:web:dm:test");
   });
+
+  it("preserves sensitive form values in serialized raw state for apply", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "agent:main:web:dm:secret";
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: {
+        auth: {
+          token: "secret-123",
+        },
+      },
+    };
+    state.configSchema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            auth: {
+              type: "object",
+              properties: {
+                token: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    };
+    state.configSnapshot = { hash: "hash-apply-secret" };
+
+    await applyConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.apply");
+    const params = request.mock.calls[0]?.[1] as {
+      raw: string;
+      baseHash: string;
+      sessionKey: string;
+    };
+    expect(params.raw).toContain("secret-123");
+    expect(params.baseHash).toBe("hash-apply-secret");
+  });
 });
 
 describe("saveConfig", () => {

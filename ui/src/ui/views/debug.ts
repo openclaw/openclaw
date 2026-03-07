@@ -33,7 +33,7 @@ export function renderDebug(props: DebugProps) {
     critical > 0 ? `${critical} critical` : warn > 0 ? `${warn} warnings` : "No critical issues";
 
   return html`
-    <section class="grid grid-cols-2">
+    <section class="grid">
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div>

@@ -2,7 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import { flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -13,7 +13,7 @@ import {
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
-import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
@@ -25,6 +25,7 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import {
@@ -38,7 +39,7 @@ import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
   PresenceEntry,
-  HealthSnapshot,
+  HealthSummary,
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
@@ -62,10 +63,10 @@ type GatewayHost = {
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
-  toolsCatalogLoading: boolean;
-  toolsCatalogError: string | null;
-  toolsCatalogResult: import("./types.ts").ToolsCatalogResult | null;
-  debugHealth: HealthSnapshot | null;
+  healthLoading: boolean;
+  healthResult: HealthSummary | null;
+  healthError: string | null;
+  debugHealth: HealthSummary | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
@@ -202,7 +203,7 @@ export function connectGateway(host: GatewayHost) {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
-      void loadToolsCatalog(host as unknown as OpenClawApp);
+      void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
@@ -254,48 +255,12 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
   }
 }
 
-function handleTerminalChatEvent(
-  host: GatewayHost,
-  payload: ChatEventPayload | undefined,
-  state: ReturnType<typeof handleChatEvent>,
-) {
-  if (state !== "final" && state !== "error" && state !== "aborted") {
-    return;
-  }
-  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
-  const runId = payload?.runId;
-  if (!runId || !host.refreshSessionsAfterChat.has(runId)) {
-    return;
-  }
-  host.refreshSessionsAfterChat.delete(runId);
-  if (state === "final") {
-    void loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    });
-  }
-}
-
-function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
-  if (payload?.sessionKey) {
-    setLastActiveSessionKey(
-      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-      payload.sessionKey,
-    );
-  }
-  const state = handleChatEvent(host as unknown as OpenClawApp, payload);
-  handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
-    void loadChatHistory(host as unknown as OpenClawApp);
-  }
-}
-
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   host.eventLogBuffer = [
     { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,
   ].slice(0, 250);
-  if (host.tab === "debug") {
+  if (host.tab === "debug" || host.tab === "overview") {
     host.eventLog = host.eventLogBuffer;
   }
 
@@ -311,7 +276,33 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "chat") {
-    handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    const payload = evt.payload as ChatEventPayload | undefined;
+    if (payload?.sessionKey) {
+      setLastActiveSessionKey(
+        host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+        payload.sessionKey,
+      );
+    }
+    const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+    if (state === "final" || state === "error" || state === "aborted") {
+      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+      const runId = payload?.runId;
+      if (runId && host.refreshSessionsAfterChat.has(runId)) {
+        host.refreshSessionsAfterChat.delete(runId);
+        if (state === "final") {
+          void loadSessions(host as unknown as OpenClawApp, {
+            activeMinutes: 0,
+            limit: 0,
+            includeGlobal: false,
+            includeUnknown: false,
+          });
+        }
+      }
+    }
+    if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
+      void loadChatHistory(host as unknown as OpenClawApp);
+    }
     return;
   }
 
@@ -364,7 +355,7 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   const snapshot = hello.snapshot as
     | {
         presence?: PresenceEntry[];
-        health?: HealthSnapshot;
+        health?: HealthSummary;
         sessionDefaults?: SessionDefaultsSnapshot;
         updateAvailable?: UpdateAvailable;
       }
@@ -374,6 +365,7 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   }
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
+    host.healthResult = snapshot.health;
   }
   if (snapshot?.sessionDefaults) {
     applySessionDefaults(host, snapshot.sessionDefaults);

@@ -184,9 +184,17 @@ export async function runUpdate(state: ConfigState) {
   state.updateRunning = true;
   state.lastError = null;
   try {
-    await state.client.request("update.run", {
+    const res = await state.client.request<{
+      ok?: boolean;
+      result?: { status?: string; reason?: string };
+    }>("update.run", {
       sessionKey: state.applySessionKey,
     });
+    if (res && res.ok === false) {
+      const status = res.result?.status ?? "error";
+      const reason = res.result?.reason ?? "Update failed.";
+      state.lastError = `Update ${status}: ${reason}`;
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {

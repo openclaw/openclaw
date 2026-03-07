@@ -1,15 +1,17 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ThemeMode } from "./theme.ts";
+import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
@@ -49,10 +51,12 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
+  const isActive = state.tab === tab;
+  const collapsed = state.settings.navCollapsed;
   return html`
     <a
       href=${href}
-      class="nav-item ${state.tab === tab ? "active" : ""}"
+      class="nav-item ${isActive ? "nav-item--active" : ""}"
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||
@@ -77,7 +81,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
       title=${titleForTab(tab)}
     >
       <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
-      <span class="nav-item__text">${titleForTab(tab)}</span>
+      ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
     </a>
   `;
 }
@@ -122,23 +126,52 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
+export function renderChatSessionSelect(state: AppViewState) {
+  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  return html`
+    <div class="chat-controls__session-row">
+      <label class="field chat-controls__session">
+        <select
+          .value=${state.sessionKey}
+          ?disabled=${!state.connected || sessionGroups.length === 0}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            if (state.sessionKey === next) {
+              return;
+            }
+            switchChatSession(state, next);
+          }}
+        >
+          ${repeat(
+            sessionGroups,
+            (group) => group.id,
+            (group) =>
+              html`<optgroup label=${group.label}>
+                ${repeat(
+                  group.options,
+                  (entry) => entry.key,
+                  (entry) =>
+                    html`<option value=${entry.key} title=${entry.title}>
+                      ${entry.label}
+                    </option>`,
+                )}
+              </optgroup>`,
+          )}
+        </select>
+      </label>
+    </div>
+  `;
+}
+
 export function renderChatControls(state: AppViewState) {
-  const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron
     ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
     : 0;
-  const sessionOptions = resolveSessionOptions(
-    state.sessionKey,
-    state.sessionsResult,
-    mainSessionKey,
-    hideCron,
-  );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
-  // Refresh icon
   const refreshIcon = html`
     <svg
       width="18"
@@ -174,43 +207,6 @@ export function renderChatControls(state: AppViewState) {
   `;
   return html`
     <div class="chat-controls">
-      <label class="field chat-controls__session">
-        <select
-          .value=${state.sessionKey}
-          ?disabled=${!state.connected}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
-            state.sessionKey = next;
-            state.chatMessage = "";
-            state.chatStream = null;
-            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-            state.chatRunId = null;
-            (state as unknown as OpenClawApp).resetToolStream();
-            (state as unknown as OpenClawApp).resetChatScroll();
-            state.applySettings({
-              ...state.settings,
-              sessionKey: next,
-              lastActiveSessionKey: next,
-            });
-            void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(
-              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-              next,
-              true,
-            );
-            void loadChatHistory(state as unknown as ChatState);
-          }}
-        >
-          ${repeat(
-            sessionOptions,
-            (entry) => entry.key,
-            (entry) =>
-              html`<option value=${entry.key} title=${entry.key}>
-                ${entry.displayName ?? entry.key}
-              </option>`,
-          )}
-        </select>
-      </label>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -291,23 +287,36 @@ export function renderChatControls(state: AppViewState) {
   `;
 }
 
-function resolveMainSessionKey(
-  hello: AppViewState["hello"],
-  sessions: SessionsListResult | null,
-): string | null {
-  const snapshot = hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined;
-  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) {
-    return mainSessionKey;
-  }
-  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) {
-    return mainKey;
-  }
-  if (sessions?.sessions?.some((row) => row.key === "main")) {
-    return "main";
-  }
-  return null;
+function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  state.sessionKey = nextSessionKey;
+  state.chatMessage = "";
+  state.chatStream = null;
+  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+  state.chatRunId = null;
+  (state as unknown as OpenClawApp).resetToolStream();
+  (state as unknown as OpenClawApp).resetChatScroll();
+  state.applySettings({
+    ...state.settings,
+    sessionKey: nextSessionKey,
+    lastActiveSessionKey: nextSessionKey,
+  });
+  void state.loadAssistantIdentity();
+  syncUrlWithSessionKey(
+    state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+    nextSessionKey,
+    true,
+  );
+  void loadChatHistory(state as unknown as ChatState);
+  void refreshSessionOptions(state);
+}
+
+async function refreshSessionOptions(state: AppViewState) {
+  await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
+    activeMinutes: 0,
+    limit: 0,
+    includeGlobal: false,
+    includeUnknown: false,
+  });
 }
 
 /* ── Channel display labels ────────────────────────────── */
@@ -431,51 +440,75 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
-function resolveSessionOptions(
+type SessionOptionEntry = {
+  key: string;
+  label: string;
+  title: string;
+};
+
+type SessionOptionGroup = {
+  id: string;
+  label: string;
+  options: SessionOptionEntry[];
+};
+
+export function resolveSessionOptionGroups(
+  state: AppViewState,
   sessionKey: string,
   sessions: SessionsListResult | null,
-  mainSessionKey?: string | null,
-  hideCron = false,
-) {
-  const seen = new Set<string>();
-  const options: Array<{ key: string; displayName?: string }> = [];
-
-  const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
-  const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
-
-  // Add main session key first
-  if (mainSessionKey) {
-    seen.add(mainSessionKey);
-    options.push({
-      key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
-    });
+): SessionOptionGroup[] {
+  const rows = sessions?.sessions ?? [];
+  const hideCron = state.sessionsHideCron ?? true;
+  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
+  for (const row of rows) {
+    byKey.set(row.key, row);
   }
 
-  // Add current session key next — always include it even if it's a cron session,
-  // so the active session is never silently dropped from the select.
-  if (!seen.has(sessionKey)) {
-    seen.add(sessionKey);
-    options.push({
-      key: sessionKey,
-      displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
-    });
-  }
-
-  // Add sessions from the result, optionally filtering out cron sessions.
-  if (sessions?.sessions) {
-    for (const s of sessions.sessions) {
-      if (!seen.has(s.key) && !(hideCron && isCronSessionKey(s.key))) {
-        seen.add(s.key);
-        options.push({
-          key: s.key,
-          displayName: resolveSessionDisplayName(s.key, s),
-        });
-      }
+  const seenKeys = new Set<string>();
+  const groups = new Map<string, SessionOptionGroup>();
+  const ensureGroup = (groupId: string, label: string): SessionOptionGroup => {
+    const existing = groups.get(groupId);
+    if (existing) {
+      return existing;
     }
-  }
+    const created: SessionOptionGroup = {
+      id: groupId,
+      label,
+      options: [],
+    };
+    groups.set(groupId, created);
+    return created;
+  };
 
-  return options;
+  const addOption = (key: string) => {
+    if (!key || seenKeys.has(key)) {
+      return;
+    }
+    seenKeys.add(key);
+    const row = byKey.get(key);
+    const parsed = parseAgentSessionKey(key);
+    const group = parsed
+      ? ensureGroup(
+          `agent:${parsed.agentId.toLowerCase()}`,
+          resolveAgentGroupLabel(state, parsed.agentId),
+        )
+      : ensureGroup("other", "Other Sessions");
+    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    group.options.push({
+      key,
+      label,
+      title: key,
+    });
+  };
+
+  for (const row of rows) {
+    if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
+      continue;
+    }
+    addOption(row.key);
+  }
+  addOption(sessionKey);
+  return Array.from(groups.values());
 }
 
 /** Count sessions with a cron: key that would be hidden when hideCron=true. */
@@ -487,88 +520,162 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
   return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
 }
 
-const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
+function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {
+  const normalized = agentIdRaw.trim().toLowerCase();
+  const agent = (state.agentsList?.agents ?? []).find(
+    (entry) => entry.id.trim().toLowerCase() === normalized,
+  );
+  const name = agent?.identity?.name?.trim() || agent?.name?.trim() || "";
+  return name && name !== agentIdRaw ? `${name} (${agentIdRaw})` : agentIdRaw;
+}
 
-export function renderThemeToggle(state: AppViewState) {
-  const index = Math.max(0, THEME_ORDER.indexOf(state.theme));
-  const applyTheme = (next: ThemeMode) => (event: MouseEvent) => {
-    const element = event.currentTarget as HTMLElement;
-    const context: ThemeTransitionContext = { element };
-    if (event.clientX || event.clientY) {
-      context.pointerClientX = event.clientX;
-      context.pointerClientY = event.clientY;
+function resolveSessionScopedOptionLabel(
+  key: string,
+  row?: SessionsListResult["sessions"][number],
+  rest?: string,
+) {
+  const base = rest?.trim() || key;
+  if (!row) {
+    return base;
+  }
+  const displayName =
+    typeof row.displayName === "string" && row.displayName.trim().length > 0
+      ? row.displayName.trim()
+      : null;
+  const label = typeof row.label === "string" ? row.label.trim() : "";
+  const showDisplayName = Boolean(
+    displayName && displayName !== key && displayName !== label && displayName !== base,
+  );
+  if (!showDisplayName) {
+    return base;
+  }
+  return `${base} · ${displayName}`;
+}
+
+type ThemeOption = { id: ThemeName; label: string; icon: string };
+const THEME_OPTIONS: ThemeOption[] = [
+  { id: "claw", label: "Claw", icon: "🦀" },
+  { id: "knot", label: "Knot", icon: "🪢" },
+  { id: "dash", label: "Dash", icon: "📊" },
+];
+
+type ThemeModeOption = { id: ThemeMode; label: string; short: string };
+const THEME_MODE_OPTIONS: ThemeModeOption[] = [
+  { id: "system", label: "System", short: "SYS" },
+  { id: "light", label: "Light", short: "LIGHT" },
+  { id: "dark", label: "Dark", short: "DARK" },
+];
+
+function currentThemeIcon(theme: ThemeName): string {
+  return THEME_OPTIONS.find((o) => o.id === theme)?.icon ?? "🎨";
+}
+
+export function renderTopbarThemeModeToggle(state: AppViewState) {
+  const modeIcon = (mode: ThemeMode) => {
+    if (mode === "system") {
+      return icons.monitor;
     }
-    state.setTheme(next, context);
+    if (mode === "light") {
+      return icons.sun;
+    }
+    return icons.moon;
+  };
+
+  const applyMode = (mode: ThemeMode, e: Event) => {
+    if (mode === state.themeMode) {
+      return;
+    }
+    state.setThemeMode(mode, { element: e.currentTarget as HTMLElement });
   };
 
   return html`
-    <div class="theme-toggle" style="--theme-index: ${index};">
-      <div class="theme-toggle__track" role="group" aria-label="Theme">
-        <span class="theme-toggle__indicator"></span>
-        <button
-          class="theme-toggle__button ${state.theme === "system" ? "active" : ""}"
-          @click=${applyTheme("system")}
-          aria-pressed=${state.theme === "system"}
-          aria-label="System theme"
-          title="System"
-        >
-          ${renderMonitorIcon()}
-        </button>
-        <button
-          class="theme-toggle__button ${state.theme === "light" ? "active" : ""}"
-          @click=${applyTheme("light")}
-          aria-pressed=${state.theme === "light"}
-          aria-label="Light theme"
-          title="Light"
-        >
-          ${renderSunIcon()}
-        </button>
-        <button
-          class="theme-toggle__button ${state.theme === "dark" ? "active" : ""}"
-          @click=${applyTheme("dark")}
-          aria-pressed=${state.theme === "dark"}
-          aria-label="Dark theme"
-          title="Dark"
-        >
-          ${renderMoonIcon()}
-        </button>
-      </div>
+    <div class="topbar-theme-mode" role="group" aria-label="Color mode">
+      ${THEME_MODE_OPTIONS.map(
+        (opt) => html`
+          <button
+            type="button"
+            class="topbar-theme-mode__btn ${opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""}"
+            title=${opt.label}
+            aria-label="Color mode: ${opt.label}"
+            aria-pressed=${opt.id === state.themeMode}
+            @click=${(e: Event) => applyMode(opt.id, e)}
+          >
+            ${modeIcon(opt.id)}
+          </button>
+        `,
+      )}
     </div>
   `;
 }
 
-function renderSunIcon() {
-  return html`
-    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="4"></circle>
-      <path d="M12 2v2"></path>
-      <path d="M12 20v2"></path>
-      <path d="m4.93 4.93 1.41 1.41"></path>
-      <path d="m17.66 17.66 1.41 1.41"></path>
-      <path d="M2 12h2"></path>
-      <path d="M20 12h2"></path>
-      <path d="m6.34 17.66-1.41 1.41"></path>
-      <path d="m19.07 4.93-1.41 1.41"></path>
-    </svg>
-  `;
-}
+export function renderThemeToggle(state: AppViewState) {
+  const setOpen = (orb: HTMLElement, nextOpen: boolean) => {
+    orb.classList.toggle("theme-orb--open", nextOpen);
+    const trigger = orb.querySelector<HTMLButtonElement>(".theme-orb__trigger");
+    const menu = orb.querySelector<HTMLElement>(".theme-orb__menu");
+    if (trigger) {
+      trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+    }
+    if (menu) {
+      menu.setAttribute("aria-hidden", nextOpen ? "false" : "true");
+    }
+  };
 
-function renderMoonIcon() {
-  return html`
-    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"
-      ></path>
-    </svg>
-  `;
-}
+  const toggleOpen = (e: Event) => {
+    const orb = (e.currentTarget as HTMLElement).closest<HTMLElement>(".theme-orb");
+    if (!orb) {
+      return;
+    }
+    const isOpen = orb.classList.contains("theme-orb--open");
+    if (isOpen) {
+      setOpen(orb, false);
+    } else {
+      setOpen(orb, true);
+      const close = (ev: MouseEvent) => {
+        if (!orb.contains(ev.target as Node)) {
+          setOpen(orb, false);
+          document.removeEventListener("click", close);
+        }
+      };
+      requestAnimationFrame(() => document.addEventListener("click", close));
+    }
+  };
 
-function renderMonitorIcon() {
+  const pick = (opt: ThemeOption, e: Event) => {
+    const orb = (e.currentTarget as HTMLElement).closest<HTMLElement>(".theme-orb");
+    if (orb) {
+      setOpen(orb, false);
+    }
+    if (opt.id !== state.theme) {
+      const context: ThemeTransitionContext = { element: orb ?? undefined };
+      state.setTheme(opt.id, context);
+    }
+  };
+
   return html`
-    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect width="20" height="14" x="2" y="3" rx="2"></rect>
-      <line x1="8" x2="16" y1="21" y2="21"></line>
-      <line x1="12" x2="12" y1="17" y2="21"></line>
-    </svg>
+    <div class="theme-orb" aria-label="Theme">
+      <button
+        type="button"
+        class="theme-orb__trigger"
+        title="Theme"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        @click=${toggleOpen}
+      >${currentThemeIcon(state.theme)}</button>
+      <div class="theme-orb__menu" role="menu" aria-hidden="true">
+        ${THEME_OPTIONS.map(
+          (opt) => html`
+            <button
+              type="button"
+              class="theme-orb__option ${opt.id === state.theme ? "theme-orb__option--active" : ""}"
+              title=${opt.label}
+              role="menuitemradio"
+              aria-checked=${opt.id === state.theme}
+              aria-label=${opt.label}
+              @click=${(e: Event) => pick(opt, e)}
+            >${opt.icon}</button>`,
+        )}
+      </div>
+    </div>
   `;
 }

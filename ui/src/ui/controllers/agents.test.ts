@@ -14,6 +14,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
     agentsList: null,
     agentsSelectedId: "main",
     toolsCatalogLoading: false,
+    toolsCatalogLoadingAgentId: null,
     toolsCatalogError: null,
     toolsCatalogResult: null,
   };
@@ -56,6 +57,70 @@ describe("loadToolsCatalog", () => {
 
     expect(state.toolsCatalogResult).toBeNull();
     expect(state.toolsCatalogError).toContain("gateway unavailable");
+    expect(state.toolsCatalogLoading).toBe(false);
+  });
+
+  it("allows a new agent request to replace a stale in-flight load", async () => {
+    const { state, request } = createState();
+
+    let resolveMain:
+      | ((value: {
+          agentId: string;
+          profiles: { id: string; label: string }[];
+          groups: {
+            id: string;
+            label: string;
+            source: string;
+            tools: { id: string; label: string; description: string; source: string }[];
+          }[];
+        }) => void)
+      | null = null;
+    const mainRequest = new Promise<{
+      agentId: string;
+      profiles: { id: string; label: string }[];
+      groups: {
+        id: string;
+        label: string;
+        source: string;
+        tools: { id: string; label: string; description: string; source: string }[];
+      }[];
+    }>((resolve) => {
+      resolveMain = resolve;
+    });
+
+    const replacementPayload = {
+      agentId: "other",
+      profiles: [{ id: "full", label: "Full" }],
+      groups: [],
+    };
+
+    request.mockImplementationOnce(() => mainRequest).mockResolvedValueOnce(replacementPayload);
+
+    const initialLoad = loadToolsCatalog(state, "main");
+    await Promise.resolve();
+
+    state.agentsSelectedId = "other";
+    await loadToolsCatalog(state, "other");
+
+    expect(request).toHaveBeenNthCalledWith(1, "tools.catalog", {
+      agentId: "main",
+      includePlugins: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "tools.catalog", {
+      agentId: "other",
+      includePlugins: true,
+    });
+    expect(state.toolsCatalogResult).toEqual(replacementPayload);
+    expect(state.toolsCatalogLoading).toBe(false);
+
+    resolveMain?.({
+      agentId: "main",
+      profiles: [{ id: "full", label: "Full" }],
+      groups: [],
+    });
+    await initialLoad;
+
+    expect(state.toolsCatalogResult).toEqual(replacementPayload);
     expect(state.toolsCatalogLoading).toBe(false);
   });
 });
