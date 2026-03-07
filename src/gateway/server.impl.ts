@@ -937,11 +937,9 @@ export async function startGatewayServer(
     }
   }
 
-  // [dev-mode] Attempt to start Hub notification server (once, at gateway start)
-  // Hub is presented as a plugin. If management agrees, we'd like it to be
-  // a built-in tool for agents — enabling in-session alert and response
-  // without requiring a separate server process.
+  // [dev-mode] Startup warning and Hub auto-start
   if (!minimalTestGateway && isDevMode()) {
+    console.warn("\n⚠️  DEV MODE ACTIVE — security features relaxed. Do not use in production.\n");
     try {
       const { fileURLToPath } = await import("node:url");
       const thisDir = path.dirname(fileURLToPath(import.meta.url));

@@ -11,6 +11,7 @@ import datetime
 import urllib.request
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 
 # Configuration
 HOST = "127.0.0.1"  # Internal only
@@ -21,7 +22,7 @@ LOG_FILE = Path(__file__).parent / "hub.log"
 # OpenClaw API
 OPENCLAW_HOST = os.environ.get("OPENCLAW_HOST", "127.0.0.1")
 OPENCLAW_PORT = int(os.environ.get("OPENCLAW_PORT", "18789"))
-OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
+OPENCLAW_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 OPENCLAW_AGENT = os.environ.get("OPENCLAW_AGENT", "agent:main")  # default value, please update in .env
 HUB_CHANNEL = os.environ.get("HUB_CHANNEL", "WhatsApp")  # default value, please update in .env
 
@@ -138,6 +139,10 @@ INSTRUCTION: Forward this to the user on {HUB_CHANNEL} NOW using the message too
 
 # ============ HTTP SERVER ============
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
 class HubHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress default logging
@@ -225,7 +230,7 @@ def main():
     log("=== Hub starting ===")
     init_db()
 
-    server = HTTPServer((HOST, PORT), HubHandler)
+    server = ThreadingHTTPServer((HOST, PORT), HubHandler)
     log(f"Hub listening on http://{HOST}:{PORT}")
     log("Endpoints:")
     log("  POST /notify - Send notification {source, title, message, priority}")
