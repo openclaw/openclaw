@@ -1,24 +1,22 @@
 #!/usr/bin/env node
 
-import path from "node:path";
 import ts from "typescript";
+import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
 import {
   collectFileViolations,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
 } from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = resolveRepoRoot(import.meta.url);
-const sourceRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];
+const { repoRoot, sourceRoots, resolveFromRepo } = createPairingGuardContext(import.meta.url);
 
 const allowedFiles = new Set([
-  path.join(repoRoot, "src", "security", "dm-policy-shared.ts"),
-  path.join(repoRoot, "src", "channels", "allow-from.ts"),
+  resolveFromRepo("src/security/dm-policy-shared.ts"),
+  resolveFromRepo("src/channels/allow-from.ts"),
   // Config migration/audit logic may intentionally reference store + group fields.
-  path.join(repoRoot, "src", "security", "fix.ts"),
-  path.join(repoRoot, "src", "security", "audit-channel.ts"),
+  resolveFromRepo("src/security/fix.ts"),
+  resolveFromRepo("src/security/audit-channel.ts"),
 ]);
 
 const storeIdentifierRe = /^(?:storeAllowFrom|storedAllowFrom|storeAllowList)$/i;

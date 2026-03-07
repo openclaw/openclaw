@@ -12,6 +12,8 @@ type QuoteScanState = {
 };
 const WEAK_RANDOM_SAME_LINE_PATTERN =
   /(?:Date\.now[^\r\n]*Math\.random|Math\.random[^\r\n]*Date\.now)/u;
+const PATH_JOIN_CALL_PATTERN = /path\s*\.\s*join\s*\(/u;
+const OS_TMPDIR_CALL_PATTERN = /os\s*\.\s*tmpdir\s*\(/u;
 
 function shouldSkip(relativePath: string): boolean {
   return shouldSkipGuardrailRuntimeSource(relativePath);
@@ -144,10 +146,13 @@ function isOsTmpdirExpression(argument: string): boolean {
 }
 
 function mightContainDynamicTmpdirJoin(source: string): boolean {
+  if (!source.includes("path") || !source.includes("join") || !source.includes("tmpdir")) {
+    return false;
+  }
   return (
-    source.includes("path") &&
-    source.includes("join") &&
-    source.includes("tmpdir") &&
+    (source.includes("path.join") || PATH_JOIN_CALL_PATTERN.test(source)) &&
+    (source.includes("os.tmpdir") || OS_TMPDIR_CALL_PATTERN.test(source)) &&
+    source.includes("`") &&
     source.includes("${")
   );
 }
@@ -219,13 +224,21 @@ describe("temp path guard", () => {
 
     for (const file of files) {
       const relativePath = file.relativePath;
-      if (shouldSkip(relativePath)) {
+      const source = file.source;
+      const mightContainTmpdirJoin =
+        source.includes("tmpdir") &&
+        source.includes("path") &&
+        source.includes("join") &&
+        source.includes("`");
+      const mightContainWeakRandom = source.includes("Date.now") && source.includes("Math.random");
+
+      if (!mightContainTmpdirJoin && !mightContainWeakRandom) {
         continue;
       }
-      if (hasDynamicTmpdirJoin(file.source)) {
+      if (mightContainTmpdirJoin && hasDynamicTmpdirJoin(source)) {
         offenders.push(relativePath);
       }
-      if (WEAK_RANDOM_SAME_LINE_PATTERN.test(file.source)) {
+      if (mightContainWeakRandom && WEAK_RANDOM_SAME_LINE_PATTERN.test(source)) {
         weakRandomMatches.push(relativePath);
       }
     }

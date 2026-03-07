@@ -27,6 +27,76 @@ afterEach(() => {
 });
 
 describe("sendMessage channel normalization", () => {
+  it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
+    const resolvedCfg = {
+      __resolvedCfgMarker: "cfg-from-secret-resolution",
+      channels: {},
+    } as Record<string, unknown>;
+    const seen: {
+      resolveCfg?: unknown;
+      sendCfg?: unknown;
+      to?: string;
+    } = {};
+    const imessageAliasPlugin: ChannelPlugin = {
+      id: "imessage",
+      meta: {
+        id: "imessage",
+        label: "iMessage",
+        selectionLabel: "iMessage",
+        docsPath: "/channels/imessage",
+        blurb: "iMessage test stub.",
+        aliases: ["imsg"],
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to, cfg }) => {
+          seen.resolveCfg = cfg;
+          const normalized = String(to ?? "")
+            .trim()
+            .replace(/^imessage:/i, "");
+          return { ok: true, to: normalized };
+        },
+        sendText: async ({ cfg, to }) => {
+          seen.sendCfg = cfg;
+          seen.to = to;
+          return { channel: "imessage", messageId: "i-resolved" };
+        },
+        sendMedia: async ({ cfg, to }) => {
+          seen.sendCfg = cfg;
+          seen.to = to;
+          return { channel: "imessage", messageId: "i-resolved-media" };
+        },
+      },
+    };
+
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: imessageAliasPlugin,
+        },
+      ]),
+    );
+
+    const result = await sendMessage({
+      cfg: resolvedCfg,
+      to: " imessage:+15551234567 ",
+      content: "hi",
+      channel: "imsg",
+    });
+
+    expect(result.channel).toBe("imessage");
+    expect(seen.resolveCfg).toBe(resolvedCfg);
+    expect(seen.sendCfg).toBe(resolvedCfg);
+    expect(seen.to).toBe("+15551234567");
+  });
+
   it("normalizes Teams alias", async () => {
     const sendMSTeams = vi.fn(async () => ({
       messageId: "m1",
@@ -155,20 +225,24 @@ describe("sendPoll channel normalization", () => {
   });
 });
 
+const setMattermostGatewayRegistry = () => {
+  setRegistry(
+    createTestRegistry([
+      {
+        pluginId: "mattermost",
+        source: "test",
+        plugin: {
+          ...createMattermostLikePlugin({ onSendText: () => {} }),
+          outbound: { deliveryMode: "gateway" },
+        },
+      },
+    ]),
+  );
+};
+
 describe("gateway url override hardening", () => {
   it("drops gateway url overrides in backend mode (SSRF hardening)", async () => {
-    setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "mattermost",
-          source: "test",
-          plugin: {
-            ...createMattermostLikePlugin({ onSendText: () => {} }),
-            outbound: { deliveryMode: "gateway" },
-          },
-        },
-      ]),
-    );
+    setMattermostGatewayRegistry();
 
     callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
     await sendMessage({
@@ -196,18 +270,7 @@ describe("gateway url override hardening", () => {
   });
 
   it("forwards explicit agentId in gateway send params", async () => {
-    setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "mattermost",
-          source: "test",
-          plugin: {
-            ...createMattermostLikePlugin({ onSendText: () => {} }),
-            outbound: { deliveryMode: "gateway" },
-          },
-        },
-      ]),
-    );
+    setMattermostGatewayRegistry();
 
     callGatewayMock.mockResolvedValueOnce({ messageId: "m-agent" });
     await sendMessage({

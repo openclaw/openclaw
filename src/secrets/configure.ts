@@ -1,30 +1,36 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
-import { type SecretsApplyPlan } from "./plan.js";
-import { resolveDefaultSecretProviderAlias } from "./ref-contract.js";
+import {
+  buildConfigureCandidatesForScope,
+  buildSecretsConfigurePlan,
+  collectConfigureProviderChanges,
+  hasConfigurePlanChanges,
+  type ConfigureCandidate,
+} from "./configure-plan.js";
+import type { SecretsApplyPlan } from "./plan.js";
+import { PROVIDER_ENV_VARS } from "./provider-env-vars.js";
+import { isValidSecretProviderAlias, resolveDefaultSecretProviderAlias } from "./ref-contract.js";
+import { resolveSecretRefValue } from "./resolve.js";
+import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
-
-type ConfigureCandidate = {
-  type: "models.providers.apiKey" | "skills.entries.apiKey" | "channels.googlechat.serviceAccount";
-  path: string;
-  pathSegments: string[];
-  label: string;
-  providerId?: string;
-  accountId?: string;
-};
+import { readJsonObjectIfExists } from "./storage-scan.js";
 
 export type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
 };
 
-const PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
@@ -124,67 +130,6 @@ function providerHint(provider: SecretProviderConfig): string {
   return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
 }
 
-function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
-  const out: ConfigureCandidate[] = [];
-  const providers = config.models?.providers as Record<string, unknown> | undefined;
-  if (providers) {
-    for (const [providerId, providerValue] of Object.entries(providers)) {
-      if (!isRecord(providerValue)) {
-        continue;
-      }
-      out.push({
-        type: "models.providers.apiKey",
-        path: `models.providers.${providerId}.apiKey`,
-        pathSegments: ["models", "providers", providerId, "apiKey"],
-        label: `Provider API key: ${providerId}`,
-        providerId,
-      });
-    }
-  }
-
-  const entries = config.skills?.entries as Record<string, unknown> | undefined;
-  if (entries) {
-    for (const [entryId, entryValue] of Object.entries(entries)) {
-      if (!isRecord(entryValue)) {
-        continue;
-      }
-      out.push({
-        type: "skills.entries.apiKey",
-        path: `skills.entries.${entryId}.apiKey`,
-        pathSegments: ["skills", "entries", entryId, "apiKey"],
-        label: `Skill API key: ${entryId}`,
-      });
-    }
-  }
-
-  const googlechat = config.channels?.googlechat;
-  if (isRecord(googlechat)) {
-    out.push({
-      type: "channels.googlechat.serviceAccount",
-      path: "channels.googlechat.serviceAccount",
-      pathSegments: ["channels", "googlechat", "serviceAccount"],
-      label: "Google Chat serviceAccount (default)",
-    });
-    const accounts = googlechat.accounts;
-    if (isRecord(accounts)) {
-      for (const [accountId, value] of Object.entries(accounts)) {
-        if (!isRecord(value)) {
-          continue;
-        }
-        out.push({
-          type: "channels.googlechat.serviceAccount",
-          path: `channels.googlechat.accounts.${accountId}.serviceAccount`,
-          pathSegments: ["channels", "googlechat", "accounts", accountId, "serviceAccount"],
-          label: `Google Chat serviceAccount (${accountId})`,
-          accountId,
-        });
-      }
-    }
-  }
-
-  return out;
-}
-
 function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
   const hasSource = (source: SecretRefSource) =>
     Object.values(config.secrets?.providers ?? {}).some((provider) => provider?.source === source);
@@ -210,6 +155,33 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
   return value;
 }
 
+const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+
+function validateEnvNameCsv(value: string): string | undefined {
+  const entries = parseCsv(value);
+  for (const entry of entries) {
+    if (!ENV_NAME_PATTERN.test(entry)) {
+      return `Invalid env name: ${entry}`;
+    }
+  }
+  return undefined;
+}
+
+async function promptEnvNameCsv(params: {
+  message: string;
+  initialValue: string;
+}): Promise<string[]> {
+  const raw = assertNoCancel(
+    await text({
+      message: params.message,
+      initialValue: params.initialValue,
+      validate: (value) => validateEnvNameCsv(String(value ?? "")),
+    }),
+    "Secrets configure cancelled.",
+  );
+  return parseCsv(String(raw ?? ""));
+}
+
 async function promptOptionalPositiveInt(params: {
   message: string;
   initialValue?: number;
@@ -218,10 +190,14 @@ async function promptOptionalPositiveInt(params: {
   const raw = assertNoCancel(
     await text({
       message: params.message,
-      initialValue: params.initialValue ? String(params.initialValue) : "",
+      initialValue: params.initialValue === undefined ? "" : String(params.initialValue),
       validate: (value) => {
-        const parsed = parseOptionalPositiveInt(String(value ?? ""), params.max);
-        if (String(value ?? "").trim() && parsed === undefined) {
+        const trimmed = String(value ?? "").trim();
+        if (!trimmed) {
+          return undefined;
+        }
+        const parsed = parseOptionalPositiveInt(trimmed, params.max);
+        if (parsed === undefined) {
           return `Must be an integer between 1 and ${params.max}`;
         }
         return undefined;
@@ -229,7 +205,168 @@ async function promptOptionalPositiveInt(params: {
     }),
     "Secrets configure cancelled.",
   );
-  return parseOptionalPositiveInt(String(raw ?? ""), params.max);
+  const parsed = parseOptionalPositiveInt(String(raw ?? ""), params.max);
+  return parsed;
+}
+
+function configureCandidateKey(candidate: {
+  configFile: "openclaw.json" | "auth-profiles.json";
+  path: string;
+  agentId?: string;
+}): string {
+  if (candidate.configFile === "auth-profiles.json") {
+    return `auth-profiles:${String(candidate.agentId ?? "").trim()}:${candidate.path}`;
+  }
+  return `openclaw:${candidate.path}`;
+}
+
+function hasSourceChoice(
+  sourceChoices: Array<{ value: SecretRefSource; label: string }>,
+  source: SecretRefSource,
+): boolean {
+  return sourceChoices.some((entry) => entry.value === source);
+}
+
+function resolveCandidateProviderHint(candidate: ConfigureCandidate): string | undefined {
+  if (typeof candidate.authProfileProvider === "string" && candidate.authProfileProvider.trim()) {
+    return candidate.authProfileProvider.trim().toLowerCase();
+  }
+  if (typeof candidate.providerId === "string" && candidate.providerId.trim()) {
+    return candidate.providerId.trim().toLowerCase();
+  }
+  return undefined;
+}
+
+function resolveSuggestedEnvSecretId(candidate: ConfigureCandidate): string | undefined {
+  const hintedProvider = resolveCandidateProviderHint(candidate);
+  if (!hintedProvider) {
+    return undefined;
+  }
+  const envCandidates = PROVIDER_ENV_VARS[hintedProvider];
+  if (!Array.isArray(envCandidates) || envCandidates.length === 0) {
+    return undefined;
+  }
+  return envCandidates[0];
+}
+
+function resolveConfigureAgentId(config: OpenClawConfig, explicitAgentId?: string): string {
+  const knownAgentIds = new Set(listAgentIds(config));
+  if (!explicitAgentId) {
+    return resolveDefaultAgentId(config);
+  }
+  const normalized = normalizeAgentId(explicitAgentId);
+  if (knownAgentIds.has(normalized)) {
+    return normalized;
+  }
+  const known = [...knownAgentIds].toSorted().join(", ");
+  throw new Error(
+    `Unknown agent id "${explicitAgentId}". Known agents: ${known || "none configured"}.`,
+  );
+}
+
+function normalizeAuthStoreForConfigure(
+  raw: Record<string, unknown> | null,
+  storePath: string,
+): AuthProfileStore {
+  if (!raw) {
+    return {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+    };
+  }
+  if (!isRecord(raw.profiles)) {
+    throw new Error(
+      `Cannot run interactive secrets configure because ${storePath} is invalid (missing "profiles" object).`,
+    );
+  }
+  const version = typeof raw.version === "number" && Number.isFinite(raw.version) ? raw.version : 1;
+  return {
+    version,
+    profiles: raw.profiles as AuthProfileStore["profiles"],
+    ...(isRecord(raw.order) ? { order: raw.order as AuthProfileStore["order"] } : {}),
+    ...(isRecord(raw.lastGood) ? { lastGood: raw.lastGood as AuthProfileStore["lastGood"] } : {}),
+    ...(isRecord(raw.usageStats)
+      ? { usageStats: raw.usageStats as AuthProfileStore["usageStats"] }
+      : {}),
+  };
+}
+
+function loadAuthProfileStoreForConfigure(params: {
+  config: OpenClawConfig;
+  agentId: string;
+}): AuthProfileStore {
+  const agentDir = resolveAgentDir(params.config, params.agentId);
+  const storePath = resolveAuthStorePath(agentDir);
+  const parsed = readJsonObjectIfExists(storePath);
+  if (parsed.error) {
+    throw new Error(
+      `Cannot run interactive secrets configure because ${storePath} could not be read: ${parsed.error}`,
+    );
+  }
+  return normalizeAuthStoreForConfigure(parsed.value, storePath);
+}
+
+async function promptNewAuthProfileCandidate(agentId: string): Promise<ConfigureCandidate> {
+  const profileId = assertNoCancel(
+    await text({
+      message: "Auth profile id",
+      validate: (value) => {
+        const trimmed = String(value ?? "").trim();
+        if (!trimmed) {
+          return "Required";
+        }
+        if (!AUTH_PROFILE_ID_PATTERN.test(trimmed)) {
+          return 'Use letters/numbers/":"/"_"/"-" only.';
+        }
+        return undefined;
+      },
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  const credentialType = assertNoCancel(
+    await select({
+      message: "Auth profile credential type",
+      options: [
+        { value: "api_key", label: "api_key (key/keyRef)" },
+        { value: "token", label: "token (token/tokenRef)" },
+      ],
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  const provider = assertNoCancel(
+    await text({
+      message: "Provider id",
+      validate: (value) => (String(value ?? "").trim().length > 0 ? undefined : "Required"),
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  const profileIdTrimmed = String(profileId).trim();
+  const providerTrimmed = String(provider).trim();
+  if (credentialType === "token") {
+    return {
+      type: "auth-profiles.token.token",
+      path: `profiles.${profileIdTrimmed}.token`,
+      pathSegments: ["profiles", profileIdTrimmed, "token"],
+      label: `profiles.${profileIdTrimmed}.token (auth profile, agent ${agentId})`,
+      configFile: "auth-profiles.json",
+      agentId,
+      authProfileProvider: providerTrimmed,
+      expectedResolvedValue: "string",
+    };
+  }
+  return {
+    type: "auth-profiles.api_key.key",
+    path: `profiles.${profileIdTrimmed}.key`,
+    pathSegments: ["profiles", profileIdTrimmed, "key"],
+    label: `profiles.${profileIdTrimmed}.key (auth profile, agent ${agentId})`,
+    configFile: "auth-profiles.json",
+    agentId,
+    authProfileProvider: providerTrimmed,
+    expectedResolvedValue: "string",
+  };
 }
 
 async function promptProviderAlias(params: { existingAliases: Set<string> }): Promise<string> {
@@ -242,7 +379,7 @@ async function promptProviderAlias(params: { existingAliases: Set<string> }): Pr
         if (!trimmed) {
           return "Required";
         }
-        if (!PROVIDER_ALIAS_PATTERN.test(trimmed)) {
+        if (!isValidSecretProviderAlias(trimmed)) {
           return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
         }
         if (params.existingAliases.has(trimmed)) {
@@ -275,23 +412,10 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
 async function promptEnvProvider(
   base?: Extract<SecretProviderConfig, { source: "env" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "env" }>> {
-  const allowlistRaw = assertNoCancel(
-    await text({
-      message: "Env allowlist (comma-separated, blank for unrestricted)",
-      initialValue: base?.allowlist?.join(",") ?? "",
-      validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
-        for (const entry of entries) {
-          if (!ENV_NAME_PATTERN.test(entry)) {
-            return `Invalid env name: ${entry}`;
-          }
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
-  const allowlist = parseCsv(String(allowlistRaw ?? ""));
+  const allowlist = await promptEnvNameCsv({
+    message: "Env allowlist (comma-separated, blank for unrestricted)",
+    initialValue: base?.allowlist?.join(",") ?? "",
+  });
   return {
     source: "env",
     ...(allowlist.length > 0 ? { allowlist } : {}),
@@ -436,22 +560,10 @@ async function promptExecProvider(
     "Secrets configure cancelled.",
   );
 
-  const passEnvRaw = assertNoCancel(
-    await text({
-      message: "Pass-through env vars (comma-separated, blank for none)",
-      initialValue: base?.passEnv?.join(",") ?? "",
-      validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
-        for (const entry of entries) {
-          if (!ENV_NAME_PATTERN.test(entry)) {
-            return `Invalid env name: ${entry}`;
-          }
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
+  const passEnv = await promptEnvNameCsv({
+    message: "Pass-through env vars (comma-separated, blank for none)",
+    initialValue: base?.passEnv?.join(",") ?? "",
+  });
 
   const trustedDirsRaw = assertNoCancel(
     await text({
@@ -486,7 +598,6 @@ async function promptExecProvider(
   );
 
   const args = await parseArgsInput(String(argsRaw ?? ""));
-  const passEnv = parseCsv(String(passEnvRaw ?? ""));
   const trustedDirs = parseCsv(String(trustedDirsRaw ?? ""));
 
   return {
@@ -626,41 +737,12 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
   }
 }
 
-function collectProviderPlanChanges(params: { original: OpenClawConfig; next: OpenClawConfig }): {
-  upserts: Record<string, SecretProviderConfig>;
-  deletes: string[];
-} {
-  const originalProviders = getSecretProviders(params.original);
-  const nextProviders = getSecretProviders(params.next);
-
-  const upserts: Record<string, SecretProviderConfig> = {};
-  const deletes: string[] = [];
-
-  for (const [providerAlias, nextProviderConfig] of Object.entries(nextProviders)) {
-    const current = originalProviders[providerAlias];
-    if (isDeepStrictEqual(current, nextProviderConfig)) {
-      continue;
-    }
-    upserts[providerAlias] = structuredClone(nextProviderConfig);
-  }
-
-  for (const providerAlias of Object.keys(originalProviders)) {
-    if (!Object.prototype.hasOwnProperty.call(nextProviders, providerAlias)) {
-      deletes.push(providerAlias);
-    }
-  }
-
-  return {
-    upserts,
-    deletes: deletes.toSorted(),
-  };
-}
-
 export async function runSecretsConfigureInteractive(
   params: {
     env?: NodeJS.ProcessEnv;
     providersOnly?: boolean;
     skipProviderSetup?: boolean;
+    agentId?: string;
   } = {},
 ): Promise<SecretsConfigureResult> {
   if (!process.stdin.isTTY) {
@@ -682,26 +764,62 @@ export async function runSecretsConfigureInteractive(
     await configureProvidersInteractive(stagedConfig);
   }
 
-  const providerChanges = collectProviderPlanChanges({
+  const providerChanges = collectConfigureProviderChanges({
     original: snapshot.config,
     next: stagedConfig,
   });
 
   const selectedByPath = new Map<string, ConfigureCandidate & { ref: SecretRef }>();
   if (!params.providersOnly) {
-    const candidates = buildCandidates(stagedConfig);
+    const configureAgentId = resolveConfigureAgentId(snapshot.config, params.agentId);
+    const authStore = loadAuthProfileStoreForConfigure({
+      config: snapshot.config,
+      agentId: configureAgentId,
+    });
+    const candidates = buildConfigureCandidatesForScope({
+      config: stagedConfig,
+      authoredOpenClawConfig: snapshot.resolved,
+      authProfiles: {
+        agentId: configureAgentId,
+        store: authStore,
+      },
+    });
     if (candidates.length === 0) {
-      throw new Error("No configurable secret-bearing fields found in openclaw.json.");
+      throw new Error("No configurable secret-bearing fields found for this agent scope.");
     }
 
     const sourceChoices = toSourceChoices(stagedConfig);
+    const hasDerivedCandidates = candidates.some((candidate) => candidate.isDerived === true);
+    let showDerivedCandidates = false;
 
     while (true) {
-      const options = candidates.map((candidate) => ({
-        value: candidate.path,
+      const visibleCandidates = showDerivedCandidates
+        ? candidates
+        : candidates.filter((candidate) => candidate.isDerived !== true);
+      const options = visibleCandidates.map((candidate) => ({
+        value: configureCandidateKey(candidate),
         label: candidate.label,
-        hint: candidate.path,
+        hint: [
+          candidate.configFile === "auth-profiles.json" ? "auth-profiles.json" : "openclaw.json",
+          candidate.isDerived === true ? "derived" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" | "),
       }));
+      options.push({
+        value: "__create_auth_profile__",
+        label: "Create auth profile mapping",
+        hint: `Add a new auth-profiles target for agent ${configureAgentId}`,
+      });
+      if (hasDerivedCandidates) {
+        options.push({
+          value: "__toggle_derived__",
+          label: showDerivedCandidates ? "Hide derived targets" : "Show derived targets",
+          hint: showDerivedCandidates
+            ? "Show only fields authored directly in config"
+            : "Include normalized/derived aliases",
+        });
+      }
       if (selectedByPath.size > 0) {
         options.unshift({
           value: "__done__",
@@ -721,16 +839,41 @@ export async function runSecretsConfigureInteractive(
       if (selectedPath === "__done__") {
         break;
       }
+      if (selectedPath === "__create_auth_profile__") {
+        const createdCandidate = await promptNewAuthProfileCandidate(configureAgentId);
+        const key = configureCandidateKey(createdCandidate);
+        const existingIndex = candidates.findIndex((entry) => configureCandidateKey(entry) === key);
+        if (existingIndex >= 0) {
+          candidates[existingIndex] = createdCandidate;
+        } else {
+          candidates.push(createdCandidate);
+        }
+        continue;
+      }
+      if (selectedPath === "__toggle_derived__") {
+        showDerivedCandidates = !showDerivedCandidates;
+        continue;
+      }
 
-      const candidate = candidates.find((entry) => entry.path === selectedPath);
+      const candidate = visibleCandidates.find(
+        (entry) => configureCandidateKey(entry) === selectedPath,
+      );
       if (!candidate) {
         throw new Error(`Unknown configure target: ${selectedPath}`);
       }
+      const candidateKey = configureCandidateKey(candidate);
+      const priorSelection = selectedByPath.get(candidateKey);
+      const existingRef = priorSelection?.ref ?? candidate.existingRef;
+      const sourceInitialValue =
+        existingRef && hasSourceChoice(sourceChoices, existingRef.source)
+          ? existingRef.source
+          : undefined;
 
       const source = assertNoCancel(
         await select({
           message: "Secret source",
           options: sourceChoices,
+          initialValue: sourceInitialValue,
         }),
         "Secrets configure cancelled.",
       ) as SecretRefSource;
@@ -738,16 +881,18 @@ export async function runSecretsConfigureInteractive(
       const defaultAlias = resolveDefaultSecretProviderAlias(stagedConfig, source, {
         preferFirstProviderForSource: true,
       });
+      const providerInitialValue =
+        existingRef?.source === source ? existingRef.provider : defaultAlias;
       const provider = assertNoCancel(
         await text({
           message: "Provider alias",
-          initialValue: defaultAlias,
+          initialValue: providerInitialValue,
           validate: (value) => {
             const trimmed = String(value ?? "").trim();
             if (!trimmed) {
               return "Required";
             }
-            if (!PROVIDER_ALIAS_PATTERN.test(trimmed)) {
+            if (!isValidSecretProviderAlias(trimmed)) {
               return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
             }
             return undefined;
@@ -755,24 +900,50 @@ export async function runSecretsConfigureInteractive(
         }),
         "Secrets configure cancelled.",
       );
+      const providerAlias = String(provider).trim();
+      const suggestedIdFromExistingRef =
+        existingRef?.source === source ? existingRef.id : undefined;
+      let suggestedId = suggestedIdFromExistingRef;
+      if (!suggestedId && source === "env") {
+        suggestedId = resolveSuggestedEnvSecretId(candidate);
+      }
+      if (!suggestedId && source === "file") {
+        const configuredProvider = stagedConfig.secrets?.providers?.[providerAlias];
+        if (configuredProvider?.source === "file" && configuredProvider.mode === "singleValue") {
+          suggestedId = "value";
+        }
+      }
       const id = assertNoCancel(
         await text({
           message: "Secret id",
+          initialValue: suggestedId,
           validate: (value) => (String(value ?? "").trim().length > 0 ? undefined : "Required"),
         }),
         "Secrets configure cancelled.",
       );
       const ref: SecretRef = {
         source,
-        provider: String(provider).trim(),
+        provider: providerAlias,
         id: String(id).trim(),
       };
+      const resolved = await resolveSecretRefValue(ref, {
+        config: stagedConfig,
+        env,
+      });
+      assertExpectedResolvedSecretValue({
+        value: resolved,
+        expected: candidate.expectedResolvedValue,
+        errorMessage:
+          candidate.expectedResolvedValue === "string"
+            ? `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a non-empty string.`
+            : `Ref ${ref.source}:${ref.provider}:${ref.id} did not resolve to a supported value type.`,
+      });
 
       const next = {
         ...candidate,
         ref,
       };
-      selectedByPath.set(candidate.path, next);
+      selectedByPath.set(candidateKey, next);
 
       const addMore = assertNoCancel(
         await confirm({
@@ -787,37 +958,14 @@ export async function runSecretsConfigureInteractive(
     }
   }
 
-  if (
-    selectedByPath.size === 0 &&
-    Object.keys(providerChanges.upserts).length === 0 &&
-    providerChanges.deletes.length === 0
-  ) {
+  if (!hasConfigurePlanChanges({ selectedTargets: selectedByPath, providerChanges })) {
     throw new Error("No secrets changes were selected.");
   }
 
-  const plan: SecretsApplyPlan = {
-    version: 1,
-    protocolVersion: 1,
-    generatedAt: new Date().toISOString(),
-    generatedBy: "openclaw secrets configure",
-    targets: [...selectedByPath.values()].map((entry) => ({
-      type: entry.type,
-      path: entry.path,
-      pathSegments: [...entry.pathSegments],
-      ref: entry.ref,
-      ...(entry.providerId ? { providerId: entry.providerId } : {}),
-      ...(entry.accountId ? { accountId: entry.accountId } : {}),
-    })),
-    ...(Object.keys(providerChanges.upserts).length > 0
-      ? { providerUpserts: providerChanges.upserts }
-      : {}),
-    ...(providerChanges.deletes.length > 0 ? { providerDeletes: providerChanges.deletes } : {}),
-    options: {
-      scrubEnv: true,
-      scrubAuthProfilesForProviderTargets: true,
-      scrubLegacyAuthJson: true,
-    },
-  };
+  const plan = buildSecretsConfigurePlan({
+    selectedTargets: selectedByPath,
+    providerChanges,
+  });
 
   const preflight = await runSecretsApply({
     plan,
