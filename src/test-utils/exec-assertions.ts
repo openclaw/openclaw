@@ -1,8 +1,15 @@
+import path from "node:path";
 import { expect } from "vitest";
+
+function normalizeDarwinTmpPath(filePath: string): string {
+  return process.platform === "darwin" && filePath.startsWith("/private/var/")
+    ? filePath.slice("/private".length)
+    : filePath;
+}
 
 export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   calls: Array<[unknown, { cwd?: string } | undefined]>;
-  expectedCwd: string;
+  expectedTargetDir: string;
 }) {
   const npmCalls = params.calls.filter((call) => Array.isArray(call[0]) && call[0][0] === "npm");
   expect(npmCalls.length).toBe(1);
@@ -19,7 +26,11 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
     "--silent",
     "--ignore-scripts",
   ]);
-  expect(opts?.cwd).toBe(params.expectedCwd);
+  expect(opts?.cwd).toBeTruthy();
+  const cwd = normalizeDarwinTmpPath(String(opts?.cwd));
+  const expectedTargetDir = normalizeDarwinTmpPath(params.expectedTargetDir);
+  expect(path.dirname(cwd)).toBe(path.dirname(expectedTargetDir));
+  expect(path.basename(cwd)).toMatch(/^\.openclaw-install-stage-/);
 }
 
 export function expectSingleNpmPackIgnoreScriptsCall(params: {
