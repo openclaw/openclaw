@@ -2,6 +2,7 @@ import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channe
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export function resolvePinnedMainDmOwnerFromAllowlist(params: {
@@ -118,22 +119,28 @@ export function resolveDmGroupAccessDecision(params: {
   const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
 
   if (params.isGroup) {
-    if (groupPolicy === "disabled") {
-      return {
-        decision: "block",
-        reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
-        reason: "groupPolicy=disabled",
-      };
-    }
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
+    const groupAccess = evaluateMatchedGroupAccessForPolicy({
+      groupPolicy,
+      allowlistConfigured: effectiveGroupAllowFrom.length > 0,
+      allowlistMatched: params.isSenderAllowed(effectiveGroupAllowFrom),
+    });
+
+    if (!groupAccess.allowed) {
+      if (groupAccess.reason === "disabled") {
+        return {
+          decision: "block",
+          reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
+          reason: "groupPolicy=disabled",
+        };
+      }
+      if (groupAccess.reason === "empty_allowlist") {
         return {
           decision: "block",
           reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
           reason: "groupPolicy=allowlist (empty allowlist)",
         };
       }
-      if (!params.isSenderAllowed(effectiveGroupAllowFrom)) {
+      if (groupAccess.reason === "not_allowlisted") {
         return {
           decision: "block",
           reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
@@ -141,6 +148,7 @@ export function resolveDmGroupAccessDecision(params: {
         };
       }
     }
+
     return {
       decision: "allow",
       reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,

@@ -280,11 +280,14 @@ export {
 } from "./allow-from.js";
 export {
   evaluateGroupRouteAccessForPolicy,
+  evaluateMatchedGroupAccessForPolicy,
   evaluateSenderGroupAccess,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
   type GroupRouteAccessDecision,
   type GroupRouteAccessReason,
+  type MatchedGroupAccessDecision,
+  type MatchedGroupAccessReason,
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
