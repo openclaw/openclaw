@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from packages.common.errors import KillSwitchEnabledError, ReadOnlyError, WebhookAuthError
@@ -36,6 +37,7 @@ from services.webhook_gateway.routes.stripe import router as stripe_router
 from services.webhook_gateway.routes.stripe_webhook import router as stripe_webhook_router
 from services.webhook_gateway.routes.trello import router as trello_router
 from services.webhook_gateway.routes.views_registry import router as views_registry_router
+from services.webhook_gateway.routes.admin_cc import router as admin_cc_router
 from services.webhook_gateway.routes.admin_marketing import router as admin_marketing_router
 from services.webhook_gateway.routes.views_registry_fix import (
     router as views_registry_fix_router,
@@ -46,6 +48,15 @@ logger = get_logger("gateway")
 init_sentry("webhook-gateway")
 
 app = FastAPI(title="OpenClaw Growth - Webhook Gateway")
+
+# CORS — allow Command Center dev server (Vite on port 5174)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(health_router, prefix="/health")
 app.include_router(manychat_router, prefix="/webhooks/manychat")
@@ -76,6 +87,7 @@ app.include_router(views_registry_fix_router, prefix="")
 app.include_router(admin_schedule_router, prefix="/admin/schedule")
 app.include_router(admin_today_router, prefix="/admin/today")
 app.include_router(admin_webops_router, prefix="")
+app.include_router(admin_cc_router, prefix="/admin/cc")
 app.include_router(admin_marketing_router, prefix="/admin/marketing")
 
 
