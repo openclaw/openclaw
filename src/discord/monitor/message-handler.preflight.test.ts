@@ -150,10 +150,14 @@ function createMessage(params: {
   id: string;
   channelId: string;
   content: string;
-  author: import("@buape/carbon").Message["author"];
+  author: {
+    id: string;
+    bot: boolean;
+    username?: string;
+  };
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
-  attachments?: import("@buape/carbon").Message["attachments"];
+  attachments?: Array<Record<string, unknown>>;
 }): import("@buape/carbon").Message {
   return {
     id: params.id,

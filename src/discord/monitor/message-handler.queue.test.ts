@@ -7,6 +7,7 @@ import {
 const preflightDiscordMessageMock = vi.hoisted(() => vi.fn());
 const processDiscordMessageMock = vi.hoisted(() => vi.fn());
 const eventualReplyDeliveredMock = vi.hoisted(() => vi.fn());
+type SetStatusFn = (patch: Record<string, unknown>) => void;
 
 vi.mock("./message-handler.preflight.js", () => ({
   preflightDiscordMessage: preflightDiscordMessageMock,
@@ -45,7 +46,7 @@ function createPreflightContext(channelId = "ch-1") {
 }
 
 async function createLifecycleStopScenario(params: {
-  createHandler: (status: ReturnType<typeof vi.fn>) => {
+  createHandler: (status: SetStatusFn) => {
     handler: (data: never, opts: never) => Promise<void>;
     stop: () => void;
   };
@@ -59,7 +60,7 @@ async function createLifecycleStopScenario(params: {
       createPreflightContext(contextParams.data.channel_id),
   );
 
-  const setStatus = vi.fn();
+  const setStatus = vi.fn<SetStatusFn>();
   const { handler, stop } = params.createHandler(setStatus);
 
   await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
