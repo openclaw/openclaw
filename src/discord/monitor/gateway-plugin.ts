@@ -27,6 +27,64 @@ export function resolveDiscordGatewayIntents(
   return intents;
 }
 
+/**
+ * Default gateway info used when the Discord API is unreachable.
+ * Provides the standard gateway URL so Carbon's reconnect logic can still
+ * attempt WebSocket connections with exponential backoff.
+ */
+const FALLBACK_GATEWAY_INFO: APIGatewayBotInfo = {
+  url: "wss://gateway.discord.gg/",
+  shards: 1,
+  session_start_limit: {
+    total: 1000,
+    remaining: 1000,
+    reset_after: 14_400_000,
+    max_concurrency: 1,
+  },
+};
+
+/**
+ * Log a registerClient failure instead of letting it become an unhandled
+ * promise rejection that crashes the gateway process.
+ */
+function logRegisterClientFailure(error: unknown, runtime: RuntimeEnv): void {
+  runtime.error?.(
+    danger(
+      `discord: gateway registerClient failed: ${error instanceof Error ? error.message : String(error)}. ` +
+        "The gateway will remain disconnected; other channels are unaffected.",
+    ),
+  );
+}
+
+/**
+ * Create a GatewayPlugin subclass that catches unhandled promise rejections
+ * from `registerClient`. Carbon's `Client` constructor calls
+ * `plugin.registerClient(this)` without awaiting the returned promise, so
+ * any rejection would crash the gateway process.
+ */
+function createSafeGatewayPlugin(
+  gatewayOptions: ConstructorParameters<typeof GatewayPlugin>[0],
+  runtime: RuntimeEnv,
+): GatewayPlugin {
+  class SafeGatewayPlugin extends GatewayPlugin {
+    constructor() {
+      super(gatewayOptions);
+    }
+
+    override async registerClient(
+      client: Parameters<GatewayPlugin["registerClient"]>[0],
+    ): Promise<void> {
+      try {
+        await super.registerClient(client);
+      } catch (error) {
+        logRegisterClientFailure(error, runtime);
+      }
+    }
+  }
+
+  return new SafeGatewayPlugin();
+}
+
 export function createDiscordGatewayPlugin(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
@@ -40,7 +98,7 @@ export function createDiscordGatewayPlugin(params: {
   };
 
   if (!proxy) {
-    return new GatewayPlugin(options);
+    return createSafeGatewayPlugin(options, params.runtime);
   }
 
   try {
@@ -54,7 +112,9 @@ export function createDiscordGatewayPlugin(params: {
         super(options);
       }
 
-      override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
+      override async registerClient(
+        client: Parameters<GatewayPlugin["registerClient"]>[0],
+      ): Promise<void> {
         if (!this.gatewayInfo) {
           try {
             const response = await undiciFetch("https://discord.com/api/v10/gateway/bot", {
@@ -65,13 +125,20 @@ export function createDiscordGatewayPlugin(params: {
             } as Record<string, unknown>);
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
-            throw new Error(
-              `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
+            params.runtime.error?.(
+              danger(
+                `discord: failed to fetch gateway info via proxy: ${error instanceof Error ? error.message : String(error)}. ` +
+                  "Falling back to default gateway URL.",
+              ),
             );
+            this.gatewayInfo = { ...FALLBACK_GATEWAY_INFO };
           }
         }
-        return super.registerClient(client);
+        try {
+          await super.registerClient(client);
+        } catch (error) {
+          logRegisterClientFailure(error, params.runtime);
+        }
       }
 
       override createWebSocket(url: string) {
@@ -82,6 +149,6 @@ export function createDiscordGatewayPlugin(params: {
     return new ProxyGatewayPlugin();
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-    return new GatewayPlugin(options);
+    return createSafeGatewayPlugin(options, params.runtime);
   }
 }
