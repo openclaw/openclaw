@@ -860,7 +860,8 @@ export async function runTui(opts: TuiOptions) {
       requestExit();
       return;
     }
-    setActivityStatus("press ctrl+c again to exit");
+    const activeRunHint = activeRunId ? " (run active: Esc or /abort to stop)" : "";
+    setActivityStatus(`press ctrl+c again to exit${activeRunHint}`);
     tui.requestRender();
   };
   editor.onCtrlC = () => {

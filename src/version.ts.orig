@@ -106,14 +106,6 @@ export function resolveRuntimeServiceVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
-  // Debug: log version resolution sources
-  const debug = env["OPENCLAW_VERSION_DEBUG"] === "1";
-  if (debug) {
-    console.log("[version] OPENCLAW_VERSION:", env["OPENCLAW_VERSION"]);
-    console.log("[version] VERSION constant:", VERSION);
-    console.log("[version] npm_package_version:", env["npm_package_version"]);
-  }
-
   const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
 
   return (

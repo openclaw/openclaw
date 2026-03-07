@@ -329,6 +329,8 @@ export type MemorySearchConfig = {
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
+    /** HTTP/HTTPS proxy URL (e.g., "http://127.0.0.1:7890"). Useful for regions with API restrictions. */
+    proxy?: string;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */

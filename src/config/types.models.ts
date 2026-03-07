@@ -57,6 +57,7 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  autoDiscover?: boolean;
 };
 
 export type BedrockDiscoveryConfig = {
