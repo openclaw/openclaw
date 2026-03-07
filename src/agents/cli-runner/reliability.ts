@@ -66,9 +66,7 @@ function pickWatchdogProfile(backend: CliBackendConfig, useResume: boolean): Wat
     return Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(value));
   })();
   const overallPolicy: OverallTimeoutPolicy =
-    configured?.overallPolicy === "extend-on-output"
-      ? "extend-on-output"
-      : CLI_WATCHDOG_DEFAULT_OVERALL_POLICY;
+    configured?.overallPolicy ?? CLI_WATCHDOG_DEFAULT_OVERALL_POLICY;
   const overallMaxMs =
     typeof configured?.overallMaxMs === "number" && Number.isFinite(configured.overallMaxMs)
       ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured.overallMaxMs))
