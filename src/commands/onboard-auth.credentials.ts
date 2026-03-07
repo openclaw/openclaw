@@ -375,14 +375,14 @@ export async function setOpenrouterApiKey(
   });
 }
 
-export async function setOrqApiKey(key: string, agentDir?: string) {
+export async function setOrqApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
   upsertAuthProfile({
     profileId: "orq:default",
-    credential: {
-      type: "api_key",
-      provider: "orq",
-      key,
-    },
+    credential: buildApiKeyCredential("orq", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
