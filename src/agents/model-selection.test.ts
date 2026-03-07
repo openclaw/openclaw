@@ -14,7 +14,6 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
   resolveModelRefFromString,
-  resolveThinkingDefault,
 } from "./model-selection.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -452,7 +451,7 @@ describe("model-selection", () => {
             thinkingDefault: "high",
             models: {
               "openai-codex/gpt-5.3-codex": {
-                thinkingDefault: "xhigh",
+                params: { thinking: "xhigh" },
               },
             },
           },
@@ -490,13 +489,13 @@ describe("model-selection", () => {
       const cfg: Partial<OpenClawConfig> = {};
       const resolved = resolveThinkingDefault({
         cfg: cfg as OpenClawConfig,
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+        provider: "openai",
+        model: "o3-mini",
         catalog: [
           {
-            id: "claude-opus-4-6",
-            provider: "anthropic",
-            name: "Claude Opus 4.6",
+            id: "o3-mini",
+            provider: "openai",
+            name: "o3-mini",
             reasoning: true,
           },
         ],

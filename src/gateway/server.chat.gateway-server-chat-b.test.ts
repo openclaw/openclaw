@@ -437,7 +437,7 @@ describe("gateway server chat", () => {
       testState.agentConfig = {
         thinkingDefault: "high",
         models: {
-          "anthropic/claude-opus-4-6": { thinkingDefault: "low" },
+          "anthropic/claude-opus-4-6": { params: { thinking: "low" } },
         },
       };
 
