@@ -329,6 +329,12 @@ jobs:
 
           BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
+
+          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+            echo "Base commit $BASE not found in shallow checkout; fetching."
+            git fetch --no-tags --depth=1 --no-recurse-submodules origin "$BASE" || true
+          fi
+
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
