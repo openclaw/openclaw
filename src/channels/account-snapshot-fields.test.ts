@@ -14,21 +14,21 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       name: "Primary",
       tokenSource: "config",
       tokenStatus: "configured_unavailable",
-      signingSecretSource: "config",
-      signingSecretStatus: "configured_unavailable",
+      signingSecretSource: "config", // pragma: allowlist secret
+      signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
       webhookUrl: "https://example.com/webhook",
       webhookPath: "/webhook",
       audienceType: "project-number",
       audience: "1234567890",
-      publicKey: "pk_live_123",
+      publicKey: "pk_live_123", // pragma: allowlist secret
     });
 
     expect(snapshot).toEqual({
       name: "Primary",
       tokenSource: "config",
       tokenStatus: "configured_unavailable",
-      signingSecretSource: "config",
-      signingSecretStatus: "configured_unavailable",
+      signingSecretSource: "config", // pragma: allowlist secret
+      signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
     });
   });
 
@@ -111,7 +111,7 @@ describe("resolveConfiguredFromRequiredCredentialStatuses", () => {
   it("returns true when required keys are configured or available", () => {
     expect(
       resolveConfiguredFromRequiredCredentialStatuses(
-        { botTokenStatus: "available", signingSecretStatus: "configured_unavailable" },
+        { botTokenStatus: "available", signingSecretStatus: "configured_unavailable" }, // pragma: allowlist secret
         ["botTokenStatus", "signingSecretStatus"],
       ),
     ).toBe(true);
@@ -164,11 +164,11 @@ describe("projectCredentialSnapshotFields", () => {
       tokenSource: "config",
       botTokenSource: "env",
       appTokenSource: "config",
-      signingSecretSource: "config",
+      signingSecretSource: "config", // pragma: allowlist secret
       tokenStatus: "available",
       botTokenStatus: "missing",
       appTokenStatus: "configured_unavailable",
-      signingSecretStatus: "available",
+      signingSecretStatus: "available", // pragma: allowlist secret
       userTokenStatus: "missing",
       webhookUrl: "https://example.com",
     });
@@ -176,11 +176,11 @@ describe("projectCredentialSnapshotFields", () => {
       tokenSource: "config",
       botTokenSource: "env",
       appTokenSource: "config",
-      signingSecretSource: "config",
+      signingSecretSource: "config", // pragma: allowlist secret
       tokenStatus: "available",
       botTokenStatus: "missing",
       appTokenStatus: "configured_unavailable",
-      signingSecretStatus: "available",
+      signingSecretStatus: "available", // pragma: allowlist secret
       userTokenStatus: "missing",
     });
     expect(result).not.toHaveProperty("webhookUrl");
