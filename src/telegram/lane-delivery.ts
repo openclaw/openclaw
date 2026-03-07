@@ -427,8 +427,31 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: preview final too long for edit (${text.length} > ${params.draftMaxChars}); falling back to standard send`,
         );
       }
+      // Capture preview message id before stopping so we can clean it up
+      // after fallback send to avoid duplicates.
+      const previewMessageIdBeforeFallback = lane.stream?.messageId();
       await params.stopDraftLane(lane);
+      // After stop(), the stream may have flushed/created a visible preview.
+      const previewMessageIdAfterStop = previewMessageIdBeforeFallback ?? lane.stream?.messageId();
       const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+      // Clean up the orphaned preview message to prevent the user from seeing
+      // both the preview and the final message (the core duplicate-message bug
+      // in Telegram DM streaming).
+      // Note: cleanup is only performed when the fallback send succeeds
+      // (delivered === true).  When the send fails, the preview is kept so the
+      // user still sees *something*.  This differs from the archived-preview
+      // path in consumeArchivedAnswerPreviewForFinal which may delete even on
+      // send failure — that path deals with boundary-rotated previews that are
+      // stale by definition.
+      if (delivered && typeof previewMessageIdAfterStop === "number") {
+        try {
+          await params.deletePreviewMessage(previewMessageIdAfterStop);
+        } catch (err) {
+          params.log(
+            `telegram: ${laneName} fallback send orphaned preview cleanup failed (${previewMessageIdAfterStop}): ${String(err)}`,
+          );
+        }
+      }
       return delivered ? "sent" : "skipped";
     }
 

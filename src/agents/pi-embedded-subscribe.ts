@@ -9,8 +9,11 @@ import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-span
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
+  isRecentlyDelivered,
   normalizeTextForComparison,
+  recordDeliveredText,
 } from "./pi-embedded-helpers.js";
+import type { RecentDeliveredEntry } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
 import type {
   EmbeddedPiSubscribeContext,
@@ -70,6 +73,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    recentDeliveredTexts: [] as RecentDeliveredEntry[],
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -102,12 +106,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
+    opts?: { sourceText?: string },
   ) => {
     if (!params.onBlockReply) {
       return;
     }
     void Promise.resolve()
       .then(() => params.onBlockReply?.(payload))
+      .then(() => {
+        // Record in cross-turn dedup cache only after successful delivery.
+        // Recording before send would suppress retries on transient failures.
+        if (opts?.sourceText) {
+          recordDeliveredText(opts.sourceText, state.recentDeliveredTexts);
+        }
+      })
       .catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
@@ -148,15 +160,21 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const shouldSkipAssistantText = (text: string) => {
-    if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) {
-      return false;
+    // Same-turn dedup (existing behaviour).
+    if (state.lastAssistantTextMessageIndex === state.assistantMessageIndex) {
+      const trimmed = text.trimEnd();
+      if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
+        return true;
+      }
+      const normalized = normalizeTextForComparison(text);
+      if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
+        return true;
+      }
     }
-    const trimmed = text.trimEnd();
-    if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
-      return true;
-    }
-    const normalized = normalizeTextForComparison(text);
-    if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
+    // Cross-turn dedup: catch duplicates caused by context compaction replaying
+    // the same assistant text in a new turn.  Uses a rolling hash cache with a
+    // 1-hour TTL so intentionally repeated content still goes through eventually.
+    if (isRecentlyDelivered(text, state.recentDeliveredTexts)) {
       return true;
     }
     return false;
@@ -171,6 +189,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     assistantTexts.push(text);
     rememberAssistantText(text);
+    // Record in cross-turn cache so post-compaction replays are caught.
+    recordDeliveredText(text, state.recentDeliveredTexts);
   };
 
   const finalizeAssistantTexts = (args: {
@@ -190,6 +210,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           text,
         );
         rememberAssistantText(text);
+        recordDeliveredText(text, state.recentDeliveredTexts);
       } else {
         pushAssistantText(text);
       }
@@ -504,6 +525,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts.push(chunk);
     rememberAssistantText(chunk);
     if (!params.onBlockReply) {
+      // No block reply callback — text is accumulated for final delivery.
+      // Record now since there's no async send that could fail.
+      recordDeliveredText(chunk, state.recentDeliveredTexts);
       return;
     }
     const splitResult = replyDirectiveAccumulator.consume(chunk);
@@ -522,14 +546,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
-    emitBlockReplySafely({
-      text: cleanedText,
-      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
+    emitBlockReplySafely(
+      {
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      },
+      { sourceText: chunk },
+    );
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
