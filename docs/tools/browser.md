@@ -242,6 +242,44 @@ Flow:
 
 If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
 
+### Connect to an existing Chrome via `--remote-debugging-port` (no extension)
+
+If you want OpenClaw to control an already-running Chrome instance (for example to reuse existing login sessions) without clicking the extension button on each tab, run Chrome with a debugging port and point an OpenClaw profile at that CDP URL.
+
+1. Start Chrome with remote debugging enabled (example: macOS):
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9223 \
+  --remote-debugging-address=127.0.0.1 \
+  --user-data-dir="$HOME/.openclaw/browser/existing-chrome"
+```
+
+2. Add a CDP profile in `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  browser: {
+    attachOnly: true,
+    defaultProfile: "existing-chrome",
+    profiles: {
+      "existing-chrome": {
+        cdpUrl: "http://127.0.0.1:9223",
+        color: "#4285F4",
+      },
+    },
+  },
+}
+```
+
+3. Restart the Gateway.
+
+Notes:
+
+- `attachOnly: true` is global: OpenClaw will not launch its own local browser process for **any** profile. If you still want OpenClaw-managed profiles (for example `openclaw`), omit `attachOnly` and only set `profiles.existing-chrome.cdpUrl`.
+- If you prefer to keep the profile name `chrome`, you can override `profiles.chrome.cdpUrl` with your own CDP URL.
+- Keep the debugging endpoint on loopback (`127.0.0.1`) unless you have strong network controls in place.
+
 ### Sandboxed sessions
 
 If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
