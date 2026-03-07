@@ -59,6 +59,8 @@ export { createScopedPairingAccess } from "./pairing-access.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export {
   buildBaseChannelStatusSummary,
+  buildProbeChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { withTempDownloadPath } from "./temp-path.js";
