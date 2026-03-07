@@ -43,6 +43,114 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+const LEAKED_UNTRUSTED_META_SENTINELS = [
+  "Conversation info (untrusted metadata):",
+  "Sender (untrusted metadata):",
+  "Thread starter (untrusted, for context):",
+  "Replied message (untrusted, for context):",
+  "Forwarded message context (untrusted metadata):",
+  "Chat history since last reply (untrusted, for context):",
+] as const;
+
+const LEAKED_GROUP_META_LINE_RE =
+  /The user's message ID is .*originated from the group chat labeled/i;
+
+const LEAKED_PROMPT_SCAFFOLDING_FAST_RE = new RegExp(
+  [
+    ...LEAKED_UNTRUSTED_META_SENTINELS,
+    "The user's message ID is",
+    "I need a response that avoids exposing the sender's untrusted metadata.",
+    "<tools>",
+  ]
+    .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|"),
+);
+
+function isLeakedUntrustedMetaSentinelLine(line: string): boolean {
+  const trimmed = line.trim();
+  return LEAKED_UNTRUSTED_META_SENTINELS.some((sentinel) => sentinel === trimmed);
+}
+
+function stripLeakedPromptScaffolding(text: string): string {
+  if (!text || !LEAKED_PROMPT_SCAFFOLDING_FAST_RE.test(text)) {
+    return text;
+  }
+
+  const lines = text.split("\n");
+  const result: string[] = [];
+
+  let inUntrustedMetaBlock = false;
+  let inFencedJson = false;
+  let inToolFence = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const trimmed = line.trim();
+
+    if (!inUntrustedMetaBlock && !inToolFence) {
+      const leakedMetaMatch = LEAKED_GROUP_META_LINE_RE.exec(line);
+      if (leakedMetaMatch && leakedMetaMatch.index >= 0) {
+        const keptPrefix = line.slice(0, leakedMetaMatch.index).trimEnd();
+        if (keptPrefix) {
+          result.push(keptPrefix);
+        }
+        continue;
+      }
+      if (
+        trimmed.includes("I need a response that avoids exposing the sender's untrusted metadata.")
+      ) {
+        continue;
+      }
+      if (trimmed === "```python" && (lines[i + 1] ?? "").trim() === "<tools>") {
+        inToolFence = true;
+        continue;
+      }
+    }
+
+    if (!inUntrustedMetaBlock && isLeakedUntrustedMetaSentinelLine(line)) {
+      const next = lines[i + 1];
+      if (next?.trim() !== "```json") {
+        result.push(line);
+        continue;
+      }
+      inUntrustedMetaBlock = true;
+      inFencedJson = false;
+      continue;
+    }
+
+    if (inUntrustedMetaBlock) {
+      if (!inFencedJson && trimmed === "```json") {
+        inFencedJson = true;
+        continue;
+      }
+      if (inFencedJson) {
+        if (trimmed === "```") {
+          inUntrustedMetaBlock = false;
+          inFencedJson = false;
+        }
+        continue;
+      }
+      if (trimmed === "") {
+        continue;
+      }
+      inUntrustedMetaBlock = false;
+    }
+
+    if (inToolFence) {
+      if (trimmed === "```") {
+        inToolFence = false;
+      }
+      continue;
+    }
+
+    result.push(line);
+  }
+
+  return result
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
     return RATE_LIMIT_ERROR_USER_MESSAGE;
@@ -641,7 +749,8 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   }
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripFinalTagsFromText(text);
-  const trimmed = stripped.trim();
+  const deScaffolded = stripLeakedPromptScaffolding(stripped);
+  const trimmed = deScaffolded.trim();
   if (!trimmed) {
     return "";
   }
@@ -685,7 +794,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
-  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = deScaffolded.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 

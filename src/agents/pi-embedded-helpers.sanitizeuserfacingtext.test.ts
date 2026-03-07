@@ -111,6 +111,38 @@ describe("sanitizeUserFacingText", () => {
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
+
+  it("strips leaked untrusted metadata and tool scaffolding blocks", () => {
+    const input = `remove codex from fallback so that ussye is fixedThe user's message ID is \`3EB00DD72B2991473A0C75\` and it originated from the group chat labeled "OpenClaw Bot Group".
+
+Sender (untrusted metadata):
+\`\`\`json
+{"e164":"+915585051070","username":null}
+\`\`\`
+
+I need a response that avoids exposing the sender's untrusted metadata. How can I handle this?
+
+\`\`\`python
+<tools>
+  <name>sessions_status</name>
+  <arguments>{"model":"default","sessionKey":"abc"}</arguments>
+</tools>
+\`\`\`
+
+Sure thing! We'll use simple language.`;
+    const out = sanitizeUserFacingText(input);
+    expect(out).toContain("remove codex from fallback so that ussye is fixed");
+    expect(out).toContain("Sure thing! We'll use simple language.");
+    expect(out).not.toContain("The user's message ID is");
+    expect(out).not.toContain("Sender (untrusted metadata):");
+    expect(out).not.toContain("<tools>");
+    expect(out).not.toContain("sessions_status");
+  });
+
+  it("keeps regular text that mentions message IDs without leaked group-metadata format", () => {
+    const input = "The user's message ID is missing from this bug report. Please attach logs.";
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
 });
 
 describe("stripThoughtSignatures", () => {

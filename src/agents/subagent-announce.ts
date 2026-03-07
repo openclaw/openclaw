@@ -387,7 +387,6 @@ function buildChildCompletionFindings(
       ),
     );
   }
-
   if (sections.length === 0) {
     return undefined;
   }
