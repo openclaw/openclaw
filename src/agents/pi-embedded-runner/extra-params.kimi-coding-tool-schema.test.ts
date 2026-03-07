@@ -103,6 +103,48 @@ describe("extra-params: Kimi anthropic tool schema wrapper", () => {
     });
   });
 
+  it("normalizes tools for api.kimi.com root anthropic endpoints", () => {
+    const payload = runToolPayloadCase({
+      applyProvider: "custom",
+      applyModelId: "k2p5",
+      model: {
+        api: "anthropic-messages",
+        provider: "custom",
+        id: "k2p5",
+        baseUrl: "https://api.kimi.com",
+      } as Model<"anthropic-messages">,
+    });
+
+    const tools = payload.tools as Array<Record<string, unknown>>;
+    expect(tools[0]?.type).toBe("function");
+    expect(tools[0]?.function).toBeDefined();
+    expect(payload.tool_choice).toEqual({
+      type: "function",
+      function: { name: "read" },
+    });
+  });
+
+  it("does not normalize tools for domains that only suffix-match kimi.com", () => {
+    const payload = runToolPayloadCase({
+      applyProvider: "custom",
+      applyModelId: "k2p5",
+      model: {
+        api: "anthropic-messages",
+        provider: "custom",
+        id: "k2p5",
+        baseUrl: "https://api.notkimi.com/v1",
+      } as Model<"anthropic-messages">,
+    });
+
+    const tools = payload.tools as Array<Record<string, unknown>>;
+    expect(tools[0]?.name).toBe("read");
+    expect(tools[0]?.function).toBeUndefined();
+    expect(payload.tool_choice).toEqual({
+      type: "tool",
+      name: "read",
+    });
+  });
+
   it("does not normalize tools for non-kimi anthropic endpoints", () => {
     const payload = runToolPayloadCase({
       applyProvider: "anthropic",

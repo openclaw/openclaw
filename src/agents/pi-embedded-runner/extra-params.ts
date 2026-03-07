@@ -571,12 +571,18 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
             }
             if (typeof msg.content === "string") {
               msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
+                {
+                  type: "text",
+                  text: msg.content,
+                  cache_control: { type: "ephemeral" },
+                },
               ];
             } else if (Array.isArray(msg.content) && msg.content.length > 0) {
               const last = msg.content[msg.content.length - 1];
               if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+                (last as Record<string, unknown>).cache_control = {
+                  type: "ephemeral",
+                };
               }
             }
           }
@@ -761,7 +767,8 @@ function isKimiCodingAnthropicEndpoint(model: {
     const parsed = new URL(model.baseUrl);
     const host = parsed.hostname.toLowerCase();
     const pathname = parsed.pathname.toLowerCase();
-    if (!host.endsWith("kimi.com")) {
+    const isKimiDomain = host === "kimi.com" || host.endsWith(".kimi.com");
+    if (!isKimiDomain) {
       return false;
     }
 
@@ -773,8 +780,7 @@ function isKimiCodingAnthropicEndpoint(model: {
     return (
       normalized.includes("kimi.com/coding") ||
       normalized.includes("api.kimi.com/v1") ||
-      normalized === "https://api.kimi.com" ||
-      normalized === "https://api.kimi.com/"
+      normalized.includes("api.kimi.com")
     );
   }
 }
@@ -1134,7 +1140,13 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
-  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+  if (
+    shouldApplySiliconFlowThinkingOffCompat({
+      provider,
+      modelId,
+      thinkingLevel,
+    })
+  ) {
     log.debug(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
     );
