@@ -299,13 +299,12 @@ export function createCliStreamFn(params: CliStreamFnParams): StreamFunction {
             break;
           }
           case "tool_start": {
-            // Do NOT emit text_end here. Pre-tool narration text
-            // ("Let me check...", "Now let me look at...") is
-            // internal agent reasoning, not final output. Leaving
-            // the text block open lets the embedded subscribe
-            // handler's onBlockReplyDiscard discard it as mid-stream
-            // hedging rather than flushing it to the user.
+            // Discard pre-tool narration text ("Let me check...",
+            // "Now let me look at..."). This is internal agent
+            // reasoning between tool calls, not the final response.
+            // Clear accumulated text so only post-tool text is kept.
             if (textStarted) {
+              textParts.length = 0;
               textStarted = false;
             }
             // Track name so we can include it in the result event
