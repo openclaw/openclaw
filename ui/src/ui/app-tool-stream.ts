@@ -32,6 +32,8 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  /** Committed text segments (text that was streaming before a tool call started). */
+  chatStreamSegments: Array<{ text: string; ts: number }>;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -231,10 +233,14 @@ export function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
 }
 
 export function resetToolStream(host: ToolStreamHost) {
+  if (host.toolStreamSyncTimer != null) {
+    clearTimeout(host.toolStreamSyncTimer);
+    host.toolStreamSyncTimer = null;
+  }
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
-  flushToolStreamSync(host);
+  host.chatStreamSegments = [];
 }
 
 export type CompactionStatus = {
@@ -401,11 +407,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (payload.stream !== "tool") {
     return;
   }
-  const accepted = resolveAcceptedSession(host, payload);
-  if (!accepted.accepted) {
+
+  // Filter by session only. Don't check chatRunId because the client sets it
+  // to a client-generated UUID (via generateUUID in sendChatMessage), while
+  // tool events arrive with the server's engine runId — they can never match.
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (sessionKey && sessionKey !== host.sessionKey) {
     return;
   }
-  const sessionKey = accepted.sessionKey;
 
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
@@ -425,10 +434,25 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
+    // When a new tool starts, commit any pending streaming text so it renders
+    // above the tool card rather than being replaced by it.
+    const appHost = host as unknown as {
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+    };
+    if (appHost.chatStream && appHost.chatStream.trim()) {
+      host.chatStreamSegments.push({
+        text: appHost.chatStream,
+        ts: appHost.chatStreamStartedAt ?? now,
+      });
+      appHost.chatStream = null;
+      appHost.chatStreamStartedAt = null;
+    }
+
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
+      sessionKey: sessionKey ?? host.sessionKey,
       name,
       args,
       output: output || undefined,

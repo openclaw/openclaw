@@ -45,6 +45,7 @@ export type ChatProps = {
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
+  streamSegments?: Array<{ text: string; ts: number }>;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -566,13 +567,43 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  if (props.showThinking) {
-    for (let i = 0; i < tools.length; i++) {
-      items.push({
-        kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
+  // Always render tool messages and committed stream segments — these represent
+  // visible tool calls and the assistant text surrounding them, not internal
+  // reasoning (which is gated on showThinking elsewhere).
+  {
+    const segments = props.streamSegments ?? [];
+    type TimestampedItem = { ts: number; item: ChatItem };
+    const combined: TimestampedItem[] = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      combined.push({
+        ts: seg.ts,
+        item: {
+          kind: "stream",
+          key: `stream-segment:${i}:${seg.ts}`,
+          text: seg.text,
+          startedAt: seg.ts,
+        },
       });
+    }
+
+    for (let i = 0; i < tools.length; i++) {
+      const tool = tools[i] as { startedAt?: number; timestamp?: number };
+      const ts = tool.startedAt ?? tool.timestamp ?? Date.now();
+      combined.push({
+        ts,
+        item: {
+          kind: "message",
+          key: messageKey(tools[i], i + history.length),
+          message: tools[i],
+        },
+      });
+    }
+
+    combined.sort((a, b) => a.ts - b.ts);
+    for (const { item } of combined) {
+      items.push(item);
     }
   }
 
