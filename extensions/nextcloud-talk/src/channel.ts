@@ -1,5 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
+  collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   formatAllowFromLowercase,
   mapAllowFromEntries,
@@ -13,8 +14,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   normalizeAccountId,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type OpenClawConfig,
@@ -133,31 +132,31 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-        providerConfigPresent:
-          (cfg.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
       const roomAllowlistConfigured =
         account.config.rooms && Object.keys(account.config.rooms).length > 0;
-      return collectOpenGroupPolicyRouteAllowlistWarnings({
-        groupPolicy,
-        routeAllowlistConfigured: roomAllowlistConfigured,
-        restrictSenders: {
-          surface: "Nextcloud Talk rooms",
-          openScope: "any member in allowed rooms",
-          groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-          groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-        },
-        noRouteAllowlist: {
-          surface: "Nextcloud Talk rooms",
-          routeAllowlistPath: "channels.nextcloud-talk.rooms",
-          routeScope: "room",
-          groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-          groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-        },
+      return collectAllowlistProviderGroupPolicyWarnings({
+        cfg,
+        providerConfigPresent:
+          (cfg.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] !== undefined,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          collectOpenGroupPolicyRouteAllowlistWarnings({
+            groupPolicy,
+            routeAllowlistConfigured: roomAllowlistConfigured,
+            restrictSenders: {
+              surface: "Nextcloud Talk rooms",
+              openScope: "any member in allowed rooms",
+              groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+              groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+            },
+            noRouteAllowlist: {
+              surface: "Nextcloud Talk rooms",
+              routeAllowlistPath: "channels.nextcloud-talk.rooms",
+              routeScope: "room",
+              groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+              groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+            },
+          }),
       });
     },
   },
