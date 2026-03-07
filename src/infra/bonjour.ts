@@ -40,7 +40,39 @@ function isDisabledByEnv() {
 
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "OpenClaw";
+  const baseName = trimmed.length > 0 ? trimmed : "OpenClaw";
+  
+  // Fix for Issue #37705: DNS labels cannot exceed 63 bytes (RFC 1035)
+  // Truncate to 63 bytes, ensuring we don't split UTF-8 multi-byte characters
+  const MAX_LABEL_BYTES = 63;
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(baseName);
+  
+  if (encoded.length <= MAX_LABEL_BYTES) {
+    return baseName;
+  }
+  
+  // Truncate safely: decode first N bytes that fit
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let truncated = decoder.decode(encoded.slice(0, MAX_LABEL_BYTES));
+  
+  // Remove trailing replacement character only if it was introduced by truncation
+  // (not if it's a valid U+FFFD in the original string)
+  if (truncated.endsWith("\uFFFD") && !baseName.slice(0, truncated.length).endsWith("\uFFFD")) {
+    truncated = truncated.slice(0, -1);
+  }
+  
+  const result = truncated || "OpenClaw";
+  
+  // Log warning if truncation occurred
+  if (result !== baseName) {
+    logWarn(
+      `Bonjour service name truncated from ${encoded.length} bytes to ${MAX_LABEL_BYTES} bytes. ` +
+      `Original: "${baseName}", Truncated: "${result}"`
+    );
+  }
+  
+  return result;
 }
 
 function prettifyInstanceName(name: string) {
