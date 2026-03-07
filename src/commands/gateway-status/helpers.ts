@@ -189,6 +189,8 @@ export async function resolveAuthForTarget(
     }
     return passwordResolution.value;
   };
+  const withDiagnostics = <T extends { token?: string; password?: string }>(result: T) =>
+    diagnostics.length > 0 ? { ...result, diagnostics } : result;
 
   if (target.kind === "configRemote" || target.kind === "sshTunnel") {
     const remoteTokenValue = cfg.gateway?.remote?.token;
@@ -198,11 +200,7 @@ export async function resolveAuthForTarget(
     const password = token
       ? undefined
       : await resolvePassword(remotePasswordValue, "gateway.remote.password");
-    return {
-      token,
-      password,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({ token, password });
   }
 
   const authDisabled = authMode === "none" || authMode === "trusted-proxy";
@@ -213,49 +211,39 @@ export async function resolveAuthForTarget(
   const envToken = readGatewayTokenEnv();
   const envPassword = readGatewayPasswordEnv();
   if (tokenOnly) {
+    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+    if (token) {
+      return withDiagnostics({ token });
+    }
     if (envToken) {
       return { token: envToken };
     }
-    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
-    return {
-      token,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({});
   }
   if (passwordOnly) {
+    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
+    if (password) {
+      return withDiagnostics({ password });
+    }
     if (envPassword) {
       return { password: envPassword };
     }
-    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
-    return {
-      password,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({});
   }
 
+  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+  if (token) {
+    return withDiagnostics({ token });
+  }
   if (envToken) {
     return { token: envToken };
   }
-  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
-  if (token) {
-    return {
-      token,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
-  }
   if (envPassword) {
-    return {
-      password: envPassword,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({ password: envPassword });
   }
   const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
 
-  return {
-    token,
-    password,
-    ...(diagnostics.length > 0 ? { diagnostics } : {}),
-  };
+  return withDiagnostics({ token, password });
 }
 
 export { pickGatewaySelfPresence };
