@@ -459,14 +459,17 @@ describe("handleFeishuMessage command authorization", () => {
       id: "ou-unapproved",
       meta: { name: undefined },
     });
-    expect(mockBuildPairingReply).toHaveBeenCalledWith({
-      channel: "feishu",
-      idLine: "Your Feishu user id: ou-unapproved",
-      code: "ABCDEFGH",
-    });
     expect(mockSendMessageFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat:oc-dm",
+        text: expect.stringContaining("Your Feishu user id: ou-unapproved"),
+        accountId: "default",
+      }),
+    );
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc-dm",
+        text: expect.stringContaining("Pairing code: ABCDEFGH"),
         accountId: "default",
       }),
     );
