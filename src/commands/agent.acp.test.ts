@@ -215,7 +215,41 @@ describe("agentCommand ACP runtime routing", () => {
 
       expect(runTurn).toHaveBeenCalledWith(
         expect.objectContaining({
+          rawSessionKey: "main",
           sessionKey: "agent:main:acp:test",
+          text: "ping",
+        }),
+      );
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves raw non-default agent aliases when the manager resolves a canonical ACP key", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify({}, null, 2));
+
+      const cfg = createAcpEnabledConfig(home, storePath);
+      cfg.session = { store: storePath, mainKey: "desk" };
+      cfg.acp = {
+        ...cfg.acp,
+        allowedAgents: ["helper"],
+      };
+      loadConfigSpy.mockReturnValue(cfg);
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: () => resolveReadySession("agent:helper:desk", "helper"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:helper:main" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rawSessionKey: "agent:helper:main",
+          sessionKey: "agent:helper:desk",
           text: "ping",
         }),
       );

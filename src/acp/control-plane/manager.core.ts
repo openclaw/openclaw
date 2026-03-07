@@ -650,6 +650,7 @@ export class AcpSessionManager {
   }
 
   async runTurn(input: AcpRunTurnInput): Promise<void> {
+    const rawSessionKey = input.rawSessionKey ?? input.sessionKey;
     const sessionKey = canonicalizeAcpSessionKey({
       cfg: input.cfg,
       sessionKey: input.sessionKey,
@@ -662,7 +663,7 @@ export class AcpSessionManager {
       const resolution = this.resolveSession({
         cfg: input.cfg,
         sessionKey,
-        rawSessionKey: input.sessionKey,
+        rawSessionKey,
       });
       if (resolution.kind === "none") {
         throw new AcpRuntimeError(

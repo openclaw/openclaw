@@ -50,6 +50,7 @@ export type AcpInitializeSessionInput = {
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  rawSessionKey?: string;
   text: string;
   mode: AcpRuntimePromptMode;
   requestId: string;

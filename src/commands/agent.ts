@@ -591,6 +591,7 @@ async function agentCommandInternal(
         await acpManager.runTurn({
           cfg,
           sessionKey: acpSessionKey,
+          rawSessionKey: sessionKey,
           text: body,
           mode: "prompt",
           requestId: runId,
