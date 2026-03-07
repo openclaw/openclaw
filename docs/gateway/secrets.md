@@ -179,8 +179,8 @@ Request payload (stdin):
 
 Response payload (stdout):
 
-```json
-{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "sk-..." } }
+```jsonc
+{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "<openai-api-key>" } } // pragma: allowlist secret
 ```
 
 Optional per-id errors:
