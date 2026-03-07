@@ -12,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  normalizeStoreSessionKey,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
@@ -179,6 +180,11 @@ export function resolveSessionEntryForKey(
   const direct = store[sessionKey];
   if (direct) {
     return { entry: direct, key: sessionKey };
+  }
+  const normalized = normalizeStoreSessionKey(sessionKey);
+  const entry = store[normalized];
+  if (entry) {
+    return { entry, key: normalized };
   }
   return {};
 }

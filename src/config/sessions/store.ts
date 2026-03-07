@@ -108,7 +108,7 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   return next;
 }
 
-function normalizeStoreSessionKey(sessionKey: string): string {
+export function normalizeStoreSessionKey(sessionKey: string): string {
   return sessionKey.trim().toLowerCase();
 }
 
