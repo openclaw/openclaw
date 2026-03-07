@@ -271,4 +271,64 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
   });
+
+  it("falls back to defaults model when session entry is not found", async () => {
+    // When the current session key has no entry in the store (brand-new session),
+    // the TUI should show the configured default model, not "unknown".
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {
+        modelProvider: "my-copilot",
+        model: "claude-opus-4.6",
+        contextTokens: 200000,
+      },
+      sessions: [],
+    });
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { refreshSessionInfo } = createSessionActions({
+      client: { listSessions } as unknown as GatewayChatClient,
+      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshSessionInfo();
+
+    expect(state.sessionInfo.model).toBe("claude-opus-4.6");
+    expect(state.sessionInfo.modelProvider).toBe("my-copilot");
+    expect(state.sessionInfo.contextTokens).toBe(200000);
+  });
 });
