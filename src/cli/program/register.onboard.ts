@@ -148,6 +148,7 @@ export function registerOnboardCommand(program: Command) {
           anthropicApiKey: opts.anthropicApiKey as string | undefined,
           openaiApiKey: opts.openaiApiKey as string | undefined,
           mistralApiKey: opts.mistralApiKey as string | undefined,
+          orqApiKey: opts.orqApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
           kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
           aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,

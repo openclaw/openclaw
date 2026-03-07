@@ -148,6 +148,7 @@ export async function modelsStatusCommand(
     "github-copilot",
     "google-vertex",
     "openai",
+    "orq",
     "google",
     "groq",
     "cerebras",

@@ -41,6 +41,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [OpenAI (API + Codex)](/providers/openai)
 - [OpenCode Zen](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
+- [Orq AI Router](/providers/orq)
 - [Qianfan](/providers/qianfan)
 - [Qwen (OAuth)](/providers/qwen)
 - [Together AI](/providers/together)

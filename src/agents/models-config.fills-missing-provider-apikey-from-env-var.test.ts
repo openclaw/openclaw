@@ -172,6 +172,44 @@ describe("models-config", () => {
       });
     });
   });
+  it("stores ORQ_API_KEY env var name when models exist and apiKey is missing", async () => {
+    await withTempHome(async () => {
+      await withEnvVar("ORQ_API_KEY", "orq-test-key", async () => {
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              orq: {
+                baseUrl: "https://api.orq.ai/v2/router",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "router-default",
+                    name: "Orq Router",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200000,
+                    maxTokens: 16384,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureOpenClawModelsJson(cfg);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
+        }>();
+        // We store the env var name to avoid persisting secrets in models.json.
+        expect(parsed.providers.orq?.apiKey).toBe("ORQ_API_KEY");
+        const ids = parsed.providers.orq?.models?.map((model) => model.id);
+        expect(ids).toContain("router-default");
+      });
+    });
+  });
+
   it("merges providers by default", async () => {
     await withTempHome(async () => {
       await writeAgentModelsJson({

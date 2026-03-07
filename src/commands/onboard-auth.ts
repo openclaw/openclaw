@@ -4,6 +4,12 @@ export {
 } from "../agents/synthetic-models.js";
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
+  ORQ_DEFAULT_MODEL_ID,
+  ORQ_DEFAULT_MODEL_REF,
+  ORQ_BASE_URL,
+  buildOrqModelDefinitions,
+} from "../agents/orq-models.js";
+export {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
@@ -25,6 +31,8 @@ export {
   applyMoonshotProviderConfigCn,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyOrqConfig,
+  applyOrqProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyTogetherConfig,
@@ -62,6 +70,7 @@ export {
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setOpenaiApiKey,
+  setOrqApiKey,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
