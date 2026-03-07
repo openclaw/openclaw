@@ -517,6 +517,19 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
+// Filter out delivery-mirror messages to prevent role alternation errors
+function isDeliveryMirrorMessage(message: AgentMessage): boolean {
+  const msg = message as unknown as Record<string, unknown>;
+  const api = typeof msg.api === "string" ? msg.api : undefined;
+  const provider = typeof msg.provider === "string" ? msg.provider : undefined;
+  const model = typeof msg.model === "string" ? msg.model : undefined;
+  return api === "openai-responses" && provider === "openclaw" && model === "delivery-mirror";
+}
+
+function filterDeliveryMirrorMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.filter((msg) => !isDeliveryMirrorMessage(msg));
+}
+
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
@@ -536,7 +549,9 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
     });
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  // Filter out delivery-mirror messages to prevent role alternation errors
+  const filteredMessages = filterDeliveryMirrorMessages(params.messages);
+  const withInterSessionMarkers = annotateInterSessionUserMessages(filteredMessages);
   const sanitizedImages = await sanitizeSessionMessagesImages(
     withInterSessionMarkers,
     "session:history",
