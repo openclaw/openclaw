@@ -207,6 +207,8 @@ export type DiagnosticsConfig = {
   flags?: string[];
   /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
   stuckSessionWarnMs?: number;
+  /** Threshold in ms before a stuck session is automatically aborted. Set to 0 to disable. */
+  stuckSessionAutoRecoverMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };
