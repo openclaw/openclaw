@@ -153,7 +153,8 @@ export function renderApp(state: AppViewState) {
     availableUpdate && state.updateDismissedVersion !== availableUpdate.latestVersion
       ? availableUpdate
       : null;
-  const versionStatusClass = effectiveUpdate ? "warn" : "ok";
+  // Keep status warning based on actual availability, not dismissal state
+  const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
