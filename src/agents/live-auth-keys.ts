@@ -171,9 +171,6 @@ export function isApiKeyRateLimitError(message: string): boolean {
   if (lower.includes("usage limit")) {
     return true;
   }
-  if (lower.includes("hit your") && lower.includes("limit")) {
-    return true;
-  }
   if (lower.includes("credit") && lower.includes("exhausted")) {
     return true;
   }
