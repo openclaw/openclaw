@@ -1,8 +1,7 @@
 import type { Command } from "commander";
-import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { warnIfCronSchedulerDisabled } from "./shared.js";
+import { handleCronCliError, printCronJson, warnIfCronSchedulerDisabled } from "./shared.js";
 
 function registerCronToggleCommand(params: {
   cron: Command;
@@ -21,11 +20,10 @@ function registerCronToggleCommand(params: {
             id,
             patch: { enabled: params.enabled },
           });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          printCronJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );
@@ -43,10 +41,9 @@ export function registerCronSimpleCommands(cron: Command) {
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.remove", opts, { id });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          printCronJson(res);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );
@@ -79,10 +76,9 @@ export function registerCronSimpleCommands(cron: Command) {
             id,
             limit,
           });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          printCronJson(res);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );
@@ -102,12 +98,11 @@ export function registerCronSimpleCommands(cron: Command) {
             id,
             mode: opts.due ? "due" : "force",
           });
-          defaultRuntime.log(JSON.stringify(res, null, 2));
+          printCronJson(res);
           const result = res as { ok?: boolean; ran?: boolean } | undefined;
           defaultRuntime.exit(result?.ok && result?.ran ? 0 : 1);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );
