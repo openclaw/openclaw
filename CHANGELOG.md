@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - CLI: make read-only SecretRef status flows degrade safely (#37023) thanks @joshavant.
 - Docker/Podman extension dependency baking: add `OPENCLAW_EXTENSIONS` so container builds can preinstall selected bundled extension npm dependencies into the image for faster and more reproducible startup in container deployments. (#32223) Thanks @sallyom.
 - Onboarding/web search: add provider selection step and full provider list in configure wizard, with SecretRef ref-mode support during onboarding. (#34009) Thanks @kesku and @thewilloftheshadow.
+- Agents/compaction post-context configurability: add `agents.defaults.compaction.postCompactionSections` so deployments can choose which `AGENTS.md` sections are re-injected after compaction, while preserving legacy fallback behavior when the documented default pair is configured in any order. (#34556) thanks @efe-arv.
 
 ### Breaking
 
@@ -88,6 +89,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/system events: restore runtime system events to the message timeline (`System:` lines), preserve think-hint parsing with prepended events, and carry events into deferred followup/collect/steer-backlog prompts to keep cache behavior stable without dropping queued metadata. (#34794) Thanks @anisoptera.
 - Security/audit account handling: avoid prototype-chain account IDs in audit validation by using own-property checks for `accounts`. (#34982) Thanks @HOYALIM.
 - Cron/restart catch-up semantics: replay interrupted recurring jobs and missed immediate cron slots on startup without replaying interrupted one-shot jobs, with guarded missed-slot probing to avoid malformed-schedule startup aborts and duplicate-trigger drift after restart. (from #34466, #34896, #34625, #33206) Thanks @dunamismax, @dsantoreis, @Octane0411, and @Sid-Qin.
+- Venice/provider onboarding hardening: align per-model Venice completion-token limits with discovery metadata, clamp untrusted discovery values to safe bounds, sync the static Venice fallback catalog with current live model metadata, and disable tool wiring for Venice models that do not support function calling so default Venice setups no longer fail with `max_completion_tokens` or unsupported-tools 400s. Fixes #38168. Thanks @Sid-Qin, @powermaster888 and @vincentkoc.
 - Agents/session usage tracking: preserve accumulated usage metadata on embedded Pi runner error exits so failed turns still update session `totalTokens` from real usage instead of stale prior values. (#34275) thanks @RealKai42.
 - Slack/reaction thread context routing: carry Slack native DM channel IDs through inbound context and threading tool resolution so reaction targets resolve consistently for DM `To=user:*` sessions (including `toolContext.currentChannelId` fallback behavior). (from #34831; overlaps #34440, #34502, #34483, #32754) Thanks @dunamismax.
 - Subagents/announce completion scoping: scope nested direct-child completion aggregation to the current requester run window, harden frozen completion capture for deterministic descendant synthesis, and route completion announce delivery through parent-agent announce turns with provenance-aware internal events. (#35080) Thanks @tyler6204.
@@ -101,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/HTTP tools invoke media compatibility: preserve raw media payload access for direct `/tools/invoke` clients by allowing media `nodes` invoke commands only in HTTP tool context, while keeping agent-context media invoke blocking to prevent base64 prompt bloat. (#34365) Thanks @obviyus.
 - Agents/Nodes media outputs: add dedicated `photos_latest` action handling, block media-returning `nodes invoke` commands, keep metadata-only `camera.list` invoke allowed, and normalize empty `photos_latest` results to a consistent response shape to prevent base64 context bloat. (#34332) Thanks @obviyus.
 - TUI/session-key canonicalization: normalize `openclaw tui --session` values to lowercase so uppercase session names no longer drop real-time streaming updates due to gateway/TUI key mismatches. (#33866, #34013) thanks @lynnzc.
+- iMessage/echo loop hardening: strip leaked assistant-internal scaffolding from outbound iMessage replies, drop reflected assistant-content messages before they re-enter inbound processing, extend echo-cache text retention for delayed reflections, and suppress repeated loop traffic before it amplifies into queue overflow. (#33295) Thanks @joelnishanth.
 - Outbound/send config threading: pass resolved SecretRef config through outbound adapters and helper send paths so send flows do not reload unresolved runtime config. (#33987) Thanks @joshavant.
 - Sessions/subagent attachments: remove `attachments[].content.maxLength` from `sessions_spawn` schema to avoid llama.cpp GBNF repetition overflow, and preflight UTF-8 byte size before buffer allocation while keeping runtime file-size enforcement unchanged. (#33648) Thanks @anisoptera.
 - Runtime/tool-state stability: recover from dangling Anthropic `tool_use` after compaction, serialize long-running Discord handler runs without blocking new inbound events, and prevent stale busy snapshots from suppressing stuck-channel recovery. (from #33630, #33583) Thanks @kevinWangSheng and @theotarr.
@@ -121,6 +124,7 @@ Docs: https://docs.openclaw.ai
 - Security/auth labels: remove token and API-key snippets from user-facing auth status labels so `/status` and `/models` do not expose credential fragments. (#33262) thanks @cu1ch3n.
 - Auth/credential semantics: align profile eligibility + probe diagnostics with SecretRef/expiry rules and harden browser download atomic writes. (#33733) thanks @joshavant.
 - Security/audit denyCommands guidance: suggest likely exact node command IDs for unknown `gateway.nodes.denyCommands` entries so ineffective denylist entries are easier to correct. (#29713) thanks @liquidhorizon88-bot.
+- Agents/overload failover handling: classify overloaded provider failures separately from rate limits/status timeouts, add short overload backoff before retry/failover, record overloaded prompt/assistant failures as transient auth-profile cooldowns (with probeable same-provider fallback) instead of treating them like persistent auth/billing failures, and keep one-shot cron retry classification aligned so overloaded fallback summaries still count as transient retries.
 - Docs/security hardening guidance: document Docker `DOCKER-USER` + UFW policy and add cross-linking from Docker install docs for VPS/public-host setups. (#27613) thanks @dorukardahan.
 - Docs/security threat-model links: replace relative `.md` links with Mintlify-compatible root-relative routes in security docs to prevent broken internal navigation. (#27698) thanks @clawdoo.
 - Plugins/Update integrity drift: avoid false integrity drift prompts when updating npm-installed plugins from unpinned specs, while keeping drift checks for exact pinned versions. (#37179) Thanks @vincentkoc.
@@ -204,10 +208,15 @@ Docs: https://docs.openclaw.ai
 - Skills/nano-banana-pro resolution override: respect explicit `--resolution` values during image editing and only auto-detect output size from input images when the flag is omitted. (#36880) Thanks @shuofengzhang and @vincentkoc.
 - Skills/openai-image-gen CLI validation: validate `--background` and `--style` inputs early, normalize supported values, and warn when those flags are ignored for incompatible models. (#36762) Thanks @shuofengzhang and @vincentkoc.
 - Skills/openai-image-gen output formats: validate `--output-format` values early, normalize aliases like `jpg -> jpeg`, and warn when the flag is ignored for incompatible models. (#36648) Thanks @shuofengzhang and @vincentkoc.
+- ACP/skill env isolation: strip skill-injected API keys from ACP harness child-process environments so tools like Codex CLI keep their own auth flow instead of inheriting billed provider keys from active skills. (#36316) Thanks @taw0002 and @vincentkoc.
 - WhatsApp media upload caps: make outbound media sends and auto-replies honor `channels.whatsapp.mediaMaxMb` with per-account overrides so inbound and outbound limits use the same channel config. Thanks @vincentkoc.
 - Windows/Plugin install: when OpenClaw runs on Windows via Bun and `npm-cli.js` is not colocated with the runtime binary, fall back to `npm.cmd`/`npx.cmd` through the existing `cmd.exe` wrapper so `openclaw plugins install` no longer fails with `spawn EINVAL`. (#38056) Thanks @0xlin2023.
 - Telegram/send retry classification: retry grammY `Network request ... failed after N attempts` envelopes in send flows without reclassifying plain `Network request ... failed!` wrappers as transient, restoring the intended retry path while keeping broad send-context message matching tight. (#38056) Thanks @0xlin2023.
 - Gateway/probes: keep `/health`, `/healthz`, `/ready`, and `/readyz` reachable when the Control UI is mounted at `/`, preserve plugin-owned route precedence on those paths, and make `/ready` and `/readyz` report channel-backed readiness with startup grace plus `503` on disconnected managed channels, while `/health` and `/healthz` stay shallow liveness probes. (#18446) Thanks @vibecodooor, @mahsumaktas, and @vincentkoc.
+- Feishu/media downloads: drop invalid timeout fields from SDK method calls now that client-level `httpTimeoutMs` applies to requests. (#38267) Thanks @ant1eicher and @thewilloftheshadow.
+- PI embedded runner/Feishu docs: propagate sender identity into embedded attempts so Feishu doc auto-grant restores requester access for embedded-runner executions. (#32915) thanks @cszhouwei.
+- Agents/usage normalization: normalize missing or partial assistant usage snapshots before compaction accounting so `openclaw agent --json` no longer crashes when provider payloads omit `totalTokens` or related usage fields. (#34977) thanks @sp-hk2ldn.
+- Venice/default model refresh: switch the built-in Venice default to `kimi-k2-5`, update onboarding aliasing, and refresh Venice provider docs/recommendations to match the current private and anonymized catalog. (from #12964) Fixes #20156. Thanks @sabrinaaquino and @vincentkoc.
 
 ## 2026.3.2
 
@@ -709,6 +718,7 @@ Docs: https://docs.openclaw.ai
 - Slack/Disabled channel startup: skip Slack monitor socket startup entirely when `channels.slack.enabled=false` (including configs that still contain valid tokens), preventing disabled accounts from opening websocket connections. (#30586) Thanks @liuxiaopai-ai.
 - Onboarding/Custom providers: use Azure OpenAI-specific verification auth/payload shape (`api-key`, deployment-path chat completions payload) when probing Azure endpoints so valid Azure custom-provider setup no longer fails preflight. (#29421) Thanks @kunalk16.
 - Feishu/Docx editing tools: add `feishu_doc` positional insert, table row/column operations, table-cell merge, and color-text updates; switch markdown write/append/insert to Descendant API insertion with large-document batching; and harden image uploads for data URI/base64/local-path inputs with strict validation and routing-safe upload metadata. (#29411) Thanks @Elarwei001.
+- Commands/Owner-only tools: treat identified direct-chat senders as owners when no owner allowlist is configured, while preserving internal `operator.admin` owner sessions. (#26331) thanks @widingmarcus-cyber
 
 ## 2026.2.26
 
@@ -2879,6 +2889,7 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles: resolve short message IDs safely and expose full IDs in templates. (#1387) Thanks @tyler6204.
 - Infra: preserve fetch helper methods when wrapping abort signals. (#1387)
 - macOS: default distribution packaging to universal binaries. (#1396) Thanks @JustYannicc.
+- Embedded runner: forward sender identity into attempt execution so Feishu doc auto-grant receives requester context again. (#32915) Thanks @cszhouwei.
 
 ## 2026.1.20
 
