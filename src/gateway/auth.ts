@@ -291,7 +291,10 @@ export function resolveGatewayAuth(params: {
   };
 }
 
-export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
+export function assertGatewayAuthConfigured(
+  auth: ResolvedGatewayAuth,
+  rawAuthConfig?: GatewayAuthConfig | null,
+): void {
   if (auth.mode === "token" && !auth.token) {
     if (auth.allowTailscale) {
       return;
@@ -301,6 +304,11 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
     );
   }
   if (auth.mode === "password" && !auth.password) {
+    if (rawAuthConfig?.password != null && typeof rawAuthConfig.password !== "string") {
+      throw new Error(
+        "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup",
+      );
+    }
     throw new Error("gateway auth mode is password, but no password was configured");
   }
   if (auth.mode === "trusted-proxy") {
