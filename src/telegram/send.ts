@@ -576,7 +576,8 @@ export async function sendMessageTelegram(
       fileName: media.fileName,
     });
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
-    const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
+    const fileName =
+      media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
     const file = new InputFile(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
