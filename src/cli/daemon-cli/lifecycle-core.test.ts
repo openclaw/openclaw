@@ -32,6 +32,7 @@ const service = {
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
+  readBestEffortConfig: async () => loadConfig(),
 }));
 
 vi.mock("../../runtime.js", () => ({
