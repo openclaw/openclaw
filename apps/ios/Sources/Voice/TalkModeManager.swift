@@ -70,6 +70,20 @@ final class TalkModeManager: NSObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var silenceTask: Task<Void, Never>?
 
+    /// When true, use ElevenLabs realtime WebSocket STT instead of Apple Speech.
+    private var useElevenLabsSTT: Bool = false
+    /// Realtime WebSocket STT client for ElevenLabs.
+    private var realtimeSTTClient: ElevenLabsRealtimeSTTClient?
+
+    /// User-selected STT model (persisted in UserDefaults).
+    var sttModelId: String {
+        didSet { UserDefaults.standard.set(sttModelId, forKey: "talk.stt.modelId") }
+    }
+    /// User-selected STT language code (persisted in UserDefaults). Empty = auto-detect.
+    var sttLanguageCode: String {
+        didSet { UserDefaults.standard.set(sttLanguageCode, forKey: "talk.stt.languageCode") }
+    }
+
     private var lastHeard: Date?
     private var lastTranscript: String = ""
     private var loggedPartialThisCycle: Bool = false
@@ -119,6 +133,8 @@ final class TalkModeManager: NSObject {
 
     init(allowSimulatorCapture: Bool = false) {
         self.allowSimulatorCapture = allowSimulatorCapture
+        self.sttModelId = UserDefaults.standard.string(forKey: "talk.stt.modelId") ?? "scribe_v2_realtime"
+        self.sttLanguageCode = UserDefaults.standard.string(forKey: "talk.stt.languageCode") ?? ""
         super.init()
     }
 
@@ -172,23 +188,26 @@ final class TalkModeManager: NSObject {
         }
 
         self.logger.info("start")
-        self.statusText = "Requesting permissions…"
+        self.statusText = "Starting…"
         let micOk = await Self.requestMicrophonePermission()
         guard micOk else {
             self.logger.warning("start blocked: microphone permission denied")
             self.statusText = "Microphone permission denied"
             return
         }
-        let speechOk = await Self.requestSpeechPermission()
-        guard speechOk else {
-            self.logger.warning("start blocked: speech permission denied")
-            self.statusText = Self.permissionMessage(
-                kind: "Speech recognition",
-                status: SFSpeechRecognizer.authorizationStatus())
-            return
-        }
 
         await self.reloadConfig()
+
+        if !self.useElevenLabsSTT {
+            let speechOk = await Self.requestSpeechPermission()
+            guard speechOk else {
+                self.logger.warning("start blocked: speech permission denied")
+                self.statusText = Self.permissionMessage(
+                    kind: "Speech recognition",
+                    status: SFSpeechRecognizer.authorizationStatus())
+                return
+            }
+        }
         do {
             try Self.configureAudioSession()
             // Set this before starting recognition so any early speech errors are classified correctly.
@@ -323,14 +342,16 @@ final class TalkModeManager: NSObject {
                     NSLocalizedDescriptionKey: "Microphone permission denied",
                 ])
             }
-            let speechOk = await Self.requestSpeechPermission()
-            guard speechOk else {
-                self.statusText = Self.permissionMessage(
-                    kind: "Speech recognition",
-                    status: SFSpeechRecognizer.authorizationStatus())
-                throw NSError(domain: "TalkMode", code: 5, userInfo: [
-                    NSLocalizedDescriptionKey: "Speech recognition permission denied",
-                ])
+            if !self.useElevenLabsSTT {
+                let speechOk = await Self.requestSpeechPermission()
+                guard speechOk else {
+                    self.statusText = Self.permissionMessage(
+                        kind: "Speech recognition",
+                        status: SFSpeechRecognizer.authorizationStatus())
+                    throw NSError(domain: "TalkMode", code: 5, userInfo: [
+                        NSLocalizedDescriptionKey: "Speech recognition permission denied",
+                    ])
+                }
             }
         }
 
@@ -366,6 +387,13 @@ final class TalkModeManager: NSObject {
         self.isPushToTalkActive = false
         self.isListening = false
         self.captureMode = .idle
+
+        // For realtime STT, send commit before stopping so the final transcript arrives.
+        if self.useElevenLabsSTT, let client = self.realtimeSTTClient {
+            client.commit()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+
         self.stopRecognition()
         self.pttTimeoutTask?.cancel()
         self.pttTimeoutTask = nil
@@ -499,17 +527,6 @@ final class TalkModeManager: NSObject {
         #endif
 
         self.stopRecognition()
-        self.speechRecognizer = SFSpeechRecognizer()
-        guard let recognizer = self.speechRecognizer else {
-            throw NSError(domain: "TalkMode", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Speech recognizer unavailable",
-            ])
-        }
-
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        self.recognitionRequest?.taskHint = .dictation
-        guard let request = self.recognitionRequest else { return }
 
         GatewayDiagnostics.log("talk audio: session \(Self.describeAudioSession())")
 
@@ -555,23 +572,83 @@ final class TalkModeManager: NSObject {
                 }
                 if raw >= threshold {
                     self.lastAudioActivity = Date()
+                    if self.useElevenLabsSTT {
+                        self.lastHeard = Date()
+                    }
                 }
             }
         }
         self.audioTapDiagnostics = tapDiagnostics
-        let tapBlock = Self.makeAudioTapAppendCallback(request: request, diagnostics: tapDiagnostics)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
-        self.inputTapInstalled = true
 
-        self.audioEngine.prepare()
-        try self.audioEngine.start()
-        self.loggedPartialThisCycle = false
+        if self.useElevenLabsSTT {
+            // ElevenLabs realtime WebSocket STT path.
+            guard let apiKey = self.apiKey, !apiKey.isEmpty else {
+                throw NSError(domain: "TalkMode", code: 6, userInfo: [
+                    NSLocalizedDescriptionKey: "ElevenLabs API key not configured",
+                ])
+            }
+            let sttLang = self.sttLanguageCode.isEmpty ? "" : self.sttLanguageCode
+            let client = ElevenLabsRealtimeSTTClient(
+                apiKey: apiKey,
+                modelId: self.sttModelId,
+                languageCode: sttLang,
+                sampleRate: Int(format.sampleRate))
+            client.onTranscript = { [weak self] transcript, kind in
+                guard let self else { return }
+                let isFinal = kind == .committed
+                Task { @MainActor in
+                    await self.handleTranscript(transcript: transcript, isFinal: isFinal)
+                }
+            }
+            client.onError = { [weak self] error in
+                guard let self else { return }
+                self.logger.warning("realtime STT error: \(error.localizedDescription, privacy: .public)")
+                GatewayDiagnostics.log("talk stt: realtime error=\(error.localizedDescription)")
+                Task { @MainActor in
+                    await self.restartRecognitionAfterError()
+                }
+            }
+            self.realtimeSTTClient = client
+            client.connect()
 
-        GatewayDiagnostics.log(
-            "talk speech: recognition started mode=\(String(describing: self.captureMode)) "
-                + "engineRunning=\(self.audioEngine.isRunning)"
-        )
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            let tapBlock = Self.makeAudioTapRealtimeCallback(client: client, diagnostics: tapDiagnostics)
+            input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
+            self.inputTapInstalled = true
+
+            self.audioEngine.prepare()
+            try self.audioEngine.start()
+
+            GatewayDiagnostics.log(
+                "talk stt: elevenlabs realtime started mode=\(String(describing: self.captureMode)) "
+                    + "engineRunning=\(self.audioEngine.isRunning)"
+            )
+        } else {
+            // Apple Speech path: feed audio buffers into SFSpeechRecognizer.
+            self.speechRecognizer = SFSpeechRecognizer()
+            guard let recognizer = self.speechRecognizer else {
+                throw NSError(domain: "TalkMode", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Speech recognizer unavailable",
+                ])
+            }
+
+            self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+            self.recognitionRequest?.shouldReportPartialResults = true
+            self.recognitionRequest?.taskHint = .dictation
+            guard let request = self.recognitionRequest else { return }
+
+            let tapBlock = Self.makeAudioTapAppendCallback(request: request, diagnostics: tapDiagnostics)
+            input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
+            self.inputTapInstalled = true
+
+            self.audioEngine.prepare()
+            try self.audioEngine.start()
+            self.loggedPartialThisCycle = false
+
+            GatewayDiagnostics.log(
+                "talk speech: recognition started mode=\(String(describing: self.captureMode)) "
+                    + "engineRunning=\(self.audioEngine.isRunning)"
+            )
+            self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             if let error {
                 let msg = error.localizedDescription
@@ -618,12 +695,30 @@ final class TalkModeManager: NSObject {
                 await self.handleTranscript(transcript: transcript, isFinal: result.isFinal)
             }
         }
+        }
+    }
+
+    /// Audio tap callback that streams Int16 PCM to the realtime WebSocket STT client.
+    private nonisolated static func makeAudioTapRealtimeCallback(
+        client: ElevenLabsRealtimeSTTClient,
+        diagnostics: AudioTapDiagnostics) -> AVAudioNodeTapBlock
+    {
+        { buffer, _ in
+            diagnostics.onBuffer(buffer)
+            guard let floatData = buffer.floatChannelData else { return }
+            let frameCount = Int(buffer.frameLength)
+            let int16Data = WAVEncoder.float32ToInt16(floatData[0], count: frameCount)
+            Task { @MainActor in
+                client.sendAudio(int16Data)
+            }
+        }
     }
 
     private func restartRecognitionAfterError() async {
         guard self.isEnabled, self.captureMode == .continuous else { return }
         // Avoid thrashing the audio engine if it’s already running.
-        if self.recognitionTask != nil, self.audioEngine.isRunning { return }
+        if (self.recognitionTask != nil || self.realtimeSTTClient?.isConnected == true),
+           self.audioEngine.isRunning { return }
         try? await Task.sleep(nanoseconds: 250_000_000)
         guard self.isEnabled, self.captureMode == .continuous else { return }
         do {
@@ -641,6 +736,8 @@ final class TalkModeManager: NSObject {
     }
 
     private func stopRecognition() {
+        self.realtimeSTTClient?.disconnect()
+        self.realtimeSTTClient = nil
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -2063,6 +2160,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultVoiceId = self.defaultVoiceId
             self.gatewayTalkDefaultModelId = self.defaultModelId
             self.gatewayTalkApiKeyConfigured = (self.apiKey?.isEmpty == false)
+            self.useElevenLabsSTT = (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt

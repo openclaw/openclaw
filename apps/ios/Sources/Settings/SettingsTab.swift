@@ -339,6 +339,26 @@ struct SettingsTab: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Speech-to-Text")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Picker("STT Model", selection: Bindable(self.appModel.talkMode).sttModelId) {
+                                    Text("Scribe v2 Realtime").tag("scribe_v2_realtime")
+                                }
+                                TextField(
+                                    "Language (e.g. eng, zho, auto)",
+                                    text: Bindable(self.appModel.talkMode).sttLanguageCode)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                Text(
+                                    "ElevenLabs STT is enabled when an API key is configured. "
+                                        + "Leave language empty for auto-detect.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+
                             self.featureToggle(
                                 "Show Talk Button",
                                 isOn: self.$talkButtonEnabled,
