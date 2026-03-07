@@ -123,39 +123,41 @@ function normalizeAnthropicModelId(model: string): string {
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
-  if (provider === "anthropic") {
-    return normalizeAnthropicModelId(model);
-  }
-  if (provider === "vercel-ai-gateway" && !model.includes("/")) {
-    // Allow Vercel-specific Claude refs without an upstream prefix.
-    const normalizedAnthropicModel = normalizeAnthropicModelId(model);
-    if (normalizedAnthropicModel.startsWith("claude-")) {
-      return `anthropic/${normalizedAnthropicModel}`;
-    }
-  }
-  if (provider === "google") {
-    return normalizeGoogleModelId(model);
-  }
+  let normalizedModel = model;
 
   // For non-OpenRouter providers, tolerate accidental "provider/model" input
   // when a provider is already selected. This keeps API payloads model-only
   // (e.g. "gemini-2.0-flash" instead of "gemini/gemini-2.0-flash").
   if (provider !== "openrouter") {
-    const lower = model.toLowerCase();
+    const lower = normalizedModel.toLowerCase();
     const ownPrefix = `${provider}/`;
     if (lower.startsWith(ownPrefix)) {
-      return model.slice(ownPrefix.length);
+      normalizedModel = normalizedModel.slice(ownPrefix.length);
     }
+  }
+
+  if (provider === "anthropic") {
+    return normalizeAnthropicModelId(normalizedModel);
+  }
+  if (provider === "vercel-ai-gateway" && !normalizedModel.includes("/")) {
+    // Allow Vercel-specific Claude refs without an upstream prefix.
+    const normalizedAnthropicModel = normalizeAnthropicModelId(normalizedModel);
+    if (normalizedAnthropicModel.startsWith("claude-")) {
+      return `anthropic/${normalizedAnthropicModel}`;
+    }
+  }
+  if (provider === "google") {
+    return normalizeGoogleModelId(normalizedModel);
   }
 
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
   // "openrouter/<name>" as the model ID sent to the API. Models from external
   // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
   // are passed through as-is (#12924).
-  if (provider === "openrouter" && !model.includes("/")) {
-    return `openrouter/${model}`;
+  if (provider === "openrouter" && !normalizedModel.includes("/")) {
+    return `openrouter/${normalizedModel}`;
   }
-  return model;
+  return normalizedModel;
 }
 
 export function normalizeModelRef(provider: string, model: string): ModelRef {
