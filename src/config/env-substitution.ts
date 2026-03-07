@@ -159,13 +159,74 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
 }
 
 /**
+ * Parses a systemd-style `EnvironmentFile` (simple KEY=VALUE, one per line).
+ * Lines starting with `#` are comments. Supports quoted values.
+ * Strips export prefix if present.
+ */
+export function parseEnvFile(content: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    // Strip optional "export " prefix
+    const stripped = line.startsWith("export ") ? line.slice(7) : line;
+    const eq = stripped.indexOf("=");
+    if (eq === -1) continue;
+    const key = stripped.slice(0, eq).trim();
+    if (!ENV_VAR_NAME_PATTERN.test(key)) continue;
+    let val = stripped.slice(eq + 1);
+    // Strip surrounding quotes
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    result[key] = val;
+  }
+  return result;
+}
+
+export interface ResolveConfigEnvVarsOptions {
+  /**
+   * Base environment to use (defaults to `process.env`).
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Additional env-file contents to merge in (e.g. from systemd `EnvironmentFile=`).
+   * Values in later entries override earlier ones; both override `env`.
+   */
+  envFiles?: string[];
+}
+
+/**
  * Resolves `${VAR_NAME}` environment variable references in config values.
  *
  * @param obj - The parsed config object (after JSON5 parse and $include resolution)
- * @param env - Environment variables to use for substitution (defaults to process.env)
+ * @param envOrOpts - Either a `NodeJS.ProcessEnv` map (legacy) or a `ResolveConfigEnvVarsOptions` object.
+ *   Pass `{ envFiles: [fileContents] }` to merge secrets from systemd `EnvironmentFile=` paths
+ *   that are not present in the CLI process environment.
  * @returns The config object with env vars substituted
  * @throws {MissingEnvVarError} If a referenced env var is not set or empty
  */
-export function resolveConfigEnvVars(obj: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
+export function resolveConfigEnvVars(
+  obj: unknown,
+  envOrOpts: NodeJS.ProcessEnv | ResolveConfigEnvVarsOptions = process.env,
+): unknown {
+  let env: NodeJS.ProcessEnv;
+  if (
+    envOrOpts &&
+    typeof envOrOpts === "object" &&
+    ("env" in envOrOpts || "envFiles" in envOrOpts)
+  ) {
+    const opts = envOrOpts as ResolveConfigEnvVarsOptions;
+    const merged: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
+    for (const fileContent of opts.envFiles ?? []) {
+      Object.assign(merged, parseEnvFile(fileContent));
+    }
+    env = merged;
+  } else {
+    env = envOrOpts as NodeJS.ProcessEnv;
+  }
   return substituteAny(obj, env, "");
 }
