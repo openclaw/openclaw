@@ -19,11 +19,13 @@ export function normalizeMessageActionInput(params: {
 
   const explicitTarget =
     typeof normalizedArgs.target === "string" ? normalizedArgs.target.trim() : "";
+  const hasLegacyTargetFields =
+    typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =
     (typeof normalizedArgs.to === "string" && normalizedArgs.to.trim().length > 0) ||
     (typeof normalizedArgs.channelId === "string" && normalizedArgs.channelId.trim().length > 0);
 
-  if (explicitTarget && hasLegacyTarget) {
+  if (explicitTarget && hasLegacyTargetFields) {
     delete normalizedArgs.to;
     delete normalizedArgs.channelId;
   }
