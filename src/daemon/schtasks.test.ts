@@ -44,15 +44,18 @@ describe("scheduled task runtime derivation", () => {
     ).toEqual({ status: "running" });
   });
 
-  it("treats Running without last result as running", () => {
+  it("treats Running without numeric result as unknown", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({
         status: "Running",
       }),
-    ).toEqual({ status: "running" });
+    ).toEqual({
+      status: "unknown",
+      detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
+    });
   });
 
-  it("downgrades stale Running status when last result is not a running code", () => {
+  it("treats non-running result codes as stopped", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({
         status: "Running",
@@ -60,7 +63,7 @@ describe("scheduled task runtime derivation", () => {
       }),
     ).toEqual({
       status: "stopped",
-      detail: "Task reports Running but Last Run Result=0x0; treating as stale runtime state.",
+      detail: "Task Last Run Result=0x0; treating as not running.",
     });
   });
 
@@ -88,15 +91,21 @@ describe("scheduled task runtime derivation", () => {
         status: "Wird ausgeführt",
         lastRunResult: "0x0",
       }),
-    ).toEqual({ status: "stopped" });
+    ).toEqual({
+      status: "stopped",
+      detail: "Task Last Run Result=0x0; treating as not running.",
+    });
   });
 
-  it("treats localized status without result code as stopped", () => {
+  it("treats localized status without result code as unknown", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({
         status: "Wird ausgeführt",
       }),
-    ).toEqual({ status: "stopped" });
+    ).toEqual({
+      status: "unknown",
+      detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
+    });
   });
 });
 
