@@ -125,4 +125,46 @@ describe("models set + fallbacks", () => {
       },
     });
   });
+
+  it("rejects model without provider prefix (#5790)", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    // Should reject "qwen2.5-coder:7b" without a provider prefix
+    await expect(modelsSetCommand("qwen2.5-coder:7b", runtime)).rejects.toThrow(
+      /requires a provider prefix/i,
+    );
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("accepts model with explicit provider prefix (#5790)", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("ollama/qwen2.5-coder:7b", runtime);
+
+    expectWrittenPrimaryModel("ollama/qwen2.5-coder:7b");
+  });
+
+  it("accepts model alias without provider prefix (#5790)", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4.1": { alias: "gpt4" },
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("gpt4", runtime);
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = getWrittenConfig();
+    expect(
+      (written.agents as { defaults: { model: { primary: string } } }).defaults.model.primary,
+    ).toBe("openai/gpt-4.1");
+  });
 });
