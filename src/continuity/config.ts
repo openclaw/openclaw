@@ -51,8 +51,16 @@ function resolveCaptureMode(
   return value === "off" || value === "review" || value === "auto" ? value : fallback;
 }
 
-function resolvePositiveNumber(value: unknown, fallback: number, max?: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+function resolvePositiveNumber(
+  value: unknown,
+  fallback: number,
+  max?: number,
+  allowZero = false,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return fallback;
+  }
+  if (!allowZero && value === 0) {
     return fallback;
   }
   if (typeof max === "number") {
@@ -102,6 +110,7 @@ export function resolveContinuityConfig(raw?: unknown): ResolvedContinuityConfig
         capture.minConfidence,
         DEFAULT_CONTINUITY_CONFIG.capture.minConfidence,
         1,
+        true,
       ),
     },
     review: {

@@ -92,4 +92,14 @@ describe("resolveContinuityConfig", () => {
     expect(resolved.recall.scope).toEqual(DEFAULT_CONTINUITY_CONFIG.recall.scope);
     expect(resolved.recall.scope).not.toBe(DEFAULT_CONTINUITY_CONFIG.recall.scope);
   });
+
+  it("accepts zero for capture.minConfidence", () => {
+    const resolved = resolveContinuityConfig({
+      capture: {
+        minConfidence: 0,
+      },
+    });
+
+    expect(resolved.capture.minConfidence).toBe(0);
+  });
 });

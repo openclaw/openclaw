@@ -12,6 +12,7 @@ export type ContinuityState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   continuityLoading: boolean;
+  continuityLoadPromise?: Promise<void> | null;
   continuityError: string | null;
   continuityStatus: ContinuityStatus | null;
   continuityRecords: ContinuityRecord[];
@@ -22,6 +23,10 @@ export type ContinuityState = {
   continuityLimit: string;
   continuityBusyId: string | null;
   continuityExplainById: Record<string, ContinuityExplainResult | null>;
+};
+
+type LoadContinuityOptions = {
+  waitForCurrent?: boolean;
 };
 
 function buildAgentId(state: ContinuityState): string | undefined {
@@ -63,28 +68,40 @@ function formatContinuityError(err: unknown): string {
   return String(err);
 }
 
-export async function loadContinuity(state: ContinuityState) {
+export async function loadContinuity(state: ContinuityState, options: LoadContinuityOptions = {}) {
   if (!state.client || !state.connected) {
     return;
   }
+  const client = state.client;
   if (state.continuityLoading) {
+    if (options.waitForCurrent && state.continuityLoadPromise) {
+      await state.continuityLoadPromise;
+      if (state.client && state.connected) {
+        await loadContinuity(state);
+      }
+    }
     return;
   }
   state.continuityLoading = true;
   state.continuityError = null;
-  try {
-    const agentId = buildAgentId(state);
-    const [status, records] = await Promise.all([
-      state.client.request<ContinuityStatus>("continuity.status", agentId ? { agentId } : {}),
-      state.client.request<ContinuityRecord[]>("continuity.list", buildListParams(state)),
-    ]);
-    state.continuityStatus = status;
-    state.continuityRecords = Array.isArray(records) ? records : [];
-  } catch (err) {
-    state.continuityError = formatContinuityError(err);
-  } finally {
-    state.continuityLoading = false;
-  }
+  const loadPromise = (async () => {
+    try {
+      const agentId = buildAgentId(state);
+      const [status, records] = await Promise.all([
+        client.request<ContinuityStatus>("continuity.status", agentId ? { agentId } : {}),
+        client.request<ContinuityRecord[]>("continuity.list", buildListParams(state)),
+      ]);
+      state.continuityStatus = status;
+      state.continuityRecords = Array.isArray(records) ? records : [];
+    } catch (err) {
+      state.continuityError = formatContinuityError(err);
+    } finally {
+      state.continuityLoading = false;
+      state.continuityLoadPromise = null;
+    }
+  })();
+  state.continuityLoadPromise = loadPromise;
+  await loadPromise;
 }
 
 export function updateContinuityFilters(
@@ -139,7 +156,7 @@ export async function patchContinuity(
       delete next[id];
       state.continuityExplainById = next;
     }
-    await loadContinuity(state);
+    await loadContinuity(state, { waitForCurrent: true });
   } catch (err) {
     state.continuityError = formatContinuityError(err);
   } finally {

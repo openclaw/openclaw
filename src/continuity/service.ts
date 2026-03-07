@@ -157,7 +157,6 @@ function renderManagedSection(kind: ContinuityKind, records: ContinuityRecord[])
               `- Source: ${escapeMarkdownLine(record.source.sessionKey ?? record.source.sessionId ?? "unknown")}`,
               `- Role: ${record.source.role}`,
               `- Approved: ${new Date(record.approvedAt).toISOString()}`,
-              `- Excerpt: ${escapeMarkdownLine(record.source.excerpt)}`,
             ].join("\n"),
           )
           .join("\n\n");
