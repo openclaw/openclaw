@@ -589,10 +589,15 @@ export function createOpenAIWebSocketStreamFn(
         extraParams.reasoning = reasoning;
       }
 
+      // Omit `store` when the model explicitly disables it via compat.supportsStore = false
+      // (e.g., Azure OpenAI Responses API or non-OpenAI backends like Gemini via Cloudflare)
+      const modelCompat = model.compat && typeof model.compat === "object" ? model.compat : {};
+      const supportsStore = (modelCompat as { supportsStore?: boolean }).supportsStore;
+      const shouldIncludeStore = supportsStore !== false;
       const payload: Record<string, unknown> = {
         type: "response.create",
         model: model.id,
-        store: false,
+        ...(shouldIncludeStore ? { store: false } : {}),
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
