@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+﻿import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
@@ -15,6 +15,28 @@ import {
   sessionMemoryRawEntrySchema,
   sessionMemorySummaryEntrySchema,
 } from "./types.js";
+
+const summaryWriteChains = new Map<string, Promise<void>>();
+
+async function withSummaryWriteLock<T>(filePath: string, op: () => Promise<T>): Promise<T> {
+  const previous = summaryWriteChains.get(filePath) ?? Promise.resolve();
+  let releaseCurrent: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const nextChain = previous.then(() => current);
+  summaryWriteChains.set(filePath, nextChain);
+
+  await previous;
+  try {
+    return await op();
+  } finally {
+    releaseCurrent?.();
+    if (summaryWriteChains.get(filePath) === nextChain) {
+      summaryWriteChains.delete(filePath);
+    }
+  }
+}
 
 function encodeMessageId(messageId: string): string {
   const normalized = messageId.trim();
@@ -173,10 +195,11 @@ export async function appendSessionMemorySummaryEntry(params: {
   sessionId: string;
   entry: SessionMemorySummaryEntry;
 }): Promise<void> {
-  await appendJsonLine(
-    resolveSessionMemorySummaryFile(params.agentId, params.sessionId),
-    sessionMemorySummaryEntrySchema.parse(params.entry),
-  );
+  const filePath = resolveSessionMemorySummaryFile(params.agentId, params.sessionId);
+  const parsed = sessionMemorySummaryEntrySchema.parse(params.entry);
+  await withSummaryWriteLock(filePath, async () => {
+    await appendJsonLine(filePath, parsed);
+  });
 }
 
 /**
@@ -194,20 +217,22 @@ export async function upsertSessionMemorySummaryEntry(params: {
 }): Promise<void> {
   const parsed = sessionMemorySummaryEntrySchema.parse(params.entry);
   const filePath = resolveSessionMemorySummaryFile(params.agentId, params.sessionId);
-  const existing = await readSessionMemorySummaryEntries({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
+  await withSummaryWriteLock(filePath, async () => {
+    const existing = await readSessionMemorySummaryEntries({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
+    const idx = existing.findIndex((e) => e.messageId === parsed.messageId);
+    if (idx === -1) {
+      // No existing entry - append as normal.
+      await appendJsonLine(filePath, parsed);
+      return;
+    }
+    // Replace the existing entry and rewrite the whole file.
+    existing[idx] = parsed;
+    await ensureParentDir(filePath);
+    await fs.writeFile(filePath, existing.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
   });
-  const idx = existing.findIndex((e) => e.messageId === parsed.messageId);
-  if (idx === -1) {
-    // No existing entry — append as normal.
-    await appendJsonLine(filePath, parsed);
-    return;
-  }
-  // Replace the existing entry and rewrite the whole file.
-  existing[idx] = parsed;
-  await ensureParentDir(filePath);
-  await fs.writeFile(filePath, existing.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
 }
 
 export async function readSessionMemoryAuditEntries(params: {
@@ -383,3 +408,4 @@ export async function deleteSessionMemoryArtifacts(params: {
     }),
   ]);
 }
+
