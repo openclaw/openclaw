@@ -32,7 +32,10 @@ export function isCompactionCircuitOpen(
   sessionKey: string,
   opts?: { maxConsecutiveFailures?: number; nowMs?: number },
 ): boolean {
-  const state = getState(sessionKey);
+  const state = states.get(sessionKey);
+  if (!state) {
+    return false; // No failures recorded — circuit is closed
+  }
   const max = opts?.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_FAILURES;
   const now = opts?.nowMs ?? Date.now();
 
