@@ -7,6 +7,7 @@ import {
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
   resolveMentionGatingWithBypass,
+  resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/googlechat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
@@ -229,12 +230,10 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   const dmPolicy = account.config.dm?.policy ?? "pairing";
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
   const normalizedGroupUsers = groupUsers.map((v) => String(v));
-  const senderGroupPolicy =
-    groupPolicy === "disabled"
-      ? "disabled"
-      : normalizedGroupUsers.length > 0
-        ? "allowlist"
-        : "open";
+  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+    groupPolicy,
+    groupAllowFrom: normalizedGroupUsers,
+  });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)

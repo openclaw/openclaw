@@ -14,6 +14,16 @@ export type SenderGroupAccessDecision = {
   reason: SenderGroupAccessReason;
 };
 
+export function resolveSenderScopedGroupPolicy(params: {
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: string[];
+}): GroupPolicy {
+  if (params.groupPolicy === "disabled") {
+    return "disabled";
+  }
+  return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
+}
+
 export function evaluateSenderGroupAccessForPolicy(params: {
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied?: boolean;
