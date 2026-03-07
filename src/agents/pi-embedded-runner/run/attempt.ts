@@ -2588,43 +2588,47 @@ export async function runEmbeddedAttempt(
         hookRunner?.hasHooks("loop_iteration_start") || hookRunner?.hasHooks("loop_iteration_end")
           ? activeSession.subscribe((event) => {
               if (event.type === "turn_start") {
+                // Counters maintained unconditionally — loop_iteration_end
+                // needs hookTurnMessageCount even if only end handlers exist.
                 hookTurnIteration++;
                 hookTurnMessageCount = activeSession.messages.length;
-                hookRunner
-                  .runLoopIterationStart(
-                    {
-                      iteration: hookTurnIteration,
-                      messageCount: activeSession.messages.length,
-                      // Tool results from previous turn that triggered this iteration
-                      pendingToolResults: hookPendingToolResults,
-                    },
-                    hookCtx,
-                  )
-                  .catch((err) =>
-                    log.warn(
-                      `loop_iteration_start hook failed: runId=${params.runId} iteration=${hookTurnIteration} ${String(err)}`,
-                    ),
-                  );
+                if (hookRunner?.hasHooks("loop_iteration_start")) {
+                  hookRunner
+                    .runLoopIterationStart(
+                      {
+                        iteration: hookTurnIteration,
+                        messageCount: activeSession.messages.length,
+                        pendingToolResults: hookPendingToolResults,
+                      },
+                      hookCtx,
+                    )
+                    .catch((err) =>
+                      log.warn(
+                        `loop_iteration_start hook failed: runId=${params.runId} iteration=${hookTurnIteration} ${String(err)}`,
+                      ),
+                    );
+                }
               }
               if (event.type === "turn_end") {
                 const toolResults = event.toolResults ?? [];
-                // Capture for next turn_start
                 hookPendingToolResults = toolResults.length;
-                hookRunner
-                  .runLoopIterationEnd(
-                    {
-                      iteration: hookTurnIteration,
-                      toolCallsMade: toolResults.length,
-                      newMessagesAdded: activeSession.messages.length - hookTurnMessageCount,
-                      hasToolResults: toolResults.length > 0,
-                    },
-                    hookCtx,
-                  )
-                  .catch((err) =>
-                    log.warn(
-                      `loop_iteration_end hook failed: runId=${params.runId} iteration=${hookTurnIteration} ${String(err)}`,
-                    ),
-                  );
+                if (hookRunner?.hasHooks("loop_iteration_end")) {
+                  hookRunner
+                    .runLoopIterationEnd(
+                      {
+                        iteration: hookTurnIteration,
+                        toolCallsMade: toolResults.length,
+                        newMessagesAdded: activeSession.messages.length - hookTurnMessageCount,
+                        hasToolResults: toolResults.length > 0,
+                      },
+                      hookCtx,
+                    )
+                    .catch((err) =>
+                      log.warn(
+                        `loop_iteration_end hook failed: runId=${params.runId} iteration=${hookTurnIteration} ${String(err)}`,
+                      ),
+                    );
+                }
               }
             })
           : undefined;
