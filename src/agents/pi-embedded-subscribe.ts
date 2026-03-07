@@ -78,6 +78,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
+    consecutiveToolOnlyTurns: 0,
+    toolOnlyNudgeInjected: false,
   };
   const usageTotals = {
     input: 0,
