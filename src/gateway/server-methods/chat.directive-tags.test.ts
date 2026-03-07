@@ -797,4 +797,92 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
   });
+
+  it("chat.send does not inherit external routes for webchat clients on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-webchat-channel-scoped-no-inherit-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "imessage",
+        to: "+8619800001234",
+        accountId: "default",
+      },
+      lastChannel: "imessage",
+      lastTo: "+8619800001234",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    // Webchat client accessing an iMessage channel-scoped session should NOT
+    // inherit the external delivery route. Fixes #38957.
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-channel-scoped-no-inherit",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            id: "openclaw-webchat",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:imessage:direct:+8619800001234",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send still inherits external routes for UI clients on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-ui-channel-scoped-inherit-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "imessage",
+        to: "+8619800001234",
+        accountId: "default",
+      },
+      lastChannel: "imessage",
+      lastTo: "+8619800001234",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-ui-channel-scoped-inherit",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:imessage:direct:+8619800001234",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "imessage",
+        OriginatingTo: "+8619800001234",
+        ExplicitDeliverRoute: true,
+        AccountId: "default",
+      }),
+    );
+  });
 });

@@ -32,11 +32,7 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -168,22 +164,22 @@ function resolveChatSendOriginatingRoute(params: {
     !isChannelScopedSession &&
     typeof sessionScopeParts[1] === "string" &&
     sessionChannelHint === routeChannelCandidate;
-  const isFromWebchatClient =
-    isWebchatClient(params.client) || params.client?.mode === GATEWAY_CLIENT_MODES.UI;
+  const isFromWebchatClient = isWebchatClient(params.client);
   const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
   const isConfiguredMainSessionScope =
     normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
 
-  // Keep explicit delivery for channel-scoped sessions, but refuse to inherit
-  // stale external routes for shared-main and other channel-agnostic webchat/UI
-  // turns where the session key does not encode the user's current target.
+  // Webchat/Control UI clients never inherit external delivery routes, even when
+  // accessing channel-scoped sessions. External routes are only for non-webchat
+  // clients where the session key explicitly encodes an external target.
   // Preserve the old configured-main contract: any connected non-webchat client
   // may inherit the last external route even when client metadata is absent.
   const canInheritDeliverableRoute = Boolean(
+    !isFromWebchatClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
     ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      (isConfiguredMainSessionScope && params.hasConnectedClient && !isFromWebchatClient)),
+      (isConfiguredMainSessionScope && params.hasConnectedClient)),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
