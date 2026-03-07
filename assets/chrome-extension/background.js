@@ -137,10 +137,31 @@ async function ensureRelayConnection() {
     const httpBase = `http://127.0.0.1:${port}`
     const wsUrl = await buildRelayWsUrl(port, gatewayToken)
 
-    // Fast preflight: is the relay server up?
+    // Fast preflight: is the relay server up, and is the token valid?
+    // We probe /json/version (which requires auth) rather than / (which is open)
+    // so we can distinguish "server down" from "wrong token" before the WebSocket
+    // upgrade — Chrome's WS API swallows the 401 status and only surfaces a
+    // generic "HTTP Authentication failed" error with no actionable detail.
     try {
-      await fetch(`${httpBase}/`, { method: 'HEAD', signal: AbortSignal.timeout(2000) })
+      const relayToken = wsUrl.includes('token=') ? new URL(wsUrl.replace('ws://', 'http://')).searchParams.get('token') : ''
+      const preflightHeaders = relayToken ? { 'x-openclaw-relay-token': relayToken } : {}
+      const preflightRes = await fetch(`${httpBase}/json/version`, {
+        method: 'GET',
+        headers: preflightHeaders,
+        signal: AbortSignal.timeout(2000),
+      })
+      if (preflightRes.status === 401) {
+        throw new Error('Unauthorized: gateway token is incorrect. Open extension options to update your gateway token.')
+      }
+      if (!preflightRes.ok && preflightRes.status !== 404) {
+        // 404 is fine — some relay builds may not serve /json/version yet; fall through to WS.
+        throw new Error(`Relay server not reachable at ${httpBase} (HTTP ${preflightRes.status})`)
+      }
     } catch (err) {
+      if (err instanceof Error && (err.message.startsWith('Unauthorized') || err.message.includes('Relay server not reachable'))) {
+        throw err
+      }
+      // Network-level failure (fetch threw) means server is down.
       throw new Error(`Relay server not reachable at ${httpBase} (${String(err)})`)
     }
 

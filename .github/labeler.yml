@@ -3,6 +3,11 @@
       - any-glob-to-any-file:
           - "extensions/bluebubbles/**"
           - "docs/channels/bluebubbles.md"
+"channel: dingtalk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dingtalk/**"
+          - "docs/channels/dingtalk.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:

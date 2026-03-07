@@ -1,0 +1,30 @@
+{
+  "id": "dingtalk",
+  "name": "DingTalk",
+  "description": "钉钉消息渠道插件",
+  "version": "0.1.1",
+  "channels": ["dingtalk"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "clientId": { "type": "string" },
+      "clientSecret": { "type": "string" },
+      "connectionMode": { "type": "string", "enum": ["stream", "webhook"] },
+      "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
+      "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+      "requireMention": { "type": "boolean" },
+      "allowFrom": { "type": "array", "items": { "type": "string" } },
+      "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+      "historyLimit": { "type": "integer", "minimum": 0 },
+      "textChunkLimit": { "type": "integer", "minimum": 1 },
+      "enableAICard": { "type": "boolean" },
+      "maxFileSizeMB": { "type": "number", "minimum": 1 }
+    }
+  },
+  "uiHints": {
+    "clientId": { "label": "Client ID (AppKey)" },
+    "clientSecret": { "label": "Client Secret (AppSecret)", "sensitive": true }
+  }
+}

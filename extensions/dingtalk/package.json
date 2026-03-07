@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/dingtalk",
+  "version": "2026.2.1",
+  "description": "OpenClaw DingTalk channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "dingtalk-stream": "^2.1.4",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dingtalk",
+      "label": "DingTalk",
+      "selectionLabel": "DingTalk (钉钉)",
+      "docsPath": "/channels/dingtalk",
+      "docsLabel": "dingtalk",
+      "blurb": "钉钉企业消息",
+      "aliases": [
+        "ding"
+      ],
+      "order": 71
+    },
+    "install": {
+      "npmSpec": "@openclaw/dingtalk",
+      "localPath": "extensions/dingtalk",
+      "defaultChoice": "local"
+    }
+  }
+}

@@ -44,5 +44,10 @@ export function isRetryableReconnectError(err) {
   if (message.includes("Missing gatewayToken")) {
     return false;
   }
+  // 401 from the relay means the stored token is wrong — retrying won't help
+  // until the user updates their gateway token in the extension options.
+  if (message.includes("Unauthorized") || message.includes("401")) {
+    return false;
+  }
   return true;
 }
