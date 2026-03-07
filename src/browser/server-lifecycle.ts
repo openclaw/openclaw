@@ -1,6 +1,10 @@
+import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { resolveProfile } from "./config.js";
-import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
+import {
+  ensureChromeExtensionRelayServer,
+  stopChromeExtensionRelayServer,
+} from "./extension-relay.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
@@ -37,6 +41,18 @@ export async function stopKnownBrowserProfiles(params: {
   try {
     for (const name of listKnownProfileNames(current)) {
       try {
+        const runtime = current.profiles.get(name);
+        if (runtime?.running) {
+          await stopOpenClawChrome(runtime.running);
+          runtime.running = null;
+          continue;
+        }
+        if (runtime?.profile.driver === "extension") {
+          await stopChromeExtensionRelayServer({ cdpUrl: runtime.profile.cdpUrl }).catch(
+            () => false,
+          );
+          continue;
+        }
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {
         // ignore

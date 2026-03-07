@@ -198,7 +198,7 @@ Why this works:
 
 - `browser.attachOnly: true` prevents OpenClaw from launching its own managed browser.
 - Overriding `browser.profiles.chrome` replaces the built-in `chrome` profile that normally points at the extension relay.
-- Setting both the top-level `cdpUrl` and the profile-level `cdpUrl` keeps single-profile and named-profile callers pointed at the same endpoint.
+- The top-level `browser.cdpUrl` is a legacy single-profile alias. The profile-level `browser.profiles.chrome.cdpUrl` is preferred, but setting both keeps single-profile and named-profile callers pointed at the same endpoint.
 
 Notes:
 
