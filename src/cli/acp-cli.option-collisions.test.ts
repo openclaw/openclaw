@@ -93,6 +93,7 @@ describe("acp cli option collisions", () => {
   });
 
   it("loads gateway token/password from files", async () => {
+    // pragma: allowlist secret
     await withSecretFiles({ token: "tok_file\n", [passwordKey()]: "pw_file\n" }, async (files) => {
       await parseAcp([
         "--token-file",

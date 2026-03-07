@@ -27,7 +27,7 @@ describe("talk normalization", () => {
   it("maps legacy ElevenLabs fields into provider/providers", () => {
     const normalized = normalizeTalkSection({
       voiceId: "voice-123",
-      voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
+      voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" }, // pragma: allowlist secret
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
@@ -101,6 +101,7 @@ describe("talk normalization", () => {
   });
 
   it("merges ELEVENLABS_API_KEY into normalized defaults for legacy configs", async () => {
+    // pragma: allowlist secret
     await withEnvAsync({ [elevenLabsApiKeyEnv]: "env-eleven-key" }, async () => {
       // pragma: allowlist secret
       await withTempConfig(

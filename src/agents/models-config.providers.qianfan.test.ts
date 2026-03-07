@@ -9,6 +9,7 @@ const qianfanApiKeyEnv = ["QIANFAN_API", "KEY"].join("_");
 
 describe("Qianfan provider", () => {
   it("should include qianfan when QIANFAN_API_KEY is configured", async () => {
+    // pragma: allowlist secret
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await withEnvAsync({ [qianfanApiKeyEnv]: "test-key" }, async () => {
       // pragma: allowlist secret
