@@ -634,6 +634,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-tools");
+    releaseWsSession("sess-store-default");
+    releaseWsSession("sess-store-compat");
   });
 
   it("connects to the WebSocket on first call", async () => {
@@ -689,6 +691,73 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.type).toBe("response.create");
     expect(sent.model).toBe("gpt-5.2");
     expect(Array.isArray(sent.input)).toBe(true);
+  });
+
+  it("includes store:false by default", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-default");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_store_default", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.store).toBe(false);
+  });
+
+  it("omits store when compat.supportsStore is false (#39086)", async () => {
+    releaseWsSession("sess-store-compat");
+    const noStoreModel = {
+      ...modelStub,
+      compat: { supportsStore: false },
+    };
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-compat");
+    const stream = streamFn(
+      noStoreModel as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_no_store", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("store");
   });
 
   it("emits an AssistantMessage on response.completed", async () => {
