@@ -433,19 +433,29 @@ function collectAgentSandboxDockerEnvAssignments(params: {
   const defaultsDocker = isRecord(defaultsSandbox?.docker) ? defaultsSandbox.docker : undefined;
   const defaultsEnv = isRecord(defaultsDocker?.env) ? defaultsDocker.env : undefined;
 
-  // Collect from agents.list[].sandbox.docker.env (skip disabled agents)
   const list = Array.isArray(agents.list) ? agents.list : [];
+  const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : "off";
 
-  // Defaults env refs are always active because sandbox env is merged key-by-key
-  // (global + agent), not replaced wholesale. An agent having its own env map does
-  // not mean it overrides every key from defaults.
+  // Defaults env refs are active when sandbox env is merged key-by-key (global +
+  // agent). But if sandbox mode is "off" everywhere, these refs are never consumed.
   if (defaultsEnv) {
+    // Active if defaults mode is not "off", or any enabled agent overrides mode to non-off.
+    const anyAgentSandboxed =
+      defaultsMode !== "off" ||
+      list.some((rawAgent) => {
+        if (!isRecord(rawAgent) || rawAgent.enabled === false) {
+          return false;
+        }
+        const agentSandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+        return typeof agentSandbox?.mode === "string" && agentSandbox.mode !== "off";
+      });
     collectSandboxDockerEnvAssignments({
       env: defaultsEnv,
       pathPrefix: "agents.defaults.sandbox.docker.env",
       defaults: params.defaults,
       context: params.context,
-      active: true,
+      active: anyAgentSandboxed,
+      inactiveReason: "sandbox mode is off; env refs are not consumed.",
     });
   }
 
@@ -459,12 +469,14 @@ function collectAgentSandboxDockerEnvAssignments(params: {
     if (env) {
       const enabled = rawAgent.enabled !== false;
       const effectiveScope = computeEffectiveSandboxScope(sandbox, defaultsSandbox);
-      // When scope is "shared", agent-level docker settings are ignored by
-      // resolveSandboxDockerConfig, so these refs are never used.
-      const active = enabled && effectiveScope !== "shared";
+      const effectiveMode = typeof sandbox?.mode === "string" ? sandbox.mode : defaultsMode;
+      // Inactive when: agent disabled, scope is shared (agent docker ignored), or mode is off.
+      const active = enabled && effectiveScope !== "shared" && effectiveMode !== "off";
       const inactiveReason = !enabled
         ? "agent is disabled."
-        : "agent sandbox scope is shared; agent-level docker env is ignored.";
+        : effectiveScope === "shared"
+          ? "agent sandbox scope is shared; agent-level docker env is ignored."
+          : "sandbox mode is off; env refs are not consumed.";
       collectSandboxDockerEnvAssignments({
         env,
         pathPrefix: `agents.list.${index}.sandbox.docker.env`,

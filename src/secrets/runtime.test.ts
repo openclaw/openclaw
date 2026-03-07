@@ -2179,6 +2179,7 @@ describe("secrets runtime snapshot", () => {
       agents: {
         defaults: {
           sandbox: {
+            mode: "non-main",
             docker: {
               env: {
                 API_KEY: { source: "env", provider: "default", id: "SANDBOX_API_KEY" },
@@ -2204,6 +2205,11 @@ describe("secrets runtime snapshot", () => {
   it("resolves SecretRef in agents.list[].sandbox.docker.env", async () => {
     const config = asConfig({
       agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+          },
+        },
         list: [
           {
             id: "worker",
@@ -2337,6 +2343,105 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats sandbox.docker.env refs as inactive when sandbox mode is off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: {
+              env: {
+                SECRET: { source: "env", provider: "default", id: "MISSING_MODE_OFF_SECRET" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.defaults.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("treats per-agent sandbox.docker.env refs as inactive when agent mode is off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+          },
+        },
+        list: [
+          {
+            id: "off-agent",
+            sandbox: {
+              mode: "off",
+              docker: {
+                env: {
+                  SECRET: { source: "env", provider: "default", id: "MISSING_AGENT_OFF_SECRET" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.warnings.map((w) => w.path)).toContain(
+      "agents.list.0.sandbox.docker.env.SECRET",
+    );
+  });
+
+  it("keeps defaults env refs active when agent overrides mode to non-off", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            docker: {
+              env: {
+                SHARED_KEY: { source: "env", provider: "default", id: "SHARED_SECRET" },
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "sandboxed-agent",
+            sandbox: {
+              mode: "non-main",
+            },
+          },
+        ],
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { SHARED_SECRET: "resolved-value" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const env = snapshot.config.agents?.defaults?.sandbox?.docker?.env as Record<string, unknown>;
+    expect(env?.SHARED_KEY).toBe("resolved-value");
+  });
+
   it("resolves defaults sandbox.docker.env refs even when agents define their own env", async () => {
     // Sandbox env is merged key-by-key (global + agent), not replaced wholesale.
     // Defaults refs must stay active even when agents have their own env maps,
@@ -2345,6 +2450,7 @@ describe("secrets runtime snapshot", () => {
       agents: {
         defaults: {
           sandbox: {
+            mode: "non-main",
             docker: {
               env: {
                 SHARED_KEY: { source: "env", provider: "default", id: "SHARED_SECRET" },
@@ -2383,6 +2489,7 @@ describe("secrets runtime snapshot", () => {
       agents: {
         defaults: {
           sandbox: {
+            mode: "non-main",
             docker: {
               env: {
                 PLAIN_VAR: "hello-world",

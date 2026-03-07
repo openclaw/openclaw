@@ -216,17 +216,20 @@ describe("sandbox docker config", () => {
     }
   });
 
-  it("throws on unresolved SecretRef objects in sandbox env at resolve time", () => {
-    expect(() =>
-      resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: {
-          env: {
-            API_KEY: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
-          },
+  it("filters out unresolved SecretRef objects in sandbox env at resolve time", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        env: {
+          PLAIN: "plain-value",
+          API_KEY: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
         },
-      }),
-    ).toThrow(/sandbox\.docker\.env\.API_KEY.*unresolved secret reference/);
+      },
+    });
+    // Non-string values are filtered (not thrown) because this function is also
+    // called from read-only audit/status paths on unresolved config.
+    expect(resolved.env).toEqual({ PLAIN: "plain-value" });
+    expect(resolved.env!.API_KEY).toBeUndefined();
   });
 
   it("rejects non-string values in binds array", () => {
