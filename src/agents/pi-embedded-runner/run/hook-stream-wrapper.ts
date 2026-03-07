@@ -173,9 +173,17 @@ export function wrapStreamFnWithHooks(
   return wrapped;
 }
 
-/** Helper to detect tool call content blocks in an assistant message. */
+/** Helper to detect tool call content blocks in an assistant message.
+ *  Covers all variants: pi-agent-core normalized (toolCall), provider-specific
+ *  (tool_use for Anthropic, tool_call for OpenAI), and legacy (toolUse, functionCall). */
 function isToolCallBlockType(type: unknown): boolean {
-  return type === "toolCall" || type === "tool_call" || type === "tool_use";
+  return (
+    type === "toolCall" ||
+    type === "tool_call" ||
+    type === "tool_use" ||
+    type === "toolUse" ||
+    type === "functionCall"
+  );
 }
 
 /**
