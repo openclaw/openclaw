@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -183,9 +184,10 @@ class MicCaptureManager(
   private fun start() {
     stopRequested = false
     if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-      _statusText.value = "Speech recognizer unavailable"
-      _micEnabled.value = false
-      return
+      // On many Chinese OEM devices (Xiaomi, Huawei, OPPO, vivo), this returns false
+      // even though a working OEM speech engine is installed. Log a warning but continue
+      // so we can attempt to use the device's configured speech recognition service.
+      Log.w(tag, "isRecognitionAvailable=false; will attempt OEM speech engine fallback")
     }
     if (!hasMicPermission()) {
       _statusText.value = "Microphone permission required"
@@ -196,7 +198,7 @@ class MicCaptureManager(
     mainHandler.post {
       try {
         if (recognizer == null) {
-          recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
+          recognizer = createBestAvailableRecognizer().also { it.setRecognitionListener(listener) }
         }
         startListeningSession()
       } catch (err: Throwable) {
@@ -204,6 +206,41 @@ class MicCaptureManager(
         _micEnabled.value = false
       }
     }
+  }
+
+  /**
+   * Create the best available [SpeechRecognizer] for this device.
+   *
+   * 1. If the platform reports recognition as available, use the default recognizer.
+   * 2. Otherwise, query `Settings.Secure.voice_recognition_service` for the device's
+   *    configured OEM speech engine (e.g. Xiaomi's mibrain, Huawei's HiVoice, etc.)
+   *    and create a recognizer targeting that component directly.
+   * 3. If no OEM engine is configured either, fall back to the default recognizer
+   *    and let the platform surface its own error.
+   */
+  private fun createBestAvailableRecognizer(): SpeechRecognizer {
+    if (SpeechRecognizer.isRecognitionAvailable(context)) {
+      return SpeechRecognizer.createSpeechRecognizer(context)
+    }
+
+    val oemServiceFlat = try {
+      Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+    } catch (e: Throwable) {
+      Log.w(tag, "Failed to query voice_recognition_service setting", e)
+      null
+    }
+
+    if (!oemServiceFlat.isNullOrBlank()) {
+      val component = android.content.ComponentName.unflattenFromString(oemServiceFlat)
+      if (component != null) {
+        Log.i(tag, "Using OEM speech engine: $component")
+        return SpeechRecognizer.createSpeechRecognizer(context, component)
+      }
+      Log.w(tag, "voice_recognition_service value '$oemServiceFlat' could not be parsed as ComponentName")
+    }
+
+    Log.w(tag, "No OEM speech engine found; falling back to default recognizer")
+    return SpeechRecognizer.createSpeechRecognizer(context)
   }
 
   private fun stop() {
