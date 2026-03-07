@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import {
   cronIsolatedRun,
@@ -8,6 +9,16 @@ import {
   withGatewayServer,
   waitForSystemEvent,
 } from "./test-helpers.js";
+
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+    "../infra/heartbeat-wake.js",
+  );
+  return {
+    ...actual,
+    requestHeartbeatNow: vi.fn(),
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -165,13 +176,90 @@ describe("gateway server hooks", () => {
   test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
-      const denied = await postHook(port, "/hooks/agent", {
+      const deniedWake = await postHook(port, "/hooks/wake", {
+        text: "Ping",
+        sessionKey: "hook:test",
+      });
+      expect(deniedWake.status).toBe(400);
+      const deniedWakeBody = (await deniedWake.json()) as { error?: string };
+      expect(deniedWakeBody.error).toContain("hooks.allowRequestSessionKey");
+
+      const deniedAgent = await postHook(port, "/hooks/agent", {
         message: "Do it",
         sessionKey: "agent:main:dm:u99999",
       });
-      expect(denied.status).toBe(400);
-      const deniedBody = (await denied.json()) as { error?: string };
-      expect(deniedBody.error).toContain("hooks.allowRequestSessionKey");
+      expect(deniedAgent.status).toBe(400);
+      const deniedAgentBody = (await deniedAgent.json()) as { error?: string };
+      expect(deniedAgentBody.error).toContain("hooks.allowRequestSessionKey");
+    });
+  });
+
+  test("routes /hooks/wake to requested sessionKey when policy allows", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: "hook-secret",
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    vi.mocked(requestHeartbeatNow).mockClear();
+    await withGatewayServer(async ({ port }) => {
+      const resWake = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({
+          text: "Session-routed wake",
+          sessionKey: "hook:test",
+        }),
+      });
+      expect(resWake.status).toBe(200);
+
+      // Ensure the wake went to the requested hook session key, not main.
+      expect(peekSystemEvents("hook:test").some((e) => e.includes("Session-routed wake"))).toBe(
+        true,
+      );
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+      expect(requestHeartbeatNow).toHaveBeenCalledWith({
+        reason: "hook:wake",
+        sessionKey: "hook:test",
+      });
+      drainSystemEvents("hook:test");
+
+      // Direct contract tests for invalid typed sessionKey.
+      const invalidSessionKeys: unknown[] = [123, { a: 1 }, "   "];
+      for (const sessionKey of invalidSessionKeys) {
+        const resBadKey = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer hook-secret",
+          },
+          body: JSON.stringify({
+            text: "Bad key",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            sessionKey: sessionKey as any,
+          }),
+        });
+        expect(resBadKey.status).toBe(400);
+      }
+    });
+  });
+
+  test("keeps default /hooks/wake mode=now heartbeats untargeted", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    vi.mocked(requestHeartbeatNow).mockClear();
+    await withGatewayServer(async ({ port }) => {
+      const resWake = await postHook(port, "/hooks/wake", {
+        text: "Default wake",
+        mode: "now",
+      });
+      expect(resWake.status).toBe(200);
+
+      expect(peekSystemEvents(resolveMainKey()).some((e) => e.includes("Default wake"))).toBe(true);
+      expect(requestHeartbeatNow).toHaveBeenCalledWith({ reason: "hook:wake" });
+      drainSystemEvents(resolveMainKey());
     });
   });
 
