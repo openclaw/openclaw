@@ -987,7 +987,7 @@ function parseDedupPointerTarget(text: string): ParsedDedupPointerTarget | undef
 
   forEachSyntheticHeaderLine(text, (line) => {
     const match = line.match(
-      /^Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\.$/,
+      /^Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\.(?:\s.*)?$/,
     );
     if (!match) {
       return false;

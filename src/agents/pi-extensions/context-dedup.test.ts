@@ -1017,6 +1017,33 @@ describe("context-dedup", () => {
     expect(postRewrite).toContain("Same as context message #1, block #0 (literal text).");
   });
 
+  it("resolves dedup chains through near-duplicate inline metadata pointers", () => {
+    const rootChunk = "root chunk line ".repeat(20);
+    const intermediatePointer =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #0, block #0 (toolCallId call_root).";
+    const nearDuplicateInline =
+      "[Near-duplicate content trimmed]\n" +
+      "Same as context message #1, block #0 (toolCallId call_mid). Shared prefix 120 chars and suffix 120 chars.\n" +
+      "Differing middle (10 chars):\nHELLO_WORLD";
+    const pointerToNearDuplicate =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #2, block #0 (toolCallId call_leaf).";
+
+    const messages = [
+      { role: "toolResult", toolCallId: "call_root", content: rootChunk },
+      { role: "toolResult", toolCallId: "call_mid", content: intermediatePointer },
+      { role: "toolResult", toolCallId: "call_leaf", content: nearDuplicateInline },
+      { role: "toolResult", toolCallId: "call_chain", content: pointerToNearDuplicate },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String(rewritten[3].content);
+
+    expect(postRewrite).toContain("Same as context message #0, block #0");
+    expect(postRewrite).not.toContain("Same as context message #2, block #0");
+  });
+
   it("ignores pointer-like payload lines when resolving lineage roots", () => {
     const rootChunk = "root chunk line ".repeat(20);
     const lineageWithPayloadPointer =
