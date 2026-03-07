@@ -76,6 +76,7 @@ export type ChatProps = {
   onSend: () => void;
   onHistoryNavigateUp?: () => boolean;
   onHistoryNavigateDown?: () => boolean;
+  historyNavigationActive?: boolean;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
@@ -93,7 +94,11 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
-function shouldHandleHistoryNavigation(event: KeyboardEvent, target: HTMLTextAreaElement): boolean {
+function shouldHandleHistoryNavigation(
+  event: KeyboardEvent,
+  target: HTMLTextAreaElement,
+  historyNavigationActive: boolean,
+): boolean {
   if (
     event.altKey ||
     event.ctrlKey ||
@@ -107,11 +112,14 @@ function shouldHandleHistoryNavigation(event: KeyboardEvent, target: HTMLTextAre
   if (target.selectionStart !== target.selectionEnd) {
     return false;
   }
+  if (historyNavigationActive) {
+    return true;
+  }
   if (event.key === "ArrowUp") {
     return target.selectionStart === 0;
   }
   if (event.key === "ArrowDown") {
-    return target.selectionStart === target.value.length;
+    return false;
   }
   return false;
 }
@@ -470,7 +478,13 @@ export function renderChat(props: ChatProps) {
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key === "ArrowUp" || e.key === "ArrowDown") {
                   const target = e.target as HTMLTextAreaElement;
-                  if (!shouldHandleHistoryNavigation(e, target)) {
+                  if (
+                    !shouldHandleHistoryNavigation(
+                      e,
+                      target,
+                      Boolean(props.historyNavigationActive),
+                    )
+                  ) {
                     return;
                   }
                   const navigate =

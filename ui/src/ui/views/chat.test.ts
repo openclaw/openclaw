@@ -271,7 +271,7 @@ describe("chat view", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("navigates history down when cursor is at end of draft", () => {
+  it("does not enter history down from normal editing mode", () => {
     const container = document.createElement("div");
     const onHistoryNavigateDown = vi.fn(() => true);
     render(
@@ -294,8 +294,8 @@ describe("chat view", () => {
     });
     textarea.dispatchEvent(event);
 
-    expect(onHistoryNavigateDown).toHaveBeenCalledTimes(1);
-    expect(event.defaultPrevented).toBe(true);
+    expect(onHistoryNavigateDown).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("does not navigate history down when cursor is not at end", () => {
@@ -323,6 +323,62 @@ describe("chat view", () => {
 
     expect(onHistoryNavigateDown).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("allows ArrowDown while history mode is active even if caret is at start", () => {
+    const container = document.createElement("div");
+    const onHistoryNavigateDown = vi.fn(() => true);
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryNavigateDown,
+          historyNavigationActive: true,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryNavigateDown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("allows ArrowUp while history mode is active even if caret is at end", () => {
+    const container = document.createElement("div");
+    const onHistoryNavigateUp = vi.fn(() => true);
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryNavigateUp,
+          historyNavigationActive: true,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryNavigateUp).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("keeps caret at start after ArrowUp history navigation updates draft", async () => {

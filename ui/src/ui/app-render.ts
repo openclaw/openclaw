@@ -1058,6 +1058,7 @@ export function renderApp(state: AppViewState) {
                 onDraftChange: (next) => state.handleChatDraftChange(next),
                 onHistoryNavigateUp: () => state.handleChatInputHistoryNavigate("up"),
                 onHistoryNavigateDown: () => state.handleChatInputHistoryNavigate("down"),
+                historyNavigationActive: state.chatInputHistoryIndex !== -1,
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),
