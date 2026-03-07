@@ -104,6 +104,17 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
   logEvery: feishuWebhookAnomalyDefaults.logEvery,
 });
 
+function closeWsClient(client: Lark.WSClient | undefined): void {
+  if (!client) {
+    return;
+  }
+  try {
+    client.close();
+  } catch {
+    // Best-effort cleanup during stop/reload paths.
+  }
+}
+
 export function clearFeishuWebhookRateLimitStateForTest(): void {
   feishuWebhookRateLimiter.clear();
   feishuWebhookAnomalyTracker.clear();
@@ -134,6 +145,7 @@ export function recordWebhookStatus(
 
 export function stopFeishuMonitorState(accountId?: string): void {
   if (accountId) {
+    closeWsClient(wsClients.get(accountId));
     wsClients.delete(accountId);
     const server = httpServers.get(accountId);
     if (server) {
@@ -145,6 +157,9 @@ export function stopFeishuMonitorState(accountId?: string): void {
     return;
   }
 
+  for (const client of wsClients.values()) {
+    closeWsClient(client);
+  }
   wsClients.clear();
   for (const server of httpServers.values()) {
     server.close();

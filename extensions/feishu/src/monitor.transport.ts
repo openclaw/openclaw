@@ -80,23 +80,37 @@ export async function monitorWebSocket({
   eventDispatcher,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
 
   const wsClient = createFeishuWSClient(account);
   wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      wsClients.delete(accountId);
-      botOpenIds.delete(accountId);
-      botNames.delete(accountId);
-    };
+    let cleanedUp = false;
 
-    const handleAbort = () => {
+    function cleanup(): void {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      abortSignal?.removeEventListener("abort", handleAbort);
+      try {
+        wsClient.close();
+      } catch (err) {
+        error(`feishu[${accountId}]: failed to close WebSocket client: ${String(err)}`);
+      } finally {
+        wsClients.delete(accountId);
+        botOpenIds.delete(accountId);
+        botNames.delete(accountId);
+      }
+    }
+
+    function handleAbort(): void {
       log(`feishu[${accountId}]: abort signal received, stopping`);
       cleanup();
       resolve();
-    };
+    }
 
     if (abortSignal?.aborted) {
       cleanup();
@@ -111,7 +125,6 @@ export async function monitorWebSocket({
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
-      abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     }
   });
