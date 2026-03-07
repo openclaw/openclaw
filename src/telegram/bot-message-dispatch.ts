@@ -15,7 +15,11 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
@@ -117,7 +121,7 @@ function resolveTelegramReasoningLevel(params: {
   try {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream") {
       return level;
