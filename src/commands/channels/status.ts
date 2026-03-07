@@ -144,6 +144,13 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
         bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
       }
+      if (Array.isArray(account.allowSendTo)) {
+        bits.push(
+          account.allowSendTo.length > 0
+            ? `sendTo:${account.allowSendTo.slice(0, 2).join(",")}`
+            : "sendTo:none",
+        );
+      }
       appendTokenSourceBits(bits, account);
       const application = account.application as
         | { intents?: { messageContent?: string } }
