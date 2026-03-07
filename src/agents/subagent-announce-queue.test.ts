@@ -165,4 +165,53 @@ describe("subagent-announce-queue", () => {
       }
     }
   });
+
+  it("drops only the failing item after max consecutive drain failures and continues with remaining items", async () => {
+    const prompts: string[] = [];
+    let resolveCompletion = () => {};
+    const waitForCompletion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve;
+    });
+
+    // First item always fails; second item succeeds.
+    const send = vi.fn(async (item: { prompt: string }) => {
+      prompts.push(item.prompt);
+      if (item.prompt === "always-failing") {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      // Second item succeeds — we're done.
+      resolveCompletion();
+    });
+
+    // Enqueue two items: a permanently failing one and a good one.
+    enqueueAnnounce({
+      key: "announce:test:drop-failing",
+      item: {
+        prompt: "always-failing",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:drop-failing",
+      item: {
+        prompt: "should-succeed",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+
+    await waitForCompletion;
+
+    // The failing item should have been attempted 5 times (default max), then dropped.
+    // The succeeding item should then be delivered.
+    const failingAttempts = prompts.filter((p) => p === "always-failing").length;
+    const succeedingAttempts = prompts.filter((p) => p === "should-succeed").length;
+    expect(failingAttempts).toBe(5);
+    expect(succeedingAttempts).toBe(1);
+  });
 });
