@@ -871,14 +871,24 @@ describe("chat view", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("does not navigate history down when cursor is not at end", () => {
+  it("passes blocked ArrowDown results through without preventing default", () => {
     const container = document.createElement("div");
-    const onHistoryNavigateDown = vi.fn(() => true);
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowdown-editing-mode" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 2,
+      selectionEnd: 2,
+      valueLength: 5,
+    }));
     render(
       renderChat(
         createProps({
           draft: "hello",
-          onHistoryNavigateDown,
+          onHistoryKeydown,
         }),
       ),
       container,
@@ -894,8 +904,82 @@ describe("chat view", () => {
     });
     textarea.dispatchEvent(event);
 
-    expect(onHistoryNavigateDown).not.toHaveBeenCalled();
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("passes handled ArrowDown results through even if caret is at start", () => {
+    const container = document.createElement("div");
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "down" as const,
+      decision: "handled:history-down" as const,
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 5,
+    }));
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryKeydown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("passes handled ArrowUp results through even if caret is at end", () => {
+    const container = document.createElement("div");
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up" as const,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+      selectionStart: 5,
+      selectionEnd: 5,
+      valueLength: 5,
+    }));
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryKeydown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("keeps caret at start after ArrowUp history navigation updates draft", async () => {
@@ -906,16 +990,26 @@ describe("chat view", () => {
         renderChat(
           createProps({
             draft,
-            onHistoryNavigateUp,
+            onHistoryKeydown,
           }),
         ),
         container,
       );
     };
-    const onHistoryNavigateUp = vi.fn(() => {
+    const onHistoryKeydown = vi.fn(() => {
       draft = "older-entry";
       renderCurrent();
-      return true;
+      return {
+        handled: true,
+        preventDefault: true,
+        restoreCaret: "up" as const,
+        decision: "handled:history-up" as const,
+        historyNavigationActiveBefore: true,
+        historyNavigationActiveAfter: true,
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 6,
+      };
     });
 
     renderCurrent();
@@ -926,7 +1020,7 @@ describe("chat view", () => {
     textarea.dispatchEvent(event);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-    expect(onHistoryNavigateUp).toHaveBeenCalledTimes(1);
+    expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
     expect(textarea.selectionStart).toBe(0);
     expect(textarea.selectionEnd).toBe(0);
   });
