@@ -15,11 +15,13 @@ const hoisted = vi.hoisted(() => {
   const cronInstances: Array<{
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    flush: ReturnType<typeof vi.fn>;
   }> = [];
 
   class CronServiceMock {
     start = vi.fn(async () => {});
     stop = vi.fn();
+    flush = vi.fn(async () => {});
     constructor() {
       cronInstances.push(this);
     }
@@ -398,7 +400,11 @@ describe("gateway hot reload", () => {
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(nextConfig);
 
       expect(hoisted.cronInstances.length).toBe(2);
+      expect(hoisted.cronInstances[0].flush).toHaveBeenCalledTimes(1);
       expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
+      expect(hoisted.cronInstances[0].flush.mock.invocationCallOrder[0]).toBeLessThan(
+        hoisted.cronInstances[0].stop.mock.invocationCallOrder[0],
+      );
       expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
