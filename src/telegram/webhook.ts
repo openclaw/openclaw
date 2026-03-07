@@ -87,6 +87,7 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   healthPath?: string;
   publicUrl?: string;
+  setStatus?: (status: Record<string, unknown>) => void;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -107,6 +108,7 @@ export async function startTelegramWebhook(opts: {
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    setStatus: opts.setStatus,
   });
   await initializeTelegramWebhookBot({
     bot,
@@ -255,12 +257,34 @@ export async function startTelegramWebhook(opts: {
   runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
   runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
 
+  // ── Webhook transport heartbeat ──
+  // Periodically verify Telegram API reachability so the health monitor
+  // sees transport liveness even if no webhook requests arrive.
+  let webhookHeartbeat: ReturnType<typeof setInterval> | null = null;
+  if (opts.setStatus) {
+    const setStatus = opts.setStatus;
+    const ping = async () => {
+      try {
+        await bot.api.getWebhookInfo();
+        setStatus({ lastEventAt: Date.now() });
+      } catch {
+        // API unreachable — don't update, let health monitor detect staleness
+      }
+    };
+    void ping();
+    webhookHeartbeat = setInterval(ping, 10 * 60_000);
+    webhookHeartbeat.unref();
+  }
+
   let shutDown = false;
   const shutdown = () => {
     if (shutDown) {
       return;
     }
     shutDown = true;
+    if (webhookHeartbeat) {
+      clearInterval(webhookHeartbeat);
+    }
     void withTelegramApiErrorLogging({
       operation: "deleteWebhook",
       runtime,
