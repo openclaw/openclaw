@@ -1,33 +1,37 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+function mockContextModuleDeps(loadConfigImpl: () => unknown) {
+  vi.doMock("../config/config.js", () => ({
+    loadConfig: loadConfigImpl,
+  }));
+  vi.doMock("./models-config.js", () => ({
+    ensureOpenClawModelsJson: vi.fn(async () => {}),
+  }));
+  vi.doMock("./agent-paths.js", () => ({
+    resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+  }));
+  vi.doMock("./pi-model-discovery.js", () => ({
+    discoverAuthStorage: vi.fn(() => ({})),
+    discoverModels: vi.fn(() => ({
+      getAll: () => [],
+    })),
+  }));
+}
+
 describe("lookupContextTokens", () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
   it("returns configured model context window on first lookup", async () => {
-    vi.doMock("../config/config.js", () => ({
-      loadConfig: () => ({
-        models: {
-          providers: {
-            openrouter: {
-              models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
-            },
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
           },
         },
-      }),
-    }));
-    vi.doMock("./models-config.js", () => ({
-      ensureOpenClawModelsJson: vi.fn(async () => {}),
-    }));
-    vi.doMock("./agent-paths.js", () => ({
-      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-    }));
-    vi.doMock("./pi-model-discovery.js", () => ({
-      discoverAuthStorage: vi.fn(() => ({})),
-      discoverModels: vi.fn(() => ({
-        getAll: () => [],
-      })),
+      },
     }));
 
     const { lookupContextTokens } = await import("./context.js");
@@ -36,21 +40,7 @@ describe("lookupContextTokens", () => {
 
   it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
     const loadConfigMock = vi.fn(() => ({ models: {} }));
-    vi.doMock("../config/config.js", () => ({
-      loadConfig: loadConfigMock,
-    }));
-    vi.doMock("./models-config.js", () => ({
-      ensureOpenClawModelsJson: vi.fn(async () => {}),
-    }));
-    vi.doMock("./agent-paths.js", () => ({
-      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-    }));
-    vi.doMock("./pi-model-discovery.js", () => ({
-      discoverAuthStorage: vi.fn(() => ({})),
-      discoverModels: vi.fn(() => ({
-        getAll: () => [],
-      })),
-    }));
+    mockContextModuleDeps(loadConfigMock);
 
     const argvSnapshot = process.argv;
     process.argv = ["node", "openclaw", "--profile", "--", "config", "validate"];
@@ -79,21 +69,7 @@ describe("lookupContextTokens", () => {
         },
       }));
 
-    vi.doMock("../config/config.js", () => ({
-      loadConfig: loadConfigMock,
-    }));
-    vi.doMock("./models-config.js", () => ({
-      ensureOpenClawModelsJson: vi.fn(async () => {}),
-    }));
-    vi.doMock("./agent-paths.js", () => ({
-      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-    }));
-    vi.doMock("./pi-model-discovery.js", () => ({
-      discoverAuthStorage: vi.fn(() => ({})),
-      discoverModels: vi.fn(() => ({
-        getAll: () => [],
-      })),
-    }));
+    mockContextModuleDeps(loadConfigMock);
 
     const argvSnapshot = process.argv;
     process.argv = ["node", "openclaw", "config", "validate"];

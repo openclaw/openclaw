@@ -423,6 +423,12 @@ export const OpenClawSchema = z
     media: z
       .object({
         preserveFilenames: z.boolean().optional(),
+        ttlHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24 * 7)
+          .optional(),
       })
       .strict()
       .optional(),
@@ -440,7 +446,7 @@ export const OpenClawSchema = z
             maxAttempts: z.number().int().min(0).max(10).optional(),
             backoffMs: z.array(z.number().int().nonnegative()).min(1).max(10).optional(),
             retryOn: z
-              .array(z.enum(["rate_limit", "network", "timeout", "server_error"]))
+              .array(z.enum(["rate_limit", "overloaded", "network", "timeout", "server_error"]))
               .min(1)
               .optional(),
           })
@@ -829,6 +835,7 @@ export const OpenClawSchema = z
         slots: z
           .object({
             memory: z.string().optional(),
+            contextEngine: z.string().optional(),
           })
           .strict()
           .optional(),

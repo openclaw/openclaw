@@ -247,7 +247,7 @@ export class GatewayBrowserClient {
       role,
       scopes,
       device,
-      caps: [],
+      caps: ["tool-events"],
       auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,

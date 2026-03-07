@@ -163,13 +163,23 @@ export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   if (!statusRaw) {
     return { status: "unknown" };
   }
-  if (statusRaw !== "running") {
-    return { status: "stopped" };
-  }
 
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
   const runningCodes = new Set(["0x41301"]);
-  if (normalizedResult && !runningCodes.has(normalizedResult)) {
+  const isRunningByCode = normalizedResult != null && runningCodes.has(normalizedResult);
+  const isRunningByStatus = statusRaw === "running";
+
+  // schtasks.exe localizes its Status field ("Running" in English,
+  // "Wird ausgeführt" in German, "En cours" in French, etc.).
+  // Prefer the locale-invariant Last Run Result code 0x41301
+  // ("task is currently running") over string matching. (#39057)
+  if (!isRunningByStatus && !isRunningByCode) {
+    return { status: "stopped" };
+  }
+
+  // Cross-check: if the English status says "running" but the result
+  // code disagrees, the runtime state is likely stale.
+  if (isRunningByStatus && normalizedResult && !isRunningByCode) {
     return {
       status: "stopped",
       detail: `Task reports Running but Last Run Result=${parsed.lastRunResult}; treating as stale runtime state.`,

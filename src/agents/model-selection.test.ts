@@ -481,6 +481,83 @@ describe("model-selection", () => {
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
     });
+
+    it("should prefer configured custom provider when default provider is not in models.providers", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            n1n: {
+              baseUrl: "https://n1n.example.com",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT 5.4",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "n1n", model: "gpt-5.4" });
+    });
+
+    it("should keep default provider when it is in models.providers", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  name: "Claude Opus 4.6",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("should fall back to hardcoded default when no custom providers have models", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            "empty-provider": {
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
   });
 
   describe("resolveThinkingDefault", () => {

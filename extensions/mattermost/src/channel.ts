@@ -26,11 +26,6 @@ import {
   listMattermostDirectoryGroups,
   listMattermostDirectoryPeers,
 } from "./mattermost/directory.js";
-import {
-  buildButtonAttachments,
-  resolveInteractionCallbackUrl,
-  setInteractionSecret,
-} from "./mattermost/interactions.js";
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
@@ -160,54 +155,14 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const replyToId = typeof params.replyToId === "string" ? params.replyToId : undefined;
     const resolvedAccountId = accountId || undefined;
 
-    // Build props with button attachments if buttons are provided
-    let props: Record<string, unknown> | undefined;
-    if (params.buttons && Array.isArray(params.buttons)) {
-      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
-      if (account.botToken) setInteractionSecret(account.accountId, account.botToken);
-      const callbackUrl = resolveInteractionCallbackUrl(account.accountId, {
-        gateway: cfg.gateway,
-        interactions: account.config.interactions,
-      });
-
-      // Flatten 2D array (rows of buttons) to 1D — core schema sends Array<Array<Button>>
-      // but Mattermost doesn't have row layout, so we flatten all rows into a single list.
-      // Also supports 1D arrays for backward compatibility.
-      const rawButtons = (params.buttons as Array<unknown>).flatMap((item) =>
-        Array.isArray(item) ? item : [item],
-      ) as Array<Record<string, unknown>>;
-
-      const buttons = rawButtons
-        .map((btn) => ({
-          id: String(btn.id ?? btn.callback_data ?? ""),
-          name: String(btn.text ?? btn.name ?? btn.label ?? ""),
-          style: (btn.style as "default" | "primary" | "danger") ?? "default",
-          context:
-            typeof btn.context === "object" && btn.context !== null
-              ? (btn.context as Record<string, unknown>)
-              : undefined,
-        }))
-        .filter((btn) => btn.id && btn.name);
-
-      const attachmentText =
-        typeof params.attachmentText === "string" ? params.attachmentText : undefined;
-      props = {
-        attachments: buildButtonAttachments({
-          callbackUrl,
-          accountId: account.accountId,
-          buttons,
-          text: attachmentText,
-        }),
-      };
-    }
-
     const mediaUrl =
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
 
     const result = await sendMessageMattermost(to, message, {
       accountId: resolvedAccountId,
       replyToId,
-      props,
+      buttons: Array.isArray(params.buttons) ? params.buttons : undefined,
+      attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });
 
