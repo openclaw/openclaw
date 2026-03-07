@@ -2085,6 +2085,7 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
    - Follow the installation instructions for your operating system
 
 2. **Pull a model**:
+
    ```bash
    ollama pull llama3.3
    # or other models like
@@ -2094,6 +2095,7 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
 
 3. **Configure OpenClaw for Ollama**:
    - Set the `OLLAMA_API_KEY` environment variable (any value works):
+
      ```bash
      # Windows
      set OLLAMA_API_KEY=ollama-local
@@ -2101,16 +2103,18 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
      # macOS/Linux
      export OLLAMA_API_KEY=ollama-local
      ```
+
    - Or add to your config file:
+
      ```json5
      {
        env: { OLLAMA_API_KEY: "ollama-local" },
        models: {
          providers: {
            ollama: {
-             baseUrl: "http://localhost:11434/v1",
+             baseUrl: "http://localhost:11434",
              apiKey: "ollama-local",
-             api: "openai-completions"
+             api: "ollama"
            }
          }
        },
@@ -2123,6 +2127,7 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
      ```
 
 4. **Verify the setup**:
+
    ```bash
    openclaw models list | grep ollama
    openclaw chat --model ollama/llama3.3 "Hello, are you working?"
