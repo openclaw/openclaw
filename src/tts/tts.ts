@@ -24,6 +24,7 @@ import type {
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
@@ -246,6 +247,24 @@ function normalizeBailianBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function resolveBailianAudioDownloadSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+  const normalizedBaseUrl = normalizeBailianBaseUrl(baseUrl);
+  if (normalizedBaseUrl === DEFAULT_BAILIAN_BASE_URL) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(normalizedBaseUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    // Custom/operator-controlled endpoints may legitimately live on private hosts.
+    // Keep the second hop pinned to the configured host instead of disabling the guard.
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
 async function readTtsErrorResponse(res: Response): Promise<string | undefined> {
   try {
     const text = (await res.text()).replace(/\s+/g, " ").trim();
@@ -338,6 +357,7 @@ async function bailianTTS(params: {
   const { response: audioRes, release } = await fetchWithSsrFGuard({
     url: audioUrl,
     timeoutMs: resolveRemainingTimeoutMs(startedAtMs, params.timeoutMs),
+    policy: resolveBailianAudioDownloadSsrFPolicy(params.baseUrl),
     auditContext: "tts-bailian-audio-download",
   });
   try {
