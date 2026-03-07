@@ -820,6 +820,7 @@ async function dispatchDiscordComponentEvent(params: {
     accountId: ctx.accountId,
     guildId: interactionCtx.rawGuildId,
     memberRoleIds: interactionCtx.memberRoleIds,
+    text: eventText,
     peer: {
       kind: interactionCtx.isDirectMessage ? "direct" : "channel",
       id: interactionCtx.isDirectMessage ? interactionCtx.userId : interactionCtx.channelId,

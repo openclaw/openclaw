@@ -504,13 +504,14 @@ async function handleDiscordReactionEvent(
       return reactionBase;
     };
     const emitReaction = (text: string, parentPeerId?: string) => {
-      const { contextKey } = resolveReactionBase();
+      const { contextKey, baseText } = resolveReactionBase();
       const route = resolveAgentRoute({
         cfg: params.cfg,
         channel: "discord",
         accountId: params.accountId,
         guildId: data.guild_id ?? undefined,
         memberRoleIds,
+        text: baseText,
         peer: {
           kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
           id: isDirectMessage ? user.id : data.channel_id,
