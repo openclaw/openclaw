@@ -42,6 +42,20 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
+function isInternalControlSender(senderInfo: {
+  id?: string;
+  name?: string;
+  username?: string;
+  tag?: string;
+  e164?: string;
+}): boolean {
+  const id = senderInfo.id;
+  if (!id || !id.startsWith("openclaw-")) {
+    return false;
+  }
+  return !senderInfo.name && !senderInfo.username && !senderInfo.tag && !senderInfo.e164;
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -149,7 +163,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     tag: safeTrim(ctx.SenderTag),
     e164: safeTrim(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (senderInfo?.label && !isInternalControlSender(senderInfo)) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
         "\n",
