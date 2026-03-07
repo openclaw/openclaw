@@ -2,11 +2,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { hasConfiguredSecretInput } from "../../../config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { inspectSlackAccount } from "../../../slack/account-inspect.js";
-import {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-} from "../../../slack/accounts.js";
+import { listSlackAccountIds, resolveDefaultSlackAccountId } from "../../../slack/accounts.js";
 import { resolveSlackChannelAllowlist } from "../../../slack/resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../../../slack/resolve-users.js";
 import { formatDocsLink } from "../../../terminal/links.js";
@@ -140,8 +136,8 @@ async function promptSlackAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
   });
-  const resolved = resolveSlackAccount({ cfg: params.cfg, accountId });
-  const token = resolved.userToken ?? resolved.botToken ?? "";
+  const inspected = inspectSlackAccount({ cfg: params.cfg, accountId });
+  const token = inspected.userToken ?? inspected.botToken ?? "";
   const existing =
     params.cfg.channels?.slack?.allowFrom ?? params.cfg.channels?.slack?.dm?.allowFrom ?? [];
   const parseId = (value: string) =>
@@ -224,21 +220,19 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
     });
 
     let next = cfg;
-    const resolvedAccount = resolveSlackAccount({
+    const inspectedAccount = inspectSlackAccount({
       cfg: next,
       accountId: slackAccountId,
     });
-    const hasConfiguredBotToken = hasConfiguredSecretInput(resolvedAccount.config.botToken);
-    const hasConfiguredAppToken = hasConfiguredSecretInput(resolvedAccount.config.appToken);
-    const hasConfigTokens = hasConfiguredBotToken && hasConfiguredAppToken;
-    const accountConfigured =
-      Boolean(resolvedAccount.botToken && resolvedAccount.appToken) || hasConfigTokens;
+    const hasConfiguredBotToken = hasConfiguredSecretInput(inspectedAccount.config.botToken);
+    const hasConfiguredAppToken = hasConfiguredSecretInput(inspectedAccount.config.appToken);
+    const accountConfigured = inspectedAccount.configured;
     const allowEnv = slackAccountId === DEFAULT_ACCOUNT_ID;
     const canUseBotEnv =
       allowEnv && !hasConfiguredBotToken && Boolean(process.env.SLACK_BOT_TOKEN?.trim());
     const canUseAppEnv =
       allowEnv && !hasConfiguredAppToken && Boolean(process.env.SLACK_APP_TOKEN?.trim());
-    let resolvedBotTokenForAllowlist = resolvedAccount.botToken;
+    let resolvedBotTokenForAllowlist = inspectedAccount.botToken;
     const slackBotName = String(
       await prompter.text({
         message: "Slack bot display name (used for manifest)",
@@ -254,7 +248,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
       providerHint: "slack-bot",
       credentialLabel: "Slack bot token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured: Boolean(resolvedAccount.botToken) || hasConfiguredBotToken,
+      accountConfigured: Boolean(inspectedAccount.botToken) || hasConfiguredBotToken,
       canUseEnv: canUseBotEnv,
       hasConfigToken: hasConfiguredBotToken,
       envPrompt: "SLACK_BOT_TOKEN detected. Use env var?",
@@ -280,7 +274,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
       providerHint: "slack-app",
       credentialLabel: "Slack app token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured: Boolean(resolvedAccount.appToken) || hasConfiguredAppToken,
+      accountConfigured: Boolean(inspectedAccount.appToken) || hasConfiguredAppToken,
       canUseEnv: canUseAppEnv,
       hasConfigToken: hasConfiguredAppToken,
       envPrompt: "SLACK_APP_TOKEN detected. Use env var?",
@@ -301,12 +295,12 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       prompter,
       label: "Slack channels",
-      currentPolicy: resolvedAccount.config.groupPolicy ?? "allowlist",
-      currentEntries: Object.entries(resolvedAccount.config.channels ?? {})
+      currentPolicy: inspectedAccount.config.groupPolicy ?? "allowlist",
+      currentEntries: Object.entries(inspectedAccount.config.channels ?? {})
         .filter(([, value]) => value?.allow !== false && value?.enabled !== false)
         .map(([key]) => key),
       placeholder: "#general, #private, C123",
-      updatePrompt: Boolean(resolvedAccount.config.channels),
+      updatePrompt: Boolean(inspectedAccount.config.channels),
       setPolicy: (cfg, policy) =>
         setAccountGroupPolicyForChannel({
           cfg,
@@ -316,7 +310,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
         }),
       resolveAllowlist: async ({ cfg, entries }) => {
         let keys = entries;
-        const accountWithTokens = resolveSlackAccount({
+        const accountWithTokens = inspectSlackAccount({
           cfg,
           accountId: slackAccountId,
         });
