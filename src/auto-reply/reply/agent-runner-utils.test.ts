@@ -3,10 +3,13 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const resolveEffectiveModelFallbacksMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock, resolveEffectiveModelFallbacksMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    hoisted.resolveEffectiveModelFallbacksMock(...args),
   resolveRunModelFallbacksOverride: (...args: unknown[]) =>
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
 }));
@@ -45,6 +48,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
   });
 
   it("resolves model fallback options from run context", () => {
@@ -79,6 +83,23 @@ describe("agent-runner-utils", () => {
       sessionKey: run.sessionKey,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("uses effective fallback resolution when session model override is present", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["default-fallback"]);
+    const run = makeRun();
+
+    const resolved = resolveModelFallbackOptions(run, {
+      modelOverride: "override-model",
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      hasSessionModelOverride: true,
+    });
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual(["default-fallback"]);
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {

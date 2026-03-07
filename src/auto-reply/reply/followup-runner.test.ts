@@ -6,14 +6,17 @@ import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../con
 import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+const hoisted = vi.hoisted(() => ({
+  runWithModelFallbackMock: vi.fn(),
+}));
+
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 
-vi.mock(
-  "../../agents/model-fallback.js",
-  async () => await import("../../test-utils/model-fallback.mock.js"),
-);
+vi.mock("../../agents/model-fallback.js", () => ({
+  runWithModelFallback: (params: unknown) => hoisted.runWithModelFallbackMock(params),
+}));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
@@ -41,6 +44,18 @@ const ROUTABLE_TEST_CHANNELS = new Set([
 ]);
 
 beforeEach(() => {
+  hoisted.runWithModelFallbackMock.mockReset();
+  hoisted.runWithModelFallbackMock.mockImplementation(
+    async (params: {
+      provider: string;
+      model: string;
+      run: (provider: string, model: string) => Promise<unknown>;
+    }) => ({
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+    }),
+  );
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -576,5 +591,55 @@ describe("createFollowupRunner agentDir forwarding", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
     expect(call?.agentDir).toBe(agentDir);
+  });
+});
+
+describe("createFollowupRunner fallback resolution", () => {
+  it("uses effective fallbacks when the active session has a model override", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "openrouter",
+      modelOverride: "meta-llama/llama-3.3-70b-instruct:free",
+    };
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "openai/gpt-4.1-mini",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: {
+            agents: {
+              defaults: {
+                model: {
+                  primary: "openai/gpt-4.1-mini",
+                  fallbacks: ["openrouter/openrouter/free"],
+                },
+              },
+            },
+          } as FollowupRun["run"]["config"],
+          provider: "openrouter",
+          model: "meta-llama/llama-3.3-70b-instruct:free",
+        },
+      }),
+    );
+
+    const fallbackCall = hoisted.runWithModelFallbackMock.mock.calls[0]?.[0] as
+      | { fallbacksOverride?: string[] }
+      | undefined;
+    expect(fallbackCall?.fallbacksOverride).toEqual(["openrouter/openrouter/free"]);
   });
 });
