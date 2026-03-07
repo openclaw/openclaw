@@ -583,8 +583,7 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
-    lancedbPluginMemoryContext:
-      promptBuildResult?.lancedbPluginMemoryContext ?? legacyResult?.lancedbPluginMemoryContext,
+    messageMeta: { ...promptBuildResult?.messageMeta, ...legacyResult?.messageMeta },
   };
 }
 
@@ -1083,17 +1082,17 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
-      // Mutable ref for injecting plugin memory context into the *next* user message
+      // Mutable ref for injecting plugin message metadata into the *next* user message
       // that gets persisted to the session transcript. This is set by the
       // before_prompt_build hook result and consumed by the appendMessage wrapper below.
-      let pendingPluginMemoryContext: { prependTag: string; stripRegex: string } | undefined;
+      let pendingMessageMeta: Record<string, unknown> | undefined;
       {
         const innerAppend = sessionManager.appendMessage.bind(sessionManager);
         sessionManager.appendMessage = ((msg: unknown) => {
           const message = msg as Record<string, unknown>;
-          if (pendingPluginMemoryContext && message.role === "user") {
-            message.lancedbPluginMemoryContext = pendingPluginMemoryContext;
-            pendingPluginMemoryContext = undefined;
+          if (pendingMessageMeta && message.role === "user") {
+            Object.assign(message, pendingMessageMeta);
+            pendingMessageMeta = undefined;
           }
           return innerAppend(msg as Parameters<typeof innerAppend>[0]);
         }) as typeof sessionManager.appendMessage;
@@ -1654,12 +1653,11 @@ export async function runEmbeddedAttempt(
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
-        // Stage lancedbPluginMemoryContext so it gets injected into the next
-        // user message that the agent loop persists (via the appendMessage
-        // wrapper installed above). This ensures the flag lands on the *new*
-        // prompt message rather than a stale historical one.
-        if (hookResult?.lancedbPluginMemoryContext) {
-          pendingPluginMemoryContext = hookResult.lancedbPluginMemoryContext;
+        // Stage messageMeta so it gets injected into the next user message
+        // that the agent loop persists (via the appendMessage wrapper installed
+        // above). This ensures plugin metadata lands on the *new* prompt message.
+        if (hookResult?.messageMeta && Object.keys(hookResult.messageMeta).length > 0) {
+          pendingMessageMeta = hookResult.messageMeta;
         }
         {
           if (hookResult?.prependContext) {

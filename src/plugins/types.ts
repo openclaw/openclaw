@@ -424,12 +424,16 @@ export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
   /**
-   * Memory plugin context for UI to strip injected memory tags from display.
+   * Generic key-value bag for plugins to attach metadata to the persisted user message.
+   * The core hook system transparently merges and injects these onto the message object
+   * so plugins don't need special-cased fields. Keys are plugin-defined (e.g. convention:
+   * `"<pluginName>Context"`). The UI reads specific keys it knows about.
+   *
+   * Reserved standard key:
+   * - `displayStripPatterns`: `Array<{ regex: string; flags?: string }>` — regex patterns
+   *   the UI should strip from user message display.
    */
-  lancedbPluginMemoryContext?: {
-    prependTag: string;
-    stripRegex: string;
-  };
+  messageMeta?: Record<string, unknown>;
   /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
@@ -445,7 +449,7 @@ export type PluginHookBeforePromptBuildResult = {
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
-  "lancedbPluginMemoryContext",
+  "messageMeta",
   "prependSystemContext",
   "appendSystemContext",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];

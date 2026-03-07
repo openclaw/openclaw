@@ -2,32 +2,34 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
-interface PluginMemoryContext {
-  prependTag: string;
-  stripRegex: string;
+interface DisplayStripPattern {
+  regex: string;
+  flags?: string;
 }
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 /**
- * Strip plugin-injected memory context from user messages.
- * Currently handles lancedbPluginMemoryContext.
+ * Strip plugin-injected content from user messages using the generic
+ * `displayStripPatterns` convention. Any plugin can declare patterns
+ * via the `messageMeta.displayStripPatterns` hook result field.
  */
-function stripPluginMemoryContext(text: string, message: Record<string, unknown>): string {
-  let result = text;
+function stripDisplayPatterns(text: string, message: Record<string, unknown>): string {
+  const patterns = message.displayStripPatterns as DisplayStripPattern[] | undefined;
+  if (!Array.isArray(patterns) || patterns.length === 0) {
+    return text;
+  }
 
-  // Check for lancedbPluginMemoryContext
-  const ctx = message.lancedbPluginMemoryContext as PluginMemoryContext | undefined;
-  if (ctx?.stripRegex) {
+  let result = text;
+  for (const p of patterns) {
     try {
-      const regex = new RegExp(ctx.stripRegex, "i");
+      const regex = new RegExp(p.regex, p.flags ?? "i");
       result = result.replace(regex, "").trim();
     } catch {
       // Invalid regex, skip
     }
   }
-
   return result;
 }
 
@@ -44,8 +46,8 @@ function processMessageText(text: string, role: string, message: Record<string, 
   // Strip inbound metadata (channel info, etc.)
   let result = stripInboundMetadata(stripEnvelope(text));
 
-  // Strip any plugin-injected memory context
-  result = stripPluginMemoryContext(result, message);
+  // Strip any plugin-injected display patterns
+  result = stripDisplayPatterns(result, message);
 
   return result;
 }
