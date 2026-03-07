@@ -240,4 +240,31 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("enforces minimum cooldown between non-interval heartbeat runs (#33057)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    // First exec-event wake fires normally
+    requestHeartbeatNow({ reason: "exec-event", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second exec-event 10s later should be skipped (cooldown not elapsed)
+    vi.advanceTimersByTime(10_000);
+    requestHeartbeatNow({ reason: "exec-event", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // After 60s total, cooldown has elapsed — next wake should fire
+    vi.advanceTimersByTime(50_000);
+    requestHeartbeatNow({ reason: "exec-event", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
 });
