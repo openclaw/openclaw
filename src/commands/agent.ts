@@ -656,7 +656,7 @@ async function agentCommandInternal(
           : undefined;
         const resolvedSessionFile = await resolveAndPersistSessionFile({
           sessionId,
-          acpSessionKey,
+          sessionKey: acpSessionKey,
           sessionStore,
           storePath,
           sessionEntry,
