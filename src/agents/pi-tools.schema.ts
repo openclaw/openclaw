@@ -81,6 +81,7 @@ export function normalizeToolParameters(
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
   // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
+  // - Google endpoints (including google-antigravity) validate Gemini-compatible tool schemas.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
