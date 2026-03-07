@@ -32,6 +32,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [GLM models](/providers/glm)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [Kilocode](/providers/kilocode)
+- [llama.cpp (native, zero vendor dependencies)](/providers/llama-cpp)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
