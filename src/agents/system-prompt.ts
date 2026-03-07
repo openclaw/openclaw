@@ -29,6 +29,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
+    "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
     "",
   ];
