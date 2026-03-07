@@ -165,11 +165,13 @@ export async function fetchBrowserJson<T>(
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
+  let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
       const httpInit = withLoopbackBrowserAuth(url, init);
       return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
     }
+    isDispatcherPath = true;
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {
       throw new Error("browser control disabled");
@@ -249,6 +251,11 @@ export async function fetchBrowserJson<T>(
     return result.body as T;
   } catch (err) {
     if (err instanceof BrowserServiceError) {
+      throw err;
+    }
+    // For dispatcher paths, timeout/abort errors indicate service operation failure,
+    // not network unreachability. Preserve the original error for clearer diagnosis.
+    if (isDispatcherPath) {
       throw err;
     }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
