@@ -16,11 +16,21 @@ export type BlueBubblesServerInfo = {
   computer_id?: string;
 };
 
+export type BlueBubblesPrivateApiStatusParams = {
+  baseUrl?: string | null;
+  password?: string | null;
+  accountId?: string;
+  timeoutMs?: number;
+};
+
 /** Cache server info by account ID to avoid repeated API calls.
  * Size-capped to prevent unbounded growth (#4948). */
 const MAX_SERVER_INFO_CACHE_SIZE = 64;
 const serverInfoCache = new Map<string, { info: BlueBubblesServerInfo; expires: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const UNKNOWN_PRIVATE_API_STATUS_TTL_MS = 30_000;
+const unknownPrivateApiStatusCache = new Map<string, number>();
+const privateApiStatusProbeInflight = new Map<string, Promise<boolean | null>>();
 
 function buildCacheKey(accountId?: string): string {
   return accountId?.trim() || "default";
@@ -97,18 +107,63 @@ export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolea
   return info.private_api;
 }
 
-export async function resolveBlueBubblesPrivateApiStatus(params: {
-  baseUrl?: string | null;
-  password?: string | null;
-  accountId?: string;
-  timeoutMs?: number;
-}): Promise<boolean | null> {
+function hasRecentUnknownPrivateApiStatus(accountId?: string): boolean {
+  const cacheKey = buildCacheKey(accountId);
+  const expires = unknownPrivateApiStatusCache.get(cacheKey);
+  if (expires === undefined) {
+    return false;
+  }
+  if (expires <= Date.now()) {
+    unknownPrivateApiStatusCache.delete(cacheKey);
+    return false;
+  }
+  return true;
+}
+
+function setUnknownPrivateApiStatus(accountId?: string): void {
+  unknownPrivateApiStatusCache.set(
+    buildCacheKey(accountId),
+    Date.now() + UNKNOWN_PRIVATE_API_STATUS_TTL_MS,
+  );
+}
+
+function clearUnknownPrivateApiStatus(accountId?: string): void {
+  unknownPrivateApiStatusCache.delete(buildCacheKey(accountId));
+}
+
+export async function resolveBlueBubblesPrivateApiStatus(
+  params: BlueBubblesPrivateApiStatusParams,
+): Promise<boolean | null> {
   const cached = getCachedBlueBubblesPrivateApiStatus(params.accountId);
   if (cached !== null) {
+    clearUnknownPrivateApiStatus(params.accountId);
     return cached;
   }
-  const info = await fetchBlueBubblesServerInfo(params);
-  return typeof info?.private_api === "boolean" ? info.private_api : null;
+  if (hasRecentUnknownPrivateApiStatus(params.accountId)) {
+    return null;
+  }
+  const cacheKey = buildCacheKey(params.accountId);
+  const inflight = privateApiStatusProbeInflight.get(cacheKey);
+  if (inflight) {
+    return await inflight;
+  }
+  const probePromise = (async () => {
+    const info = await fetchBlueBubblesServerInfo(params);
+    const status = typeof info?.private_api === "boolean" ? info.private_api : null;
+    if (status === null) {
+      // Avoid paying the full probe timeout on every send while the capability remains unknown.
+      setUnknownPrivateApiStatus(params.accountId);
+    } else {
+      clearUnknownPrivateApiStatus(params.accountId);
+    }
+    return status;
+  })();
+  privateApiStatusProbeInflight.set(cacheKey, probePromise);
+  try {
+    return await probePromise;
+  } finally {
+    privateApiStatusProbeInflight.delete(cacheKey);
+  }
 }
 
 export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
@@ -146,6 +201,8 @@ export function isMacOS26OrHigher(accountId?: string): boolean {
 /** Clear the server info cache (for testing) */
 export function clearServerInfoCache(): void {
   serverInfoCache.clear();
+  unknownPrivateApiStatusCache.clear();
+  privateApiStatusProbeInflight.clear();
 }
 
 export async function probeBlueBubbles(params: {

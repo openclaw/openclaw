@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { BlueBubblesPrivateApiStatusParams } from "./probe.js";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
   enabled: true,
@@ -48,7 +49,7 @@ export function createBlueBubblesAccountsMockModule() {
 type BlueBubblesProbeMockModule = {
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
   resolveBlueBubblesPrivateApiStatus: Mock<
-    (params?: { accountId?: string }) => Promise<boolean | null>
+    (params: BlueBubblesPrivateApiStatusParams) => Promise<boolean | null>
   >;
   isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
 };
@@ -59,8 +60,8 @@ export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
     .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown);
   return {
     getCachedBlueBubblesPrivateApiStatus,
-    resolveBlueBubblesPrivateApiStatus: vi.fn(async (params?: { accountId?: string }) =>
-      getCachedBlueBubblesPrivateApiStatus(params?.accountId),
+    resolveBlueBubblesPrivateApiStatus: vi.fn(async (params: BlueBubblesPrivateApiStatusParams) =>
+      getCachedBlueBubblesPrivateApiStatus(params.accountId),
     ),
     isBlueBubblesPrivateApiStatusEnabled: vi.fn((status: boolean | null) => status === true),
   };
