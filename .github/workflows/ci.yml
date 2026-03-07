@@ -484,7 +484,9 @@ jobs:
           which node
           node -v
           pnpm -v
-          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+          # Persist Windows-native postinstall outputs in the pnpm store so restored
+          # caches can skip repeated rebuild/download work on later shards/runs.
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'
