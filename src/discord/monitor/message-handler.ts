@@ -23,6 +23,7 @@ type DiscordMessageHandlerParams = Omit<
 > & {
   setStatus?: (patch: Record<string, unknown>) => void;
   listenerTimeoutMs?: number;
+  workerRunTimeoutMs?: number;
 };
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {

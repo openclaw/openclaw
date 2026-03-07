@@ -341,6 +341,11 @@ export type DiscordAccountConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Automatic runtime/quota presence signaling (status text + status mapping). */
   autoPresence?: DiscordAutoPresenceConfig;
+  /** In-process worker settings for queued inbound Discord runs. */
+  inboundWorker?: {
+    /** Max time (ms) a queued inbound run may execute. Defaults to 1800000 (30 min). 0 = no timeout. */
+    runTimeoutMs?: number;
+  };
   /** Event queue tuning for Discord gateway listener. */
   eventQueue?: {
     /** Listener timeout in milliseconds. Default: 60000. */
