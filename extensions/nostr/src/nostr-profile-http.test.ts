@@ -283,6 +283,36 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(403);
     });
 
+    it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { "sec-fetch-site": "cross-site" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects profile mutation when forwarded client ip is non-loopback", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { "x-forwarded-for": "203.0.113.99, 127.0.0.1" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
     it("rejects private IP in picture URL (SSRF protection)", async () => {
       await expectPrivatePictureRejected("https://127.0.0.1/evil.jpg");
     });
@@ -424,6 +454,21 @@ describe("nostr-profile-http", () => {
         "/api/channels/nostr/default/profile/import",
         {},
         { headers: { origin: "https://evil.example" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects import mutation when x-real-ip is non-loopback", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {},
+        { headers: { "x-real-ip": "198.51.100.55" } },
       );
       const res = createMockResponse();
 

@@ -63,6 +63,7 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
