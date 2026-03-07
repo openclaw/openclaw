@@ -43,4 +43,7 @@ export {
   unbindThreadBindingsBySessionKey,
 } from "../discord/monitor/thread-bindings.js";
 
-export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+export {
+  buildComputedAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+} from "./status-helpers.js";
