@@ -246,6 +246,8 @@ export type SyntacticConfig = {
   maxJsonDepth: number;
   /** Rule IDs demoted to flags-only by the active context profile. These rules still fire and appear in flags/ruleIds, but do not set pass: false. hardBlockRules in the twoPass config take precedence over this. */
   suppressRules?: string[];
+  /** Rule IDs added for emphasis by the active context profile. These rules are always treated as blocking and cannot be suppressed by suppressRules. */
+  addRules?: string[];
 };
 
 /**
@@ -265,7 +267,8 @@ export function syntacticPreFilter(input: unknown, config: SyntacticConfig): Syn
 
   const flags: string[] = [];
   const ruleIds: string[] = [];
-  const suppressSet = new Set(config.suppressRules ?? []);
+  const addSet = new Set(config.addRules ?? []);
+  const suppressSet = new Set((config.suppressRules ?? []).filter((r) => !addSet.has(r)));
   let blockingFlagCount = 0;
 
   function addFlag(ruleId: string, description: string): void {
@@ -673,6 +676,8 @@ export type PreFilterParams = {
     | { transcript: "strict" | "lenient"; mcp: "strict" | "lenient" };
   /** When true, MCP results from tools with no declared schema are rejected (admin profile). */
   rejectUndeclaredToolSchemas?: boolean;
+  /** When false, schema validation is skipped entirely and contributes nothing to allRuleIds or blocking decisions. Defaults to true. */
+  schemaEnabled?: boolean;
 };
 
 /**
@@ -690,15 +695,20 @@ export async function runPreFilter(params: PreFilterParams): Promise<PreFilterRe
   const lenientExtraFields = params.source === "transcript" ? lenientTranscript : lenientMcp;
 
   const syntactic = syntacticPreFilter(params.input, params.syntacticConfig);
-  const schema = schemaValidation(
-    params.input,
-    params.source,
-    params.toolSchema,
-    lenientExtraFields,
-    params.rejectUndeclaredToolSchemas ?? false,
-  );
+  const schemaEnabled = params.schemaEnabled !== false;
+  const schema = schemaEnabled
+    ? schemaValidation(
+        params.input,
+        params.source,
+        params.toolSchema,
+        lenientExtraFields,
+        params.rejectUndeclaredToolSchemas ?? false,
+      )
+    : { pass: true, violations: [], ruleIds: [] };
 
-  const allRuleIds = [...new Set([...syntactic.ruleIds, ...schema.ruleIds])];
+  const allRuleIds = schemaEnabled
+    ? [...new Set([...syntactic.ruleIds, ...schema.ruleIds])]
+    : [...syntactic.ruleIds];
   const allFlags = [...syntactic.flags, ...schema.violations];
 
   return {

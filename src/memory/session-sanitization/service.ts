@@ -75,6 +75,7 @@ const EVENT_MIN_VERBOSITY: Readonly<Record<string, AuditVerbosity>> = {
   sanitized_block: "minimal",
   frequency_escalation_tier3: "minimal",
   write_failed: "minimal",
+  signal_failed: "minimal",
   syntactic_fail: "minimal",
   schema_fail: "minimal",
   twopass_hard_block: "minimal",
@@ -737,6 +738,7 @@ export async function writeTranscriptTurnToSessionMemory(params: {
     source: "transcript",
     syntacticConfig: validationCfg.syntactic,
     schemaStrictness: validationCfg.context.schemaStrictness,
+    schemaEnabled: validationCfg.schema.enabled,
   });
 
   // Emit syntactic audit events
@@ -1263,25 +1265,20 @@ export async function signalSessionMemory(params: {
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    if (signalValidationCfg.audit.enabled) {
-      try {
-        await appendSessionMemoryAuditEntry({
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          entry: {
-            event: "signal_failed",
-            timestamp: nowIso(now),
-            reason: `signal helper failed: ${reason}`,
-          },
-        });
-      } catch (auditError) {
-        log.warn("session memory signal audit write failed", {
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          error: auditError instanceof Error ? auditError.message : String(auditError),
-        });
-      }
-    }
+    await gatedAudit(
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        entry: {
+          event: "signal_failed",
+          timestamp: nowIso(now),
+          reason: `signal helper failed: ${reason}`,
+        },
+      },
+      "minimal",
+      { cfg: params.cfg, now },
+      signalValidationCfg.audit.enabled,
+    );
     return {
       mode: "signal",
       relevant: [],
@@ -1497,6 +1494,7 @@ export async function processMcpToolResult(params: {
     toolSchema: params.toolSchema,
     schemaStrictness: validationCfg.context.schemaStrictness,
     rejectUndeclaredToolSchemas: validationCfg.context.rejectUndeclaredToolSchemas,
+    schemaEnabled: validationCfg.schema.enabled,
   });
 
   // Emit syntactic audit events

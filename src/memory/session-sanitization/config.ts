@@ -131,6 +131,8 @@ export type ResolvedValidationConfig = {
     maxJsonDepth: number;
     /** Rule IDs demoted to flags-only by the active context profile. */
     suppressRules: string[];
+    /** Rule IDs added for emphasis by the active context profile. Always treated as blocking. */
+    addRules: string[];
   };
   schema: {
     enabled: boolean;
@@ -233,6 +235,7 @@ export function resolveSessionSanitizationValidationConfig(
       maxPayloadBytes: raw?.syntactic?.maxPayloadBytes ?? 524_288,
       maxJsonDepth: raw?.syntactic?.maxJsonDepth ?? 10,
       suppressRules: profile.syntacticEmphasis.suppressRules,
+      addRules: profile.syntacticEmphasis.addRules,
     },
     schema: {
       enabled: raw?.schema?.enabled !== false,

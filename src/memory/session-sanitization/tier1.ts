@@ -453,8 +453,13 @@ function checkStructuralTopology(rawResult: unknown, acc: CheckAccumulator): voi
     );
   }
 
-  // STRUCT-002: field count explosion
-  const fieldCount = countTotalFields(rawResult);
+  // STRUCT-002: field count at top level only
+  const fieldCount =
+    rawResult !== null && typeof rawResult === "object"
+      ? Array.isArray(rawResult)
+        ? rawResult.length
+        : Object.keys(rawResult).length
+      : 0;
   if (fieldCount > STRUCT002_MAX_FIELDS) {
     addBlock(
       acc,
