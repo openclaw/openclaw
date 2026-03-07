@@ -211,9 +211,9 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("derives max hold from timeout plus grace", () => {
-    // Grace period is 15s (DEFAULT_TIMEOUT_GRACE_MS)
-    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(660_000);
-    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(61_000);
+    // Grace period is 120s (DEFAULT_TIMEOUT_GRACE_MS)
+    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
+    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
   });
 
   it("clamps max hold for effectively no-timeout runs", () => {
