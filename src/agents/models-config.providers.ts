@@ -63,6 +63,31 @@ const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
 const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
+
+/**
+ * Returns the MiniMax API base URL, respecting MINIMAX_API_HOST env var.
+ * CN users should set MINIMAX_API_HOST=https://api.minimaxi.com to use
+ * the China endpoint (api.minimaxi.com/anthropic) instead of the global
+ * endpoint (api.minimax.io/anthropic).
+ */
+function getMinimaxBaseUrl(): string {
+  const envHost = process.env.MINIMAX_API_HOST?.trim();
+  if (!envHost) {
+    return MINIMAX_PORTAL_BASE_URL;
+  }
+  try {
+    const url = new URL(envHost);
+    // Ensure /anthropic path is preserved for anthropic-messages API
+    const origin = url.origin;
+    const pathname = url.pathname;
+    if (pathname.endsWith("/anthropic") || pathname.endsWith("/anthropic/")) {
+      return `${origin}${pathname.replace(/\/$/, "")}`;
+    }
+    return `${origin}/anthropic`;
+  } catch {
+    return MINIMAX_PORTAL_BASE_URL;
+  }
+}
 // Pricing per 1M tokens (USD) — https://platform.minimaxi.com/document/Price
 const MINIMAX_API_COST = {
   input: 0.3,
@@ -581,7 +606,7 @@ export function normalizeProviders(params: {
 
 function buildMinimaxProvider(): ProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl: getMinimaxBaseUrl(),
     api: "anthropic-messages",
     authHeader: true,
     models: [
@@ -612,7 +637,7 @@ function buildMinimaxProvider(): ProviderConfig {
 
 function buildMinimaxPortalProvider(): ProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl: getMinimaxBaseUrl(),
     api: "anthropic-messages",
     authHeader: true,
     models: [

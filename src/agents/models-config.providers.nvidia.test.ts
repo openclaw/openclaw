@@ -87,6 +87,18 @@ describe("MiniMax implicit provider (#15275)", () => {
     const providers = await resolveImplicitProviders({ agentDir });
     expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
   });
+
+  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await withEnvAsync(
+      { MINIMAX_API_KEY: "test-key", MINIMAX_API_HOST: "https://api.minimaxi.com" },
+      async () => {
+        const providers = await resolveImplicitProviders({ agentDir });
+        expect(providers?.minimax).toBeDefined();
+        expect(providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+      },
+    );
+  });
 });
 
 describe("vLLM provider", () => {
