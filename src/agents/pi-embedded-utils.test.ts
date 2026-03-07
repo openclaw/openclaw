@@ -334,6 +334,30 @@ Arguments: { "command": "ls -la" }`,
     expect(result).toBe("");
   });
 
+  it("strips legacy xml-like tool call dumps from local models", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Before
+<tool_call>
+<function=exec>
+<parameter=command>
+qmd update --reindex
+</parameter>
+</function>
+</tool_call>
+After`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Before\nAfter");
+  });
+
   it("strips tool results for downgraded calls", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
