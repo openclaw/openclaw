@@ -261,6 +261,7 @@ Docs: https://docs.openclaw.ai
 - UI/Control chat tool streaming: render tool events live in webchat without requiring refresh by enabling `tool-events` capability, fixing stream/event correlation, and resetting/reloading stream state around tool results and terminal events. (#39104) Thanks @jakepresent.
 - Models/provider apiKey persistence hardening: when a provider `apiKey` value equals a known provider env var value, persist the canonical env var name into `models.json` instead of resolved plaintext secrets. (#38889) Thanks @gambletan.
 - Discord/model picker persistence check: add a short post-dispatch settle delay before reading back session model state so picker confirmations stop reporting false mismatch warnings after successful model switches. (#39105) Thanks @akropp.
+- Agents/OpenAI WS compat store flag: omit `store` from `response.create` payloads when model compat sets `supportsStore: false`, preventing strict OpenAI-compatible providers from rejecting websocket requests with unknown-field errors. (#39113) Thanks @scoootscooob.
 
 ## 2026.3.2
 
