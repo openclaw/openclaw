@@ -24,18 +24,20 @@ describe("loadExtraBootstrapFiles", () => {
     }
   });
 
-  it("loads recognized bootstrap files from glob patterns", async () => {
+  it("loads all matching files from glob patterns including arbitrary names", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
-    await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
+    await fs.writeFile(path.join(packageDir, "README.md"), "readme content", "utf-8");
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("TOOLS.md");
-    expect(files[0]?.content).toBe("tools");
+    expect(files).toHaveLength(2);
+    const names = files.map((f) => f.name).toSorted();
+    expect(names).toEqual(["README.md", "TOOLS.md"]);
+    expect(files.find((f) => f.name === "TOOLS.md")?.content).toBe("tools");
+    expect(files.find((f) => f.name === "README.md")?.content).toBe("readme content");
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
@@ -94,6 +96,20 @@ describe("loadExtraBootstrapFiles", () => {
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["AGENTS.md"]);
     expect(files).toHaveLength(0);
+  });
+
+  it("loads arbitrary workspace files by explicit path", async () => {
+    const workspaceDir = await createWorkspaceDir("arbitrary");
+    const hooksDir = path.join(workspaceDir, "hooks");
+    await fs.mkdir(hooksDir, { recursive: true });
+    await fs.writeFile(path.join(hooksDir, "REGISTRY.yaml"), "routes: []", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "VISION.md"), "our vision", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["hooks/REGISTRY.yaml", "VISION.md"]);
+
+    expect(files).toHaveLength(2);
+    expect(files.find((f) => f.name === "REGISTRY.yaml")?.content).toBe("routes: []");
+    expect(files.find((f) => f.name === "VISION.md")?.content).toBe("our vision");
   });
 
   it("skips oversized bootstrap files and reports diagnostics", async () => {

@@ -73,6 +73,29 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
+  it("loads arbitrary (non-bootstrap) files via configured paths", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-arbitrary-");
+    const hooksDir = path.join(tempDir, "hooks");
+    await fs.mkdir(hooksDir, { recursive: true });
+    await fs.writeFile(path.join(hooksDir, "REGISTRY.yaml"), "routes: []", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["hooks/REGISTRY.yaml"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    expect(context.bootstrapFiles).toHaveLength(2);
+    const registry = context.bootstrapFiles.find((f) => f.name === "REGISTRY.yaml");
+    expect(registry).toBeDefined();
+    expect(registry?.content).toBe("routes: []");
+  });
+
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
