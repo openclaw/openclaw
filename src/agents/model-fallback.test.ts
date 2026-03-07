@@ -205,6 +205,69 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledWith("openai", "gpt-5.3-codex");
   });
 
+  it("includes deduplication hint when fallback normalizes to same key as primary (#29007)", async () => {
+    // User configures primary=openai-codex/gpt-5.3-codex, fallback=openai/gpt-5.3-codex.
+    // Both normalize to openai-codex/gpt-5.3-codex, so the fallback is deduplicated.
+    // The error should hint that the fallback was ineffective.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.3-codex",
+            fallbacks: ["openai/gpt-5.3-codex"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("API rate limit reached"), { status: 429 }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        run,
+      }),
+    ).rejects.toThrow(/configured fallback.*normalized to the same model/);
+
+    // Should only have been called once (no actual fallback candidate).
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+  });
+
+  it("does not show deduplication hint when fallback resolves to a different model", async () => {
+    // User configures primary=openai-codex/gpt-5.3-codex, fallback=openai/gpt-5.2.
+    // These are genuinely different models, so no dedup warning.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.3-codex",
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("API rate limit reached"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, "openai-codex", "gpt-5.3-codex");
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-5.2");
+  });
+
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");

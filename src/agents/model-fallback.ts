@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -27,6 +28,8 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+
+const log = createSubsystemLogger("model-fallback");
 
 type ModelCandidate = {
   provider: string;
@@ -73,18 +76,31 @@ function shouldRethrowAbort(err: unknown): boolean {
 
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
   candidates: ModelCandidate[];
-  addExplicitCandidate: (candidate: ModelCandidate) => void;
+  /** Track raw fallback refs that were deduplicated during normalization. */
+  deduplicatedFallbacks: Array<{ raw: ModelCandidate; normalized: ModelCandidate }>;
+  addExplicitCandidate: (candidate: ModelCandidate, rawCandidate?: ModelCandidate) => void;
   addAllowlistedCandidate: (candidate: ModelCandidate) => void;
 } {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
+  const deduplicatedFallbacks: Array<{ raw: ModelCandidate; normalized: ModelCandidate }> = [];
 
-  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
+  const addCandidate = (
+    candidate: ModelCandidate,
+    enforceAllowlist: boolean,
+    rawCandidate?: ModelCandidate,
+  ) => {
     if (!candidate.provider || !candidate.model) {
       return;
     }
     const key = modelKey(candidate.provider, candidate.model);
     if (seen.has(key)) {
+      // Track when a fallback candidate was deduplicated because normalization
+      // collapsed it into an existing candidate (e.g. openai/gpt-5.3-codex
+      // normalizes to the same key as openai-codex/gpt-5.3-codex).
+      if (rawCandidate && rawCandidate.provider !== candidate.provider) {
+        deduplicatedFallbacks.push({ raw: rawCandidate, normalized: candidate });
+      }
       return;
     }
     if (enforceAllowlist && allowlist && !allowlist.has(key)) {
@@ -94,14 +110,14 @@ function createModelCandidateCollector(allowlist: Set<string> | null | undefined
     candidates.push(candidate);
   };
 
-  const addExplicitCandidate = (candidate: ModelCandidate) => {
-    addCandidate(candidate, false);
+  const addExplicitCandidate = (candidate: ModelCandidate, rawCandidate?: ModelCandidate) => {
+    addCandidate(candidate, false, rawCandidate);
   };
   const addAllowlistedCandidate = (candidate: ModelCandidate) => {
     addCandidate(candidate, true);
   };
 
-  return { candidates, addExplicitCandidate, addAllowlistedCandidate };
+  return { candidates, deduplicatedFallbacks, addExplicitCandidate, addAllowlistedCandidate };
 }
 
 type ModelFallbackErrorHandler = (attempt: {
@@ -191,8 +207,28 @@ function throwFallbackFailureSummary(params: {
   lastError: unknown;
   label: string;
   formatAttempt: (attempt: FallbackAttempt) => string;
+  /** Number of configured fallbacks that were deduplicated during normalization. */
+  deduplicatedCount?: number;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
+    // When fallbacks were configured but silently collapsed into the primary
+    // (e.g. openai/gpt-5.3-codex normalized to openai-codex/gpt-5.3-codex),
+    // wrap the original error with a hint so the user understands why failover
+    // did not occur.
+    if ((params.deduplicatedCount ?? 0) > 0 && params.lastError instanceof Error) {
+      const hint =
+        ` (${params.deduplicatedCount} configured fallback(s) normalized to the same model and were skipped` +
+        ` — configure a fallback with a different model to enable failover)`;
+      const wrapped = new Error(params.lastError.message + hint, {
+        cause: params.lastError,
+      });
+      if ("status" in params.lastError) {
+        (wrapped as unknown as Record<string, unknown>).status = (
+          params.lastError as unknown as Record<string, unknown>
+        ).status;
+      }
+      throw wrapped;
+    }
     throw params.lastError;
   }
   const summary =
@@ -263,7 +299,7 @@ function resolveFallbackCandidates(params: {
   model: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
-}): ModelCandidate[] {
+}): { candidates: ModelCandidate[]; deduplicatedCount: number } {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
         cfg: params.cfg,
@@ -285,7 +321,8 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg,
     defaultProvider,
   });
-  const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
+  const { candidates, deduplicatedFallbacks, addExplicitCandidate } =
+    createModelCandidateCollector(allowlist);
 
   addExplicitCandidate(normalizedPrimary);
 
@@ -322,16 +359,37 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
+    // Derive the raw (pre-normalization) provider from the fallback string so
+    // we can detect when provider coercion caused deduplication.
+    const rawStr = String(raw ?? "").trim();
+    const slashIdx = rawStr.indexOf("/");
+    const rawProvider = slashIdx !== -1 ? rawStr.slice(0, slashIdx).trim().toLowerCase() : "";
+    const rawCandidate =
+      rawProvider && rawProvider !== resolved.ref.provider
+        ? { provider: rawProvider, model: resolved.ref.model }
+        : undefined;
+
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
-    addExplicitCandidate(resolved.ref);
+    addExplicitCandidate(resolved.ref, rawCandidate);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
     addExplicitCandidate({ provider: primary.provider, model: primary.model });
   }
 
-  return candidates;
+  // Warn when fallback candidates were silently deduplicated due to provider
+  // normalization (e.g. openai/gpt-5.3-codex normalized to openai-codex/gpt-5.3-codex,
+  // collapsing into the primary).
+  for (const { raw, normalized } of deduplicatedFallbacks) {
+    log.warn(
+      `Fallback "${raw.provider}/${raw.model}" was normalized to "${normalized.provider}/${normalized.model}" ` +
+        `and deduplicated (same as an existing candidate). ` +
+        `To enable failover, configure a fallback with a different model (e.g. a different model version or provider).`,
+    );
+  }
+
+  return { candidates, deduplicatedCount: deduplicatedFallbacks.length };
 }
 
 const lastProbeAttempt = new Map<string, number>();
@@ -458,7 +516,7 @@ export async function runWithModelFallback<T>(params: {
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveFallbackCandidates({
+  const { candidates, deduplicatedCount } = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -578,6 +636,7 @@ export async function runWithModelFallback<T>(params: {
     candidates,
     lastError,
     label: "models",
+    deduplicatedCount,
     formatAttempt: (attempt) =>
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
