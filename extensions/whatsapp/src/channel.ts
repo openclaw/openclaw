@@ -16,6 +16,7 @@ import {
   formatWhatsAppConfigAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
   readStringParam,
+  resolveReactionMessageId,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppOutboundTarget,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -253,13 +254,16 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       return Array.from(actions);
     },
     supportsAction: ({ action }) => action === "react",
-    handleAction: async ({ action, params, cfg, accountId }) => {
+    handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
       if (action !== "react") {
         throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
       }
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-      });
+      const messageId = resolveReactionMessageId({ args: params, toolContext });
+      if (!messageId) {
+        throw new Error(
+          "messageId required. Provide messageId explicitly or react to the current inbound message.",
+        );
+      }
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
       const remove = typeof params.remove === "boolean" ? params.remove : undefined;
       return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
