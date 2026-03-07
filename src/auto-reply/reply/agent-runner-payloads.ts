@@ -20,6 +20,51 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
+async function normalizeSentMediaUrlsForDedupe(params: {
+  sentMediaUrls: string[];
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+}): Promise<string[]> {
+  if (params.sentMediaUrls.length === 0 || !params.normalizeMediaPaths) {
+    return params.sentMediaUrls;
+  }
+
+  const normalizedUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of params.sentMediaUrls) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      normalizedUrls.push(trimmed);
+    }
+    try {
+      const normalized = await params.normalizeMediaPaths({
+        mediaUrl: trimmed,
+        mediaUrls: [trimmed],
+      });
+      const normalizedMediaUrls = normalized.mediaUrls?.length
+        ? normalized.mediaUrls
+        : normalized.mediaUrl
+          ? [normalized.mediaUrl]
+          : [];
+      for (const mediaUrl of normalizedMediaUrls) {
+        const candidate = mediaUrl.trim();
+        if (!candidate || seen.has(candidate)) {
+          continue;
+        }
+        seen.add(candidate);
+        normalizedUrls.push(candidate);
+      }
+    } catch (err) {
+      logVerbose(`messaging tool sent-media normalization failed: ${String(err)}`);
+    }
+  }
+
+  return normalizedUrls;
+}
+
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -113,6 +158,12 @@ export async function buildReplyPayloads(params: {
   // If target metadata is unavailable, keep legacy dedupe behavior.
   const dedupeMessagingToolPayloads =
     suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
+    ? await normalizeSentMediaUrlsForDedupe({
+        sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      })
+    : (params.messagingToolSentMediaUrls ?? []);
   const dedupedPayloads = dedupeMessagingToolPayloads
     ? filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
@@ -122,7 +173,7 @@ export async function buildReplyPayloads(params: {
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? filterMessagingToolMediaDuplicates({
         payloads: dedupedPayloads,
-        sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+        sentMediaUrls: messagingToolSentMediaUrls,
       })
     : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
