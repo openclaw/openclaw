@@ -401,8 +401,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
         }
 
         // If a later hook set sessionSaveContent, overwrite with new content.
+        // blockSessionSave takes precedence — never create/overwrite a file that
+        // was blocked, even if sessionSaveContent is also set.
         const postContent = event.context.sessionSaveContent;
-        if (typeof postContent === "string" && postContent !== writtenEntry) {
+        if (
+          event.context.blockSessionSave !== true &&
+          typeof postContent === "string" &&
+          postContent !== writtenEntry
+        ) {
           await writeFileWithinRoot({
             rootDir: memoryDir,
             relativePath: filename,

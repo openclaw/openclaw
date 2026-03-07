@@ -746,4 +746,58 @@ describe("session-memory hook", () => {
     const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
     expect(content).toContain("important data");
   });
+
+  it("blockSessionSave takes precedence over sessionSaveContent (both pre-set)", async () => {
+    const tempDir = await createCaseWorkspace("block-beats-content-pre");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "secret" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.blockSessionSave = true;
+    event.context.sessionSaveContent = "Should not appear";
+
+    await handler(event);
+    await drainPostHookActions(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
+  });
+
+  it("blockSessionSave takes precedence over sessionSaveContent (both late-set)", async () => {
+    const tempDir = await createCaseWorkspace("block-beats-content-late");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "secret" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+
+    // Handler writes inline (no flags set yet)
+    await handler(event);
+
+    // Later hooks set both flags
+    event.context.blockSessionSave = true;
+    event.context.sessionSaveContent = "Should not appear";
+
+    await drainPostHookActions(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = (await fs.readdir(memoryDir)).filter((f) => f.endsWith(".md"));
+    expect(memoryFiles).toHaveLength(0);
+  });
 });
