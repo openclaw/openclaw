@@ -83,7 +83,9 @@ export function resolveSandboxDockerConfig(params: {
   const globalDocker = params.globalDocker;
 
   // SecretRef values in env are resolved to plain strings before this function runs.
-  // Reject unresolved SecretRef objects instead of silently dropping them.
+  // Filter non-string values defensively — this function is also called from read-only
+  // paths (security audit, status, sandbox explain) that operate on raw unresolved config.
+  // The secrets resolution pipeline is the proper enforcement point for unresolved refs.
   const rawEnv = agentDocker?.env
     ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
     : (globalDocker?.env ?? { LANG: "C.UTF-8" });
@@ -91,11 +93,6 @@ export function resolveSandboxDockerConfig(params: {
   for (const [k, v] of Object.entries(rawEnv)) {
     if (typeof v === "string") {
       env[k] = v;
-    } else if (v !== undefined && v !== null) {
-      throw new Error(
-        `sandbox.docker.env.${k} contains an unresolved secret reference. ` +
-          `Ensure secrets are resolved before sandbox creation.`,
-      );
     }
   }
 
