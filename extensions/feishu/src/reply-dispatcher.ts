@@ -136,15 +136,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  // Card streaming may miss thread affinity in topic contexts; use direct replies there.
   const streamingEnabled =
     !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
+
+  // We bypass CardKit streaming completely in favor of discrete Semantic Block Delivery
+  const bypassCardKit = true;
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let hasSentFirstMessage = false;
+  let hasSentPlaceholder = false;
 
   const mergeStreamingText = (nextText: string) => {
     if (!streamText) {
@@ -235,26 +239,41 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     lastPartial = "";
   };
 
+  let lastSentBlockLength = 0;
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
-        if (streamingEnabled && renderMode === "card") {
-          startStreaming();
+        // Since CardKit streaming is disabled, we manually send a minimal placeholder card
+        // to acknowledge the user's prompt immediately, recreating the old "thinking" feel.
+        if (renderMode === "card" && !hasSentPlaceholder) {
+          hasSentPlaceholder = true;
+          void sendMarkdownCardFeishu({
+            cfg,
+            to: chatId,
+            text: "_正在思考中..._",
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            mentions: mentionTargets,
+            accountId,
+          }).catch(() => {
+            // ignore errors
+          });
         }
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
+        const fullText = payload.text ?? "";
         const mediaList =
           payload.mediaUrls && payload.mediaUrls.length > 0
             ? payload.mediaUrls
             : payload.mediaUrl
               ? [payload.mediaUrl]
               : [];
-        const hasText = Boolean(text.trim());
+        const hasText = Boolean(fullText.trim());
         const hasMedia = mediaList.length > 0;
 
         if (!hasText && !hasMedia) {
@@ -262,89 +281,73 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (hasText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const useCard =
+            renderMode === "card" || (renderMode === "auto" && shouldUseCard(fullText));
 
-          if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
-              return;
-            }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
+          if (!useCard) {
+            // Raw text fallback logic without blocks
+            if (info?.kind !== "final") return;
+            // ... handled below
+          } else {
+            // Semantic Block Delivery: only send text to the channel when the engine completes a semantic block or finishes the entire reply.
+            if (info?.kind === "block" || info?.kind === "final") {
+              const newBlockText = fullText.substring(lastSentBlockLength).trim();
+              if (!newBlockText) {
+                return;
+              }
+              lastSentBlockLength = fullText.length;
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
+              const text = newBlockText;
+              let firstChunk = true;
 
-          if (streaming?.isActive()) {
-            if (info?.kind === "block") {
-              // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text);
-            }
-            if (info?.kind === "final") {
-              streamText = text;
-              await closeStreaming();
-            }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
+              // CRITICAL: Prevent threads (话题) by NEVER providing a replyToMessageId for semantic blocks!
+              // The placeholder handled the initial reply. Now we just push strictly into the channel.
+              const actualReplyToMessageId = undefined;
+
+              for (const chunk of core.channel.text.chunkTextWithMode(
+                text,
+                textChunkLimit,
+                chunkMode,
+              )) {
+                await sendMarkdownCardFeishu({
                   cfg,
                   to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
+                  text: chunk,
+                  replyToMessageId: actualReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  mentions: undefined, // Mentions handled in placeholder
                   accountId,
                 });
+                firstChunk = false;
+                hasSentFirstMessage = true;
               }
+              return; // Done with this block
+            } else {
+              // Ignore partial deliveries
+              return;
             }
-            return;
           }
 
+          // Non-card text fallback
           let first = true;
-          if (useCard) {
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              text,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMarkdownCardFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-          } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              converted,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
+          const actualReplyToMessageId = hasSentFirstMessage ? undefined : sendReplyToMessageId;
+          const converted = core.channel.text.convertMarkdownTables(fullText, tableMode);
+          for (const chunk of core.channel.text.chunkTextWithMode(
+            converted,
+            textChunkLimit,
+            chunkMode,
+          )) {
+            await sendMessageFeishu({
+              cfg,
+              to: chatId,
+              text: chunk,
+              replyToMessageId: actualReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              mentions: first && !hasSentFirstMessage ? mentionTargets : undefined,
+              accountId,
+            });
+            first = false;
+            hasSentFirstMessage = true;
           }
         }
 
@@ -382,14 +385,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      onPartialReply: streamingEnabled
-        ? (payload: ReplyPayload) => {
-            if (!payload.text) {
-              return;
+      onPartialReply:
+        streamingEnabled && !bypassCardKit
+          ? (payload: ReplyPayload) => {
+              if (!payload.text) {
+                return;
+              }
+              queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
             }
-            queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
-          }
-        : undefined,
+          : () => {}, // Provide dummy to trick core into emitting block events
     },
     markDispatchIdle,
   };
