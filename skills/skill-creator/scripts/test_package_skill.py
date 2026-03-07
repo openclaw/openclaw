@@ -155,6 +155,68 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("self-output-skill/script.py", names)
         self.assertNotIn("self-output-skill/self-output-skill.skill", names)
 
+    def test_skips_common_local_env_directories(self):
+        skill_dir = self.create_skill("env-skip-skill")
+
+        for excluded in (".venv", "venv", "build", "dist"):
+            env_dir = skill_dir / excluded / "lib"
+            env_dir.mkdir(parents=True, exist_ok=True)
+            (env_dir / "site.py").write_text("print('should not be packaged')\n")
+
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        result = package_skill(str(skill_dir), str(out_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "env-skip-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("env-skip-skill/SKILL.md", names)
+        self.assertIn("env-skip-skill/script.py", names)
+        for excluded in (".venv", "venv", "build", "dist"):
+            self.assertNotIn(f"env-skip-skill/{excluded}/lib/site.py", names)
+
+    def test_keeps_regular_files_named_build_or_dist(self):
+        skill_dir = self.create_skill("reserved-name-files-skill")
+        (skill_dir / "build").write_text("echo keep me\n")
+        (skill_dir / "dist").write_text("echo keep me too\n")
+
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        result = package_skill(str(skill_dir), str(out_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "reserved-name-files-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("reserved-name-files-skill/SKILL.md", names)
+        self.assertIn("reserved-name-files-skill/script.py", names)
+        self.assertIn("reserved-name-files-skill/build", names)
+        self.assertIn("reserved-name-files-skill/dist", names)
+
+    def test_skips_vcs_marker_files(self):
+        skill_dir = self.create_skill("vcs-file-skip-skill")
+        (skill_dir / ".git").write_text("gitdir: /tmp/worktree\n")
+        nested = skill_dir / "nested"
+        nested.mkdir(parents=True, exist_ok=True)
+        (nested / ".hg").write_text("repo metadata\n")
+
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        result = package_skill(str(skill_dir), str(out_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "vcs-file-skip-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("vcs-file-skip-skill/SKILL.md", names)
+        self.assertIn("vcs-file-skip-skill/script.py", names)
+        self.assertNotIn("vcs-file-skip-skill/.git", names)
+        self.assertNotIn("vcs-file-skip-skill/nested/.hg", names)
+
 
 if __name__ == "__main__":
     main()

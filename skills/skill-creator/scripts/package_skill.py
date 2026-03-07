@@ -72,7 +72,20 @@ def package_skill(skill_path, output_dir=None):
 
     skill_filename = output_path / f"{skill_name}.skill"
 
-    EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules"}
+    # Skip common VCS/cache/dependency/build directories that should never ship in a .skill bundle.
+    EXCLUDED_DIRS = {
+        ".git",
+        ".svn",
+        ".hg",
+        "__pycache__",
+        "node_modules",
+        ".venv",
+        "venv",
+        "build",
+        "dist",
+    }
+    # Preserve exclusion of VCS marker files used by submodules/worktrees.
+    EXCLUDED_FILES = {".git", ".svn", ".hg"}
 
     # Create the .skill file (zip format)
     try:
@@ -85,7 +98,13 @@ def package_skill(skill_path, output_dir=None):
                     continue
 
                 rel_parts = file_path.relative_to(skill_path).parts
-                if any(part in EXCLUDED_DIRS for part in rel_parts):
+                # Exclude by directory names only. This avoids dropping regular files
+                # that happen to be named like excluded directories (e.g. "build"/"dist").
+                parent_dir_parts = rel_parts if file_path.is_dir() else rel_parts[:-1]
+                if any(part in EXCLUDED_DIRS for part in parent_dir_parts):
+                    continue
+
+                if file_path.is_file() and file_path.name in EXCLUDED_FILES:
                     continue
 
                 if file_path.is_file():
