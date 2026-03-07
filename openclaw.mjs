@@ -63,24 +63,51 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
     }
   }
   if (wantsVersion) {
-    // Match resolveBinaryVersion() priority: package metadata first,
-    // OPENCLAW_BUNDLED_VERSION only as fallback.
-    let version;
-    try {
-      const require = module.createRequire(import.meta.url);
-      version = require("./package.json").version;
-    } catch {
-      // package.json unreadable — fall through
-    }
-    if (!version) {
-      version = process.env.OPENCLAW_BUNDLED_VERSION;
-    }
+    // Mirror resolveBinaryVersion() in src/version.ts:
+    //   1. package.json (name === "openclaw") → 2. build-info.json → 3. env var
+    const require = module.createRequire(import.meta.url);
+    const PACKAGE_JSON_CANDIDATES = [
+      "../package.json",
+      "../../package.json",
+      "../../../package.json",
+      "./package.json",
+    ];
+    const BUILD_INFO_CANDIDATES = [
+      "../build-info.json",
+      "../../build-info.json",
+      "./build-info.json",
+    ];
+
+    const readVersion = (candidates, { requirePackageName = false } = {}) => {
+      for (const candidate of candidates) {
+        try {
+          const pkg = require(candidate);
+          const v = pkg.version?.trim?.();
+          if (!v) {
+            continue;
+          }
+          if (requirePackageName && pkg.name !== "openclaw") {
+            continue;
+          }
+          return v;
+        } catch {
+          // candidate missing or unreadable
+        }
+      }
+      return undefined;
+    };
+
+    const version =
+      readVersion(PACKAGE_JSON_CANDIDATES, { requirePackageName: true }) ||
+      readVersion(BUILD_INFO_CANDIDATES) ||
+      process.env.OPENCLAW_BUNDLED_VERSION;
+
     if (version) {
       process.stdout.write(`${version}\n`);
       process.exit(0);
     }
-    // Neither source available — fall through to full CLI which has
-    // additional candidates (build-info.json, __OPENCLAW_VERSION__).
+    // No source available — fall through to full CLI which also has
+    // the compile-time __OPENCLAW_VERSION__ define.
   }
 }
 
