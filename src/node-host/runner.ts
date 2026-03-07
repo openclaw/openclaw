@@ -217,8 +217,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const client = new GatewayClient({
     url,
-    token: token || undefined,
-    password: password || undefined,
+    token: token?.trim() || undefined,
+    password: password?.trim() || undefined,
+    allowPrivateWs: cfg.gateway?.dangerouslyAllowPlaintextInternal === true,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,

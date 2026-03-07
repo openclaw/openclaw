@@ -75,6 +75,7 @@ export type GatewayConnectionDetails = {
   urlSource: string;
   bindDetail?: string;
   remoteFallbackNote?: string;
+  allowPrivateWs?: boolean;
   message: string;
 };
 
@@ -179,18 +180,30 @@ export function buildGatewayConnectionDetails(
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
 
-  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
+  const allowPrivateWs =
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1" ||
+    config.gateway?.dangerouslyAllowPlaintextInternal === true;
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
   if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
+    const fixLines = allowPrivateWs
+      ? [
+          "Fix: The URL is not a recognized private/loopback target for plaintext ws://.",
+          "Use wss:// for public or unrecognized addresses.",
+        ]
+      : [
+          "Fix: Use wss:// for remote gateway URLs.",
+          "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
+          "or gateway.dangerouslyAllowPlaintextInternal=true.",
+        ];
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
         "Both credentials and chat data would be exposed to network interception.",
         `Source: ${urlSource}`,
         `Config: ${configPath}`,
-        "Fix: Use wss:// for remote gateway URLs.",
+        ...fixLines,
         "Safe remote access defaults:",
         "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
         "- or use Tailscale Serve/Funnel for HTTPS remote access",
@@ -218,6 +231,7 @@ export function buildGatewayConnectionDetails(
     urlSource,
     bindDetail,
     remoteFallbackNote,
+    allowPrivateWs,
     message,
   };
 }
@@ -613,6 +627,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
+      allowPrivateWs: params.connectionDetails.allowPrivateWs,
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,

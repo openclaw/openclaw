@@ -32,6 +32,7 @@ export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
+  allowPrivateWs?: boolean;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -55,6 +56,7 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
+      allowPrivateWs: opts.allowPrivateWs,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

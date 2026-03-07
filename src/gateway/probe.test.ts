@@ -50,4 +50,15 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
     expect(result.ok).toBe(true);
   });
+
+  it("passes the plaintext-internal override through to GatewayClient", async () => {
+    await probeGateway({
+      url: "ws://192.168.1.42:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      allowPrivateWs: true,
+    });
+
+    expect(gatewayClientState.options?.allowPrivateWs).toBe(true);
+  });
 });

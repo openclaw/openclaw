@@ -399,4 +399,13 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * DANGEROUS: Allow plaintext ws:// connections to private/loopback targets
+   * on trusted networks, matching the OPENCLAW_ALLOW_INSECURE_PRIVATE_WS break-glass policy.
+   * This enables layered security where an external TLS gateway
+   * terminates encryption and forwards plaintext to internal OpenClaw gateways.
+   * Only enable if you understand the security implications.
+   * Default: false (secure by default).
+   */
+  dangerouslyAllowPlaintextInternal?: boolean;
 };

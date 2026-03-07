@@ -345,6 +345,14 @@ export function isLocalishHost(hostHeader?: string): boolean {
   return isLoopbackHost(host) || host.endsWith(".ts.net");
 }
 
+export type IsSecureWebSocketUrlOptions = {
+  /**
+   * DANGEROUS: When true, allows plaintext ws:// connections to private/loopback
+   * targets for trusted-network break-glass scenarios.
+   */
+  allowPrivateWs?: boolean;
+};
+
 /**
  * Check if a hostname or IP refers to a private or loopback address.
  * Handles the same hostname formats as isLoopbackHost, but also accepts
@@ -408,12 +416,7 @@ function parseHostForAddressChecks(
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(
-  url: string,
-  opts?: {
-    allowPrivateWs?: boolean;
-  },
-): boolean {
+export function isSecureWebSocketUrl(url: string, opts?: IsSecureWebSocketUrlOptions): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);

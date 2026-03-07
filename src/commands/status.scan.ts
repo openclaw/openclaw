@@ -75,7 +75,7 @@ async function resolveGatewayProbeSnapshot(params: {
   cfg: ReturnType<typeof loadConfig>;
   opts: { timeoutMs?: number; all?: boolean };
 }): Promise<GatewayProbeSnapshot> {
-  const gatewayConnection = buildGatewayConnectionDetails();
+  const gatewayConnection = buildGatewayConnectionDetails({ config: params.cfg });
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
   const remoteUrlRaw =
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
@@ -89,6 +89,7 @@ async function resolveGatewayProbeSnapshot(params: {
         url: gatewayConnection.url,
         auth: gatewayProbeAuthResolution.auth,
         timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+        allowPrivateWs: gatewayConnection.allowPrivateWs,
       }).catch(() => null);
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
     gatewayProbe.error = gatewayProbe.error
