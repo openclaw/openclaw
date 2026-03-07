@@ -136,7 +136,7 @@ describe("bot-native-command-menu", () => {
     const setMyCommands = vi.fn(async () => undefined);
     const runtimeLog = vi.fn();
 
-  syncMenuCommandsWithMocks({
+    syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
       runtimeLog,
