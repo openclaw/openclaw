@@ -48,10 +48,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -69,7 +71,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
+import ai.openclaw.android.NotificationPackageFilterMode
 import ai.openclaw.android.node.DeviceNotificationListenerService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -82,6 +88,16 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
+  val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
+  val notificationForwardingMode by viewModel.notificationForwardingMode.collectAsState()
+  val notificationForwardingPackages by viewModel.notificationForwardingPackages.collectAsState()
+  val notificationForwardingQuietHoursEnabled by
+    viewModel.notificationForwardingQuietHoursEnabled.collectAsState()
+  val notificationForwardingQuietStart by viewModel.notificationForwardingQuietStart.collectAsState()
+  val notificationForwardingQuietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
+  val notificationForwardingMaxEventsPerMinute by
+    viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
+  val notificationForwardingSessionKey by viewModel.notificationForwardingSessionKey.collectAsState()
 
   val listState = rememberLazyListState()
   val deviceModel =
@@ -189,6 +205,30 @@ fun SettingsSheet(viewModel: MainViewModel) {
       mutableStateOf(isNotificationListenerEnabled(context))
     }
 
+  var notificationPickerExpanded by remember { mutableStateOf(false) }
+  var notificationAppSearch by remember { mutableStateOf("") }
+  var notificationShowSystemApps by remember { mutableStateOf(false) }
+  var installedNotificationApps by
+    remember {
+      mutableStateOf<List<InstalledApp>>(emptyList())
+    }
+  var notificationQuietStartDraft by
+    remember(notificationForwardingQuietStart) {
+      mutableStateOf(notificationForwardingQuietStart)
+    }
+  var notificationQuietEndDraft by
+    remember(notificationForwardingQuietEnd) {
+      mutableStateOf(notificationForwardingQuietEnd)
+    }
+  var notificationRateDraft by
+    remember(notificationForwardingMaxEventsPerMinute) {
+      mutableStateOf(notificationForwardingMaxEventsPerMinute.toString())
+    }
+  var notificationSessionKeyDraft by
+    remember(notificationForwardingSessionKey) {
+      mutableStateOf(notificationForwardingSessionKey.orEmpty())
+    }
+
   var photosPermissionGranted by
     remember {
       mutableStateOf(
@@ -264,6 +304,22 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.refreshGatewayConnection()
     }
 
+  val settingsScope = rememberCoroutineScope()
+
+  fun refreshInstalledNotificationApps() {
+    settingsScope.launch {
+      val discoveredApps =
+        withContext(Dispatchers.IO) {
+          queryInstalledApps(context)
+        }
+      installedNotificationApps = discoveredApps
+    }
+  }
+
+  LaunchedEffect(context) {
+    refreshInstalledNotificationApps()
+  }
+
   DisposableEffect(lifecycleOwner, context) {
     val observer =
       LifecycleEventObserver { _, event ->
@@ -273,6 +329,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           notificationsPermissionGranted = hasNotificationsPermission(context)
           notificationListenerEnabled = isNotificationListenerEnabled(context)
+          refreshInstalledNotificationApps()
           photosPermissionGranted =
             ContextCompat.checkSelfPermission(context, photosPermission) ==
               PackageManager.PERMISSION_GRANTED
@@ -356,6 +413,24 @@ fun SettingsSheet(viewModel: MainViewModel) {
       locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
     }
   }
+
+  val normalizedAppSearch = notificationAppSearch.trim().lowercase()
+  val filteredNotificationApps =
+    remember(installedNotificationApps, normalizedAppSearch, notificationShowSystemApps) {
+      installedNotificationApps
+        .asSequence()
+        .filter { app -> notificationShowSystemApps || !app.isSystemApp }
+        .filter { app ->
+          normalizedAppSearch.isEmpty() ||
+            app.label.lowercase().contains(normalizedAppSearch) ||
+            app.packageName.lowercase().contains(normalizedAppSearch)
+        }
+        .toList()
+    }
+
+  val quietHoursInputValid =
+    isValidHourMinute(notificationQuietStartDraft) &&
+      isValidHourMinute(notificationQuietEndDraft)
 
   Box(
     modifier =
@@ -612,6 +687,290 @@ fun SettingsSheet(viewModel: MainViewModel) {
             }
           },
         )
+      }
+      item {
+        ListItem(
+          modifier = Modifier.settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Forward Notification Events", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Allow notification listener events to be forwarded to gateway node events.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Switch(
+              checked = notificationForwardingEnabled,
+              onCheckedChange = viewModel::setNotificationForwardingEnabled,
+            )
+          },
+        )
+      }
+      item {
+        Column(
+          modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+          verticalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Package Filter: Allowlist", style = mobileHeadline) },
+            supportingContent = {
+              Text("Only listed package IDs are forwarded.", style = mobileCallout)
+            },
+            trailingContent = {
+              RadioButton(
+                selected = notificationForwardingMode == NotificationPackageFilterMode.Allowlist,
+                onClick = {
+                  viewModel.setNotificationForwardingMode(NotificationPackageFilterMode.Allowlist)
+                },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Package Filter: Blocklist", style = mobileHeadline) },
+            supportingContent = {
+              Text("All packages except listed IDs are forwarded.", style = mobileCallout)
+            },
+            trailingContent = {
+              RadioButton(
+                selected = notificationForwardingMode == NotificationPackageFilterMode.Blocklist,
+                onClick = {
+                  viewModel.setNotificationForwardingMode(NotificationPackageFilterMode.Blocklist)
+                },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = { notificationPickerExpanded = !notificationPickerExpanded },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text(
+              if (notificationPickerExpanded) "Close App Picker" else "Open App Picker",
+              style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+            )
+          }
+        }
+      }
+      item {
+        Text(
+          "Selected: ${notificationForwardingPackages.size} package(s)",
+          style = mobileCallout,
+          color = mobileTextSecondary,
+        )
+      }
+      if (notificationPickerExpanded) {
+        item {
+          OutlinedTextField(
+            value = notificationAppSearch,
+            onValueChange = { notificationAppSearch = it },
+            label = {
+              Text("Search apps", style = mobileCaption1, color = mobileTextSecondary)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = mobileBody.copy(color = mobileText),
+            colors = settingsTextFieldColors(),
+            enabled = notificationForwardingEnabled,
+          )
+        }
+        item {
+          ListItem(
+            modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+            colors = listItemColors,
+            headlineContent = { Text("Show System Apps", style = mobileHeadline) },
+            supportingContent = {
+              Text("Include Android/system packages in results.", style = mobileCallout)
+            },
+            trailingContent = {
+              Switch(
+                checked = notificationShowSystemApps,
+                onCheckedChange = { notificationShowSystemApps = it },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+        if (filteredNotificationApps.isEmpty()) {
+          item {
+            Text(
+              "No apps match your current filter yet.",
+              style = mobileCallout,
+              color = mobileTextSecondary,
+            )
+          }
+        }
+        items(filteredNotificationApps, key = { it.packageName }) { app ->
+          ListItem(
+            modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+            colors = listItemColors,
+            headlineContent = { Text(app.label, style = mobileHeadline) },
+            supportingContent = { Text(app.packageName, style = mobileCallout) },
+            trailingContent = {
+              Switch(
+                checked = notificationForwardingPackages.contains(app.packageName),
+                onCheckedChange = { checked ->
+                  val next = notificationForwardingPackages.toMutableSet()
+                  if (checked) {
+                    next.add(app.packageName)
+                  } else {
+                    next.remove(app.packageName)
+                  }
+                  viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+                },
+                enabled = notificationForwardingEnabled,
+              )
+            },
+          )
+        }
+      }
+      item {
+        ListItem(
+          modifier = Modifier.settingsRowModifier().alpha(if (notificationForwardingEnabled) 1f else 0.6f),
+          colors = listItemColors,
+          headlineContent = { Text("Quiet Hours", style = mobileHeadline) },
+          supportingContent = {
+            Text("Suppress forwarding during a local time window.", style = mobileCallout)
+          },
+          trailingContent = {
+            Switch(
+              checked = notificationForwardingQuietHoursEnabled,
+              onCheckedChange = { nextEnabled ->
+                if (nextEnabled && !quietHoursInputValid) {
+                  return@Switch
+                }
+                viewModel.setNotificationForwardingQuietHours(
+                  enabled = nextEnabled,
+                  start = notificationQuietStartDraft,
+                  end = notificationQuietEndDraft,
+                )
+              },
+              enabled =
+                notificationForwardingEnabled &&
+                  (notificationForwardingQuietHoursEnabled || quietHoursInputValid),
+            )
+          },
+        )
+      }
+      item {
+        OutlinedTextField(
+          value = notificationQuietStartDraft,
+          onValueChange = { notificationQuietStartDraft = it },
+          label = { Text("Quiet Start (HH:mm)", style = mobileCaption1, color = mobileTextSecondary) },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        OutlinedTextField(
+          value = notificationQuietEndDraft,
+          onValueChange = { notificationQuietEndDraft = it },
+          label = { Text("Quiet End (HH:mm)", style = mobileCaption1, color = mobileTextSecondary) },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      if (!quietHoursInputValid) {
+        item {
+          Text(
+            "Use 24-hour HH:mm format (example: 22:00).",
+            style = mobileCaption1,
+            color = mobileDanger,
+          )
+        }
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = {
+              viewModel.setNotificationForwardingQuietHours(
+                enabled = notificationForwardingQuietHoursEnabled,
+                start = notificationQuietStartDraft,
+                end = notificationQuietEndDraft,
+              )
+            },
+            enabled = notificationForwardingEnabled && quietHoursInputValid,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Save Quiet Hours", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
+      }
+      item {
+        OutlinedTextField(
+          value = notificationRateDraft,
+          onValueChange = { notificationRateDraft = it.filter { c -> c.isDigit() } },
+          label = { Text("Max Events / Minute", style = mobileCaption1, color = mobileTextSecondary) },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = {
+              val parsed = notificationRateDraft.toIntOrNull() ?: notificationForwardingMaxEventsPerMinute
+              viewModel.setNotificationForwardingMaxEventsPerMinute(parsed)
+            },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Save Rate", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
+      }
+      item {
+        OutlinedTextField(
+          value = notificationSessionKeyDraft,
+          onValueChange = { notificationSessionKeyDraft = it },
+          label = {
+            Text(
+              "Route Session Key (optional, blank = default route)",
+              style = mobileCaption1,
+              color = mobileTextSecondary,
+            )
+          },
+          placeholder = {
+            Text("Leave empty for default node route", style = mobileCaption1, color = mobileTextSecondary)
+          },
+          modifier = Modifier.fillMaxWidth(),
+          textStyle = mobileBody.copy(color = mobileText),
+          colors = settingsTextFieldColors(),
+          enabled = notificationForwardingEnabled,
+        )
+      }
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          Button(
+            onClick = {
+              viewModel.setNotificationForwardingSessionKey(notificationSessionKeyDraft.trim().ifEmpty { null })
+            },
+            enabled = notificationForwardingEnabled,
+            colors = settingsPrimaryButtonColors(),
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Save Session Route", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
       }
       item { HorizontalDivider(color = mobileBorder) }
 
@@ -914,6 +1273,64 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { Spacer(modifier = Modifier.height(24.dp)) }
     }
   }
+}
+
+private val hourMinuteRegex = Regex("^([01]\\d|2[0-3]):[0-5]\\d$")
+
+private fun isValidHourMinute(value: String): Boolean {
+  return hourMinuteRegex.matches(value.trim())
+}
+
+private data class InstalledApp(
+  val label: String,
+  val packageName: String,
+  val isSystemApp: Boolean,
+)
+
+private fun queryInstalledApps(context: Context): List<InstalledApp> {
+  val packageManager = context.packageManager
+  val launcherIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
+  val launcherPackages =
+    packageManager
+      .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
+      .asSequence()
+      .mapNotNull { it.activityInfo?.packageName?.trim()?.takeIf(String::isNotEmpty) }
+      .toMutableSet()
+
+  val recentNotificationPackages =
+    DeviceNotificationListenerService
+      .snapshot(context)
+      .notifications
+      .asSequence()
+      .map { it.packageName.trim() }
+      .filter { it.isNotEmpty() }
+      .toSet()
+
+  val candidatePackages = (launcherPackages + recentNotificationPackages)
+    .filter { it != context.packageName }
+
+  return candidatePackages
+    .asSequence()
+    .map { packageName ->
+      runCatching {
+        val appInfo = packageManager.getApplicationInfo(packageName, 0)
+        val label = packageManager.getApplicationLabel(appInfo)?.toString()?.trim().orEmpty()
+        InstalledApp(
+          label = if (label.isEmpty()) packageName else label,
+          packageName = packageName,
+          isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
+        )
+      }.getOrElse {
+        InstalledApp(
+          label = packageName,
+          packageName = packageName,
+          isSystemApp = false,
+        )
+      }
+    }
+    .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
+    .toList()
 }
 
 @Composable

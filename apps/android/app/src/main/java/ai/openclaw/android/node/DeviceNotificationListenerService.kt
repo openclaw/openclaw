@@ -8,6 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import ai.openclaw.android.NotificationBurstLimiter
+import ai.openclaw.android.NotificationForwardingPolicy
+import ai.openclaw.android.SecurePrefs
+import ai.openclaw.android.allowsPackage
+import ai.openclaw.android.isWithinQuietHours
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -126,6 +131,8 @@ private object DeviceNotificationStore {
 }
 
 class DeviceNotificationListenerService : NotificationListenerService() {
+  private val securePrefs by lazy { SecurePrefs(applicationContext) }
+
   override fun onListenerConnected() {
     super.onListenerConnected()
     activeService = this
@@ -152,7 +159,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     super.onNotificationPosted(sbn)
     val entry = sbn?.toEntry() ?: return
     DeviceNotificationStore.upsert(entry)
-    if (entry.packageName == packageName) {
+    val policy = resolveForwardingPolicy()
+    if (!shouldForwardNotification(policy = policy, sourcePackage = entry.packageName)) {
       return
     }
     emitNotificationsChanged(
@@ -163,6 +171,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         put("postTimeMs", JsonPrimitive(entry.postTimeMs))
         put("isOngoing", JsonPrimitive(entry.isOngoing))
         put("isClearable", JsonPrimitive(entry.isClearable))
+        policy.sessionKey?.let { put("sessionKey", JsonPrimitive(it)) }
         entry.title?.let { put("title", JsonPrimitive(it)) }
         entry.text?.let { put("text", JsonPrimitive(it)) }
         entry.subText?.let { put("subText", JsonPrimitive(it)) }
@@ -180,19 +189,49 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return
     }
     DeviceNotificationStore.remove(key)
-    if (removed.packageName == packageName) {
+    val removedPackageName = removed.packageName.trim()
+    val policy = resolveForwardingPolicy()
+    if (!shouldForwardNotification(policy = policy, sourcePackage = removedPackageName)) {
       return
     }
     emitNotificationsChanged(
       buildJsonObject {
         put("change", JsonPrimitive("removed"))
         put("key", JsonPrimitive(key))
-        val packageName = removed.packageName.trim()
-        if (packageName.isNotEmpty()) {
-          put("packageName", JsonPrimitive(packageName))
+        policy.sessionKey?.let { put("sessionKey", JsonPrimitive(it)) }
+        if (removedPackageName.isNotEmpty()) {
+          put("packageName", JsonPrimitive(removedPackageName))
         }
       }.toString(),
     )
+  }
+
+  private fun resolveForwardingPolicy(): NotificationForwardingPolicy {
+    return securePrefs.getNotificationForwardingPolicy(appPackageName = packageName)
+  }
+
+  private fun shouldForwardNotification(
+    policy: NotificationForwardingPolicy,
+    sourcePackage: String,
+    nowEpochMs: Long = System.currentTimeMillis(),
+  ): Boolean {
+    if (!policy.enabled) {
+      return false
+    }
+    val normalizedPackage = sourcePackage.trim()
+    if (normalizedPackage.isEmpty()) {
+      return false
+    }
+    if (normalizedPackage == packageName) {
+      return false
+    }
+    if (!policy.allowsPackage(normalizedPackage)) {
+      return false
+    }
+    if (policy.isWithinQuietHours(nowEpochMs)) {
+      return false
+    }
+    return burstLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)
   }
 
   private fun refreshActiveNotifications() {
@@ -230,6 +269,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   companion object {
     @Volatile private var activeService: DeviceNotificationListenerService? = null
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
+    private val burstLimiter = NotificationBurstLimiter()
 
     private fun serviceComponent(context: Context): ComponentName {
       return ComponentName(context, DeviceNotificationListenerService::class.java)
