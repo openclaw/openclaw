@@ -9,12 +9,11 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
-  withTempCronHome,
+  withTempCronHome as withTempHome,
   writeSessionStore,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
-const withTempHome = withTempCronHome;
 
 function makeDeps(): CliDeps {
   return {
@@ -46,7 +45,7 @@ function mockEmbeddedOk() {
 }
 
 function expectEmbeddedProviderModel(expected: { provider: string; model: string }) {
-  const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+  const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
     provider?: string;
     model?: string;
   };
@@ -149,6 +148,19 @@ async function runTurnWithStoredModelOverride(
   });
 }
 
+async function runStoredOverrideAndExpectModel(params: {
+  home: string;
+  deterministicCatalog: Array<{ id: string; name: string; provider: string }>;
+  jobPayload: CronJob["payload"];
+  expected: { provider: string; model: string };
+}) {
+  vi.mocked(runEmbeddedPiAgent).mockClear();
+  vi.mocked(loadModelCatalog).mockResolvedValue(params.deterministicCatalog);
+  const res = (await runTurnWithStoredModelOverride(params.home, params.jobPayload)).res;
+  expect(res.status).toBe("ok");
+  expectEmbeddedProviderModel(params.expected);
+}
+
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
@@ -197,6 +209,50 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("treats transient error payloads as non-fatal when a later success payload exists", async () => {
+    await withTempHome(async (home) => {
+      mockEmbeddedPayloads([
+        {
+          text: "⚠️ ✍️ Write: failed",
+          isError: true,
+        },
+        {
+          text: "Write completed successfully.",
+          isError: false,
+        },
+      ]);
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.summary).toBe("Write completed successfully.");
+    });
+  });
+
+  it("keeps error status when run-level error accompanies post-error text", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [
+          { text: "Model context overflow", isError: true },
+          { text: "Partial assistant text before error" },
+        ],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          error: { kind: "context_overflow", message: "exceeded context window" },
+        },
+      });
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
+    });
+  });
+
   it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
@@ -223,7 +279,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const lines = call?.prompt?.split("\n") ?? [];
       expect(lines[0]).toContain("[cron:job-1");
       expect(lines[0]).toContain("do it");
-      expect(lines[1]).toMatch(/^Current time: .+ \(.+\)$/);
+      expect(lines[1]).toMatch(/^Current time: .+ \(.+\) \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/);
     });
   });
 
@@ -277,71 +333,79 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("uses model override when provided", async () => {
+  it("applies model overrides with correct precedence", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
+      const deterministicCatalog = [
+        {
+          id: "gpt-4.1-mini",
+          name: "GPT-4.1 Mini",
+          provider: "openai",
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+        },
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
+
+      let res = (
+        await runCronTurn(home, {
+          jobPayload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        })
+      ).res;
+      expect(res.status).toBe("ok");
+      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
         jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
-          model: "openai/gpt-4.1-mini",
+          deliver: false,
         },
+        expected: { provider: "openai", model: "gpt-4.1-mini" },
       });
 
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "anthropic/claude-opus-4-5",
+          deliver: false,
+        },
+        expected: { provider: "anthropic", model: "claude-opus-4-5" },
+      });
     });
   });
 
-  it("uses stored session override when no job model override is provided", async () => {
+  it("uses hooks.gmail.model and keeps precedence over stored session override", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runTurnWithStoredModelOverride(home, {
-        kind: "agentTurn",
-        message: DEFAULT_MESSAGE,
-        deliver: false,
-      });
-
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
-    });
-  });
-
-  it("prefers job model override over stored session override", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runTurnWithStoredModelOverride(home, {
-        kind: "agentTurn",
-        message: DEFAULT_MESSAGE,
-        model: "anthropic/claude-opus-4-5",
-        deliver: false,
-      });
-
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
-    });
-  });
-
-  it("uses hooks.gmail.model for Gmail hook sessions", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runGmailHookTurn(home);
-
+      let res = (await runGmailHookTurn(home)).res;
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({
         provider: "openrouter",
         model: GMAIL_MODEL.replace("openrouter/", ""),
       });
-    });
-  });
 
-  it("keeps hooks.gmail.model precedence over stored session override", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runGmailHookTurn(home, {
-        "agent:main:hook:gmail:msg-1": {
-          sessionId: "existing-gmail-session",
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-5",
-        },
-      });
-
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      res = (
+        await runGmailHookTurn(home, {
+          "agent:main:hook:gmail:msg-1": {
+            sessionId: "existing-gmail-session",
+            updatedAt: Date.now(),
+            providerOverride: "anthropic",
+            modelOverride: "claude-opus-4-5",
+          },
+        })
+      ).res;
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({
         provider: "openrouter",
@@ -359,7 +423,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as { prompt?: string };
       expect(call?.prompt).toContain("EXTERNAL, UNTRUSTED");
       expect(call?.prompt).toContain("Hello");
     });
@@ -381,7 +445,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as { prompt?: string };
       expect(call?.prompt).not.toContain("EXTERNAL, UNTRUSTED");
       expect(call?.prompt).toContain("Hello");
     });
@@ -418,12 +482,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        provider?: string;
-        model?: string;
-      };
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-opus-4-5");
+      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
     });
   });
 
@@ -482,26 +541,18 @@ describe("runCronIsolatedAgentTurn", () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
-
-      const first = (
-        await runCronTurn(home, {
+      const runPingTurn = () =>
+        runCronTurn(home, {
           deps,
           jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
           message: "ping",
           mockTexts: ["ok"],
           storePath,
-        })
-      ).res;
+        });
 
-      const second = (
-        await runCronTurn(home, {
-          deps,
-          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
-          message: "ping",
-          mockTexts: ["ok"],
-          storePath,
-        })
-      ).res;
+      const first = (await runPingTurn()).res;
+
+      const second = (await runPingTurn()).res;
 
       expect(first.sessionId).toBeDefined();
       expect(second.sessionId).toBeDefined();

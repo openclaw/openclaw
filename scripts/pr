@@ -20,6 +20,7 @@ Usage:
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
   scripts/pr review-checkout-pr <PR>
+  scripts/pr review-claim <PR>
   scripts/pr review-guard <PR>
   scripts/pr review-artifacts-init <PR>
   scripts/pr review-validate-artifacts <PR>
@@ -28,6 +29,7 @@ Usage:
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR>
+  scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR>
@@ -232,6 +234,146 @@ resolve_head_push_url() {
   source .local/pr-meta.env
 
   if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+    printf 'git@github.com:%s/%s.git\n' "$PR_HEAD_OWNER" "$PR_HEAD_REPO_NAME"
+    return 0
+  fi
+
+  if [ -n "${PR_HEAD_REPO_URL:-}" ] && [ "$PR_HEAD_REPO_URL" != "null" ]; then
+    case "$PR_HEAD_REPO_URL" in
+      *.git) printf '%s\n' "$PR_HEAD_REPO_URL" ;;
+      *) printf '%s.git\n' "$PR_HEAD_REPO_URL" ;;
+    esac
+    return 0
+  fi
+
+  return 1
+}
+
+# Push to a fork PR branch via GitHub GraphQL createCommitOnBranch.
+# This uses the same permission model as the GitHub web editor, bypassing
+# the git-protocol 403 that occurs even when maintainer_can_modify is true.
+# Usage: graphql_push_to_fork <owner/repo> <branch> <expected_head_oid>
+# Pushes the diff between expected_head_oid and local HEAD as file additions/deletions.
+# File bytes are read from git objects (not the working tree) to avoid
+# symlink/special-file dereference risks from untrusted fork content.
+graphql_push_to_fork() {
+  local repo_nwo="$1"   # e.g. Oncomatic/openclaw
+  local branch="$2"     # e.g. fix/memory-flush-not-executing
+  local expected_oid="$3"
+  local max_blob_bytes=$((5 * 1024 * 1024))
+
+  # Build file changes JSON from the diff between expected_oid and HEAD.
+  local additions="[]"
+  local deletions="[]"
+
+  # Collect added/modified files
+  local added_files
+  added_files=$(git diff --no-renames --name-only --diff-filter=AM "$expected_oid" HEAD)
+  if [ -n "$added_files" ]; then
+    additions="["
+    local first=true
+    while IFS= read -r fpath; do
+      [ -n "$fpath" ] || continue
+
+      local tree_entry
+      tree_entry=$(git ls-tree HEAD -- "$fpath")
+      if [ -z "$tree_entry" ]; then
+        echo "GraphQL push could not resolve path in HEAD tree: $fpath" >&2
+        return 1
+      fi
+
+      local file_mode
+      file_mode=$(printf '%s\n' "$tree_entry" | awk '{print $1}')
+      local file_type
+      file_type=$(printf '%s\n' "$tree_entry" | awk '{print $2}')
+      local file_oid
+      file_oid=$(printf '%s\n' "$tree_entry" | awk '{print $3}')
+
+      if [ "$file_type" != "blob" ] || [ "$file_mode" = "160000" ]; then
+        echo "GraphQL push only supports blob files; refusing $fpath (mode=$file_mode type=$file_type)" >&2
+        return 1
+      fi
+
+      local blob_size
+      blob_size=$(git cat-file -s "$file_oid")
+      if [ "$blob_size" -gt "$max_blob_bytes" ]; then
+        echo "GraphQL push refused large file $fpath (${blob_size} bytes > ${max_blob_bytes})" >&2
+        return 1
+      fi
+
+      local b64
+      b64=$(git cat-file -p "$file_oid" | base64 | tr -d '\n')
+      if [ "$first" = true ]; then first=false; else additions+=","; fi
+      additions+="{\"path\":$(printf '%s' "$fpath" | jq -Rs .),\"contents\":$(printf '%s' "$b64" | jq -Rs .)}"
+    done <<< "$added_files"
+    additions+="]"
+  fi
+
+  # Collect deleted files
+  local deleted_files
+  deleted_files=$(git diff --no-renames --name-only --diff-filter=D "$expected_oid" HEAD)
+  if [ -n "$deleted_files" ]; then
+    deletions="["
+    local first=true
+    while IFS= read -r fpath; do
+      [ -n "$fpath" ] || continue
+      if [ "$first" = true ]; then first=false; else deletions+=","; fi
+      deletions+="{\"path\":$(printf '%s' "$fpath" | jq -Rs .)}"
+    done <<< "$deleted_files"
+    deletions+="]"
+  fi
+
+  local commit_headline
+  commit_headline=$(git log -1 --format=%s HEAD)
+
+  local query
+  query=$(cat <<'GRAPHQL'
+mutation($input: CreateCommitOnBranchInput!) {
+  createCommitOnBranch(input: $input) {
+    commit { oid url }
+  }
+}
+GRAPHQL
+)
+
+  local variables
+  variables=$(jq -n \
+    --arg nwo "$repo_nwo" \
+    --arg branch "$branch" \
+    --arg oid "$expected_oid" \
+    --arg headline "$commit_headline" \
+    --argjson additions "$additions" \
+    --argjson deletions "$deletions" \
+    '{input: {
+      branch: { repositoryNameWithOwner: $nwo, branchName: $branch },
+      message: { headline: $headline },
+      fileChanges: { additions: $additions, deletions: $deletions },
+      expectedHeadOid: $oid
+    }}')
+
+  local result
+  result=$(gh api graphql -f query="$query" --input - <<< "$variables" 2>&1) || {
+    echo "GraphQL push failed: $result" >&2
+    return 1
+  }
+
+  local new_oid
+  new_oid=$(printf '%s' "$result" | jq -r '.data.createCommitOnBranch.commit.oid // empty')
+  if [ -z "$new_oid" ]; then
+    echo "GraphQL push returned no commit OID: $result" >&2
+    return 1
+  fi
+
+  echo "GraphQL push succeeded: $new_oid" >&2
+  printf '%s\n' "$new_oid"
+}
+
+# Resolve HTTPS fallback URL for prhead push (used if SSH fails).
+resolve_head_push_url_https() {
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
+
+  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
     printf 'https://github.com/%s/%s.git\n' "$PR_HEAD_OWNER" "$PR_HEAD_REPO_NAME"
     return 0
   fi
@@ -253,6 +395,60 @@ set_review_mode() {
 REVIEW_MODE=$mode
 REVIEW_MODE_SET_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF_ENV
+}
+
+review_claim() {
+  local pr="$1"
+  local root
+  root=$(repo_root)
+  cd "$root"
+  mkdir -p .local
+
+  local reviewer=""
+  local max_attempts=3
+  local attempt
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    local user_log
+    user_log=".local/review-claim-user-attempt-$attempt.log"
+
+    if reviewer=$(gh api user --jq .login 2>"$user_log"); then
+      printf "%s\n" "$reviewer" >"$user_log"
+      break
+    fi
+
+    echo "Claim reviewer lookup failed (attempt $attempt/$max_attempts)."
+    print_relevant_log_excerpt "$user_log"
+
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      sleep 2
+    fi
+  done
+
+  if [ -z "$reviewer" ]; then
+    echo "Failed to resolve reviewer login after $max_attempts attempts."
+    return 1
+  fi
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    local claim_log
+    claim_log=".local/review-claim-assignee-attempt-$attempt.log"
+
+    if gh pr edit "$pr" --add-assignee "$reviewer" >"$claim_log" 2>&1; then
+      echo "review claim succeeded: @$reviewer assigned to PR #$pr"
+      return 0
+    fi
+
+    echo "Claim assignee update failed (attempt $attempt/$max_attempts)."
+    print_relevant_log_excerpt "$claim_log"
+
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      sleep 2
+    fi
+  done
+
+  echo "Failed to assign @$reviewer to PR #$pr after $max_attempts attempts."
+  return 1
 }
 
 review_checkout_main() {
@@ -359,6 +555,24 @@ EOF_MD
 {
   "recommendation": "READY FOR /prepare-pr",
   "findings": [],
+  "nitSweep": {
+    "performed": true,
+    "status": "none",
+    "summary": "No optional nits identified."
+  },
+  "behavioralSweep": {
+    "performed": true,
+    "status": "not_applicable",
+    "summary": "No runtime branch-level behavior changes require sweep evidence.",
+    "silentDropRisk": "none",
+    "branches": []
+  },
+  "issueValidation": {
+    "performed": true,
+    "source": "pr_body",
+    "status": "valid",
+    "summary": "PR description clearly states a valid problem."
+  },
   "tests": {
     "ran": [],
     "gaps": [],
@@ -380,6 +594,7 @@ review_validate_artifacts() {
   require_artifact .local/review.md
   require_artifact .local/review.json
   require_artifact .local/pr-meta.env
+  require_artifact .local/pr-meta.json
 
   review_guard "$pr"
 
@@ -415,6 +630,181 @@ review_validate_artifacts() {
   invalid_findings_count=$(jq '[.findings[]? | select((.id|type)!="string" or (.title|type)!="string" or (.area|type)!="string" or (.fix|type)!="string")] | length' .local/review.json)
   if [ "$invalid_findings_count" -gt 0 ]; then
     echo "Invalid finding shape in .local/review.json (id/title/area/fix must be strings)"
+    exit 1
+  fi
+
+  local nit_findings_count
+  nit_findings_count=$(jq '[.findings[]? | select((.severity // "") == "NIT")] | length' .local/review.json)
+
+  local nit_sweep_performed
+  nit_sweep_performed=$(jq -r '.nitSweep.performed // empty' .local/review.json)
+  if [ "$nit_sweep_performed" != "true" ]; then
+    echo "Invalid nit sweep in .local/review.json: nitSweep.performed must be true"
+    exit 1
+  fi
+
+  local nit_sweep_status
+  nit_sweep_status=$(jq -r '.nitSweep.status // ""' .local/review.json)
+  case "$nit_sweep_status" in
+    "none")
+      if [ "$nit_findings_count" -gt 0 ]; then
+        echo "Invalid nit sweep in .local/review.json: nitSweep.status is none but NIT findings exist"
+        exit 1
+      fi
+      ;;
+    "has_nits")
+      if [ "$nit_findings_count" -lt 1 ]; then
+        echo "Invalid nit sweep in .local/review.json: nitSweep.status is has_nits but no NIT findings exist"
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Invalid nit sweep status in .local/review.json: $nit_sweep_status"
+      exit 1
+      ;;
+  esac
+
+  local invalid_nit_summary_count
+  invalid_nit_summary_count=$(jq '[.nitSweep.summary | select((type != "string") or (gsub("^\\s+|\\s+$";"") | length == 0))] | length' .local/review.json)
+  if [ "$invalid_nit_summary_count" -gt 0 ]; then
+    echo "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string"
+    exit 1
+  fi
+
+  local issue_validation_performed
+  issue_validation_performed=$(jq -r '.issueValidation.performed // empty' .local/review.json)
+  if [ "$issue_validation_performed" != "true" ]; then
+    echo "Invalid issue validation in .local/review.json: issueValidation.performed must be true"
+    exit 1
+  fi
+
+  local issue_validation_source
+  issue_validation_source=$(jq -r '.issueValidation.source // ""' .local/review.json)
+  case "$issue_validation_source" in
+    "linked_issue"|"pr_body"|"both")
+      ;;
+    *)
+      echo "Invalid issue validation source in .local/review.json: $issue_validation_source"
+      exit 1
+      ;;
+  esac
+
+  local issue_validation_status
+  issue_validation_status=$(jq -r '.issueValidation.status // ""' .local/review.json)
+  case "$issue_validation_status" in
+    "valid"|"unclear"|"invalid"|"already_fixed_on_main")
+      ;;
+    *)
+      echo "Invalid issue validation status in .local/review.json: $issue_validation_status"
+      exit 1
+      ;;
+  esac
+
+  local invalid_issue_summary_count
+  invalid_issue_summary_count=$(jq '[.issueValidation.summary | select((type != "string") or (gsub("^\\s+|\\s+$";"") | length == 0))] | length' .local/review.json)
+  if [ "$invalid_issue_summary_count" -gt 0 ]; then
+    echo "Invalid issue validation summary in .local/review.json: issueValidation.summary must be a non-empty string"
+    exit 1
+  fi
+
+  local runtime_file_count
+  runtime_file_count=$(jq '[.files[]? | (.path // "") | select(test("^(src|extensions|apps)/")) | select(test("(^|/)__tests__/|\\.test\\.|\\.spec\\.") | not) | select(test("\\.(md|mdx)$") | not)] | length' .local/pr-meta.json)
+
+  local runtime_review_required="false"
+  if [ "$runtime_file_count" -gt 0 ]; then
+    runtime_review_required="true"
+  fi
+
+  local behavioral_sweep_performed
+  behavioral_sweep_performed=$(jq -r '.behavioralSweep.performed // empty' .local/review.json)
+  if [ "$behavioral_sweep_performed" != "true" ]; then
+    echo "Invalid behavioral sweep in .local/review.json: behavioralSweep.performed must be true"
+    exit 1
+  fi
+
+  local behavioral_sweep_status
+  behavioral_sweep_status=$(jq -r '.behavioralSweep.status // ""' .local/review.json)
+  case "$behavioral_sweep_status" in
+    "pass"|"needs_work"|"not_applicable")
+      ;;
+    *)
+      echo "Invalid behavioral sweep status in .local/review.json: $behavioral_sweep_status"
+      exit 1
+      ;;
+  esac
+
+  local behavioral_sweep_risk
+  behavioral_sweep_risk=$(jq -r '.behavioralSweep.silentDropRisk // ""' .local/review.json)
+  case "$behavioral_sweep_risk" in
+    "none"|"present"|"unknown")
+      ;;
+    *)
+      echo "Invalid behavioral sweep risk in .local/review.json: $behavioral_sweep_risk"
+      exit 1
+      ;;
+  esac
+
+  local invalid_behavioral_summary_count
+  invalid_behavioral_summary_count=$(jq '[.behavioralSweep.summary | select((type != "string") or (gsub("^\\s+|\\s+$";"") | length == 0))] | length' .local/review.json)
+  if [ "$invalid_behavioral_summary_count" -gt 0 ]; then
+    echo "Invalid behavioral sweep summary in .local/review.json: behavioralSweep.summary must be a non-empty string"
+    exit 1
+  fi
+
+  local behavioral_branches_is_array
+  behavioral_branches_is_array=$(jq -r 'if (.behavioralSweep.branches | type) == "array" then "true" else "false" end' .local/review.json)
+  if [ "$behavioral_branches_is_array" != "true" ]; then
+    echo "Invalid behavioral sweep in .local/review.json: behavioralSweep.branches must be an array"
+    exit 1
+  fi
+
+  local invalid_behavioral_branch_count
+  invalid_behavioral_branch_count=$(jq '[.behavioralSweep.branches[]? | select((.path|type)!="string" or (.decision|type)!="string" or (.outcome|type)!="string")] | length' .local/review.json)
+  if [ "$invalid_behavioral_branch_count" -gt 0 ]; then
+    echo "Invalid behavioral sweep branch entry in .local/review.json: each branch needs string path/decision/outcome"
+    exit 1
+  fi
+
+  local behavioral_branch_count
+  behavioral_branch_count=$(jq '[.behavioralSweep.branches[]?] | length' .local/review.json)
+
+  if [ "$runtime_review_required" = "true" ] && [ "$behavioral_sweep_status" = "not_applicable" ]; then
+    echo "Invalid behavioral sweep in .local/review.json: runtime file changes require behavioralSweep.status=pass|needs_work"
+    exit 1
+  fi
+
+  if [ "$runtime_review_required" = "true" ] && [ "$behavioral_branch_count" -lt 1 ]; then
+    echo "Invalid behavioral sweep in .local/review.json: runtime file changes require at least one branch entry"
+    exit 1
+  fi
+
+  if [ "$behavioral_sweep_status" = "not_applicable" ] && [ "$behavioral_branch_count" -gt 0 ]; then
+    echo "Invalid behavioral sweep in .local/review.json: not_applicable cannot include branch entries"
+    exit 1
+  fi
+
+  if [ "$behavioral_sweep_status" = "pass" ] && [ "$behavioral_sweep_risk" != "none" ]; then
+    echo "Invalid behavioral sweep in .local/review.json: status=pass requires silentDropRisk=none"
+    exit 1
+  fi
+
+  if [ "$recommendation" = "READY FOR /prepare-pr" ] && [ "$issue_validation_status" != "valid" ]; then
+    echo "Invalid recommendation in .local/review.json: READY FOR /prepare-pr requires issueValidation.status=valid"
+    exit 1
+  fi
+
+  if [ "$recommendation" = "READY FOR /prepare-pr" ] && [ "$behavioral_sweep_status" = "needs_work" ]; then
+    echo "Invalid recommendation in .local/review.json: READY FOR /prepare-pr requires behavioralSweep.status!=needs_work"
+    exit 1
+  fi
+
+  if [ "$recommendation" = "READY FOR /prepare-pr" ] && [ "$runtime_review_required" = "true" ] && [ "$behavioral_sweep_status" != "pass" ]; then
+    echo "Invalid recommendation in .local/review.json: READY FOR /prepare-pr on runtime changes requires behavioralSweep.status=pass"
+    exit 1
+  fi
+
+  if [ "$recommendation" = "READY FOR /prepare-pr" ] && [ "$behavioral_sweep_risk" = "present" ]; then
+    echo "Invalid recommendation in .local/review.json: READY FOR /prepare-pr is not allowed when behavioralSweep.silentDropRisk=present"
     exit 1
   fi
 
@@ -650,6 +1040,107 @@ validate_changelog_entry_for_pr() {
     exit 1
   fi
 
+  local diff_file
+  diff_file=$(mktemp)
+  git diff --unified=0 origin/main...HEAD -- CHANGELOG.md > "$diff_file"
+
+  if ! awk -v pr_pattern="$pr_pattern" '
+BEGIN {
+  line_no = 0
+  file_line_count = 0
+  issue_count = 0
+}
+FNR == NR {
+  if ($0 ~ /^@@ /) {
+    if (match($0, /\+[0-9]+/)) {
+      line_no = substr($0, RSTART + 1, RLENGTH - 1) + 0
+    } else {
+      line_no = 0
+    }
+    next
+  }
+  if ($0 ~ /^\+\+\+/) {
+    next
+  }
+  if ($0 ~ /^\+/) {
+    if (line_no > 0) {
+      added[line_no] = 1
+      added_text = substr($0, 2)
+      if (added_text ~ pr_pattern) {
+        pr_added_lines[++pr_added_count] = line_no
+        pr_added_text[line_no] = added_text
+      }
+      line_no++
+    }
+    next
+  }
+  if ($0 ~ /^-/) {
+    next
+  }
+  if (line_no > 0) {
+    line_no++
+  }
+  next
+}
+{
+  changelog[FNR] = $0
+  file_line_count = FNR
+}
+END {
+  for (idx = 1; idx <= pr_added_count; idx++) {
+    entry_line = pr_added_lines[idx]
+    section_line = 0
+    for (i = entry_line; i >= 1; i--) {
+      if (changelog[i] ~ /^### /) {
+        section_line = i
+        break
+      }
+      if (changelog[i] ~ /^## /) {
+        break
+      }
+    }
+    if (section_line == 0) {
+      printf "CHANGELOG.md entry must be inside a subsection (### ...): line %d: %s\n", entry_line, pr_added_text[entry_line]
+      issue_count++
+      continue
+    }
+
+    section_name = changelog[section_line]
+    next_heading = file_line_count + 1
+    for (i = entry_line + 1; i <= file_line_count; i++) {
+      if (changelog[i] ~ /^### / || changelog[i] ~ /^## /) {
+        next_heading = i
+        break
+      }
+    }
+
+    for (i = entry_line + 1; i < next_heading; i++) {
+      line_text = changelog[i]
+      if (line_text ~ /^[[:space:]]*$/) {
+        continue
+      }
+      if (i in added) {
+        continue
+      }
+      printf "CHANGELOG.md PR-linked entry must be appended at the end of section %s: line %d: %s\n", section_name, entry_line, pr_added_text[entry_line]
+      printf "Found existing non-added line below it at line %d: %s\n", i, line_text
+      issue_count++
+      break
+    }
+  }
+
+  if (issue_count > 0) {
+    print "Move this PR changelog entry to the end of its section (just before the next heading)."
+    exit 1
+  }
+}
+' "$diff_file" CHANGELOG.md; then
+    rm -f "$diff_file"
+    exit 1
+  fi
+  rm -f "$diff_file"
+  echo "changelog placement validated: PR-linked entries are appended at section tail"
+
   if [ -n "$contrib" ] && [ "$contrib" != "null" ]; then
     local with_pr_and_thanks
     with_pr_and_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
@@ -858,13 +1349,28 @@ prepare_push() {
     exit 1
   }
 
-  git remote add prhead "$push_url" 2>/dev/null || git remote set-url prhead "$push_url"
+  # Always set prhead to the correct fork URL for this PR.
+  # The remote is repo-level (shared across worktrees), so a previous
+  # prepare-pr run for a different fork PR can leave a stale URL.
+  git remote remove prhead 2>/dev/null || true
+  git remote add prhead "$push_url"
 
   local remote_sha
-  remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" | awk '{print $1}')
+  remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
   if [ -z "$remote_sha" ]; then
-    echo "Remote branch refs/heads/$PR_HEAD not found on prhead"
-    exit 1
+    local https_url
+    https_url=$(resolve_head_push_url_https 2>/dev/null) || true
+    if [ -n "$https_url" ] && [ "$https_url" != "$push_url" ]; then
+      echo "SSH remote failed; falling back to HTTPS..."
+      git remote set-url prhead "$https_url"
+      git remote set-url --push prhead "$https_url"
+      push_url="$https_url"
+      remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
+    fi
+    if [ -z "$remote_sha" ]; then
+      echo "Remote branch refs/heads/$PR_HEAD not found on prhead"
+      exit 1
+    fi
   fi
 
   local pushed_from_sha="$remote_sha"
@@ -876,24 +1382,52 @@ prepare_push() {
       lease_sha="$remote_sha"
     fi
     pushed_from_sha="$lease_sha"
-    if ! git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD; then
-      echo "Lease push failed, retrying once with fresh PR head..."
+    local push_output
+    if ! push_output=$(git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD 2>&1); then
+      echo "Push failed: $push_output"
 
-      lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
-      pushed_from_sha="$lease_sha"
+      # Check if this is a permission error (fork PR) vs a lease conflict.
+      # Permission errors go straight to GraphQL; lease conflicts retry with rebase.
+      if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
+        echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
+        if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+          local graphql_oid
+          graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+          prep_head_sha="$graphql_oid"
+        else
+          echo "Git push permission denied and no fork owner/repo info for GraphQL fallback."
+          exit 1
+        fi
+      else
+        echo "Lease push failed, retrying once with fresh PR head..."
 
-      git fetch origin "pull/$pr/head:pr-$pr-latest" --force
-      git rebase "pr-$pr-latest"
-      prep_head_sha=$(git rev-parse HEAD)
+        lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+        pushed_from_sha="$lease_sha"
 
-      bootstrap_deps_if_needed
-      run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
-      run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
-      if [ "${DOCS_ONLY:-false}" != "true" ]; then
-        run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
+        git fetch origin "pull/$pr/head:pr-$pr-latest" --force
+        git rebase "pr-$pr-latest"
+        prep_head_sha=$(git rev-parse HEAD)
+
+        bootstrap_deps_if_needed
+        run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
+        run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
+        if [ "${DOCS_ONLY:-false}" != "true" ]; then
+          run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
+        fi
+
+        if ! git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD; then
+          # Retry also failed — try GraphQL as last resort.
+          if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+            echo "Git push retry failed; trying GraphQL createCommitOnBranch fallback..."
+            local graphql_oid
+            graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+            prep_head_sha="$graphql_oid"
+          else
+            echo "Git push failed and no fork owner/repo info for GraphQL fallback."
+            exit 1
+          fi
+        fi
       fi
-
-      git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD
     fi
   fi
 
@@ -947,6 +1481,158 @@ EOF_ENV
   echo "artifacts=.local/prep.md .local/prep.env"
 }
 
+prepare_sync_head() {
+  local pr="$1"
+  enter_worktree "$pr" false
+
+  require_artifact .local/pr-meta.env
+  require_artifact .local/prep-context.env
+
+  checkout_prep_branch "$pr"
+
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
+  # shellcheck disable=SC1091
+  source .local/prep-context.env
+
+  local prep_head_sha
+  prep_head_sha=$(git rev-parse HEAD)
+
+  local current_head
+  current_head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+  local lease_sha
+  lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+
+  if [ "$current_head" != "$PR_HEAD" ]; then
+    echo "PR head branch changed from $PR_HEAD to $current_head. Re-run prepare-init."
+    exit 1
+  fi
+
+  local push_url
+  push_url=$(resolve_head_push_url) || {
+    echo "Unable to resolve PR head repo push URL."
+    exit 1
+  }
+
+  # Always set prhead to the correct fork URL for this PR.
+  # The remote is repo-level (shared across worktrees), so a previous
+  # run for a different fork PR can leave a stale URL.
+  git remote remove prhead 2>/dev/null || true
+  git remote add prhead "$push_url"
+
+  local remote_sha
+  remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
+  if [ -z "$remote_sha" ]; then
+    local https_url
+    https_url=$(resolve_head_push_url_https 2>/dev/null) || true
+    if [ -n "$https_url" ] && [ "$https_url" != "$push_url" ]; then
+      echo "SSH remote failed; falling back to HTTPS..."
+      git remote set-url prhead "$https_url"
+      git remote set-url --push prhead "$https_url"
+      push_url="$https_url"
+      remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
+    fi
+    if [ -z "$remote_sha" ]; then
+      echo "Remote branch refs/heads/$PR_HEAD not found on prhead"
+      exit 1
+    fi
+  fi
+
+  local pushed_from_sha="$remote_sha"
+  if [ "$remote_sha" = "$prep_head_sha" ]; then
+    echo "Remote branch already at local prep HEAD; skipping push."
+  else
+    if [ "$remote_sha" != "$lease_sha" ]; then
+      echo "Remote SHA $remote_sha differs from PR head SHA $lease_sha. Refreshing lease SHA from remote."
+      lease_sha="$remote_sha"
+    fi
+    pushed_from_sha="$lease_sha"
+    local push_output
+    if ! push_output=$(git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD 2>&1); then
+      echo "Push failed: $push_output"
+
+      if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
+        echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
+        if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+          local graphql_oid
+          graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+          prep_head_sha="$graphql_oid"
+        else
+          echo "Git push permission denied and no fork owner/repo info for GraphQL fallback."
+          exit 1
+        fi
+      else
+        echo "Lease push failed, retrying once with fresh PR head lease..."
+        lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+        pushed_from_sha="$lease_sha"
+
+        if ! push_output=$(git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD 2>&1); then
+          echo "Retry push failed: $push_output"
+          if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+            echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
+            local graphql_oid
+            graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+            prep_head_sha="$graphql_oid"
+          else
+            echo "Git push failed and no fork owner/repo info for GraphQL fallback."
+            exit 1
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  if ! wait_for_pr_head_sha "$pr" "$prep_head_sha" 8 3; then
+    local observed_sha
+    observed_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+    echo "Pushed head SHA propagation timed out. expected=$prep_head_sha observed=$observed_sha"
+    exit 1
+  fi
+
+  local pr_head_sha_after
+  pr_head_sha_after=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+
+  git fetch origin main
+  git fetch origin "pull/$pr/head:pr-$pr-verify" --force
+  git merge-base --is-ancestor origin/main "pr-$pr-verify" || {
+    echo "PR branch is behind main after push."
+    exit 1
+  }
+  git branch -D "pr-$pr-verify" 2>/dev/null || true
+
+  local contrib="${PR_AUTHOR:-}"
+  if [ -z "$contrib" ]; then
+    contrib=$(gh pr view "$pr" --json author --jq .author.login)
+  fi
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id)
+  local coauthor_email="${contrib_id}+${contrib}@users.noreply.github.com"
+
+  cat >> .local/prep.md <<EOF_PREP
+- Prep head sync completed to branch $PR_HEAD.
+- Verified PR head SHA matches local prep HEAD.
+- Verified PR head contains origin/main.
+- Note: prep sync flow does not re-run prepare gates.
+EOF_PREP
+
+  cat > .local/prep.env <<EOF_ENV
+PR_NUMBER=$PR_NUMBER
+PR_AUTHOR=$contrib
+PR_HEAD=$PR_HEAD
+PR_HEAD_SHA_BEFORE=$pushed_from_sha
+PREP_HEAD_SHA=$prep_head_sha
+COAUTHOR_EMAIL=$coauthor_email
+EOF_ENV
+
+  ls -la .local/prep.md .local/prep.env >/dev/null
+
+  echo "prepare-sync-head complete"
+  echo "prep_branch=$(git branch --show-current)"
+  echo "prep_head_sha=$prep_head_sha"
+  echo "pr_head_sha=$pr_head_sha_after"
+  echo "artifacts=.local/prep.md .local/prep.env"
+}
+
 prepare_run() {
   local pr="$1"
   prepare_init "$pr"
@@ -954,6 +1640,92 @@ prepare_run() {
   prepare_gates "$pr"
   prepare_push "$pr"
   echo "prepare-run complete for PR #$pr"
+}
+
+is_mainline_drift_critical_path_for_merge() {
+  local path="$1"
+  case "$path" in
+    package.json|pnpm-lock.yaml|pnpm-workspace.yaml|.npmrc|.oxlintrc.json|.oxfmtrc.json|tsconfig.json|tsconfig.*.json|vitest.config.ts|vitest.*.config.ts|scripts/*|.github/workflows/*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+print_file_list_with_limit() {
+  local label="$1"
+  local file_path="$2"
+  local limit="${3:-12}"
+
+  if [ ! -s "$file_path" ]; then
+    return 0
+  fi
+
+  local count
+  count=$(wc -l < "$file_path" | tr -d ' ')
+  echo "$label ($count):"
+  sed -n "1,${limit}p" "$file_path" | sed 's/^/  - /'
+  if [ "$count" -gt "$limit" ]; then
+    echo "  ... +$((count - limit)) more"
+  fi
+}
+
+mainline_drift_requires_sync() {
+  local prep_head_sha="$1"
+
+  require_artifact .local/pr-meta.json
+
+  if ! git cat-file -e "${prep_head_sha}^{commit}" 2>/dev/null; then
+    echo "Mainline drift relevance: prep head $prep_head_sha is missing locally; require sync."
+    return 0
+  fi
+
+  local delta_file
+  local pr_files_file
+  local overlap_file
+  local critical_file
+  delta_file=$(mktemp)
+  pr_files_file=$(mktemp)
+  overlap_file=$(mktemp)
+  critical_file=$(mktemp)
+
+  git diff --name-only "${prep_head_sha}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
+  jq -r '.files[]?.path // empty' .local/pr-meta.json | sed '/^$/d' | sort -u > "$pr_files_file"
+  comm -12 "$delta_file" "$pr_files_file" > "$overlap_file" || true
+
+  local path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if is_mainline_drift_critical_path_for_merge "$path"; then
+      printf '%s\n' "$path" >> "$critical_file"
+    fi
+  done < "$delta_file"
+
+  local delta_count
+  local overlap_count
+  local critical_count
+  delta_count=$(wc -l < "$delta_file" | tr -d ' ')
+  overlap_count=$(wc -l < "$overlap_file" | tr -d ' ')
+  critical_count=$(wc -l < "$critical_file" | tr -d ' ')
+
+  if [ "$delta_count" -eq 0 ]; then
+    echo "Mainline drift relevance: unable to enumerate drift files; require sync."
+    rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+    return 0
+  fi
+
+  if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
+    echo "Mainline drift relevance: sync required before merge."
+    print_file_list_with_limit "Mainline files overlapping PR touched files" "$overlap_file"
+    print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file"
+    rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+    return 0
+  fi
+
+  echo "Mainline drift relevance: no overlap with PR files and no critical infra drift."
+  print_file_list_with_limit "Mainline-only drift files" "$delta_file"
+  rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+  return 1
 }
 
 merge_verify() {
@@ -1023,10 +1795,14 @@ merge_verify() {
 
   git fetch origin main
   git fetch origin "pull/$pr/head:pr-$pr" --force
-  git merge-base --is-ancestor origin/main "pr-$pr" || {
+  if ! git merge-base --is-ancestor origin/main "pr-$pr"; then
     echo "PR branch is behind main."
-    exit 1
-  }
+    if mainline_drift_requires_sync "$PREP_HEAD_SHA"; then
+      echo "Merge verify failed: mainline drift is relevant to this PR; refresh prep head before merge."
+      exit 1
+    fi
+    echo "Merge verify: continuing without prep-head sync because behind-main drift is unrelated."
+  fi
 
   echo "merge-verify passed for PR #$pr"
 }
@@ -1086,7 +1862,7 @@ merge_run() {
   local reviewer_coauthor_email="${reviewer_id}+${reviewer}@users.noreply.github.com"
 
   cat > .local/merge-body.txt <<EOF_BODY
-Merged via /review-pr -> /prepare-pr -> /merge-pr.
+Merged via squash.
 
 Prepared head SHA: $PREP_HEAD_SHA
 Co-authored-by: $contrib <$contrib_coauthor_email>
@@ -1236,6 +2012,9 @@ main() {
     review-checkout-pr)
       review_checkout_pr "$pr"
       ;;
+    review-claim)
+      review_claim "$pr"
+      ;;
     review-guard)
       review_guard "$pr"
       ;;
@@ -1259,6 +2038,9 @@ main() {
       ;;
     prepare-push)
       prepare_push "$pr"
+      ;;
+    prepare-sync-head)
+      prepare_sync_head "$pr"
       ;;
     prepare-run)
       prepare_run "$pr"

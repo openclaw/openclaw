@@ -1,7 +1,13 @@
-import type { ChannelAccountSnapshot, ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
+import type {
+  ChannelAccountSnapshot,
+  ChannelPlugin,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/bluebubbles";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildComputedAccountStatusSnapshot,
+  buildProbeChannelStatusSummary,
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -12,7 +18,7 @@ import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/bluebubbles";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -20,6 +26,7 @@ import {
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
+import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -250,40 +257,27 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
             })
           : namedConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            bluebubbles: {
-              ...next.channels?.bluebubbles,
-              enabled: true,
-              ...(input.httpUrl ? { serverUrl: input.httpUrl } : {}),
-              ...(input.password ? { password: input.password } : {}),
-              ...(input.webhookPath ? { webhookPath: input.webhookPath } : {}),
-            },
+        return applyBlueBubblesConnectionConfig({
+          cfg: next,
+          accountId,
+          patch: {
+            serverUrl: input.httpUrl,
+            password: input.password,
+            webhookPath: input.webhookPath,
           },
-        } as OpenClawConfig;
+          onlyDefinedFields: true,
+        });
       }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          bluebubbles: {
-            ...next.channels?.bluebubbles,
-            enabled: true,
-            accounts: {
-              ...next.channels?.bluebubbles?.accounts,
-              [accountId]: {
-                ...next.channels?.bluebubbles?.accounts?.[accountId],
-                enabled: true,
-                ...(input.httpUrl ? { serverUrl: input.httpUrl } : {}),
-                ...(input.password ? { password: input.password } : {}),
-                ...(input.webhookPath ? { webhookPath: input.webhookPath } : {}),
-              },
-            },
-          },
+      return applyBlueBubblesConnectionConfig({
+        cfg: next,
+        accountId,
+        patch: {
+          serverUrl: input.httpUrl,
+          password: input.password,
+          webhookPath: input.webhookPath,
         },
-      } as OpenClawConfig;
+        onlyDefinedFields: true,
+      });
     },
   },
   pairing: {
@@ -356,16 +350,8 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       lastError: null,
     },
     collectStatusIssues: collectBlueBubblesStatusIssues,
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
     probeAccount: async ({ account, timeoutMs }) =>
       probeBlueBubbles({
         baseUrl: account.baseUrl,
@@ -375,20 +361,18 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const running = runtime?.running ?? false;
       const probeOk = (probe as BlueBubblesProbe | undefined)?.ok;
-      return {
+      const base = buildComputedAccountStatusSnapshot({
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
         configured: account.configured,
-        baseUrl: account.baseUrl,
-        running,
-        connected: probeOk ?? running,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
+        runtime,
         probe,
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      });
+      return {
+        ...base,
+        baseUrl: account.baseUrl,
+        connected: probeOk ?? running,
       };
     },
   },

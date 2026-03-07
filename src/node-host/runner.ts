@@ -1,10 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
 import { resolveBrowserConfig } from "../browser/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { GatewayClient } from "../gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
@@ -12,6 +12,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -35,43 +36,11 @@ type NodeHostRunOptions = {
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform !== "win32") {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
   }
-  const hasExtension = process.platform === "win32" && path.extname(bin).length > 0;
-  const extensions =
-    process.platform === "win32"
-      ? hasExtension
-        ? [""]
-        : (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
-            .split(";")
-            .map((ext) => ext.toLowerCase())
-      : [""];
-  for (const dir of pathEnv.split(path.delimiter).filter(Boolean)) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, bin + ext);
-      if (isExecutableFile(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
+  return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
 }
 
 function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
@@ -141,6 +110,75 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
+async function resolveNodeHostSecretInputString(params: {
+  config: OpenClawConfig;
+  value: unknown;
+  path: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  const resolvedValue = await resolveSecretInputString({
+    config: params.config,
+    value: params.value,
+    env: params.env,
+    onResolveRefError: (error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
+        cause: error,
+      });
+    },
+  });
+  if (!resolvedValue) {
+    throw new Error(`${params.path} resolved to an empty or non-string value.`);
+  }
+  return resolvedValue;
+}
+
+export async function resolveNodeHostGatewayCredentials(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  const env = params.env ?? process.env;
+  const isRemoteMode = params.config.gateway?.mode === "remote";
+  const authMode = params.config.gateway?.auth?.mode;
+  const tokenPath = isRemoteMode ? "gateway.remote.token" : "gateway.auth.token";
+  const passwordPath = isRemoteMode ? "gateway.remote.password" : "gateway.auth.password";
+  const configuredToken = isRemoteMode
+    ? params.config.gateway?.remote?.token
+    : params.config.gateway?.auth?.token;
+  const configuredPassword = isRemoteMode
+    ? params.config.gateway?.remote?.password
+    : params.config.gateway?.auth?.password;
+
+  const token =
+    normalizeSecretInputString(env.OPENCLAW_GATEWAY_TOKEN) ??
+    (await resolveNodeHostSecretInputString({
+      config: params.config,
+      value: configuredToken,
+      path: tokenPath,
+      env,
+    }));
+  const tokenCanWin = Boolean(token);
+  const localPasswordCanWin =
+    authMode === "password" ||
+    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
+  const shouldResolveConfiguredPassword =
+    !normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD) &&
+    !tokenCanWin &&
+    (isRemoteMode || localPasswordCanWin);
+  const password =
+    normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD) ??
+    (shouldResolveConfiguredPassword
+      ? await resolveNodeHostSecretInputString({
+          config: params.config,
+          value: configuredPassword,
+          path: passwordPath,
+          env,
+        })
+      : normalizeSecretInputString(configuredPassword));
+
+  return { token, password };
+}
+
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
   const nodeId = opts.nodeId?.trim() || config.nodeId;
@@ -164,13 +202,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+  const { token, password } = await resolveNodeHostGatewayCredentials({
+    config: cfg,
+    env: process.env,
+  });
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
@@ -182,8 +217,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const client = new GatewayClient({
     url,
-    token: token?.trim() || undefined,
-    password: password?.trim() || undefined,
+    token: token || undefined,
+    password: password || undefined,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
