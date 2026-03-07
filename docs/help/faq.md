@@ -2141,8 +2141,14 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
 4. **Verify the setup**:
 
    ```bash
+   # List available Ollama models
    openclaw models list | grep ollama 
-   openclaw message --model ollama/llama3.3 "Hello, are you working?"
+   
+   # Set Ollama model as default (optional)
+   openclaw models set ollama/llama3.3
+   
+   # Test the model with a simple message
+   openclaw agent --message "Hello, are you working?"
    ```
 
 #### Other self-hosted options
