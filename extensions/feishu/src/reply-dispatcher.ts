@@ -22,6 +22,26 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+/**
+ * Check whether the current partial text is "safe" to push to a streaming card.
+ *
+ * We ONLY check for balanced code fences. We do NOT require text to end at
+ * a paragraph boundary — that was too strict and blocked all streaming updates.
+ */
+function isSafeToRender(text: string): boolean {
+  if (!text.trim()) return false;
+  // Count code fences (``` at start of line or after whitespace): odd = unclosed
+  let fenceCount = 0;
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (/^```/.test(line.trimStart())) {
+      fenceCount++;
+    }
+  }
+  // Odd fence count means there's an unclosed code block — not safe
+  return fenceCount % 2 === 0;
+}
+
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
@@ -136,42 +156,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // single-card progressive update experience.
   let streaming: FeishuStreamingSession | null = null;
   let streamText = ""; // current card's text (sliced from cumulative)
-
+  let lastSafeText = "";
   let lastPartial = "";
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
-
-  type StreamTextUpdateMode = "snapshot" | "delta";
-
-  const queueStreamingUpdate = (
-    nextText: string,
-    options?: {
-      dedupeWithLastPartial?: boolean;
-      mode?: StreamTextUpdateMode;
-    },
-  ) => {
-    if (!nextText) {
-      return;
-    }
-    if (options?.dedupeWithLastPartial && nextText === lastPartial) {
-      return;
-    }
-    if (options?.dedupeWithLastPartial) {
-      lastPartial = nextText;
-    }
-    const mode = options?.mode ?? "snapshot";
-    streamText =
-      mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
-      if (streamingStartPromise) {
-        await streamingStartPromise;
-      }
-      if (streaming?.isActive()) {
-        await streaming.update(streamText);
-      }
-    });
-  };
+  let blockOffset = 0; // cumulative char offset: text before this was delivered in previous blocks
 
 
   const startStreaming = () => {
@@ -218,7 +208,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streaming = null;
     streamingStartPromise = null;
     streamText = "";
-
+    lastSafeText = "";
     lastPartial = "";
   };
 
@@ -277,9 +267,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           // If streaming card is active, handle via CardKit
           if (streaming?.isActive()) {
             if (info?.kind === "block") {
-              // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta" });
+              // Coalesced block boundary (merged by core SDK's block-reply-coalescer).
+              // Close the current streaming card with the per-block text.
+              // Then advance blockOffset so the next card starts fresh.
+              streamText = text;
+              await closeStreaming();
+              blockOffset += text.length;
             }
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
@@ -287,6 +280,62 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
+            if (hasMedia) {
+              for (const mediaUrl of mediaList) {
+                await sendMediaFeishu({
+                  cfg,
+                  to: chatId,
+                  mediaUrl,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  accountId,
+                });
+              }
+            }
+            return;
+          }
+          // No streaming card active
+          // If kind=final after blocks were delivered, only send undelivered tail text
+          if (info?.kind === "final" && blockOffset > 0) {
+            const tailText = text.length > blockOffset ? text.slice(blockOffset).trim() : "";
+            if (!tailText) {
+              // All text was already delivered via blocks — nothing more to send
+              if (hasMedia) {
+                for (const mediaUrl of mediaList) {
+                  await sendMediaFeishu({
+                    cfg,
+                    to: chatId,
+                    mediaUrl,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    accountId,
+                  });
+                }
+              }
+              return;
+            }
+            // Send only the undelivered tail as a discrete card
+            if (useCard) {
+              await sendMarkdownCardFeishu({
+                cfg,
+                to: chatId,
+                text: tailText,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                mentions: mentionTargets,
+                accountId,
+              });
+            } else {
+              await sendMessageFeishu({
+                cfg,
+                to: chatId,
+                text: tailText,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                mentions: mentionTargets,
+                accountId,
+              });
+            }
             if (hasMedia) {
               for (const mediaUrl of mediaList) {
                 await sendMediaFeishu({
@@ -382,16 +431,44 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      disableBlockStreaming: true,
+      // Block-boundary guarded streaming: accumulate partial text, but only
+      // push to CardKit when the markdown is safe (no unclosed code fences,
+      // text ends at paragraph boundary). This prevents blank card flashes.
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
               return;
             }
-            queueStreamingUpdate(payload.text, {
-              dedupeWithLastPartial: true,
-              mode: "snapshot",
-            });
+            if (payload.text === lastPartial) {
+              return;
+            }
+            lastPartial = payload.text;
+
+            // Slice cumulative text from blockOffset: each card only shows its block's content
+            const cardText = blockOffset > 0 ? payload.text.slice(blockOffset) : payload.text;
+            streamText = cardText;
+
+            // Don't start a new streaming card if there's no new content beyond delivered blocks
+            if (!streaming?.isActive() && blockOffset > 0 && cardText.trim().length === 0) {
+              return;
+            }
+
+            // Start streaming if not already started
+            startStreaming();
+
+            // Only push update to CardKit when text is safe to render
+            if (isSafeToRender(cardText) && cardText !== lastSafeText) {
+              lastSafeText = cardText;
+              const updateText = cardText;
+              partialUpdateQueue = partialUpdateQueue.then(async () => {
+                if (streamingStartPromise) {
+                  await streamingStartPromise;
+                }
+                if (streaming?.isActive()) {
+                  await streaming.update(updateText);
+                }
+              });
+            }
           }
         : undefined,
     },
