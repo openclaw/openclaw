@@ -207,7 +207,7 @@ async function ensureSessionRuntimeCleanup(params: {
     queueKeys.add(params.sessionId);
   }
   clearSessionQueues([...queueKeys]);
-  clearBootstrapSnapshot(params.target.canonicalKey);
+  clearBootstrapSnapshot(params.target.canonicalKey, params.sessionId);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     await closeTrackedBrowserTabs();

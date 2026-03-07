@@ -852,7 +852,8 @@ export async function runTui(opts: TuiOptions) {
     lastCtrlCAt = decision.nextLastCtrlCAt;
     if (decision.action === "clear") {
       editor.setText("");
-      setActivityStatus("cleared input; press ctrl+c again to exit");
+      const runHint = activeChatRunId ? "; run still active (Esc or /abort to stop)" : "";
+      setActivityStatus(`cleared input; press ctrl+c again to exit${runHint}`);
       tui.requestRender();
       return;
     }
@@ -860,7 +861,8 @@ export async function runTui(opts: TuiOptions) {
       requestExit();
       return;
     }
-    setActivityStatus("press ctrl+c again to exit");
+    const runHint = activeChatRunId ? "run still active (Esc or /abort to stop); " : "";
+    setActivityStatus(`${runHint}press ctrl+c again to exit`);
     tui.requestRender();
   };
   editor.onCtrlC = () => {

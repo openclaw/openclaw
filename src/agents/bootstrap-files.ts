@@ -76,6 +76,7 @@ export async function resolveBootstrapFilesForRun(params: {
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
