@@ -286,6 +286,7 @@ Docs: https://docs.openclaw.ai
 - Discord/plugin native command aliases: let plugins declare provider-specific slash names so native Discord registration can avoid built-in command collisions; the bundled Talk voice plugin now uses `/talkvoice` natively on Discord while keeping text `/voice`.
 - Daemon/Windows schtasks status normalization: derive runtime state from locale-neutral numeric `Last Run Result` codes only (without language string matching) and surface unknown when numeric result data is unavailable, preventing locale-specific misclassification drift. (#39153) Thanks @scoootscooob.
 - Telegram/polling conflict recovery: reset the polling `webhookCleared` latch on `getUpdates` 409 conflicts so webhook cleanup re-runs on restart cycles and polling avoids infinite conflict loops. (#39205) Thanks @amittell.
+- Heartbeat/requests-in-flight scheduling: stop advancing `nextDueMs` and avoid immediate `scheduleNext()` timer overrides on requests-in-flight skips, so wake-layer retry cooldowns are honored and heartbeat cadence no longer drifts under sustained contention. (#39182) Thanks @MumuTW.
 
 ## 2026.3.2
 
