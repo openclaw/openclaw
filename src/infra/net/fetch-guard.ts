@@ -52,12 +52,21 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
-const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "cookie2",
-];
+const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "cache-control",
+  "content-language",
+  "content-type",
+  "if-match",
+  "if-modified-since",
+  "if-none-match",
+  "if-unmodified-since",
+  "pragma",
+  "range",
+  "user-agent",
+]);
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -87,9 +96,12 @@ function stripSensitiveHeadersForCrossOriginRedirect(init?: RequestInit): Reques
   if (!init?.headers) {
     return init;
   }
-  const headers = new Headers(init.headers);
-  for (const header of CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS) {
-    headers.delete(header);
+  const incoming = new Headers(init.headers);
+  const headers = new Headers();
+  for (const [key, value] of incoming.entries()) {
+    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
+      headers.set(key, value);
+    }
   }
   return { ...init, headers };
 }
