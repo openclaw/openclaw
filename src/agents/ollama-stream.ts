@@ -326,7 +326,7 @@ export function buildAssistantMessage(
   // Qwen 3 (and potentially other reasoning models) may return their final
   // answer in a `reasoning` field with an empty `content`. Fall back to
   // `reasoning` so the response isn't silently dropped.
-  const text = response.message.content || response.message.reasoning || "";
+  const text = response.message.content || response.message.thinking || response.message.reasoning || "";
   if (text) {
     content.push({ type: "text", text });
   }
@@ -474,8 +474,11 @@ export function createOllamaStreamFn(
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
+          } else if (chunk.message?.thinking) {
+            // Qwen 3 / Ollama thinking field: content may be empty, output in thinking
+            accumulatedContent += chunk.message.thinking;
           } else if (chunk.message?.reasoning) {
-            // Qwen 3 reasoning mode: content may be empty, output in reasoning
+            // Fallback for older reasoning field name
             accumulatedContent += chunk.message.reasoning;
           }
 
