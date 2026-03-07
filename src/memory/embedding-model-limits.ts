@@ -11,6 +11,10 @@ const KNOWN_EMBEDDING_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage:voyage-3": 32000,
   "voyage:voyage-3-lite": 16000,
   "voyage:voyage-code-3": 32000,
+  "bedrock:amazon.titan-embed-text-v2:0": 8192,
+  "bedrock:amazon.titan-embed-text-v1": 8192,
+  "bedrock:cohere.embed-english-v3": 512,
+  "bedrock:cohere.embed-multilingual-v3": 512,
 };
 
 export function resolveEmbeddingMaxInputTokens(provider: EmbeddingProvider): number {
