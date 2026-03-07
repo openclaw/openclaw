@@ -23,9 +23,17 @@ export function normalizeMessageActionInput(params: {
     (typeof normalizedArgs.to === "string" && normalizedArgs.to.trim().length > 0) ||
     (typeof normalizedArgs.channelId === "string" && normalizedArgs.channelId.trim().length > 0);
 
-  if (explicitTarget && hasLegacyTarget) {
-    delete normalizedArgs.to;
-    delete normalizedArgs.channelId;
+  if (explicitTarget) {
+    const legacyTo = typeof normalizedArgs.to === "string" ? normalizedArgs.to.trim() : "";
+    const legacyChannelId =
+      typeof normalizedArgs.channelId === "string" ? normalizedArgs.channelId.trim() : "";
+
+    if (hasLegacyTarget || ("to" in normalizedArgs && !legacyTo)) {
+      delete normalizedArgs.to;
+    }
+    if (hasLegacyTarget || ("channelId" in normalizedArgs && !legacyChannelId)) {
+      delete normalizedArgs.channelId;
+    }
   }
 
   if (

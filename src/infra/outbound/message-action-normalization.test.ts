@@ -41,6 +41,7 @@ describe("normalizeMessageActionInput", () => {
 
     expect(normalized.target).toBe("channel:C1");
     expect(normalized.to).toBe("channel:C1");
+    expect("channelId" in normalized).toBe(false);
   });
 
   it("infers target from tool context when required", () => {
