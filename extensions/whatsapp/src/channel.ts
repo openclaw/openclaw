@@ -1,4 +1,5 @@
 import {
+  buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyNoRouteAllowlistWarning,
   buildOpenGroupPolicyRestrictSendersWarning,
 } from "openclaw/plugin-sdk";
@@ -8,7 +9,6 @@ import {
   collectWhatsAppStatusIssues,
   createActionGate,
   DEFAULT_ACCOUNT_ID,
-  formatPairingApproveHint,
   getChatChannelMeta,
   listWhatsAppAccountIds,
   listWhatsAppDirectoryGroupsFromConfig,
@@ -125,19 +125,16 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.whatsapp?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.whatsapp.accounts.${resolvedAccountId}.`
-        : "channels.whatsapp.";
-      return {
-        policy: account.dmPolicy ?? "pairing",
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "whatsapp",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.dmPolicy,
         allowFrom: account.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("whatsapp"),
+        policyPathSuffix: "dmPolicy",
         normalizeEntry: (raw) => normalizeE164(raw),
-      };
+      });
     },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
