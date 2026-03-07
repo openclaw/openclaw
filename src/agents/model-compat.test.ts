@@ -225,6 +225,18 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
+  it("keeps supportsUsageInStreaming undefined for Azure OpenAI when compat is unset", () => {
+    const model = {
+      ...baseModel(),
+      provider: "azure-openai",
+      baseUrl: "https://my-deployment.openai.azure.com/openai",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
+  });
+
   it("preserves explicit supportsUsageInStreaming false for Azure OpenAI", () => {
     const model = {
       ...baseModel(),
