@@ -168,6 +168,13 @@ export class AcpSessionManager {
       if (!session.acp || !session.sessionKey) {
         continue;
       }
+      const canonicalSessionKey = canonicalizeAcpSessionKey({
+        cfg: params.cfg,
+        sessionKey: session.sessionKey,
+      });
+      if (!canonicalSessionKey) {
+        continue;
+      }
       const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
       if (!isSessionIdentityPending(currentIdentity)) {
         continue;
@@ -175,22 +182,23 @@ export class AcpSessionManager {
 
       checked += 1;
       try {
-        const becameResolved = await this.withSessionActor(session.sessionKey, async () => {
+        const becameResolved = await this.withSessionActor(canonicalSessionKey, async () => {
           const resolution = this.resolveSession({
             cfg: params.cfg,
-            sessionKey: session.sessionKey,
+            sessionKey: canonicalSessionKey,
+            rawSessionKey: session.sessionKey,
           });
           if (resolution.kind !== "ready") {
             return false;
           }
           const { runtime, handle, meta } = await this.ensureRuntimeHandle({
             cfg: params.cfg,
-            sessionKey: session.sessionKey,
+            sessionKey: canonicalSessionKey,
             meta: resolution.meta,
           });
           const reconciled = await this.reconcileRuntimeSessionIdentifiers({
             cfg: params.cfg,
-            sessionKey: session.sessionKey,
+            sessionKey: canonicalSessionKey,
             runtime,
             handle,
             meta,
