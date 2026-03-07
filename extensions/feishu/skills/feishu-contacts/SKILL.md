@@ -1,58 +1,50 @@
 ---
 name: feishu-contacts
 description: |
-  飞书联系人检索与同步。搜索不到时自动从飞书 API 拉取更新。
-  当用户提到查找某人、查飞书 ID、联系人等意图时激活。
+  Search Feishu contacts by name/email to get open_id. Activate when user mentions finding someone, looking up contacts, or needs to resolve a person's name to an ID before sending messages.
 ---
 
-# 飞书联系人检索
+# Feishu Contacts Tool
 
-## 功能
+Tool `feishu_contacts` searches the organization's contact list. Auto-syncs from Feishu API when local cache has no results.
 
-### 1. 模糊搜索联系人
+## Actions
 
-按 姓名 / 英文名 / 邮箱 模糊匹配，返回 open_id、姓名、邮箱、部门等。
+### Search Contacts
 
-```typescript
-import { searchContactsLocal } from "./src/contacts.js";
-const results = searchContactsLocal("张三");
-// → [{ open_id: "ou_xxx", name: "张三", email: "...", ... }]
+```json
+{ "action": "search", "keyword": "张三" }
 ```
 
-### 2. 搜索 + 自动同步
+Fuzzy matches on: name, English name, email. Returns: `open_id`, `name`, `en_name`, `email`, `department_name`, `job_title`.
 
-本地搜不到时，自动从飞书通讯录 API 拉取全量联系人并缓存，然后重试搜索。
+## Workflow: Send Message to a Person
 
-```typescript
-import { searchContactsOrSync } from "./src/contacts.js";
-const result = await searchContactsOrSync({ keyword: "张三", cfg, accountId });
-if ("error" in result) {
-  // 权限不足等错误，已包含开启链接
-  console.log(result.error);
-} else {
-  console.log(result.results);
-}
+When user says "给某某发消息" / "send message to someone":
+
+1. **Search contact** → `feishu_contacts` with the person's name
+2. **Get `open_id`** from results (if multiple matches, ask user to confirm)
+3. **Send message** → `feishu_send` with the `open_id`
+
+```json
+// Step 1: Find the person
+{ "action": "search", "keyword": "梅晓华" }
+// → results: [{ "open_id": "ou_xxx", "name": "梅晓华", ... }]
+
+// Step 2: Send the message
+// Use feishu_send tool:
+{ "action": "text", "receive_id": "ou_xxx", "receive_id_type": "open_id", "text": "你好" }
 ```
 
-### 3. 手动触发同步
+## Auto-Sync
 
-```typescript
-import { syncContactsFromAPI } from "./src/contacts.js";
-const result = await syncContactsFromAPI({ cfg, accountId });
-```
+If a search returns no results, the tool automatically:
+1. Syncs all contacts from the Feishu API
+2. Retries the search
+3. Returns updated results
 
-## 权限要求
+## Permissions
 
-| Scope                        | 说明             | 开启链接                                                  |
-| ---------------------------- | ---------------- | --------------------------------------------------------- |
-| `contact:user.base:readonly` | 获取用户基本信息 | `https://open.feishu.cn/app/<APP_ID>/security/permission` |
+Required: `contact:user.base:readonly` — Read user basic info
 
-权限不足时会返回上述链接，让用户到飞书开放平台开启。
-
-## 数据存储
-
-SQLite 数据库：`~/.openclaw/data/feishu-contacts.db`
-
-```sql
-contacts (open_id, name, en_name, email, mobile, department_name, job_title, status)
-```
+If permission is missing, returns an error with a direct link to enable the scope.
