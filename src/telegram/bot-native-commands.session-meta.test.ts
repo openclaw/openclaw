@@ -218,24 +218,24 @@ function registerAndResolveCommandHandler(params: {
 function createConfiguredAcpTopicBinding(boundSessionKey: string) {
   return {
     spec: {
-      channel: "telegram",
+      channel: "telegram" as const,
       accountId: "default",
       conversationId: "-1001234567890:topic:42",
       parentConversationId: "-1001234567890",
       agentId: "codex",
-      mode: "persistent",
+      mode: "persistent" as const,
     },
     record: {
       bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
       targetSessionKey: boundSessionKey,
-      targetKind: "session",
+      targetKind: "session" as const,
       conversation: {
-        channel: "telegram",
+        channel: "telegram" as const,
         accountId: "default",
         conversationId: "-1001234567890:topic:42",
         parentConversationId: "-1001234567890",
       },
-      status: "active",
+      status: "active" as const,
       boundAt: 0,
     },
   } satisfies import("../acp/persistent-bindings.js").ResolvedConfiguredAcpBinding;

@@ -91,7 +91,7 @@ function createReplayMessageEvent(params: {
 function createOpenGroupReplayContext(
   processMessage: LineWebhookContext["processMessage"],
   replayCache: ReturnType<typeof createLineWebhookReplayCache>,
-): Parameters<typeof handleLineWebhookEvents>[1] {
+) {
   return {
     cfg: { channels: { line: { groupPolicy: "open" } } },
     account: {
@@ -106,7 +106,7 @@ function createOpenGroupReplayContext(
     mediaMaxBytes: 1,
     processMessage,
     replayCache,
-  };
+  } as Parameters<typeof handleLineWebhookEvents>[1];
 }
 
 vi.mock("../pairing/pairing-store.js", () => ({

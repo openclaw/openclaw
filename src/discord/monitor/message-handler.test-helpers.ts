@@ -31,8 +31,8 @@ export function createDiscordHandlerParams(overrides?: {
     accountId: "default",
     token: "test-token",
     runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
+      log: vi.fn() as (...args: unknown[]) => void,
+      error: vi.fn() as (...args: unknown[]) => void,
       exit: (code: number): never => {
         throw new Error(`exit ${code}`);
       },

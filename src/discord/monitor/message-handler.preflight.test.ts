@@ -131,7 +131,7 @@ function createThreadClient(params: { threadId: string; parentId: string }): Dis
 function createGuildEvent(params: {
   channelId: string;
   guildId: string;
-  author: import("@buape/carbon").Message["author"];
+  author: { id: string; bot: boolean; username: string } | null;
   message: import("@buape/carbon").Message;
 }): DiscordMessageEvent {
   return {

@@ -321,7 +321,10 @@ describe("createDiscordMessageHandler queue behavior", () => {
       createHandler: (status) => {
         const abortController = new AbortController();
         const handler = createDiscordMessageHandler(
-          createDiscordHandlerParams({ setStatus: status, abortSignal: abortController.signal }),
+          createDiscordHandlerParams({
+            setStatus: status as (patch: Record<string, unknown>) => void,
+            abortSignal: abortController.signal,
+          }),
         );
         return { handler, stop: () => abortController.abort() };
       },
@@ -338,7 +341,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const { setStatus, callsBeforeStop, finish } = await createLifecycleStopScenario({
       createHandler: (status) => {
         const handler = createDiscordMessageHandler(
-          createDiscordHandlerParams({ setStatus: status }),
+          createDiscordHandlerParams({
+            setStatus: status as (patch: Record<string, unknown>) => void,
+          }),
         );
         return { handler, stop: () => handler.deactivate() };
       },
