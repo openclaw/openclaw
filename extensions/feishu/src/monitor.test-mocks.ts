@@ -1,12 +1,27 @@
 import { vi } from "vitest";
 
-export const probeFeishuMock: ReturnType<typeof vi.fn> = vi.fn();
+export function createFeishuClientMockModule() {
+  return {
+    createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
+    createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
+  };
+}
 
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-}));
-
-vi.mock("./client.js", () => ({
-  createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
-}));
+export function createFeishuRuntimeMockModule() {
+  return {
+    getFeishuRuntime: () => ({
+      channel: {
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: () => ({
+            enqueue: async () => {},
+            flushKey: async () => {},
+          }),
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+      },
+    }),
+  };
+}
