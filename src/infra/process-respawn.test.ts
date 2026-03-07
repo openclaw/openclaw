@@ -67,11 +67,14 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when launchd/systemd hints are present", () => {
+  it("returns supervised when launchd hints are present on macOS", () => {
     clearSupervisorHints();
+    setPlatform("darwin");
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -110,6 +113,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("spawns detached child with current exec argv", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
+    setPlatform("linux");
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
     spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
@@ -134,23 +138,68 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {
     clearSupervisorHints();
+    setPlatform("linux");
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when OPENCLAW_SERVICE_MARKER is set", () => {
+  it("returns supervised when OpenClaw gateway task markers are set on Windows", () => {
     clearSupervisorHints();
-    process.env.OPENCLAW_SERVICE_MARKER = "gateway";
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "schtasks" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps generic service markers out of non-Windows supervisor detection", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "spawned", pid: 4242 });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+  });
+
+  it("returns disabled on Windows without Scheduled Task markers", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("disabled");
+    expect(result.detail).toContain("Scheduled Task");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores node task script hints for gateway restart detection on Windows", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_TASK_SCRIPT = "C:\\openclaw\\node.cmd";
+    process.env.OPENCLAW_TASK_SCRIPT_NAME = "node.cmd";
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "node";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("disabled");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns failed when spawn throws", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
+    setPlatform("linux");
 
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");
