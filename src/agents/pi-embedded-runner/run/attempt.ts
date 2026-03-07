@@ -2023,11 +2023,14 @@ export async function runEmbeddedAttempt(
         }
         try {
           hookIterationUnsub?.();
+        } catch (err) {
+          log.error(
+            `CRITICAL: hookIterationUnsub failed, possible resource leak: runId=${params.runId} ${String(err)}`,
+          );
+        }
+        try {
           unsubscribe();
         } catch (err) {
-          // unsubscribe() should never throw; if it does, it indicates a serious bug.
-          // Log at error level to ensure visibility, but don't rethrow in finally block
-          // as it would mask any exception from the try block above.
           log.error(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
