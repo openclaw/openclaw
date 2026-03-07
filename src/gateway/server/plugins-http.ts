@@ -5,6 +5,7 @@ import {
   resolvePluginRoutePathContext,
   type PluginRoutePathContext,
 } from "./plugins-http/path-context.js";
+import { matchedPluginRoutesRequireGatewayAuth } from "./plugins-http/route-auth.js";
 import { findMatchingPluginHttpRoutes } from "./plugins-http/route-match.js";
 
 export {
@@ -24,6 +25,7 @@ export type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
   pathContext?: PluginRoutePathContext,
+  dispatchContext?: { gatewayAuthSatisfied?: boolean },
 ) => Promise<boolean>;
 
 export function createGatewayPluginRequestHandler(params: {
@@ -31,7 +33,7 @@ export function createGatewayPluginRequestHandler(params: {
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
-  return async (req, res, providedPathContext) => {
+  return async (req, res, providedPathContext, dispatchContext) => {
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -45,6 +47,13 @@ export function createGatewayPluginRequestHandler(params: {
       })();
     const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
     if (matchedRoutes.length === 0) {
+      return false;
+    }
+    if (
+      matchedPluginRoutesRequireGatewayAuth(matchedRoutes) &&
+      dispatchContext?.gatewayAuthSatisfied === false
+    ) {
+      log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
       return false;
     }
 

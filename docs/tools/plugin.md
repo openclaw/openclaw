@@ -141,6 +141,7 @@ Notes:
 - `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 
 ## Plugin SDK import paths
 
