@@ -870,4 +870,31 @@ describe("chat view", () => {
     expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
   });
+
+  it("does not navigate history down when cursor is not at end", () => {
+    const container = document.createElement("div");
+    const onHistoryNavigateDown = vi.fn(() => true);
+    render(
+      renderChat(
+        createProps({
+          draft: "hello",
+          onHistoryNavigateDown,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.selectionStart = 2;
+    textarea.selectionEnd = 2;
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+
+    expect(onHistoryNavigateDown).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
 });
