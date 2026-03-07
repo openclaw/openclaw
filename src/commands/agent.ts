@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -523,6 +524,9 @@ async function agentCommandInternal(
     agentId: sessionAgentId,
     sessionKey,
   });
+  const agentThinkingDefault = sessionAgentId
+    ? resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault
+    : undefined;
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
@@ -674,7 +678,11 @@ async function agentCommandInternal(
       });
     }
 
-    let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
+    let resolvedThinkLevel =
+      thinkOnce ??
+      thinkOverride ??
+      persistedThinking ??
+      (agentThinkingDefault as ThinkLevel | undefined);
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 
