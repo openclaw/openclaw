@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
+  assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -366,6 +367,25 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_mismatch");
     expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
     expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
+  });
+
+  it("throws specific error when password is a provider reference object", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: { mode: "password", password: { source: "exec", provider: "op", id: "pw" } as never },
+    });
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "password",
+        password: { source: "exec", provider: "op", id: "pw" } as never,
+      }),
+    ).toThrow(/provider reference object/);
+  });
+
+  it("throws generic error when password mode has no password at all", () => {
+    const auth = resolveGatewayAuth({ authConfig: { mode: "password" } });
+    expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
+      "gateway auth mode is password, but no password was configured",
+    );
   });
 });
 
