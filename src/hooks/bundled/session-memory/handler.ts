@@ -62,18 +62,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const context = event.context || {};
 
-    // Check if another hook (e.g., security plugin) blocked the save.
-    // NOTE: Internal hooks execute sequentially in FIFO registration order.
-    // Bundled hooks register before managed/workspace hooks (see workspace.ts
-    // loadHookEntries merge order), so this check only works when the policy
-    // decision is set by a typed plugin hook (registerTypedHook) that fires
-    // earlier in the agent lifecycle, or by a hook loaded via extraDirs that
-    // registers before bundled hooks. Managed/workspace internal hooks that
-    // set blockSessionSave on the same event will run AFTER this handler.
-    if (context.blockSessionSave === true) {
-      log.debug("Session save blocked by upstream hook");
-      return;
-    }
+    // NOTE: blockSessionSave and sessionSaveContent are checked in a
+    // postHookActions callback (see bottom of this handler) so that hooks
+    // registered after this bundled handler can still set them.  The file
+    // is written inline (fail-safe: if postHookActions never runs, data is
+    // preserved on disk).  The post-hook callback handles retraction
+    // (blockSessionSave) and content replacement (sessionSaveContent).
 
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir =
@@ -92,7 +86,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
       sessionKey: event.sessionKey,
     });
     const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
 
     // Get today's date for filename
     const now = new Date(event.timestamp);
@@ -222,18 +215,63 @@ const saveSessionToMemory: HookHandler = async (event) => {
       entry = entryParts.join("\n");
     }
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
-    });
-    log.debug("Memory file written successfully");
+    // Write inline (fail-safe: if postHookActions never drains, the file
+    // is preserved on disk with the best content available at this point).
+    // If blockSessionSave was already set by an upstream hook, skip the write.
+    if (context.blockSessionSave === true) {
+      log.debug("Session save blocked by upstream hook (inline check)");
+    } else {
+      await fs.mkdir(memoryDir, { recursive: true });
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: filename,
+        data: entry,
+        encoding: "utf-8",
+      });
+      log.debug("Memory file written successfully");
 
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
+      const relPath = memoryFilePath.replace(os.homedir(), "~");
+      log.info(`Session context saved to ${relPath}`);
+    }
+
+    // Defer retraction/replacement to post-hook phase so that hooks
+    // registered after this handler can set blockSessionSave or
+    // sessionSaveContent and still have them honored.
+    const writtenEntry = context.blockSessionSave === true ? null : entry;
+    event.postHookActions.push(async () => {
+      try {
+        // If a later hook blocked the save, retract the file we just wrote.
+        if (event.context.blockSessionSave === true && writtenEntry !== null) {
+          try {
+            await fs.unlink(memoryFilePath);
+            log.debug("Session save retracted by post-hook (blockSessionSave)");
+          } catch (err) {
+            // File may not exist if inline write also didn't happen — that's fine.
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+              throw err;
+            }
+          }
+          return;
+        }
+
+        // If a later hook set sessionSaveContent, overwrite with new content.
+        const postContent = event.context.sessionSaveContent;
+        if (typeof postContent === "string" && postContent !== writtenEntry) {
+          await writeFileWithinRoot({
+            rootDir: memoryDir,
+            relativePath: filename,
+            data: postContent,
+            encoding: "utf-8",
+          });
+          log.debug("Session save content replaced by post-hook (sessionSaveContent)", {
+            length: postContent.length,
+          });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error(`Post-hook session-memory action failed: ${message}`);
+      }
+    });
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {
