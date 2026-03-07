@@ -37,14 +37,39 @@ type DotEnvFixture = {
   stateDir: string;
 };
 
+async function cleanupTempDir(base: string) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      await fs.rm(base, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY") && attempt < 5) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 50));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
+  const prevCwd = process.cwd();
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
   const cwdDir = path.join(base, "cwd");
   const stateDir = path.join(base, "state");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  await fs.mkdir(cwdDir, { recursive: true });
-  await fs.mkdir(stateDir, { recursive: true });
-  await run({ base, cwdDir, stateDir });
+  try {
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    await fs.mkdir(cwdDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await run({ base, cwdDir, stateDir });
+  } finally {
+    const cwd = process.cwd();
+    if (cwd === base || cwd.startsWith(`${base}${path.sep}`)) {
+      process.chdir(prevCwd);
+    }
+    await cleanupTempDir(base);
+  }
 }
 
 describe("loadDotEnv", () => {
