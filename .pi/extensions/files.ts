@@ -6,15 +6,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import {
-  Container,
-  Key,
-  matchesKey,
-  type SelectItem,
-  SelectList,
-  Text,
-} from "@mariozechner/pi-tui";
+import { showPagedSelectList } from "./ui/paged-select";
 
 interface FileEntry {
   path: string;
@@ -113,81 +105,29 @@ export default function (pi: ExtensionAPI) {
         }
       };
 
-      // Show file picker with SelectList
-      await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-        const container = new Container();
-
-        // Top border
-        container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-        // Title
-        container.addChild(new Text(theme.fg("accent", theme.bold(" Select file to open")), 0, 0));
-
-        // Build select items with colored operations
-        const items: SelectItem[] = files.map((f) => {
-          const ops: string[] = [];
-          if (f.operations.has("read")) {
-            ops.push(theme.fg("muted", "R"));
-          }
-          if (f.operations.has("write")) {
-            ops.push(theme.fg("success", "W"));
-          }
-          if (f.operations.has("edit")) {
-            ops.push(theme.fg("warning", "E"));
-          }
-          const opsLabel = ops.join("");
-          return {
-            value: f,
-            label: `${opsLabel} ${f.path}`,
-          };
-        });
-
-        const visibleRows = Math.min(files.length, 15);
-        let currentIndex = 0;
-
-        const selectList = new SelectList(items, visibleRows, {
-          selectedPrefix: (t) => theme.fg("accent", t),
-          selectedText: (t) => t, // Keep existing colors
-          description: (t) => theme.fg("muted", t),
-          scrollInfo: (t) => theme.fg("dim", t),
-          noMatch: (t) => theme.fg("warning", t),
-        });
-        selectList.onSelect = (item) => {
-          void openSelected(item.value as FileEntry);
-        };
-        selectList.onCancel = () => done();
-        selectList.onSelectionChange = (item) => {
-          currentIndex = items.indexOf(item);
-        };
-        container.addChild(selectList);
-
-        // Help text
-        container.addChild(
-          new Text(theme.fg("dim", " ↑↓ navigate • ←→ page • enter open • esc close"), 0, 0),
-        );
-
-        // Bottom border
-        container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
+      const items = files.map((file) => {
+        const ops: string[] = [];
+        if (file.operations.has("read")) {
+          ops.push("R");
+        }
+        if (file.operations.has("write")) {
+          ops.push("W");
+        }
+        if (file.operations.has("edit")) {
+          ops.push("E");
+        }
         return {
-          render: (w) => container.render(w),
-          invalidate: () => container.invalidate(),
-          handleInput: (data) => {
-            // Add paging with left/right
-            if (matchesKey(data, Key.left)) {
-              // Page up - clamp to 0
-              currentIndex = Math.max(0, currentIndex - visibleRows);
-              selectList.setSelectedIndex(currentIndex);
-            } else if (matchesKey(data, Key.right)) {
-              // Page down - clamp to last
-              currentIndex = Math.min(items.length - 1, currentIndex + visibleRows);
-              selectList.setSelectedIndex(currentIndex);
-            } else {
-              selectList.handleInput(data);
-            }
-            tui.requestRender();
-          },
+          value: file,
+          label: `${ops.join("")} ${file.path}`,
         };
+      });
+      await showPagedSelectList({
+        ctx,
+        title: " Select file to open",
+        items,
+        onSelect: (item) => {
+          void openSelected(item.value as FileEntry);
+        },
       });
     },
   });

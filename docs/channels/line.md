@@ -34,7 +34,7 @@ openclaw plugins install ./extensions/line
 ## Setup
 
 1. Create a LINE Developers account and open the Console:
-   https://developers.line.biz/console/
+   [https://developers.line.biz/console/](https://developers.line.biz/console/)
 2. Create (or pick) a Provider and add a **Messaging API** channel.
 3. Copy the **Channel access token** and **Channel secret** from the channel settings.
 4. Enable **Use webhook** in the Messaging API settings.
@@ -47,6 +47,10 @@ https://gateway-host/line/webhook
 The gateway responds to LINE’s webhook verification (GET) and inbound events (POST).
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
+
+Security note:
+
+- LINE signature verification is body-dependent (HMAC over the raw body), so OpenClaw applies strict pre-auth body limits and timeout before verification.
 
 ## Configure
 
@@ -118,6 +122,7 @@ Allowlists and policies:
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom`
+- Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 LINE IDs are case-sensitive. Valid IDs look like:
 

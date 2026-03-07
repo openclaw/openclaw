@@ -26,13 +26,18 @@ Set `gateway.auth.mode` to control the handshake:
 - `password` (shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config)
 
 When `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
-valid Serve proxy requests can authenticate via Tailscale identity headers
+Control UI/WebSocket auth can use Tailscale identity headers
 (`tailscale-user-login`) without supplying a token/password. OpenClaw verifies
 the identity by resolving the `x-forwarded-for` address via the local Tailscale
 daemon (`tailscale whois`) and matching it to the header before accepting it.
 OpenClaw only treats a request as Serve when it arrives from loopback with
 Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
+HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
+still require token/password auth.
+This tokenless flow assumes the gateway host is trusted. If untrusted local code
+may run on the same host, disable `gateway.auth.allowTailscale` and require
+token/password auth instead.
 To require explicit credentials, set `gateway.auth.allowTailscale: false` or
 force `gateway.auth.mode: "password"`.
 
@@ -121,7 +126,7 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 
 ## Learn more
 
-- Tailscale Serve overview: https://tailscale.com/kb/1312/serve
-- `tailscale serve` command: https://tailscale.com/kb/1242/tailscale-serve
-- Tailscale Funnel overview: https://tailscale.com/kb/1223/tailscale-funnel
-- `tailscale funnel` command: https://tailscale.com/kb/1311/tailscale-funnel
+- Tailscale Serve overview: [https://tailscale.com/kb/1312/serve](https://tailscale.com/kb/1312/serve)
+- `tailscale serve` command: [https://tailscale.com/kb/1242/tailscale-serve](https://tailscale.com/kb/1242/tailscale-serve)
+- Tailscale Funnel overview: [https://tailscale.com/kb/1223/tailscale-funnel](https://tailscale.com/kb/1223/tailscale-funnel)
+- `tailscale funnel` command: [https://tailscale.com/kb/1311/tailscale-funnel](https://tailscale.com/kb/1311/tailscale-funnel)

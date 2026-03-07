@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -143,6 +143,14 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
 const VISION_PROVIDERS = ["openai", "anthropic", "google", "minimax"] as const;
+let imageRuntimePromise: Promise<
+  typeof import("../media-understanding/providers/image-runtime.js")
+> | null = null;
+
+function loadImageRuntime() {
+  imageRuntimePromise ??= import("../media-understanding/providers/image-runtime.js");
+  return imageRuntimePromise;
+}
 
 export interface DescribeStickerParams {
   imagePath: string;
@@ -194,7 +202,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
       provider === "openai"
         ? "gpt-5-mini"
         : provider === "anthropic"
-          ? "claude-opus-4-5"
+          ? "claude-opus-4-6"
           : provider === "google"
             ? "gemini-3-flash-preview"
             : "MiniMax-VL-01";
@@ -242,8 +250,8 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
 
   try {
     const buffer = await fs.readFile(imagePath);
-    // Dynamic import to avoid circular dependency
-    const { describeImageWithModel } = await import("../media-understanding/providers/image.js");
+    // Lazy import to avoid circular dependency
+    const { describeImageWithModel } = await loadImageRuntime();
     const result = await describeImageWithModel({
       buffer,
       fileName: "sticker.webp",

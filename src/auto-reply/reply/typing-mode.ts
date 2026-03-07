@@ -1,12 +1,15 @@
 import type { TypingMode } from "../../config/types.js";
-import type { TypingController } from "./typing.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { TypingPolicy } from "../types.js";
+import type { TypingController } from "./typing.js";
 
 export type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
   wasMentioned: boolean;
   isHeartbeat: boolean;
+  typingPolicy?: TypingPolicy;
+  suppressTyping?: boolean;
 };
 
 export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
@@ -16,8 +19,16 @@ export function resolveTypingMode({
   isGroupChat,
   wasMentioned,
   isHeartbeat,
+  typingPolicy,
+  suppressTyping,
 }: TypingModeContext): TypingMode {
-  if (isHeartbeat) {
+  if (
+    isHeartbeat ||
+    typingPolicy === "heartbeat" ||
+    typingPolicy === "system_event" ||
+    typingPolicy === "internal_webchat" ||
+    suppressTyping
+  ) {
     return "never";
   }
   if (configured) {

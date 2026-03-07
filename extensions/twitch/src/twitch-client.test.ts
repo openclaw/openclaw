@@ -10,8 +10,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { TwitchClientManager } from "./twitch-client.js";
+import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn().mockResolvedValue(undefined);
@@ -21,10 +21,12 @@ const mockQuit = vi.fn();
 const mockUnbind = vi.fn();
 
 // Event handler storage for testing
+// oxlint-disable-next-line typescript/no-explicit-any
 const messageHandlers: Array<(channel: string, user: string, message: string, msg: any) => void> =
   [];
 
 // Mock functions that track handlers and return unbind objects
+// oxlint-disable-next-line typescript/no-explicit-any
 const mockOnMessage = vi.fn((handler: any) => {
   messageHandlers.push(handler);
   return { unbind: mockUnbind };
@@ -84,7 +86,7 @@ describe("TwitchClientManager", () => {
 
   const testAccount: TwitchAccountConfig = {
     username: "testbot",
-    token: "oauth:test123456",
+    accessToken: "test123456",
     clientId: "test-client-id",
     channel: "testchannel",
     enabled: true,
@@ -92,7 +94,7 @@ describe("TwitchClientManager", () => {
 
   const testAccount2: TwitchAccountConfig = {
     username: "testbot2",
-    token: "oauth:test789",
+    accessToken: "test789",
     clientId: "test-client-id-2",
     channel: "testchannel2",
     enabled: true,
@@ -143,8 +145,8 @@ describe("TwitchClientManager", () => {
     it("should use account username as default channel when channel not specified", async () => {
       const accountWithoutChannel: TwitchAccountConfig = {
         ...testAccount,
-        channel: undefined,
-      };
+        channel: "",
+      } as unknown as TwitchAccountConfig;
 
       await manager.getClient(accountWithoutChannel);
 
@@ -170,7 +172,7 @@ describe("TwitchClientManager", () => {
     it("should normalize token by removing oauth: prefix", async () => {
       const accountWithPrefix: TwitchAccountConfig = {
         ...testAccount,
-        token: "oauth:actualtoken123",
+        accessToken: "oauth:actualtoken123",
       };
 
       // Override the mock to return a specific token for this test
@@ -205,8 +207,8 @@ describe("TwitchClientManager", () => {
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,
-        clientId: undefined,
-      };
+        clientId: "" as unknown as string,
+      } as unknown as TwitchAccountConfig;
 
       await expect(manager.getClient(accountWithoutClientId)).rejects.toThrow(
         "Missing Twitch client ID",
@@ -269,6 +271,7 @@ describe("TwitchClientManager", () => {
 
       // Check the stored handler is handler2
       const key = manager.getAccountKey(testAccount);
+      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.get(key)).toBe(handler2);
     });
   });
@@ -290,7 +293,9 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
+      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.has(key)).toBe(false);
+      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.has(key)).toBe(false);
     });
 
@@ -309,6 +314,7 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(1);
 
       const key2 = manager.getAccountKey(testAccount2);
+      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.has(key2)).toBe(true);
     });
   });
@@ -321,7 +327,9 @@ describe("TwitchClientManager", () => {
       await manager.disconnectAll();
 
       expect(mockQuit).toHaveBeenCalledTimes(2);
+      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.size).toBe(0);
+      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.size).toBe(0);
     });
 
@@ -387,6 +395,7 @@ describe("TwitchClientManager", () => {
 
     it("should create client if not already connected", async () => {
       // Clear the existing client
+      // oxlint-disable-next-line typescript/no-explicit-any
       (manager as any).clients.clear();
 
       // Reset connect call count for this specific test
