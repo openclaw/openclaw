@@ -36,6 +36,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
@@ -752,7 +753,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.({ connected: true });
+      opts.setStatus?.(createConnectedChannelStatusPatch());
     }
 
     lifecycleStarted = true;
