@@ -2076,12 +2076,67 @@ More context: [Models](/concepts/models).
 
 ### Can I use selfhosted models llamacpp vLLM Ollama
 
-Yes. If your local server exposes an OpenAI-compatible API, you can point a
-custom provider at it. Ollama is supported directly and is the easiest path.
+Yes, OpenClaw supports self-hosted models through various providers. The most user-friendly option is **Ollama**, which provides a simple way to run models locally.
 
-Security note: smaller or heavily quantized models are more vulnerable to prompt
-injection. We strongly recommend **large models** for any bot that can use tools.
-If you still want small models, enable sandboxing and strict tool allowlists.
+#### Using Ollama models
+
+1. **Install Ollama**:
+   - Download and install from [https://ollama.ai](https://ollama.ai)
+   - Follow the installation instructions for your operating system
+
+2. **Pull a model**:
+   ```bash
+   ollama pull llama3.3
+   # or other models like
+   ollama pull qwen2.5-coder:32b
+   ollama pull deepseek-r1:32b
+   ```
+
+3. **Configure OpenClaw for Ollama**:
+   - Set the `OLLAMA_API_KEY` environment variable (any value works):
+     ```bash
+     # Windows
+     set OLLAMA_API_KEY=ollama-local
+     
+     # macOS/Linux
+     export OLLAMA_API_KEY=ollama-local
+     ```
+   - Or add to your config file:
+     ```json5
+     {
+       env: { OLLAMA_API_KEY: "ollama-local" },
+       models: {
+         providers: {
+           ollama: {
+             baseUrl: "http://localhost:11434/v1",
+             apiKey: "ollama-local",
+             api: "openai-completions"
+           }
+         }
+       },
+       agents: {
+         defaults: {
+           model: { primary: "ollama/llama3.3" }
+         }
+       }
+     }
+     ```
+
+4. **Verify the setup**:
+   ```bash
+   openclaw models list | grep ollama
+   openclaw chat --model ollama/llama3.3 "Hello, are you working?"
+   ```
+
+#### Other self-hosted options
+
+- **llama.cpp**: Use through OpenAI-compatible APIs or specialized providers
+- **vLLM**: Configure as an OpenAI-compatible endpoint
+- **LM Studio**: Provides a GUI for running local models
+
+#### Security considerations
+
+Smaller or heavily quantized models are more vulnerable to prompt injection. We strongly recommend **large models** for any bot that can use tools. If you still want to use smaller models, enable sandboxing and strict tool allowlists.
 
 Docs: [Ollama](/providers/ollama), [Local models](/gateway/local-models),
 [Model providers](/concepts/model-providers), [Security](/gateway/security),
