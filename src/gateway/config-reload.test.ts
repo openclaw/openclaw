@@ -175,7 +175,7 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toContain("agents.list");
   });
 
-  it("restarts heartbeat when per-agent heartbeat model changes via agents.list diff", () => {
+  it("restarts heartbeat and cron when per-agent heartbeat model changes via agents.list diff", () => {
     const prev = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
