@@ -114,6 +114,52 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.To).toBe("line:room:room-1");
   });
 
+  it("resolves prefixed-only group config through the inbound message context", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: {
+        ...account,
+        config: {
+          groups: {
+            "group:group-1": {
+              systemPrompt: "Use the prefixed group config",
+            },
+          },
+        },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed group config");
+  });
+
+  it("resolves prefixed-only room config through the inbound message context", async () => {
+    const event = createMessageEvent({ type: "room", roomId: "room-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: {
+        ...account,
+        config: {
+          groups: {
+            "room:room-1": {
+              systemPrompt: "Use the prefixed room config",
+            },
+          },
+        },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed room config");
+  });
+
   it("keeps non-text message contexts fail-closed for command auth", async () => {
     const event = createMessageEvent(
       { type: "user", userId: "user-audio" },
