@@ -36,6 +36,46 @@ async function getChatInfo(client: Lark.Client, chatId: string) {
   };
 }
 
+async function getChatList(
+  client: Lark.Client,
+  pageSize?: number,
+  pageToken?: string,
+  sortType?: "ByCreateTimeAsc" | "ByActiveTimeDesc",
+  userIdType?: "open_id" | "user_id" | "union_id",
+) {
+  const page_size = pageSize ? Math.max(1, Math.min(100, pageSize)) : 50;
+  const res = await client.im.chat.list({
+    params: {
+      page_size,
+      page_token: pageToken,
+      sort_type: sortType,
+      user_id_type: userIdType,
+    },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    has_more: res.data?.has_more,
+    page_token: res.data?.page_token,
+    items:
+      res.data?.items?.map((item) => ({
+        chat_id: item.chat_id,
+        name: item.name,
+        description: item.description,
+        owner_id: item.owner_id,
+        owner_id_type: item.owner_id_type,
+        avatar: item.avatar,
+        external: item.external,
+        tenant_key: item.tenant_key,
+        labels: item.labels,
+        chat_status: item.chat_status,
+      })) ?? [],
+  };
+}
+
 async function getChatMembers(
   client: Lark.Client,
   chatId: string,
@@ -96,14 +136,22 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     {
       name: "feishu_chat",
       label: "Feishu Chat",
-      description: "Feishu chat operations. Actions: members, info",
+      description:
+        "Feishu chat operations. Actions: members (list members of a chat), info (get chat details), list (list all chats the bot has joined, no chat_id needed)",
       parameters: FeishuChatSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuChatParams;
         try {
           const client = getClient();
           switch (p.action) {
+            case "list":
+              return json(
+                await getChatList(client, p.page_size, p.page_token, p.sort_type, p.user_id_type),
+              );
             case "members":
+              if (!p.chat_id) {
+                return json({ error: "chat_id is required for members action" });
+              }
               return json(
                 await getChatMembers(
                   client,
@@ -114,6 +162,9 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
                 ),
               );
             case "info":
+              if (!p.chat_id) {
+                return json({ error: "chat_id is required for info action" });
+              }
               return json(await getChatInfo(client, p.chat_id));
             default:
               return json({ error: `Unknown action: ${String(p.action)}` });
