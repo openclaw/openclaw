@@ -7,7 +7,11 @@ export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.hel
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
   const cdp = new URL(cdpUrl);
-  if (isLoopbackHost(ws.hostname) && !isLoopbackHost(cdp.hostname)) {
+  // Treat 0.0.0.0 and :: as wildcard bind addresses that need rewriting.
+  // Containerized browsers (e.g. browserless) report ws://0.0.0.0:<internal-port>
+  // in /json/version — these must be rewritten to the external cdpUrl host:port.
+  const isWildcardBind = ws.hostname === "0.0.0.0" || ws.hostname === "[::]";
+  if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
     if (cdpPort) {

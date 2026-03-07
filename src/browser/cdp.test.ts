@@ -245,6 +245,22 @@ describe("cdp", () => {
     expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
   });
 
+  it("rewrites 0.0.0.0 wildcard bind address to remote CDP host", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://0.0.0.0:3000/devtools/browser/ABC",
+      "http://192.168.1.202:18850?token=secret",
+    );
+    expect(normalized).toBe("ws://192.168.1.202:18850/devtools/browser/ABC?token=secret");
+  });
+
+  it("rewrites :: wildcard bind address to remote CDP host", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://[::]:3000/devtools/browser/ABC",
+      "http://192.168.1.202:18850",
+    );
+    expect(normalized).toBe("ws://192.168.1.202:18850/devtools/browser/ABC");
+  });
+
   it("upgrades ws to wss when CDP uses https", () => {
     const normalized = normalizeCdpWsUrl(
       "ws://production-sfo.browserless.io",
