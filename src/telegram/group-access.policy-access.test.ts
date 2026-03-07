@@ -180,6 +180,25 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
     expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
   });
 
+  it("blocks allowlist groups without sender identity before sender matching", () => {
+    const result = runAccess({
+      senderId: undefined,
+      senderUsername: undefined,
+      effectiveGroupAllow: senderAllow,
+      resolveGroupPolicy: () => ({
+        allowlistEnabled: true,
+        allowed: true,
+        groupConfig: { requireMention: false },
+      }),
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "group-policy-allowlist-no-sender",
+      groupPolicy: "allowlist",
+    });
+  });
+
   it("allows authorized sender in wildcard-matched group with sender entries", () => {
     const result = runAccess({
       effectiveGroupAllow: senderAllow, // entries: ["111"]
