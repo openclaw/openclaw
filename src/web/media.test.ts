@@ -457,7 +457,7 @@ describe("local media root guard", () => {
       }),
     ).resolves.toEqual(
       expect.objectContaining({
-        kind: "unknown",
+        kind: undefined,
       }),
     );
 
@@ -468,7 +468,7 @@ describe("local media root guard", () => {
       }),
     ).resolves.toEqual(
       expect.objectContaining({
-        kind: "unknown",
+        kind: undefined,
       }),
     );
   });
@@ -498,7 +498,7 @@ describe("local media root guard", () => {
       }),
     ).resolves.toEqual(
       expect.objectContaining({
-        kind: "unknown",
+        kind: undefined,
       }),
     );
   });
