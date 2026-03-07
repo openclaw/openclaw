@@ -8,6 +8,7 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
+  readSessionMessagesWithStatus,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
@@ -460,6 +461,51 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     expect(second.lastMessagePreview).toBe("New");
     expect(readSpy.mock.calls.length).toBeGreaterThan(readsAfterFirst);
     readSpy.mockRestore();
+  });
+});
+
+describe("readSessionMessagesWithStatus", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-fs-status-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns fileFound: false when no transcript file exists", () => {
+    const result = readSessionMessagesWithStatus("nonexistent-session", storePath);
+    expect(result).toEqual({ messages: [], fileFound: false });
+  });
+
+  test("returns fileFound: true with empty messages for empty transcript file", () => {
+    const sessionId = "test-status-empty";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, "", "utf-8");
+
+    const result = readSessionMessagesWithStatus(sessionId, storePath);
+    expect(result.fileFound).toBe(true);
+    expect(result.messages).toEqual([]);
+  });
+
+  test("returns fileFound: true with messages for transcript with content", () => {
+    const sessionId = "test-status-content";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "Hello" } }),
+      JSON.stringify({ message: { role: "assistant", content: "World" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readSessionMessagesWithStatus(sessionId, storePath);
+    expect(result.fileFound).toBe(true);
+    expect(result.messages).toHaveLength(2);
+  });
+
+  test("readSessionMessages still returns [] for missing file (regression)", () => {
+    const result = readSessionMessages("nonexistent-session-compat", storePath);
+    expect(result).toEqual([]);
   });
 });
 
