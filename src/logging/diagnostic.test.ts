@@ -276,7 +276,10 @@ describe("stuck session auto-recovery in heartbeat", () => {
     }
   });
 
-  it("only auto-recovers a session once per stuck cycle", async () => {
+  it("only auto-recovers a session once when abort succeeds", async () => {
+    const runsModule = await import("../agents/pi-embedded-runner/runs.js");
+    const abortSpy = vi.spyOn(runsModule, "abortEmbeddedPiRun").mockReturnValue(true);
+
     const events: Array<{ type: string; sessionId?: string }> = [];
     const unsubscribe = onDiagnosticEvent((event) => {
       if ("sessionId" in event) {
@@ -295,13 +298,45 @@ describe("stuck session auto-recovery in heartbeat", () => {
       });
       logSessionStateChange({ sessionId: "stuck-3", sessionKey: "main", state: "processing" });
 
-      // Advance well past auto-recover — multiple heartbeat ticks
       await vi.advanceTimersByTimeAsync(120_000);
 
       const recoveryEvents = events.filter((e) => e.type === "session.auto_recover");
       expect(recoveryEvents).toHaveLength(1);
     } finally {
       unsubscribe();
+      abortSpy.mockRestore();
+    }
+  });
+
+  it("retries auto-recovery when no active run was found", async () => {
+    const runsModule = await import("../agents/pi-embedded-runner/runs.js");
+    const abortSpy = vi.spyOn(runsModule, "abortEmbeddedPiRun").mockReturnValue(false);
+
+    const events: Array<{ type: string; sessionId?: string }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if ("sessionId" in event) {
+        events.push({ type: event.type, sessionId: event.sessionId });
+      } else {
+        events.push({ type: event.type });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 5_000,
+          stuckSessionAutoRecoverMs: 30_000,
+        },
+      });
+      logSessionStateChange({ sessionId: "stuck-4", sessionKey: "main", state: "processing" });
+
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      const recoveryEvents = events.filter((e) => e.type === "session.auto_recover");
+      expect(recoveryEvents.length).toBeGreaterThan(1);
+    } finally {
+      unsubscribe();
+      abortSpy.mockRestore();
     }
   });
 });

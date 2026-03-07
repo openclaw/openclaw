@@ -466,6 +466,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
               diag.warn(`auto-recovery abort sent: sessionId=${sessionId}`);
             } else {
               diag.debug(`auto-recovery: no active run to abort for sessionId=${sessionId}`);
+              autoRecoveredSessions.delete(sessionId);
             }
             emitDiagnosticEvent({
               type: "session.auto_recover",
