@@ -174,6 +174,7 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  allowTransientCooldownProbe?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -324,6 +325,7 @@ function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -838,7 +840,7 @@ async function agentCommandInternal(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride) => {
+        run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -866,6 +868,7 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

@@ -69,6 +69,43 @@ describe("waitForAgentJob", () => {
     expect(snapshot?.startedAt).toBe(300);
     expect(snapshot?.endedAt).toBe(400);
   });
+
+  it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {
+    const runId = `run-ignore-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 110 },
+    });
+
+    const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+    expect(cached?.status).toBe("ok");
+    expect(cached?.startedAt).toBe(100);
+    expect(cached?.endedAt).toBe(110);
+
+    const freshWait = waitForAgentJob({
+      runId,
+      timeoutMs: 1_000,
+      ignoreCachedSnapshot: true,
+    });
+    queueMicrotask(() => {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 200 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 200, endedAt: 210 },
+      });
+    });
+
+    const fresh = await freshWait;
+    expect(fresh?.status).toBe("ok");
+    expect(fresh?.startedAt).toBe(200);
+    expect(fresh?.endedAt).toBe(210);
+  });
 });
 
 describe("injectTimestamp", () => {
