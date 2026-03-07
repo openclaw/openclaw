@@ -57,8 +57,8 @@ repos:
           - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.auth\.password` -> `gateway\.remote\.password`'
           - --exclude-lines
           - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.remote\.password` -> `gateway\.auth\.password`'
-          - --exclude-lines
-          - "const key = `-----BEGIN PRIVATE KEY-----"
+          - --exclude-files
+          - '^src/gateway/client\.watchdog\.test\.ts$'
           - --exclude-lines
           - 'export CUSTOM_API_K[E]Y="your-key"'
           - --exclude-lines

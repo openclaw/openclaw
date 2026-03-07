@@ -17,9 +17,8 @@ describe("noVNC auth helpers", () => {
   });
 
   it("builds a fragment-based observer target URL with password", () => {
-    expect(buildNoVncObserverTargetUrl({ port: 45678, [passwordKey]: "a+b c&d" })).toBe(
-      // pragma: allowlist secret
-      // pragma: allowlist secret
+    const observerPassword = "a+b c&d"; // pragma: allowlist secret
+    expect(buildNoVncObserverTargetUrl({ port: 45678, [passwordKey]: observerPassword })).toBe(
       "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=a%2Bb+c%26d",
     );
   });

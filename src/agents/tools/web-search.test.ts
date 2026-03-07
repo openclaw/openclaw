@@ -228,15 +228,13 @@ describe("web_search kimi config resolution", () => {
   });
 
   it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    withEnv({ [kimiApiKeyEnv]: "kimi-env", [moonshotApiKeyEnv]: "moonshot-env" }, () => {
-      // pragma: allowlist secret
-      // pragma: allowlist secret
-      expect(resolveKimiApiKey({})).toBe("kimi-env");
+    const kimiEnvValue = "kimi-env"; // pragma: allowlist secret
+    const moonshotEnvValue = "moonshot-env"; // pragma: allowlist secret
+    withEnv({ [kimiApiKeyEnv]: kimiEnvValue, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(kimiEnvValue);
     });
-    withEnv({ [kimiApiKeyEnv]: undefined, [moonshotApiKeyEnv]: "moonshot-env" }, () => {
-      // pragma: allowlist secret
-      // pragma: allowlist secret
-      expect(resolveKimiApiKey({})).toBe("moonshot-env");
+    withEnv({ [kimiApiKeyEnv]: undefined, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(moonshotEnvValue);
     });
   });
 

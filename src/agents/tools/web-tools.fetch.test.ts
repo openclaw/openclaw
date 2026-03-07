@@ -132,10 +132,12 @@ function installPlainTextFetch(text: string) {
   );
 }
 
-function createFirecrawlTool(apiKey = "firecrawl-test") {
-  // pragma: allowlist secret
-  // pragma: allowlist secret
+function createFirecrawlTool(apiKey = defaultFirecrawlApiKey()) {
   return createFetchTool({ firecrawl: { [apiKeyField]: apiKey } });
+}
+
+function defaultFirecrawlApiKey() {
+  return "firecrawl-test"; // pragma: allowlist secret
 }
 
 async function executeFetch(
