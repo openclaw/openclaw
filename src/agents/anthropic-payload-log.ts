@@ -136,7 +136,7 @@ export function createAnthropicPayloadLogger(params: {
       if (!isAnthropicModel(model)) {
         return streamFn(model, context, options);
       }
-      const nextOnPayload = (payload: unknown) => {
+      const nextOnPayload = (payload: unknown, model: Model<Api>) => {
         const redactedPayload = redactImageDataForDiagnostics(payload);
         record({
           ...base,
@@ -145,7 +145,7 @@ export function createAnthropicPayloadLogger(params: {
           payload: redactedPayload,
           payloadDigest: digest(redactedPayload),
         });
-        options?.onPayload?.(payload);
+        options?.onPayload?.(payload, model);
       };
       return streamFn(model, context, {
         ...options,

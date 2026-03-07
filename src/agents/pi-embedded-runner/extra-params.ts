@@ -355,7 +355,7 @@ function createOpenAIResponsesContextManagementWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object") {
           applyOpenAIResponsesPayloadOverrides({
             payloadObj: payload as Record<string, unknown>,
@@ -365,7 +365,7 @@ function createOpenAIResponsesContextManagementWrapper(
             compactThreshold,
           });
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
@@ -415,14 +415,14 @@ function createOpenAIServiceTierWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           if (payloadObj.service_tier === undefined) {
             payloadObj.service_tier = serviceTier;
           }
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
@@ -597,7 +597,7 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as PayloadMessage[]) {
@@ -616,7 +616,7 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
             }
           }
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
@@ -661,14 +661,14 @@ function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): S
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           if (payloadObj.thinking === "off") {
             payloadObj.thinking = null;
           }
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
@@ -752,7 +752,7 @@ function createMoonshotThinkingWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
@@ -769,7 +769,7 @@ function createMoonshotThinkingWrapper(
             payloadObj.tool_choice = "auto";
           }
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
@@ -870,7 +870,7 @@ function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | und
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object" && isKimiCodingAnthropicEndpoint(model)) {
           const payloadObj = payload as Record<string, unknown>;
           if (Array.isArray(payloadObj.tools)) {
@@ -880,7 +880,7 @@ function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | und
           }
           payloadObj.tool_choice = normalizeKimiCodingToolChoice(payloadObj.tool_choice);
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
@@ -942,9 +942,44 @@ function createOpenRouterWrapper(
         ...OPENROUTER_APP_HEADERS,
         ...options?.headers,
       },
-      onPayload: (payload) => {
-        normalizeProxyReasoningPayload(payload, thinkingLevel);
-        onPayload?.(payload);
+      onPayload: (payload, model) => {
+        if (thinkingLevel && payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+
+          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
+          // OpenRouter expects the nested reasoning.effort format instead, and
+          // rejects payloads containing both fields. Remove the flat field so
+          // only the nested one is sent.
+          delete payloadObj.reasoning_effort;
+
+          // When thinking is "off", do not inject reasoning at all.
+          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
+          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
+          // cannot be disabled." Omitting the field lets each model use its own
+          // default reasoning behavior.
+          if (thinkingLevel !== "off") {
+            const existingReasoning = payloadObj.reasoning;
+
+            // OpenRouter treats reasoning.effort and reasoning.max_tokens as
+            // alternative controls. If max_tokens is already present, do not
+            // inject effort and do not overwrite caller-supplied reasoning.
+            if (
+              existingReasoning &&
+              typeof existingReasoning === "object" &&
+              !Array.isArray(existingReasoning)
+            ) {
+              const reasoningObj = existingReasoning as Record<string, unknown>;
+              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+              }
+            } else if (!existingReasoning) {
+              payloadObj.reasoning = {
+                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+              };
+            }
+          }
+        }
+        onPayload?.(payload, model);
       },
     });
   };
@@ -1061,7 +1096,7 @@ function createGoogleThinkingPayloadWrapper(
     const onPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (model.api === "google-generative-ai") {
           sanitizeGoogleThinkingPayload({
             payload,
@@ -1069,7 +1104,7 @@ function createGoogleThinkingPayloadWrapper(
             thinkingLevel,
           });
         }
-        onPayload?.(payload);
+        onPayload?.(payload, model);
       },
     });
   };
@@ -1097,12 +1132,12 @@ function createZaiToolStreamWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         if (payload && typeof payload === "object") {
           // Inject tool_stream: true for Z.AI API
           (payload as Record<string, unknown>).tool_stream = true;
         }
-        originalOnPayload?.(payload);
+        originalOnPayload?.(payload, model);
       },
     });
   };
