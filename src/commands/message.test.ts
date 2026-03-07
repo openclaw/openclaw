@@ -191,7 +191,7 @@ describe("messageCommand", () => {
     const rawConfig = {
       channels: {
         telegram: {
-          token: { $secret: "vault://telegram/token" },
+          token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
         },
       },
     };
@@ -243,7 +243,7 @@ describe("messageCommand", () => {
     const rawConfig = {
       channels: {
         telegram: {
-          token: { $secret: "vault://telegram/token" },
+          token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
         },
       },
     };

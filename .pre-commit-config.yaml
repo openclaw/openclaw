@@ -49,6 +49,16 @@ repos:
           - 'typeof remote\?\.password === "string"'
           - --exclude-lines
           - "OPENCLAW_DOCKER_GPG_FINGERPRINT="
+          - --exclude-lines
+          - '"secretShape": "(secret_input|sibling_ref)"'
+          - --exclude-lines
+          - 'API key rotation \(provider-specific\): set `\*_API_KEYS`'
+          - --exclude-lines
+          - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.auth\.password` -> `gateway\.remote\.password`'
+          - --exclude-lines
+          - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.remote\.password` -> `gateway\.auth\.password`'
+          - --exclude-lines
+          - "const key = `-----BEGIN PRIVATE KEY-----"
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0

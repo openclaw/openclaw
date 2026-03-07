@@ -21,7 +21,7 @@ describe("Kilo Gateway implicit provider", () => {
   it("should include kilocode when KILOCODE_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-    process.env.KILOCODE_API_KEY = "test-key";
+    process.env.KILOCODE_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });

@@ -57,7 +57,7 @@ Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes)
 If CLI commands feel slow on low-power VMs (or ARM hosts), enable Node's module compile cache:
 
 ```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF'
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' <!-- pragma: allowlist secret -->
 export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 mkdir -p /var/tmp/openclaw-compile-cache
 export OPENCLAW_NO_RESPAWN=1

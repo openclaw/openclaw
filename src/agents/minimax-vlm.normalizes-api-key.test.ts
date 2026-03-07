@@ -26,7 +26,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
     const { minimaxUnderstandImage } = await import("./minimax-vlm.js");
     const text = await minimaxUnderstandImage({
-      apiKey: "minimax-test-\r\nkey",
+      apiKey: "minimax-test-\r\nkey", // pragma: allowlist secret
       prompt: "hi",
       imageDataUrl: "data:image/png;base64,AAAA",
       apiHost: "https://api.minimax.io",
@@ -53,7 +53,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
     const { minimaxUnderstandImage } = await import("./minimax-vlm.js");
     const text = await minimaxUnderstandImage({
-      apiKey: "minimax-\u0417\u2502test-key",
+      apiKey: "minimax-\u0417\u2502test-key", // pragma: allowlist secret
       prompt: "hi",
       imageDataUrl: "data:image/png;base64,AAAA",
       apiHost: "https://api.minimax.io",

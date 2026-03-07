@@ -61,7 +61,7 @@ describe("feishuOnboardingAdapter.getStatus", () => {
             accounts: {
               main: {
                 appId: "",
-                appSecret: "secret_123",
+                appSecret: "secret_123", // pragma: allowlist secret
               },
             },
           },
@@ -75,11 +75,11 @@ describe("feishuOnboardingAdapter.getStatus", () => {
 
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
-    const appSecretKey = "FEISHU_APP_SECRET_STATUS_MISSING_TEST";
+    const appSecretKey = "FEISHU_APP_SECRET_STATUS_MISSING_TEST"; // pragma: allowlist secret
     const prevAppId = process.env[appIdKey];
     const prevAppSecret = process.env[appSecretKey];
     delete process.env[appIdKey];
-    process.env[appSecretKey] = "secret_env_456";
+    process.env[appSecretKey] = "secret_env_456"; // pragma: allowlist secret
 
     try {
       const status = await feishuOnboardingAdapter.getStatus({
@@ -111,11 +111,11 @@ describe("feishuOnboardingAdapter.getStatus", () => {
 
   it("treats env SecretRef appId/appSecret as configured in status", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_TEST";
-    const appSecretKey = "FEISHU_APP_SECRET_STATUS_TEST";
+    const appSecretKey = "FEISHU_APP_SECRET_STATUS_TEST"; // pragma: allowlist secret
     const prevAppId = process.env[appIdKey];
     const prevAppSecret = process.env[appSecretKey];
     process.env[appIdKey] = "cli_env_123";
-    process.env[appSecretKey] = "secret_env_456";
+    process.env[appSecretKey] = "secret_env_456"; // pragma: allowlist secret
 
     try {
       const status = await feishuOnboardingAdapter.getStatus({

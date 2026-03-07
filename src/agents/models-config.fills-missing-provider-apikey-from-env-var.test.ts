@@ -43,7 +43,7 @@ async function writeAgentModelsJson(content: unknown): Promise<void> {
 function createMergeConfigProvider() {
   return {
     baseUrl: "https://config.example/v1",
-    apiKey: "CONFIG_KEY",
+    apiKey: "CONFIG_KEY", // pragma: allowlist secret
     api: "openai-responses" as const,
     models: [
       {
@@ -114,7 +114,7 @@ describe("models-config", () => {
           providers: {
             anthropic: {
               baseUrl: "https://relay.example.com/api",
-              apiKey: "cr_xxxx",
+              apiKey: "cr_xxxx", // pragma: allowlist secret
               models: [{ id: "claude-opus-4-6", name: "Claude Opus 4.6" }],
             },
           },
@@ -178,7 +178,7 @@ describe("models-config", () => {
         providers: {
           existing: {
             baseUrl: "http://localhost:1234/v1",
-            apiKey: "EXISTING_KEY",
+            apiKey: "EXISTING_KEY", // pragma: allowlist secret
             api: "openai-completions",
             models: [
               {
@@ -211,7 +211,7 @@ describe("models-config", () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
-        apiKey: "AGENT_KEY",
+        apiKey: "AGENT_KEY", // pragma: allowlist secret
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });

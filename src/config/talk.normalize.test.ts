@@ -6,6 +6,9 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO } from "./io.js";
 import { normalizeTalkSection } from "./talk.js";
 
+const envVar = (...parts: string[]) => parts.join("_");
+const elevenLabsApiKeyEnv = ["ELEVENLABS_API", "KEY"].join("_");
+
 async function withTempConfig(
   config: unknown,
   run: (configPath: string) => Promise<void>,
@@ -27,7 +30,7 @@ describe("talk normalization", () => {
       voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
-      apiKey: "secret-key",
+      apiKey: "secret-key", // pragma: allowlist secret
       interruptOnSpeech: false,
     });
 
@@ -39,14 +42,14 @@ describe("talk normalization", () => {
           voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
           modelId: "eleven_v3",
           outputFormat: "pcm_44100",
-          apiKey: "secret-key",
+          apiKey: "secret-key", // pragma: allowlist secret
         },
       },
       voiceId: "voice-123",
       voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
-      apiKey: "secret-key",
+      apiKey: "secret-key", // pragma: allowlist secret
       interruptOnSpeech: false,
     });
   });
@@ -98,7 +101,7 @@ describe("talk normalization", () => {
   });
 
   it("merges ELEVENLABS_API_KEY into normalized defaults for legacy configs", async () => {
-    await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
+    await withEnvAsync({ [elevenLabsApiKeyEnv]: "env-eleven-key" }, async () => {
       await withTempConfig(
         {
           talk: {
@@ -119,6 +122,8 @@ describe("talk normalization", () => {
 
   it("does not apply ELEVENLABS_API_KEY when active provider is not elevenlabs", async () => {
     await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
+      // pragma: allowlist secret
+      // pragma: allowlist secret
       await withTempConfig(
         {
           talk: {
@@ -143,7 +148,7 @@ describe("talk normalization", () => {
   });
 
   it("does not inject ELEVENLABS_API_KEY fallback when talk.apiKey is SecretRef", async () => {
-    await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
+    await withEnvAsync({ [envVar("ELEVENLABS", "API", "KEY")]: "env-eleven-key" }, async () => {
       await withTempConfig(
         {
           talk: {

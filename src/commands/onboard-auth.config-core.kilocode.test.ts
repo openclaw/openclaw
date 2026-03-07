@@ -160,7 +160,7 @@ describe("Kilo Gateway provider config", () => {
   describe("env var resolution", () => {
     it("resolves KILOCODE_API_KEY from env", () => {
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "test-kilo-key";
+      process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
 
       try {
         const result = resolveEnvApiKey("kilocode");
@@ -187,7 +187,7 @@ describe("Kilo Gateway provider config", () => {
     it("resolves the kilocode api key via resolveApiKeyForProvider", async () => {
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "kilo-provider-test-key";
+      process.env.KILOCODE_API_KEY = "kilo-provider-test-key"; // pragma: allowlist secret
 
       try {
         const auth = await resolveApiKeyForProvider({

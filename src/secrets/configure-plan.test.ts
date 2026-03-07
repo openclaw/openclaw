@@ -12,7 +12,7 @@ describe("secrets configure plan helpers", () => {
   it("builds configure candidates from supported configure targets", () => {
     const config = {
       talk: {
-        apiKey: "plain",
+        apiKey: "plain", // pragma: allowlist secret
       },
       channels: {
         telegram: {
@@ -139,15 +139,15 @@ describe("secrets configure plan helpers", () => {
           provider: "elevenlabs",
           providers: {
             elevenlabs: {
-              apiKey: "demo-talk-key",
+              apiKey: "demo-talk-key", // pragma: allowlist secret
             },
           },
-          apiKey: "demo-talk-key",
+          apiKey: "demo-talk-key", // pragma: allowlist secret
         },
       } as OpenClawConfig,
       authoredOpenClawConfig: {
         talk: {
-          apiKey: "demo-talk-key",
+          apiKey: "demo-talk-key", // pragma: allowlist secret
         },
       } as OpenClawConfig,
     });

@@ -13,7 +13,7 @@ describe("normalizeProviders", () => {
         " dashscope-vision ": {
           baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
           api: "openai-completions",
-          apiKey: "DASHSCOPE_API_KEY",
+          apiKey: "DASHSCOPE_API_KEY", // pragma: allowlist secret
           models: [
             {
               id: "qwen-vl-max",
@@ -43,13 +43,13 @@ describe("normalizeProviders", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "OPENAI_API_KEY",
+          apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
           models: [],
         },
         " openai ": {
           baseUrl: "https://example.com/v1",
           api: "openai-completions",
-          apiKey: "CUSTOM_OPENAI_API_KEY",
+          apiKey: "CUSTOM_OPENAI_API_KEY", // pragma: allowlist secret
           models: [
             {
               id: "gpt-4.1-mini",
