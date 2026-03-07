@@ -125,7 +125,7 @@ export async function parseIntent(
 /**
  * Parse JSON response from Claude
  */
-function parseIntentResponse(rawText: string): ParsedIntent | null {
+export function parseIntentResponse(rawText: string): ParsedIntent | null {
   try {
     // Strip markdown code fences if present
     let jsonText = rawText.trim();
