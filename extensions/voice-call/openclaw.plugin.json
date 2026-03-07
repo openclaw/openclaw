@@ -48,6 +48,15 @@
       "label": "Notify Hangup Delay (sec)",
       "advanced": true
     },
+    "maxDurationSeconds": {
+      "label": "Max Call Duration (sec)",
+      "advanced": true
+    },
+    "staleCallReaperSeconds": {
+      "label": "Stale Call Reaper (sec)",
+      "advanced": true,
+      "help": "Auto-reap calls stuck in unexpected states (0 to disable)"
+    },
     "serve.port": {
       "label": "Webhook Port"
     },
@@ -82,6 +91,21 @@
       "label": "Allow ngrok Free Tier (Loopback Bypass)",
       "advanced": true
     },
+    "webhookSecurity.allowedHosts": {
+      "label": "Allowed Webhook Hosts",
+      "advanced": true,
+      "help": "Hostnames allowed for webhook reconstruction"
+    },
+    "webhookSecurity.trustForwardingHeaders": {
+      "label": "Trust Forwarding Headers",
+      "advanced": true,
+      "help": "Trust X-Forwarded-* headers (only if you trust your proxy)"
+    },
+    "webhookSecurity.trustedProxyIPs": {
+      "label": "Trusted Proxy IPs",
+      "advanced": true,
+      "help": "IP addresses allowed to set forwarding headers"
+    },
     "streaming.enabled": {
       "label": "Enable Streaming",
       "advanced": true
@@ -98,6 +122,26 @@
     "streaming.streamPath": {
       "label": "Media Stream Path",
       "advanced": true
+    },
+    "streaming.preStartTimeoutMs": {
+      "label": "Pre-start Timeout (ms)",
+      "advanced": true,
+      "help": "Close media stream if no start frame arrives in time"
+    },
+    "streaming.maxPendingConnections": {
+      "label": "Max Pending Connections",
+      "advanced": true,
+      "help": "Maximum pending (pre-start) media stream connections"
+    },
+    "streaming.maxPendingConnectionsPerIp": {
+      "label": "Max Pending Per IP",
+      "advanced": true,
+      "help": "Maximum pending connections per source IP"
+    },
+    "streaming.maxConnections": {
+      "label": "Max Connections",
+      "advanced": true,
+      "help": "Hard cap for all open media stream connections"
     },
     "tts.provider": {
       "label": "TTS Provider Override",
@@ -249,6 +293,10 @@
         "type": "integer",
         "minimum": 1
       },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
+      },
       "silenceTimeoutMs": {
         "type": "integer",
         "minimum": 1
@@ -313,6 +361,27 @@
           }
         }
       },
+      "webhookSecurity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trustForwardingHeaders": {
+            "type": "boolean"
+          },
+          "trustedProxyIPs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "streaming": {
         "type": "object",
         "additionalProperties": false,
@@ -341,6 +410,22 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "preStartTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnections": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnectionsPerIp": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxConnections": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },
