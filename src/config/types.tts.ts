@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "bailian" | "edge";
 
 export type TtsMode = "final" | "all";
 
@@ -61,6 +61,14 @@ export type TtsConfig = {
     baseUrl?: string;
     model?: string;
     voice?: string;
+  };
+  /** Alibaba Bailian / DashScope configuration. */
+  bailian?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voice?: string;
+    languageType?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

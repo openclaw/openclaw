@@ -354,6 +354,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     opencode: "OPENCODE_API_KEY",
     together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
+    bailian: "DASHSCOPE_API_KEY",
     ollama: "OLLAMA_API_KEY",
     vllm: "VLLM_API_KEY",
     kilocode: "KILOCODE_API_KEY",
