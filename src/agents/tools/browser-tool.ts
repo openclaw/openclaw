@@ -31,7 +31,7 @@ import {
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 import {
   listNodes,
@@ -488,6 +488,7 @@ export function createBrowserTool(opts?: {
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
           const fullPage = Boolean(params.fullPage);
+          const embed = Boolean(params.embed);
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
           const type = params.type === "jpeg" ? "jpeg" : "png";
@@ -512,6 +513,13 @@ export function createBrowserTool(opts?: {
                 type,
                 profile,
               });
+          if (embed) {
+            return await imageResultFromFile({
+              label: "browser:screenshot",
+              path: result.path,
+              details: result,
+            });
+          }
           return jsonResult(result);
         }
         case "navigate": {
