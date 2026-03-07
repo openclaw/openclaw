@@ -129,8 +129,8 @@ $Workspace = "D:\OpenClawWorkspace"
 $State = "D:\OpenClawWorkspace\.openclaw-state"
 
 runas /user:$env:COMPUTERNAME\openclaw_bot "powershell -NoProfile -NoExit -Command `"`
-$env:OPENCLAW_STATE_DIR='$State'; `
-$env:OPENCLAW_CONFIG_PATH='$State\openclaw.json'; `
+`$env:OPENCLAW_STATE_DIR='$State'; `
+`$env:OPENCLAW_CONFIG_PATH='$State\openclaw.json'; `
 Set-Location -LiteralPath '$Workspace'; `
 openclaw gateway`""
 ```
@@ -181,6 +181,7 @@ icacls "D:\OpenClawWorkspace" /remove:d "$Principal" /T /C
 Remove deny entries from sibling directories if you added them:
 
 ```powershell
+$Principal = "$env:COMPUTERNAME\openclaw_bot"
 $Parent = "D:\"
 Get-ChildItem -LiteralPath $Parent -Directory |
   Where-Object { $_.FullName -ne "D:\OpenClawWorkspace" } |
