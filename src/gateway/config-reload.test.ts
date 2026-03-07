@@ -167,6 +167,41 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([]);
   });
 
+  it("restarts heartbeat and cron when agents.list changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.list"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.restartCron).toBe(true);
+    expect(plan.hotReasons).toContain("agents.list");
+  });
+
+  it("restarts heartbeat when per-agent heartbeat model changes via agents.list diff", () => {
+    const prev = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", heartbeat: { model: "openai/gpt-4o-mini" } },
+        ],
+      },
+    };
+    const next = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", heartbeat: { model: "anthropic/claude-haiku-4-5" } },
+        ],
+      },
+    };
+    const changedPaths = diffConfigPaths(prev, next);
+    expect(changedPaths).toContain("agents.list");
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.restartCron).toBe(true);
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);
