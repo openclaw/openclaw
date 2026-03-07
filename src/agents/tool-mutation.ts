@@ -7,6 +7,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "process",
   "message",
   "sessions_send",
+  "sessions_transfer_knowledge",
   "cron",
   "gateway",
   "canvas",
@@ -107,6 +108,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "exec":
     case "bash":
     case "sessions_send":
+    case "sessions_transfer_knowledge":
       return true;
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);

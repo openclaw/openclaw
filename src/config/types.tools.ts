@@ -553,6 +553,19 @@ export type ToolsConfig = {
     enabled?: boolean;
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
+    /** User-gated knowledge transfer policy for sessions_transfer_knowledge. */
+    knowledgeTransfer?: {
+      /** Enable cross-agent curated memory transfer. Default: false. */
+      enabled?: boolean;
+      /** @deprecated Use defaultExportMode/defaultImportMode. */
+      defaultMode?: "ask" | "auto";
+      /** Default export-side approval mode when no matching rule exists. */
+      defaultExportMode?: "ask" | "auto";
+      /** Default import-side approval mode when no matching rule exists. */
+      defaultImportMode?: "ask" | "auto";
+      /** Approval wait timeout for ask mode. Default: 120 seconds. */
+      approvalTimeoutSeconds?: number;
+    };
   };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools

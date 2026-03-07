@@ -29,6 +29,9 @@ const BASE_METHODS = [
   "exec.approval.request",
   "exec.approval.waitDecision",
   "exec.approval.resolve",
+  "knowledge.transfer.approval.request",
+  "knowledge.transfer.approval.wait",
+  "knowledge.transfer.approval.resolve",
   "wizard.start",
   "wizard.next",
   "wizard.cancel",
@@ -124,5 +127,7 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "knowledge.transfer.approval.pending",
+  "knowledge.transfer.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

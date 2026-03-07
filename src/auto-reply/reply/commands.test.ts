@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
@@ -329,7 +329,7 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("requires operator.approvals");
+    expect(result.reply?.text).toContain("operator.approvals");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -356,6 +356,185 @@ describe("/approve command", () => {
         }),
       );
     }
+  });
+});
+
+describe("/learn command", () => {
+  let stateDir: string | null = null;
+  let previousStateDir: string | undefined;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-learn-policy-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+  });
+
+  afterEach(async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (stateDir) {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      stateDir = null;
+    }
+  });
+
+  it("shows usage when missing args", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/learn", cfg);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Usage:");
+    expect(result.reply?.text).toContain("/learn rule add");
+  });
+
+  it("requires owner for approve/deny/mode", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/learn mode auto", cfg, { SenderId: "123" });
+    params.command.senderIsOwner = false;
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("requires an owner sender");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches /learn approve to gateway resolve", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/learn approve req-1", cfg, { SenderId: "owner" });
+    params.command.senderIsOwner = true;
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Knowledge transfer allow submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "knowledge.transfer.approval.resolve",
+        params: { id: "req-1", decision: "allow" },
+      }),
+    );
+  });
+
+  it("requires operator.approvals for gateway clients on owner actions", async () => {
+    const cfg = {
+      commands: { text: true },
+    } as OpenClawConfig;
+    const params = buildParams("/learn approve req-1", cfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.write"],
+    });
+    params.command.senderIsOwner = true;
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("operator.approvals");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("persists /learn mode ask|auto by pair", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      tools: {
+        agentToAgent: {
+          knowledgeTransfer: {
+            enabled: true,
+            defaultExportMode: "ask",
+            defaultImportMode: "ask",
+            approvalTimeoutSeconds: 120,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const modeParams = buildParams("/learn mode auto --pair worker,teacher", cfg, {
+      SenderId: "owner",
+    });
+    modeParams.command.senderIsOwner = true;
+    const modeResult = await handleCommands(modeParams);
+    expect(modeResult.shouldContinue).toBe(false);
+    expect(modeResult.reply?.text).toContain("Learn mode set to auto");
+
+    const statusParams = buildParams("/learn status --pair worker,teacher", cfg, {
+      SenderId: "owner",
+    });
+    statusParams.command.senderIsOwner = true;
+    const statusResult = await handleCommands(statusParams);
+    expect(statusResult.shouldContinue).toBe(false);
+    expect(statusResult.reply?.text).toContain("Default Export Mode");
+    expect(statusResult.reply?.text).toContain("Pair: worker,teacher");
+  });
+
+  it("supports /learn rule add/list/remove with pair and side", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      tools: {
+        agentToAgent: {
+          knowledgeTransfer: {
+            enabled: true,
+            defaultExportMode: "ask",
+            defaultImportMode: "ask",
+            approvalTimeoutSeconds: 120,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const addParams = buildParams(
+      "/learn rule add hide --side export --path memory/private/** --pair worker,teacher",
+      cfg,
+      {
+        SenderId: "owner",
+      },
+    );
+    addParams.command.senderIsOwner = true;
+    const addResult = await handleCommands(addParams);
+    expect(addResult.shouldContinue).toBe(false);
+    expect(addResult.reply?.text).toContain("Rule saved:");
+    expect(addResult.reply?.text).toContain("side=export");
+    expect(addResult.reply?.text).toContain("decision=hide");
+
+    const listParams = buildParams("/learn rule list --pair worker,teacher", cfg, {
+      SenderId: "owner",
+    });
+    listParams.command.senderIsOwner = true;
+    const listResult = await handleCommands(listParams);
+    expect(listResult.shouldContinue).toBe(false);
+    expect(listResult.reply?.text).toContain("worker,teacher");
+    expect(listResult.reply?.text).toContain("memory/private/**");
+
+    const ruleLine = listResult.reply?.text?.split("\n").find((line) => line.startsWith("- "));
+    if (!ruleLine) {
+      throw new Error("missing rule line");
+    }
+    const id = ruleLine.slice(2).split(" | ")[0]?.trim();
+    if (!id) {
+      throw new Error("missing rule id");
+    }
+
+    const removeParams = buildParams(`/learn rule remove ${id} --pair worker,teacher`, cfg, {
+      SenderId: "owner",
+    });
+    removeParams.command.senderIsOwner = true;
+    const removeResult = await handleCommands(removeParams);
+    expect(removeResult.shouldContinue).toBe(false);
+    expect(removeResult.reply?.text).toContain("Removed rule");
   });
 });
 

@@ -182,6 +182,15 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
   "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
   "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
+  "tools.agentToAgent.knowledgeTransfer": "Knowledge Transfer Policy",
+  "tools.agentToAgent.knowledgeTransfer.enabled": "Enable Knowledge Transfer",
+  "tools.agentToAgent.knowledgeTransfer.defaultMode": "Knowledge Transfer Default Mode",
+  "tools.agentToAgent.knowledgeTransfer.defaultExportMode":
+    "Knowledge Transfer Default Export Mode",
+  "tools.agentToAgent.knowledgeTransfer.defaultImportMode":
+    "Knowledge Transfer Default Import Mode",
+  "tools.agentToAgent.knowledgeTransfer.approvalTimeoutSeconds":
+    "Knowledge Transfer Approval Timeout (sec)",
   "tools.elevated": "Elevated Tool Access",
   "tools.elevated.enabled": "Enable Elevated Tool Access",
   "tools.elevated.allowFrom": "Elevated Tool Allow Rules",

@@ -314,6 +314,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
+  "tools.agentToAgent.knowledgeTransfer":
+    "Knowledge-transfer controls for sessions_transfer_knowledge, including enablement, default approval mode, and approval timeout. Keep ask mode as default unless operators explicitly opt into auto-learning.",
+  "tools.agentToAgent.knowledgeTransfer.enabled":
+    "Enable curated memory transfer between agents via sessions_transfer_knowledge. Keep disabled by default and enable only for trusted agent-pair workflows.",
+  "tools.agentToAgent.knowledgeTransfer.defaultMode":
+    'Default learning mode when no per-pair override exists: "ask" (user approval required) or "auto" (learn immediately). Use "ask" for human-in-the-loop control.',
+  "tools.agentToAgent.knowledgeTransfer.defaultExportMode":
+    'Default export-side mode when a matching policy rule allows transfer but does not override mode. "ask" requires owner approval, "auto" approves immediately.',
+  "tools.agentToAgent.knowledgeTransfer.defaultImportMode":
+    'Default import-side mode when a matching policy rule allows transfer but does not override mode. "ask" requires owner approval, "auto" approves immediately.',
+  "tools.agentToAgent.knowledgeTransfer.approvalTimeoutSeconds":
+    "Timeout in seconds for pending ask-mode transfer approvals before automatic decline. Use a short timeout for interactive channels and longer timeout when approvals are handled asynchronously.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
