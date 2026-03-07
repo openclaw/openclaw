@@ -1,3 +1,4 @@
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export type AllowlistUserResolutionLike = {
@@ -28,10 +29,7 @@ export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([
-    ...(params.existing ?? []).map((entry) => String(entry)),
-    ...params.additions,
-  ]);
+  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
 }
 
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
