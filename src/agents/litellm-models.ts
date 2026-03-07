@@ -3,7 +3,7 @@ import type { ModelDefinitionConfig } from "../config/types.js";
 // LiteLLM is a proxy that supports many models, so the base URL and model
 // are user-configurable. We provide sensible defaults for onboarding.
 export const LITELLM_DEFAULT_BASE_URL = "http://localhost:4000";
-export const LITELLM_DEFAULT_MODEL_ID = "gpt-4";
+export const LITELLM_DEFAULT_MODEL_ID = "claude-opus-4-6";
 export const LITELLM_DEFAULT_MODEL_REF = `litellm/${LITELLM_DEFAULT_MODEL_ID}`;
 export const LITELLM_DEFAULT_COST = {
   input: 0,
