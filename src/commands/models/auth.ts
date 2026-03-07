@@ -1,4 +1,10 @@
-import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
+import {
+  cancel as clackCancel,
+  confirm as clackConfirm,
+  isCancel,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -14,7 +20,11 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
@@ -34,24 +44,38 @@ import {
 } from "../provider-auth-helpers.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
-const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
-  clackConfirm({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-const text = (params: Parameters<typeof clackText>[0]) =>
-  clackText({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+function guardPromptCancel<T>(value: T | symbol): T | undefined {
+  if (isCancel(value)) {
+    clackCancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    return undefined;
+  }
+  return value;
+}
+
+const confirm = async (params: Parameters<typeof clackConfirm>[0]) =>
+  guardPromptCancel(
+    await clackConfirm({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
+const text = async (params: Parameters<typeof clackText>[0]) =>
+  guardPromptCancel(
+    await clackText({
+      ...params,
+      message: stylePromptMessage(params.message),
+    }),
+  );
+const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  guardPromptCancel(
+    await clackSelect({
+      ...params,
+      message: stylePromptMessage(params.message),
+      options: params.options.map((opt) =>
+        opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      ),
+    }),
+  );
 
 type TokenProvider = "anthropic";
 
@@ -98,7 +122,10 @@ export async function modelsAuthSetupTokenCommand(
     message: "Paste Anthropic setup-token",
     validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
   });
-  const token = String(tokenInput ?? "").trim();
+  if (tokenInput === undefined) {
+    return;
+  }
+  const token = String(tokenInput).trim();
   const profileId = resolveDefaultTokenProfileId(provider);
 
   upsertAuthProfile({
@@ -141,7 +168,10 @@ export async function modelsAuthPasteTokenCommand(
     message: `Paste token for ${provider}`,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  const token = String(tokenInput ?? "").trim();
+  if (tokenInput === undefined) {
+    return;
+  }
+  const token = String(tokenInput).trim();
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
@@ -165,27 +195,30 @@ export async function modelsAuthPasteTokenCommand(
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
-  const provider = (await select({
+  const provider = await select<TokenProvider | "custom">({
     message: "Token provider",
     options: [
       { value: "anthropic", label: "anthropic" },
       { value: "custom", label: "custom (type provider id)" },
     ],
-  })) as TokenProvider | "custom";
+  });
+  if (!provider) {
+    return;
+  }
 
-  const providerId =
-    provider === "custom"
-      ? normalizeProviderId(
-          String(
-            await text({
-              message: "Provider id",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
-          ),
-        )
-      : provider;
+  let providerId = provider;
+  if (provider === "custom") {
+    const providerInput = await text({
+      message: "Provider id",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    if (providerInput === undefined) {
+      return;
+    }
+    providerId = normalizeProviderId(String(providerInput));
+  }
 
-  const method = (await select({
+  const method = await select<"setup-token" | "paste">({
     message: "Token method",
     options: [
       ...(providerId === "anthropic"
@@ -199,7 +232,10 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
         : []),
       { value: "paste", label: "paste token" },
     ],
-  })) as "setup-token" | "paste";
+  });
+  if (!method) {
+    return;
+  }
 
   if (method === "setup-token") {
     await modelsAuthSetupTokenCommand({ provider: providerId }, runtime);
@@ -207,34 +243,42 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
   }
 
   const profileIdDefault = resolveDefaultTokenProfileId(providerId);
-  const profileId = String(
-    await text({
-      message: "Profile id",
-      initialValue: profileIdDefault,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
+  const profileInput = await text({
+    message: "Profile id",
+    initialValue: profileIdDefault,
+    validate: (value) => (value?.trim() ? undefined : "Required"),
+  });
+  if (profileInput === undefined) {
+    return;
+  }
+  const profileId = String(profileInput).trim();
 
   const wantsExpiry = await confirm({
     message: "Does this token expire?",
     initialValue: false,
   });
-  const expiresIn = wantsExpiry
-    ? String(
-        await text({
-          message: "Expires in (duration)",
-          initialValue: "365d",
-          validate: (value) => {
-            try {
-              parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
-              return undefined;
-            } catch {
-              return "Invalid duration (e.g. 365d, 12h, 30m)";
-            }
-          },
-        }),
-      ).trim()
-    : undefined;
+  if (wantsExpiry === undefined) {
+    return;
+  }
+  let expiresIn: string | undefined;
+  if (wantsExpiry) {
+    const expiresInput = await text({
+      message: "Expires in (duration)",
+      initialValue: "365d",
+      validate: (value) => {
+        try {
+          parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
+          return undefined;
+        } catch {
+          return "Invalid duration (e.g. 365d, 12h, 30m)";
+        }
+      },
+    });
+    if (expiresInput === undefined) {
+      return;
+    }
+    expiresIn = String(expiresInput).trim();
+  }
 
   await modelsAuthPasteTokenCommand({ provider: providerId, profileId, expiresIn }, runtime);
 }
