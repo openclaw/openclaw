@@ -59,6 +59,8 @@ repos:
           - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.remote\.password` -> `gateway\.auth\.password`'
           - --exclude-files
           - '^src/gateway/client\.watchdog\.test\.ts$'
+          - --exclude-files
+          - '^apps/macos/Tests/OpenClawIPCTests/GatewayEndpointStoreTests\.swift$'
           - --exclude-lines
           - 'export CUSTOM_API_K[E]Y="your-key"'
           - --exclude-lines
