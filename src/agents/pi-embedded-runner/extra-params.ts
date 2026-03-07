@@ -761,10 +761,21 @@ function isKimiCodingAnthropicEndpoint(model: {
     const parsed = new URL(model.baseUrl);
     const host = parsed.hostname.toLowerCase();
     const pathname = parsed.pathname.toLowerCase();
-    return host.endsWith("kimi.com") && pathname.startsWith("/coding");
+    if (!host.endsWith("kimi.com")) {
+      return false;
+    }
+
+    // Some deployments use api.kimi.com without a /coding prefix but still
+    // require OpenAI-style tools[].function payloads.
+    return pathname.startsWith("/coding") || pathname === "/" || pathname.startsWith("/v1");
   } catch {
     const normalized = model.baseUrl.toLowerCase();
-    return normalized.includes("kimi.com/coding");
+    return (
+      normalized.includes("kimi.com/coding") ||
+      normalized.includes("api.kimi.com/v1") ||
+      normalized === "https://api.kimi.com" ||
+      normalized === "https://api.kimi.com/"
+    );
   }
 }
 
