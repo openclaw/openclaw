@@ -54,6 +54,34 @@ function makeAutoModel(overrides: Record<string, unknown> = {}) {
   });
 }
 
+async function withFetchPathTest(
+  mockFetch: ReturnType<typeof vi.fn>,
+  runAssertions: () => Promise<void>,
+) {
+  const origNodeEnv = process.env.NODE_ENV;
+  const origVitest = process.env.VITEST;
+  delete process.env.NODE_ENV;
+  delete process.env.VITEST;
+
+  vi.stubGlobal("fetch", mockFetch);
+
+  try {
+    await runAssertions();
+  } finally {
+    if (origNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = origNodeEnv;
+    }
+    if (origVitest === undefined) {
+      delete process.env.VITEST;
+    } else {
+      process.env.VITEST = origVitest;
+    }
+    vi.unstubAllGlobals();
+  }
+}
+
 describe("discoverKilocodeModels", () => {
   it("returns static catalog in test environment", async () => {
     // Default vitest env — should return static catalog without fetching
@@ -77,12 +105,6 @@ describe("discoverKilocodeModels", () => {
 
 describe("discoverKilocodeModels (fetch path)", () => {
   it("parses gateway models with correct pricing conversion", async () => {
-    // Temporarily unset test env flags to exercise the fetch path
-    const origNodeEnv = process.env.NODE_ENV;
-    const origVitest = process.env.VITEST;
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
-
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () =>
@@ -90,9 +112,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
           data: [makeAutoModel(), makeGatewayModel()],
         }),
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    try {
+    await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
 
       // Should have fetched from the gateway URL
@@ -123,68 +143,31 @@ describe("discoverKilocodeModels (fetch path)", () => {
       // Verify context/tokens
       expect(sonnet?.contextWindow).toBe(200000);
       expect(sonnet?.maxTokens).toBe(8192);
-    } finally {
-      process.env.NODE_ENV = origNodeEnv;
-      if (origVitest !== undefined) {
-        process.env.VITEST = origVitest;
-      }
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("falls back to static catalog on network error", async () => {
-    const origNodeEnv = process.env.NODE_ENV;
-    const origVitest = process.env.VITEST;
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
-
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
-    vi.stubGlobal("fetch", mockFetch);
-
-    try {
+    await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models.length).toBeGreaterThan(0);
       expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
-    } finally {
-      process.env.NODE_ENV = origNodeEnv;
-      if (origVitest !== undefined) {
-        process.env.VITEST = origVitest;
-      }
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("falls back to static catalog on HTTP error", async () => {
-    const origNodeEnv = process.env.NODE_ENV;
-    const origVitest = process.env.VITEST;
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
-
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    try {
+    await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models.length).toBeGreaterThan(0);
       expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
-    } finally {
-      process.env.NODE_ENV = origNodeEnv;
-      if (origVitest !== undefined) {
-        process.env.VITEST = origVitest;
-      }
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("ensures kilo/auto is present even when API doesn't return it", async () => {
-    const origNodeEnv = process.env.NODE_ENV;
-    const origVitest = process.env.VITEST;
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
-
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () =>
@@ -192,27 +175,14 @@ describe("discoverKilocodeModels (fetch path)", () => {
           data: [makeGatewayModel()], // no kilo/auto
         }),
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    try {
+    await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
       expect(models.some((m) => m.id === "anthropic/claude-sonnet-4")).toBe(true);
-    } finally {
-      process.env.NODE_ENV = origNodeEnv;
-      if (origVitest !== undefined) {
-        process.env.VITEST = origVitest;
-      }
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("detects text-only models without image modality", async () => {
-    const origNodeEnv = process.env.NODE_ENV;
-    const origVitest = process.env.VITEST;
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
-
     const textOnlyModel = makeGatewayModel({
       id: "some/text-model",
       architecture: {
@@ -226,28 +196,15 @@ describe("discoverKilocodeModels (fetch path)", () => {
       ok: true,
       json: () => Promise.resolve({ data: [textOnlyModel] }),
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    try {
+    await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       const textModel = models.find((m) => m.id === "some/text-model");
       expect(textModel?.input).toEqual(["text"]);
       expect(textModel?.reasoning).toBe(false);
-    } finally {
-      process.env.NODE_ENV = origNodeEnv;
-      if (origVitest !== undefined) {
-        process.env.VITEST = origVitest;
-      }
-      vi.unstubAllGlobals();
-    }
+    });
   });
 
   it("keeps a later valid duplicate when an earlier entry is malformed", async () => {
-    const origNodeEnv = process.env.NODE_ENV;
-    const origVitest = process.env.VITEST;
-    delete process.env.NODE_ENV;
-    delete process.env.VITEST;
-
     const malformedAutoModel = makeAutoModel({
       name: "Broken Kilo Auto",
       pricing: undefined,
@@ -260,21 +217,13 @@ describe("discoverKilocodeModels (fetch path)", () => {
           data: [malformedAutoModel, makeAutoModel(), makeGatewayModel()],
         }),
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    try {
+    await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       const auto = models.find((m) => m.id === "kilo/auto");
       expect(auto).toBeDefined();
       expect(auto?.name).toBe("Kilo: Auto");
       expect(auto?.cost.input).toBeCloseTo(5.0);
       expect(models.some((m) => m.id === "anthropic/claude-sonnet-4")).toBe(true);
-    } finally {
-      process.env.NODE_ENV = origNodeEnv;
-      if (origVitest !== undefined) {
-        process.env.VITEST = origVitest;
-      }
-      vi.unstubAllGlobals();
-    }
+    });
   });
 });
