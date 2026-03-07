@@ -293,6 +293,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Use the PR head SHA so the baseline matches the actual branch files,
+          # not the synthetic merge ref whose line numbers can drift.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: false
 
       - name: Setup Node environment
