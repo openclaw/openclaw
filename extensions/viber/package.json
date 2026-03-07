@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/viber",
+  "version": "2026.3.3",
+  "private": true,
+  "description": "OpenClaw Viber channel plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

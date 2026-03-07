@@ -1,0 +1,9 @@
+{
+  "id": "viber",
+  "channels": ["viber"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

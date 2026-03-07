@@ -13,6 +13,7 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "viber",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -106,6 +107,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
+  },
+  viber: {
+    id: "viber",
+    label: "Viber",
+    selectionLabel: "Viber (Bot API)",
+    detailLabel: "Viber Bot",
+    docsPath: "/channels/viber",
+    docsLabel: "viber",
+    blurb: "connect via Viber Bot API — create a bot at partners.viber.com.",
+    systemImage: "bubble.left.and.text.bubble.right",
   },
 };
 

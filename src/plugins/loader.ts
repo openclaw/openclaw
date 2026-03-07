@@ -171,6 +171,7 @@ const pluginSdkScopedAliasEntries = [
   { subpath: "voice-call", srcFile: "voice-call.ts", distFile: "voice-call.js" },
   { subpath: "zalo", srcFile: "zalo.ts", distFile: "zalo.js" },
   { subpath: "zalouser", srcFile: "zalouser.ts", distFile: "zalouser.js" },
+  { subpath: "viber", srcFile: "viber.ts", distFile: "viber.js" },
   { subpath: "account-id", srcFile: "account-id.ts", distFile: "account-id.js" },
   {
     subpath: "keyed-async-queue",
