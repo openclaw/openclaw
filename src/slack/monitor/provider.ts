@@ -24,6 +24,7 @@ import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
@@ -345,13 +346,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
 
-      const allowEntries =
-        allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
+      const allowEntries = normalizeStringEntries(allowFrom).filter((entry) => entry !== "*");
       if (allowEntries.length > 0) {
         try {
           const resolvedUsers = await resolveSlackUserAllowlist({
             token: resolveToken,
-            entries: allowEntries.map((entry) => String(entry)),
+            entries: allowEntries,
           });
           const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
             resolvedUsers,
