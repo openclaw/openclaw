@@ -39,7 +39,41 @@ type BrowserProxyResult = {
   files?: BrowserProxyFile[];
 };
 
+type BrowserActToolParams = {
+  request?: Record<string, unknown>;
+  ref?: string;
+  targetId?: string;
+  timeoutMs?: number;
+};
+
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+
+function normalizeBrowserActRequest(params: BrowserActToolParams): Record<string, unknown> {
+  const request = params.request;
+  if (!request || typeof request !== "object") {
+    throw new Error("request required");
+  }
+
+  const normalized: Record<string, unknown> = { ...request };
+
+  // Keep backward compatibility with tool calls that put shared act fields at the
+  // top level instead of nesting them inside `request`.
+  if (typeof params.ref === "string" && params.ref.trim() && normalized.ref === undefined) {
+    normalized.ref = params.ref;
+  }
+  if (
+    typeof params.targetId === "string" &&
+    params.targetId.trim() &&
+    normalized.targetId === undefined
+  ) {
+    normalized.targetId = params.targetId;
+  }
+  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
+    normalized.timeoutMs ??= params.timeoutMs;
+  }
+
+  return normalized;
+}
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -674,10 +708,15 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = params.request as Record<string, unknown> | undefined;
-          if (!request || typeof request !== "object") {
-            throw new Error("request required");
-          }
+          const request = normalizeBrowserActRequest({
+            request: params.request as Record<string, unknown> | undefined,
+            ref: typeof params.ref === "string" ? params.ref : undefined,
+            targetId: typeof params.targetId === "string" ? params.targetId : undefined,
+            timeoutMs:
+              typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+                ? params.timeoutMs
+                : undefined,
+          });
           try {
             const result = proxyRequest
               ? await proxyRequest({

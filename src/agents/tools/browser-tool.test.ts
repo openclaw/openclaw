@@ -25,6 +25,17 @@ const browserClientMocks = vi.hoisted(() => ({
 }));
 vi.mock("../../browser/client.js", () => browserClientMocks);
 
+const browserActionsMocks = vi.hoisted(() => ({
+  browserAct: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserArmDialog: vi.fn(async () => ({ ok: true })),
+  browserArmFileChooser: vi.fn(async () => ({ ok: true })),
+  browserConsoleMessages: vi.fn(async () => ({ ok: true, messages: [] })),
+  browserNavigate: vi.fn(async () => ({ ok: true, targetId: "t1", url: "https://example.com" })),
+  browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
+  browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
+}));
+vi.mock("../../browser/client-actions.js", () => browserActionsMocks);
+
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
@@ -287,5 +298,68 @@ describe("browser tool snapshot labels", () => {
     expect(result?.content).toHaveLength(2);
     expect(result?.content?.[0]).toMatchObject({ type: "text", text: "label text" });
     expect(result?.content?.[1]).toMatchObject({ type: "image" });
+  });
+});
+
+describe("browser tool act compatibility", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+  });
+
+  it("merges top-level ref into act request", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.(null, {
+      action: "act",
+      ref: "e146",
+      request: { kind: "click" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ kind: "click", ref: "e146" }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("keeps nested request ref when both request and top-level ref are provided", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.(null, {
+      action: "act",
+      ref: "outer-ref",
+      request: { kind: "click", ref: "inner-ref" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ kind: "click", ref: "inner-ref" }),
+      expect.objectContaining({ profile: undefined }),
+    );
+    const [, request] = browserActionsMocks.browserAct.mock.calls.at(-1) ?? [];
+    expect(request).not.toMatchObject({ ref: "outer-ref" });
+  });
+
+  it("merges top-level targetId and timeoutMs into act request", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.(null, {
+      action: "act",
+      targetId: "target-1",
+      timeoutMs: 1234,
+      request: { kind: "click", ref: "e146" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "click",
+        ref: "e146",
+        targetId: "target-1",
+        timeoutMs: 1234,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
   });
 });
