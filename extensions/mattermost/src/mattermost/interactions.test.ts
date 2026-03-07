@@ -109,6 +109,53 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
     expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
   });
 
+  it("verifies nested context regardless of nested key order", () => {
+    const originalContext = {
+      action_id: "nested",
+      payload: {
+        model: "gpt-5",
+        meta: {
+          provider: "openai",
+          page: 2,
+        },
+      },
+    };
+    const token = generateInteractionToken(originalContext);
+
+    const reorderedContext = {
+      payload: {
+        meta: {
+          page: 2,
+          provider: "openai",
+        },
+        model: "gpt-5",
+      },
+      action_id: "nested",
+    };
+
+    expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
+  });
+
+  it("rejects nested context tampering", () => {
+    const originalContext = {
+      action_id: "nested",
+      payload: {
+        provider: "openai",
+        model: "gpt-5",
+      },
+    };
+    const token = generateInteractionToken(originalContext);
+    const tamperedContext = {
+      action_id: "nested",
+      payload: {
+        provider: "anthropic",
+        model: "gpt-5",
+      },
+    };
+
+    expect(verifyInteractionToken(tamperedContext, token)).toBe(false);
+  });
+
   it("scopes tokens per account when account secrets differ", () => {
     setInteractionSecret("acct-a", "bot-token-a");
     setInteractionSecret("acct-b", "bot-token-b");

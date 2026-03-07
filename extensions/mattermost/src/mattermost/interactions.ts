@@ -162,13 +162,26 @@ export function getInteractionSecret(accountId?: string): string {
   );
 }
 
+function canonicalizeInteractionContext(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeInteractionContext(item));
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => [key, canonicalizeInteractionContext(entryValue)]);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
 export function generateInteractionToken(
   context: Record<string, unknown>,
   accountId?: string,
 ): string {
   const secret = getInteractionSecret(accountId);
-  // Sort keys for stable serialization — Mattermost may reorder context keys
-  const payload = JSON.stringify(context, Object.keys(context).sort());
+  const payload = JSON.stringify(canonicalizeInteractionContext(context));
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 

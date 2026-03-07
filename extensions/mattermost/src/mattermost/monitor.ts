@@ -61,7 +61,11 @@ import {
   renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
-import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
+import {
+  authorizeMattermostCommandInvocation,
+  isMattermostSenderAllowed,
+  normalizeMattermostAllowList,
+} from "./monitor-auth.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
@@ -807,6 +811,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   const runModelPickerCommand = async (params: {
     commandText: string;
+    commandAuthorized: boolean;
     route: ReturnType<typeof core.channel.routing.resolveAgentRoute>;
     channelId: string;
     senderId: string;
@@ -852,7 +857,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       MessageSid: `interaction:${params.postId}:${Date.now()}`,
       Timestamp: Date.now(),
       WasMentioned: true,
-      CommandAuthorized: true,
+      CommandAuthorized: params.commandAuthorized,
       CommandSource: "native" as const,
       OriginatingChannel: "mattermost" as const,
       OriginatingTo: to,
@@ -987,12 +992,71 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     const channelInfo = await resolveChannelInfo(params.payload.channel_id);
-    const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
-    const chatType = channelChatType(kind);
-    const teamId = channelInfo?.team_id ?? params.payload.team_id ?? undefined;
-    const channelName = channelInfo?.name ?? undefined;
-    const channelDisplay = channelInfo?.display_name ?? channelName ?? params.payload.channel_id;
-    const roomLabel = channelName ? `#${channelName}` : channelDisplay;
+    const pickerCommandText =
+      pickerState.action === "select"
+        ? `/model ${pickerState.provider}/${pickerState.model}`
+        : pickerState.action === "list"
+          ? `/models ${pickerState.provider}`
+          : "/models";
+    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+      cfg,
+      surface: "mattermost",
+    });
+    const hasControlCommand = core.channel.text.hasControlCommand(pickerCommandText, cfg);
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    const storeAllowFrom = normalizeMattermostAllowList(
+      await readStoreAllowFromForDmPolicy({
+        provider: "mattermost",
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
+    );
+    const auth = authorizeMattermostCommandInvocation({
+      account,
+      cfg,
+      senderId: params.payload.user_id,
+      senderName: params.userName,
+      channelId: params.payload.channel_id,
+      channelInfo,
+      storeAllowFrom,
+      allowTextCommands,
+      hasControlCommand,
+    });
+    if (!auth.ok) {
+      if (auth.denyReason === "dm-pairing") {
+        const { code } = await pairing.upsertPairingRequest({
+          id: params.payload.user_id,
+          meta: { name: params.userName },
+        });
+        return {
+          ephemeral_text: core.channel.pairing.buildPairingReply({
+            channel: "mattermost",
+            idLine: `Your Mattermost user id: ${params.payload.user_id}`,
+            code,
+          }),
+        };
+      }
+      const denyText =
+        auth.denyReason === "unknown-channel"
+          ? "Temporary error: unable to determine channel type. Please try again."
+          : auth.denyReason === "dm-disabled"
+            ? "This bot is not accepting direct messages."
+            : auth.denyReason === "channels-disabled"
+              ? "Model picker actions are disabled in channels."
+              : auth.denyReason === "channel-no-allowlist"
+                ? "Model picker actions are not configured for this channel."
+                : "Unauthorized.";
+      return {
+        ephemeral_text: denyText,
+      };
+    }
+    const kind = auth.kind;
+    const chatType = auth.chatType;
+    const teamId = auth.channelInfo.team_id ?? params.payload.team_id ?? undefined;
+    const channelName = auth.channelName || undefined;
+    const channelDisplay = auth.channelDisplay || auth.channelName || params.payload.channel_id;
+    const roomLabel = auth.roomLabel;
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "mattermost",
@@ -1064,6 +1128,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       try {
         await runModelPickerCommand({
           commandText: `/model ${targetModelRef}`,
+          commandAuthorized: auth.commandAuthorized,
           route,
           channelId: params.payload.channel_id,
           senderId: params.payload.user_id,
