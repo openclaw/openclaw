@@ -30,6 +30,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /** Zero-based attempt index within the outer run loop (retry/compaction). */
+  attemptIndex: number;
 };
 
 export type EmbeddedRunAttemptResult = {
