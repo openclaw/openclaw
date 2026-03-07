@@ -378,6 +378,10 @@ Findings include:
 - precedence shadowing (`auth-profiles.json` taking priority over `openclaw.json` refs)
 - legacy residues (`auth.json`, OAuth reminders)
 
+Header residue note:
+
+- Sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
+
 ### `secrets configure`
 
 Interactive helper that:

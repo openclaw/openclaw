@@ -65,6 +65,10 @@ Scan OpenClaw state for:
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
+Header residue note:
+
+- Sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
+
 ```bash
 openclaw secrets audit
 openclaw secrets audit --check
