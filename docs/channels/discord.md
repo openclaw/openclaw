@@ -1102,11 +1102,18 @@ openclaw logs --follow
 
     - `Listener DiscordMessageListener timed out after 30000ms for event MESSAGE_CREATE`
     - `Slow listener detected ...`
+    - `discord inbound worker timed out after ...`
 
-    Canonical knob:
+    Listener budget knob:
 
     - single-account: `channels.discord.eventQueue.listenerTimeout`
     - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
+
+    Worker run timeout knob:
+
+    - single-account: `channels.discord.inboundWorker.runTimeoutMs`
+    - multi-account: `channels.discord.accounts.<accountId>.inboundWorker.runTimeoutMs`
+    - default: `1800000` (30 minutes); set `0` to disable
 
     Recommended baseline:
 
@@ -1119,6 +1126,9 @@ openclaw logs --follow
           eventQueue: {
             listenerTimeout: 120000,
           },
+          inboundWorker: {
+            runTimeoutMs: 1800000,
+          },
         },
       },
     },
@@ -1126,7 +1136,8 @@ openclaw logs --follow
 }
 ```
 
-    Tune this first before adding alternate timeout controls elsewhere.
+    Use `eventQueue.listenerTimeout` for slow listener setup and `inboundWorker.runTimeoutMs`
+    only if you want a separate safety valve for queued agent turns.
 
   </Accordion>
 
@@ -1177,11 +1188,13 @@ High-signal Discord fields:
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
-- event queue: `eventQueue.listenerTimeout` (canonical), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
+- event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
+- inbound worker: `inboundWorker.runTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
+  - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
