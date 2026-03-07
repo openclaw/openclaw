@@ -16,6 +16,10 @@ vi.mock("./message-handler.process.js", () => ({
 
 const { createDiscordMessageHandler } = await import("./message-handler.js");
 
+function createSetStatusMock() {
+  return vi.fn<(patch: Record<string, unknown>) => void>();
+}
+
 function createDeferred<T = void>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {};
   const promise = new Promise<T>((innerResolve) => {
@@ -112,7 +116,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const setStatus = vi.fn();
+    const setStatus = createSetStatusMock();
     createDiscordMessageHandler(createHandlerParams({ setStatus }));
 
     expect(setStatus).toHaveBeenCalledWith(
@@ -141,7 +145,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         createPreflightContext(params.data.channel_id),
     );
 
-    const setStatus = vi.fn();
+    const setStatus = createSetStatusMock();
     const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
@@ -304,7 +308,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
 
     try {
-      const setStatus = vi.fn();
+      const setStatus = createSetStatusMock();
       const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
       await expect(
         handler(createMessageData("m-1") as never, {} as never),
@@ -351,7 +355,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         createPreflightContext(params.data.channel_id),
     );
 
-    const setStatus = vi.fn();
+    const setStatus = createSetStatusMock();
     const abortController = new AbortController();
     const handler = createDiscordMessageHandler(
       createHandlerParams({ setStatus, abortSignal: abortController.signal }),
@@ -386,7 +390,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         createPreflightContext(params.data.channel_id),
     );
 
-    const setStatus = vi.fn();
+    const setStatus = createSetStatusMock();
     const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
@@ -498,7 +502,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         createPreflightContext(params.data.channel_id),
     );
 
-    const setStatus = vi.fn();
+    const setStatus = createSetStatusMock();
     const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();

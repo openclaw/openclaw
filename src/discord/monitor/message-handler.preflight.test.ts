@@ -26,6 +26,26 @@ type DiscordConfig = NonNullable<
 >["discord"];
 type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 type DiscordClient = import("@buape/carbon").Client;
+type DiscordMessage = import("@buape/carbon").Message;
+type DiscordMessageAuthor = DiscordMessage["author"];
+type DiscordMessageAttachment = NonNullable<DiscordMessage["attachments"]>[number];
+
+function createDiscordAuthor(author: {
+  id: string;
+  bot: boolean;
+  username: string;
+}): DiscordMessageAuthor {
+  return author as unknown as DiscordMessageAuthor;
+}
+
+function createDiscordAttachment(attachment: {
+  id: string;
+  url: string;
+  content_type: string;
+  filename: string;
+}): DiscordMessageAttachment {
+  return attachment as unknown as DiscordMessageAttachment;
+}
 
 function createThreadBinding(
   overrides?: Partial<
@@ -155,11 +175,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: false,
-      author: {
+      author: createDiscordAuthor({
         id: "relay-bot-1",
         bot: true,
         username: "OpenClaw",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     const result = await preflightDiscordMessage({
@@ -241,11 +261,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: false,
-      author: {
+      author: createDiscordAuthor({
         id: "relay-bot-1",
         bot: true,
         username: "Relay",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     registerSessionBindingAdapter({
@@ -332,11 +352,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: false,
-      author: {
+      author: createDiscordAuthor({
         id: "relay-bot-1",
         bot: true,
         username: "Relay",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     registerSessionBindingAdapter({
@@ -400,11 +420,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: false,
-      author: {
+      author: createDiscordAuthor({
         id: "relay-bot-1",
         bot: true,
         username: "Relay",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     const result = await preflightDiscordMessage({
@@ -542,11 +562,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [{ id: "999" }],
       mentionedRoles: [],
       mentionedEveryone: false,
-      author: {
+      author: createDiscordAuthor({
         id: "user-1",
         bot: false,
         username: "Alice",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     const result = await preflightDiscordMessage({
@@ -619,11 +639,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: true,
-      author: {
+      author: createDiscordAuthor({
         id: "user-1",
         bot: false,
         username: "Alice",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     const result = await preflightDiscordMessage({
@@ -697,11 +717,11 @@ describe("preflightDiscordMessage", () => {
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: true,
-      author: {
+      author: createDiscordAuthor({
         id: "relay-bot-1",
         bot: true,
         username: "Relay",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     const result = await preflightDiscordMessage({
@@ -773,21 +793,21 @@ describe("preflightDiscordMessage", () => {
       timestamp: new Date().toISOString(),
       channelId,
       attachments: [
-        {
+        createDiscordAttachment({
           id: "att-1",
           url: "https://cdn.discordapp.com/attachments/voice.ogg",
           content_type: "audio/ogg",
           filename: "voice.ogg",
-        },
+        }),
       ],
       mentionedUsers: [],
       mentionedRoles: [],
       mentionedEveryone: false,
-      author: {
+      author: createDiscordAuthor({
         id: "user-1",
         bot: false,
         username: "Alice",
-      },
+      }),
     } as unknown as import("@buape/carbon").Message;
 
     const result = await preflightDiscordMessage(

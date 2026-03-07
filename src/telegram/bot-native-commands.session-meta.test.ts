@@ -12,6 +12,8 @@ type ResolveConfiguredAcpBindingRecordFn =
   typeof import("../acp/persistent-bindings.js").resolveConfiguredAcpBindingRecord;
 type EnsureConfiguredAcpBindingSessionFn =
   typeof import("../acp/persistent-bindings.js").ensureConfiguredAcpBindingSession;
+type ResolvedConfiguredAcpBinding =
+  import("../acp/persistent-bindings.js").ResolvedConfiguredAcpBinding;
 
 const persistentBindingMocks = vi.hoisted(() => ({
   resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredAcpBindingRecordFn>(() => null),
@@ -87,6 +89,32 @@ function createDeferred<T>() {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+function createConfiguredTopicBinding(targetSessionKey: string): ResolvedConfiguredAcpBinding {
+  return {
+    spec: {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890:topic:42",
+      parentConversationId: "-1001234567890",
+      agentId: "codex",
+      mode: "persistent",
+    },
+    record: {
+      bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-1001234567890:topic:42",
+        parentConversationId: "-1001234567890",
+      },
+      status: "active",
+      boundAt: 0,
+    },
+  } satisfies ResolvedConfiguredAcpBinding;
 }
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
@@ -254,29 +282,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   it("routes Telegram native commands through configured ACP topic bindings", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
-    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
-      spec: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:42",
-        parentConversationId: "-1001234567890",
-        agentId: "codex",
-        mode: "persistent",
-      },
-      record: {
-        bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
-        targetSessionKey: boundSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-1001234567890:topic:42",
-          parentConversationId: "-1001234567890",
-        },
-        status: "active",
-        boundAt: 0,
-      },
-    });
+    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(
+      createConfiguredTopicBinding(boundSessionKey),
+    );
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
       ok: true,
       sessionKey: boundSessionKey,
@@ -359,29 +367,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
-    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
-      spec: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:42",
-        parentConversationId: "-1001234567890",
-        agentId: "codex",
-        mode: "persistent",
-      },
-      record: {
-        bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
-        targetSessionKey: boundSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-1001234567890:topic:42",
-          parentConversationId: "-1001234567890",
-        },
-        status: "active",
-        boundAt: 0,
-      },
-    });
+    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(
+      createConfiguredTopicBinding(boundSessionKey),
+    );
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
       ok: false,
       sessionKey: boundSessionKey,
@@ -405,29 +393,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   it("keeps /new blocked in ACP-bound Telegram topics when sender is unauthorized", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
-    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
-      spec: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:42",
-        parentConversationId: "-1001234567890",
-        agentId: "codex",
-        mode: "persistent",
-      },
-      record: {
-        bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
-        targetSessionKey: boundSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-1001234567890:topic:42",
-          parentConversationId: "-1001234567890",
-        },
-        status: "active",
-        boundAt: 0,
-      },
-    });
+    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(
+      createConfiguredTopicBinding(boundSessionKey),
+    );
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
       ok: true,
       sessionKey: boundSessionKey,

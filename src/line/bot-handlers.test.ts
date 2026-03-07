@@ -65,8 +65,13 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
+type ProcessLineMessage = import("./bot-handlers.js").LineHandlerContext["processMessage"];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+
+function createProcessMessageMock() {
+  return vi.fn<ProcessLineMessage>(async () => undefined);
+}
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: readAllowFromStoreMock,
@@ -86,7 +91,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("blocks group messages when groupPolicy is disabled", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m1", type: "text", text: "hi" },
@@ -118,7 +123,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("blocks group messages when allowlist is empty", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m2", type: "text", text: "hi" },
@@ -150,7 +155,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("allows group messages when sender is in groupAllowFrom", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m3", type: "text", text: "hi" },
@@ -185,7 +190,7 @@ describe("handleLineWebhookEvents", () => {
 
   it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
     readAllowFromStoreMock.mockResolvedValueOnce(["user-store"]);
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m5", type: "text", text: "hi" },
@@ -221,7 +226,7 @@ describe("handleLineWebhookEvents", () => {
 
   it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
     readAllowFromStoreMock.mockResolvedValueOnce(["user-5"]);
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m5b", type: "text", text: "hi" },
@@ -258,7 +263,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("blocks group messages when wildcard group config disables groups", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m4", type: "text", text: "hi" },
@@ -290,7 +295,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("scopes DM pairing requests to accountId", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m5", type: "text", text: "hi" },
@@ -328,7 +333,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("does not authorize DM senders from another account's pairing-store entries", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     readAllowFromStoreMock.mockImplementation(async (...args: unknown[]) => {
       const accountId = args[2] as string | undefined;
       if (accountId === "work") {
@@ -376,7 +381,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("deduplicates replayed webhook events by webhookEventId before processing", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m-replay", type: "text", text: "hello" },
@@ -416,7 +421,7 @@ describe("handleLineWebhookEvents", () => {
     const firstDone = new Promise<void>((resolve) => {
       resolveFirst = resolve;
     });
-    const processMessage = vi.fn(async () => {
+    const processMessage = createProcessMessageMock().mockImplementation(async () => {
       await firstDone;
     });
     const event = {
@@ -461,7 +466,7 @@ describe("handleLineWebhookEvents", () => {
     const firstDone = new Promise<void>((_, reject) => {
       rejectFirst = reject;
     });
-    const processMessage = vi.fn(async () => {
+    const processMessage = createProcessMessageMock().mockImplementation(async () => {
       await firstDone;
     });
     const event = {
@@ -502,7 +507,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     const event = {
       type: "message",
       message: { id: "m-dup-1", type: "text", text: "hello" },
@@ -549,7 +554,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("deduplicates postback redeliveries by webhookEventId when replyToken changes", async () => {
-    const processMessage = vi.fn();
+    const processMessage = createProcessMessageMock();
     buildLinePostbackContextMock.mockResolvedValue({
       ctxPayload: { From: "line:user:user-postback" },
       route: { agentId: "default" },
@@ -600,8 +605,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("does not mark replay cache when event processing fails", async () => {
-    const processMessage = vi
-      .fn()
+    const processMessage = createProcessMessageMock()
       .mockRejectedValueOnce(new Error("transient failure"))
       .mockResolvedValueOnce(undefined);
     const event = {
