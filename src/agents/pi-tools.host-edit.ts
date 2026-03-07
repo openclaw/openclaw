@@ -18,6 +18,9 @@ function resolveHostEditPath(root: string, pathParam: string): string {
  * the file may be correctly updated but the tool reports failure. This wrapper catches errors and
  * if the target file on disk contains the intended newText, returns success so we don't surface
  * a false "edit failed" to the user (fixes #32333, same pattern as #30773 for write).
+ *
+ * Fix for #27082: Also verify the file content actually changed by comparing before/after,
+ * avoiding false positives when newText already existed in the file before the edit attempt.
  */
 export function wrapHostEditToolWithPostWriteRecovery(
   base: AnyAgentTool,
@@ -31,12 +34,24 @@ export function wrapHostEditToolWithPostWriteRecovery(
       signal: AbortSignal | undefined,
       onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
+      const record =
+        params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+      const pathParam = record && typeof record.path === "string" ? record.path : undefined;
+
+      // Read original content before attempting edit (for #27082 fix)
+      let originalContent: string | undefined;
+      if (pathParam) {
+        try {
+          const absolutePath = resolveHostEditPath(root, pathParam);
+          originalContent = await fs.readFile(absolutePath, "utf-8");
+        } catch {
+          // File doesn't exist yet or unreadable; that's ok, originalContent stays undefined
+        }
+      }
+
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
       } catch (err) {
-        const record =
-          params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-        const pathParam = record && typeof record.path === "string" ? record.path : undefined;
         const newText =
           record && typeof record.newText === "string"
             ? record.newText
@@ -61,7 +76,9 @@ export function wrapHostEditToolWithPostWriteRecovery(
           const hasNew = content.includes(newText);
           const stillHasOld =
             oldText !== undefined && oldText.length > 0 && content.includes(oldText);
-          if (hasNew && !stillHasOld) {
+          // Fix for #27082: Also verify the file actually changed (not just newText already existed)
+          const fileChanged = originalContent === undefined || originalContent !== content;
+          if (hasNew && !stillHasOld && fileChanged) {
             return {
               content: [
                 {
