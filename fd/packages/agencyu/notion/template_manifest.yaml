@@ -1,0 +1,1772 @@
+version: "2.1"
+template_version: "1.0.0"
+os_version: "agencyos+fulldigital.1"
+owner: "openclaw"
+
+governance:
+  schema_lock:
+    enabled: true
+    discipline: "openclaw_only"
+    human_changes_not_allowed: true
+    human_edit_policy:
+      allow_db_row_edits: true
+      allow_property_edits: false
+      allow_view_edits: false
+    enforcement:
+      write_lock_property: "write_lock"
+      write_lock_default: true
+  write_lock_default: true
+  require_version_match: true
+
+  # Integration philosophy
+  integrations_mode: "clawdcursor_preferred"
+  integrations_policy:
+    primary: "clawdcursor skill (browser/Operator-style + human-in-the-loop)"
+    secondary: "API connectors where stable + low-risk (Trello, Stripe, Notion)"
+    principle: "Minimize OAuth; maximize deterministic ops + verifiable state in Notion"
+
+root_page:
+  required: true
+
+required_root_pages:
+  - page_key: "command_center"
+    title: "Command Center"
+    purpose: "Primary operational dashboard. Widgets live here. Global + per-brand sections."
+  - page_key: "fd_hq"
+    title: "Full Digital HQ"
+    purpose: "Brand dashboard for Full Digital — filtered pipeline, delivery, cash, incidents."
+    parent: "root"
+  - page_key: "cutmv_hq"
+    title: "CUTMV HQ"
+    purpose: "Brand dashboard for CUTMV — filtered pipeline, delivery, cash, incidents."
+    parent: "fd_hq"
+  - page_key: "ops_console"
+    title: "Ops Console"
+    purpose: "Admin-only tools, compliance, runbooks, audits."
+  - page_key: "system_settings"
+    title: "System Settings"
+    purpose: "Template versions, write_lock, last_verified_at, integration toggles."
+  - page_key: "client_portal_root"
+    title: "Client Portals"
+    purpose: "Parent page for all client portal pages."
+
+# UX rules (5-year-old standard)
+ux_rules:
+  layout:
+    max_heading_levels: 2  # H1 and H2 only
+    panels: "callout"      # Callouts as panels
+    separators: "divider"  # Dividers between panels
+    widget_structure:
+      - "simple_title"
+      - "one_sentence_instruction"
+      - "data"
+    command_center_shows_only:
+      - "What to do now"
+      - "What is broken"
+      - "Who needs attention"
+  text:
+    no_jargon: true
+    examples:
+      - { bad: "attended events", good: "Calls Showed" }
+      - { bad: "gross receipts", good: "Money In (7 days)" }
+    every_widget_includes: "What should I do?"
+  color_structure:
+    callout_role: "panels"
+    divider_role: "between panels"
+    icons: "on callouts for quick scanning, body text plain"
+  safety:
+    write_lock_banner: "If write_lock is on, UI shows a big Locked banner"
+    missing_views_fallback: "Widget becomes Repair instructions block, not blank"
+
+brands:
+  - brand_key: "fulldigital"
+    name: "Full Digital"
+    role: "parent"
+  - brand_key: "cutmv"
+    name: "CUTMV"
+    role: "child"
+    parent_brand: "fulldigital"
+
+databases:
+
+  # ════════════════════════════════════════════
+  # LAYER 0: SYSTEM (OpenClaw-controlled)
+  # ════════════════════════════════════════════
+
+  brands:
+    title: "Brands"
+    required: true
+    description: "Brand registry — Full Digital (parent) and CUTMV (child). All operational DBs link here."
+    properties:
+      name:
+        type: title
+        required: true
+      brand_key:
+        type: rich_text
+        required: true
+      parent_brand:
+        type: relation
+        target: brands
+        required: false
+      hq_page:
+        type: url
+        required: false
+      is_parent_org:
+        type: checkbox
+        required: true
+      primary_domain:
+        type: url
+        required: false
+      default_currency:
+        type: select
+        options:
+          - USD
+          - CAD
+        required: false
+      default_timezone:
+        type: select
+        options:
+          - America/New_York
+          - America/Chicago
+          - America/Los_Angeles
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - All Brands
+
+  system_settings:
+    title: "System Settings"
+    required: true
+    description: "OpenClaw-controlled settings — version pinning, locks, timestamps"
+    properties:
+      name:
+        type: title
+        required: true
+      template_version:
+        type: rich_text
+        required: true
+      os_version:
+        type: rich_text
+        required: true
+      write_lock:
+        type: checkbox
+        required: true
+      last_verified_at:
+        type: date
+        required: false
+      last_heal_at:
+        type: date
+        required: false
+      last_reconcile_at:
+        type: date
+        required: false
+      notion_root_page_id:
+        type: rich_text
+        required: true
+      views_registry_db_id:
+        type: rich_text
+        required: false
+      system_audit_log_db_id:
+        type: rich_text
+        required: false
+      manifest_hash:
+        type: rich_text
+        required: false
+      capacity_override_ok_to_scale:
+        type: checkbox
+        required: false
+      capacity_override_expires_at:
+        type: date
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - System Status
+
+  views_registry:
+    title: "Views Registry"
+    required: true
+    description: "Required views registry (API-safe view verification)"
+    properties:
+      name:
+        type: title
+        required: true
+      database_key:
+        type: select
+        options:
+          - brands
+          - system_settings
+          - views_registry
+          - clients
+          - outcomes
+          - projects
+          - tasks
+          - efforts
+          - work_orders
+          - crm_pipeline
+          - attribution_touchpoints
+          - invoices
+          - expenses
+          - meetings
+          - contacts
+          - sop_library
+          - agency_assets
+          - client_assets
+          - team_directory
+          - system_audit_log
+          - skills_backlog
+          - goals
+          - daily_plan
+          - schedule
+        required: true
+      required:
+        type: checkbox
+        required: true
+      status:
+        type: select
+        options:
+          - ok
+          - missing
+          - unknown
+        required: true
+      last_verified_at:
+        type: date
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Missing Views
+      - By Database
+
+  system_audit_log:
+    title: "System Audit Log"
+    required: true
+    description: "System-wide audit trail for OpenClaw actions (human-readable + machine-parsable)"
+    properties:
+      name:
+        type: title
+        required: true
+      ts:
+        type: date
+        required: true
+      correlation_id:
+        type: rich_text
+        required: true
+      system:
+        type: select
+        options:
+          - openclaw
+          - notion
+          - trello
+          - ghl
+          - stripe
+          - quickbooks
+          - manychat
+          - clickfunnels
+        required: true
+      action:
+        type: rich_text
+        required: true
+      target:
+        type: rich_text
+        required: false
+      result:
+        type: select
+        options:
+          - ok
+          - blocked
+          - failed
+          - simulated
+        required: true
+      stop_reason:
+        type: rich_text
+        required: false
+      payload_json:
+        type: rich_text
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Recent (24h)
+      - Failures
+      - By System
+      - By Correlation
+
+  approvals:
+    title: "Approvals"
+    required: false
+    description: "Read-only mirror of approval queue — shows pending/recent approvals with Telegram deep links"
+    properties:
+      approval_id:
+        type: title
+        required: true
+      brand:
+        type: select
+        options:
+          - fulldigital
+          - cutmv
+        required: true
+      action_type:
+        type: rich_text
+        required: true
+      risk:
+        type: select
+        options:
+          - low
+          - medium
+          - high
+        required: true
+      spend_impact:
+        type: number
+        required: false
+      why_now:
+        type: rich_text
+        required: false
+      rollback_plan:
+        type: rich_text
+        required: false
+      status:
+        type: select
+        options:
+          - PENDING
+          - APPROVED_STEP1
+          - APPROVED
+          - DENIED
+          - EXPIRED
+        required: true
+      expires_at:
+        type: date
+        required: false
+      correlation_id:
+        type: rich_text
+        required: false
+      telegram_link:
+        type: url
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Pending
+      - Recent
+
+  # ════════════════════════════════════════════
+  # LAYER 1: CORE EXECUTION
+  # ════════════════════════════════════════════
+
+  clients:
+    title: "Clients"
+    required: true
+    description: "Master client registry — hub for all cross-system IDs"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      ghl_contact_id:
+        type: rich_text
+        required: true
+      trello_board_id:
+        type: rich_text
+        required: true
+      stripe_customer_id:
+        type: rich_text
+        required: false
+      qb_customer_id:
+        type: rich_text
+        required: false
+      notion_client_page_id:
+        type: rich_text
+        required: false
+      dropbox_master_folder_url:
+        type: url
+        required: false
+      service_package:
+        type: select
+        options:
+          - Retainer
+          - Rollout
+          - CutMV
+          - Custom
+        required: true
+      status:
+        type: select
+        options:
+          - Lead
+          - Active
+          - Paused
+          - Completed
+        required: true
+      lifecycle_state:
+        type: select
+        options:
+          - prospect
+          - onboarding
+          - active
+          - at_risk
+          - churned
+          - completed
+        required: false
+      mrr:
+        type: number
+        required: false
+      start_date:
+        type: date
+        required: false
+      last_activity_at:
+        type: date
+        required: false
+      last_invoice_paid_at:
+        type: date
+        required: false
+      open_tasks_count:
+        type: number
+        required: false
+      health_score:
+        type: number
+        required: false
+      churn_risk:
+        type: select
+        options:
+          - Low
+          - Medium
+          - High
+        required: false
+      alerts_enabled:
+        type: checkbox
+        required: false
+      last_synced_at:
+        type: date
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Active Clients
+      - By Service Package
+      - Churn Risk
+      - MRR Overview
+
+  outcomes:
+    title: "Outcomes"
+    required: true
+    description: "Strategic goals per client engagement"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: true
+      status:
+        type: select
+        options:
+          - Planned
+          - In Progress
+          - Achieved
+          - Dropped
+        required: true
+      target_date:
+        type: date
+        required: false
+      kpi_metric:
+        type: rich_text
+        required: false
+      kpi_target:
+        type: number
+        required: false
+      kpi_actual:
+        type: number
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - By Client
+      - Active Outcomes
+
+  projects:
+    title: "Projects"
+    required: true
+    description: "Scoped units of work under outcomes"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: true
+      outcome:
+        type: relation
+        target: outcomes
+        required: false
+      status:
+        type: select
+        options:
+          - Planned
+          - Active
+          - Blocked
+          - Completed
+          - Cancelled
+        required: true
+      priority:
+        type: select
+        options:
+          - Low
+          - Medium
+          - High
+          - Urgent
+        required: false
+      start_date:
+        type: date
+        required: false
+      due_date:
+        type: date
+        required: false
+      project_type:
+        type: select
+        options:
+          - Content
+          - Ads
+          - Funnel
+          - Branding
+          - Strategy
+          - Custom
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Active Projects
+      - By Client
+      - Blocked
+
+  tasks:
+    title: "Tasks"
+    required: true
+    description: "Atomic deliverables within projects (may mirror Trello cards)"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: false
+      project:
+        type: relation
+        target: projects
+        required: false
+      assignee:
+        type: rich_text
+        required: false
+      status:
+        type: select
+        options:
+          - Backlog
+          - In Progress
+          - Needs Review
+          - Done
+          - Archived
+        required: true
+      priority:
+        type: select
+        options:
+          - Low
+          - Medium
+          - High
+          - Urgent
+        required: false
+      due_date:
+        type: date
+        required: false
+      estimated_hours:
+        type: number
+        required: false
+      task_type:
+        type: select
+        options:
+          - Design
+          - Copy
+          - Video
+          - Dev
+          - Strategy
+          - QA
+          - Admin
+        required: false
+      trello_card_id:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Open Tasks
+      - Overdue Tasks
+      - By Assignee
+      - Needs Review Queue
+
+  efforts:
+    title: "Efforts"
+    required: true
+    description: "Time entries / resource allocation"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      task:
+        type: relation
+        target: tasks
+        required: true
+      team_member:
+        type: rich_text
+        required: true
+      hours:
+        type: number
+        required: true
+      date:
+        type: date
+        required: true
+      billable:
+        type: checkbox
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - By Team Member
+      - This Week
+      - By Project
+
+  # ════════════════════════════════════════════
+  # LAYER 2: FULFILLMENT MIRROR (Trello truth)
+  # ════════════════════════════════════════════
+
+  work_orders:
+    title: "Work Orders (Trello Mirror)"
+    required: true
+    description: "Mirror of client-facing Trello cards — never manually edited"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      trello_card_id:
+        type: rich_text
+        required: true
+      trello_board_id:
+        type: rich_text
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: true
+      status:
+        type: select
+        options:
+          - Requests
+          - In Progress
+          - Needs Review / Feedback
+          - Approved / Ready for Delivery
+          - Published / Delivered
+        required: true
+      due_complete:
+        type: checkbox
+        required: true
+      truth_badge:
+        type: select
+        options:
+          - trello
+          - ghl
+          - stripe
+          - notion
+        required: true
+      current_draft_url:
+        type: url
+        required: false
+      current_final_url:
+        type: url
+        required: false
+      delivery_links_json:
+        type: rich_text
+        required: false
+      last_synced_at:
+        type: date
+        required: true
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Active Work
+      - Needs Review
+      - Release Queue
+      - Published Archive
+
+  # ════════════════════════════════════════════
+  # LAYER 3: SALES (GHL mirror + attribution)
+  # ════════════════════════════════════════════
+
+  crm_pipeline:
+    title: "CRM Pipeline"
+    required: true
+    description: "Sales tracking — GHL pipeline mirror + attribution"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      ghl_contact_id:
+        type: rich_text
+        required: true
+      stage:
+        type: select
+        options:
+          - New
+          - Qualified
+          - Booked
+          - Showed
+          - Closed Won
+          - Closed Lost
+        required: true
+      utm_source:
+        type: rich_text
+        required: false
+      utm_campaign:
+        type: rich_text
+        required: false
+      utm_adset:
+        type: rich_text
+        required: false
+      utm_ad:
+        type: rich_text
+        required: false
+      manychat_subscriber_id:
+        type: rich_text
+        required: false
+      manychat_tags:
+        type: multi_select
+        options:
+          - qualified
+          - booked
+          - no_show
+          - nurture
+        required: false
+      assigned_setter:
+        type: rich_text
+        required: false
+      appointment_key:
+        type: rich_text
+        required: false
+      setter_id:
+        type: rich_text
+        required: false
+      calendar_source:
+        type: select
+        options:
+          - ghl
+          - calendly
+        required: false
+      source:
+        type: select
+        options:
+          - Instagram
+          - Meta
+          - ClickFunnels
+          - Referral
+          - Organic
+        required: false
+      booked_call_date:
+        type: date
+        required: false
+      deal_value:
+        type: number
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Pipeline Kanban
+      - Hot Leads
+      - Booked This Week
+      - Attribution by Campaign
+
+  attribution_touchpoints:
+    title: "Attribution Touchpoints"
+    required: true
+    description: "Canonical attribution object across ManyChat/GHL/Stripe/QB"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      ghl_contact_id:
+        type: rich_text
+        required: false
+      manychat_subscriber_id:
+        type: rich_text
+        required: false
+      utm_source:
+        type: rich_text
+        required: false
+      utm_campaign:
+        type: rich_text
+        required: false
+      utm_adset:
+        type: rich_text
+        required: false
+      utm_ad:
+        type: rich_text
+        required: false
+      utm_content:
+        type: rich_text
+        required: false
+      clickfunnels_funnel_id:
+        type: rich_text
+        required: false
+      first_seen_at:
+        type: date
+        required: false
+      last_seen_at:
+        type: date
+        required: false
+      confidence:
+        type: select
+        options:
+          - high
+          - medium
+          - low
+        required: false
+      stripe_customer_id:
+        type: rich_text
+        required: false
+      stripe_payment_intent_id:
+        type: rich_text
+        required: false
+      qb_invoice_id:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - By Campaign
+      - Unlinked Payments
+
+  # ════════════════════════════════════════════
+  # LAYER 4: FINANCE (Stripe/QB mirror)
+  # ════════════════════════════════════════════
+
+  invoices:
+    title: "Invoices"
+    required: true
+    description: "Stripe/QuickBooks invoice mirror with reconciliation"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: false
+      ghl_contact_id:
+        type: rich_text
+        required: false
+      stripe_payment_intent_id:
+        type: rich_text
+        required: false
+      stripe_invoice_id:
+        type: rich_text
+        required: false
+      qb_invoice_id:
+        type: rich_text
+        required: false
+      invoice_id:
+        type: rich_text
+        required: true
+      amount:
+        type: number
+        required: true
+      period:
+        type: rich_text
+        required: false
+      status:
+        type: select
+        options:
+          - Draft
+          - Sent
+          - Paid
+          - Overdue
+          - Cancelled
+        required: true
+      issued_date:
+        type: date
+        required: true
+      paid_date:
+        type: date
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Outstanding Invoices
+      - Paid Last 30 Days
+      - Revenue by Client
+
+  expenses:
+    title: "Expenses"
+    required: true
+    description: "Cost tracking — ad spend, operations, contractor payments"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      amount:
+        type: number
+        required: true
+      category:
+        type: select
+        options:
+          - Ad Spend
+          - Software
+          - Contractors
+          - Payroll
+          - Taxes
+          - Other
+        required: true
+      campaign:
+        type: rich_text
+        required: false
+      vendor:
+        type: rich_text
+        required: false
+      date:
+        type: date
+        required: true
+      recurring:
+        type: checkbox
+        required: false
+      qb_expense_id:
+        type: rich_text
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - This Month
+      - By Category
+      - Ad Spend ROI
+
+  # ════════════════════════════════════════════
+  # LAYER 5: COMMUNICATION
+  # ════════════════════════════════════════════
+
+  meetings:
+    title: "Meetings"
+    required: true
+    description: "Meeting log with client relation"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: false
+      date:
+        type: date
+        required: true
+      meeting_type:
+        type: select
+        options:
+          - Discovery
+          - Strategy
+          - Review
+          - Onboarding
+          - Check-in
+          - Ad Hoc
+        required: false
+      attendees:
+        type: rich_text
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      action_items:
+        type: rich_text
+        required: false
+      recording_url:
+        type: url
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - This Week
+      - By Client
+
+  contacts:
+    title: "Contacts"
+    required: true
+    description: "External contacts directory"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      email:
+        type: email
+        required: false
+      phone:
+        type: phone_number
+        required: false
+      company:
+        type: rich_text
+        required: false
+      role:
+        type: rich_text
+        required: false
+      contact_type:
+        type: select
+        options:
+          - Client
+          - Lead
+          - Partner
+          - Vendor
+          - Contractor
+        required: false
+      ghl_contact_id:
+        type: rich_text
+        required: false
+      client:
+        type: relation
+        target: clients
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - By Client
+      - By Type
+
+  # ════════════════════════════════════════════
+  # LAYER 6: KNOWLEDGE & OPERATIONS
+  # ════════════════════════════════════════════
+
+  sop_library:
+    title: "SOP Library"
+    required: true
+    description: "Versioned standard operating procedures"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      department:
+        type: select
+        options:
+          - Sales
+          - Fulfillment
+          - Operations
+          - Finance
+          - Hiring
+          - QA
+          - System Governance
+        required: true
+      owner:
+        type: rich_text
+        required: false
+      version:
+        type: rich_text
+        required: false
+      status:
+        type: select
+        options:
+          - Draft
+          - Active
+          - Deprecated
+        required: true
+      last_updated:
+        type: date
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Active SOPs
+      - By Department
+
+  agency_assets:
+    title: "Agency Assets"
+    required: true
+    description: "Internal templates, contracts, branding guidelines"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      asset_type:
+        type: select
+        options:
+          - Proposal
+          - Contract
+          - Brand
+          - Template
+          - Automation Diagram
+          - Other
+        required: false
+      url:
+        type: url
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - By Type
+
+  client_assets:
+    title: "Client Assets"
+    required: true
+    description: "Per-client brand kits, logos, credentials"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      client:
+        type: relation
+        target: clients
+        required: true
+      asset_type:
+        type: select
+        options:
+          - Brand Kit
+          - Logos
+          - Fonts
+          - Colors
+          - Guidelines
+          - Links
+          - Other
+        required: false
+      url:
+        type: url
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - By Client
+
+  skills_backlog:
+    title: "Skills Backlog"
+    required: false
+    description: "Skill fork tracking — one row per fork request"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: false
+      skill_key:
+        type: rich_text
+        required: true
+      source_url:
+        type: url
+        required: false
+      trust_tier:
+        type: select
+        options:
+          - official
+          - curated
+          - community
+          - unknown
+        required: true
+      fit_score:
+        type: number
+        required: false
+      risk_score:
+        type: number
+        required: false
+      recommended_mode:
+        type: select
+        options:
+          - safe_then_confirm
+          - confirm_only
+          - do_not_install
+        required: true
+      status:
+        type: select
+        options:
+          - Pending Review
+          - In Progress
+          - Approved
+          - Rejected
+        required: true
+      pain_point:
+        type: rich_text
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      checklist_page_url:
+        type: url
+        required: false
+      created_at:
+        type: date
+        required: false
+      last_updated_at:
+        type: date
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Pending Review
+      - By Trust Tier
+
+  # ════════════════════════════════════════════
+  # LAYER 7: EXECUTIVE OPERATING SYSTEM
+  # ════════════════════════════════════════════
+
+  goals:
+    title: "Goals"
+    required: true
+    description: "Brand-level daily/weekly targets. Each row = one KPI goal for one brand."
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      kpi_key:
+        type: select
+        options:
+          - calls_booked
+          - trials
+          - paid
+          - revenue
+          - close_rate
+        required: true
+      cadence:
+        type: select
+        options:
+          - daily
+          - weekly
+        required: true
+      target_value:
+        type: number
+        required: true
+      current_value:
+        type: number
+        required: false
+      progress_pct:
+        type: number
+        required: false
+      status:
+        type: select
+        options:
+          - Active
+          - Paused
+          - Achieved
+          - Dropped
+        required: true
+      start_date:
+        type: date
+        required: false
+      end_date:
+        type: date
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Active Goals
+      - By Brand
+
+  daily_plan:
+    title: "Daily Plan"
+    required: true
+    description: "One row per day per brand — aggregated schedule + goal snapshot for CC display."
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      plan_date:
+        type: date
+        required: true
+      goal_chip:
+        type: rich_text
+        required: false
+      schedule_summary:
+        type: rich_text
+        required: false
+      top_priorities_json:
+        type: rich_text
+        required: false
+      blockers_json:
+        type: rich_text
+        required: false
+      status:
+        type: select
+        options:
+          - Draft
+          - Active
+          - Reviewed
+          - Archived
+        required: true
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Today
+      - This Week
+
+  schedule:
+    title: "Schedule"
+    required: true
+    description: "Unified schedule aggregating Trello due dates, Google Calendar events, and GHL appointments."
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      source:
+        type: select
+        options:
+          - trello
+          - gcal
+          - ghl
+          - manual
+        required: true
+      external_key:
+        type: rich_text
+        required: false
+      event_type:
+        type: select
+        options:
+          - deadline
+          - meeting
+          - focus_block
+          - reminder
+          - appointment
+        required: true
+      start_time:
+        type: date
+        required: true
+      end_time:
+        type: date
+        required: false
+      all_day:
+        type: checkbox
+        required: false
+      location:
+        type: rich_text
+        required: false
+      attendees:
+        type: rich_text
+        required: false
+      trello_card_id:
+        type: rich_text
+        required: false
+      gcal_event_id:
+        type: rich_text
+        required: false
+      ghl_appointment_id:
+        type: rich_text
+        required: false
+      status:
+        type: select
+        options:
+          - Scheduled
+          - In Progress
+          - Completed
+          - Cancelled
+        required: true
+      conflict_flag:
+        type: checkbox
+        required: false
+      notes:
+        type: rich_text
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Today
+      - This Week
+      - Conflicts
+      - By Source
+
+  team_directory:
+    title: "Team Directory"
+    required: true
+    description: "Team members, capacity, roles"
+    properties:
+      name:
+        type: title
+        required: true
+      brand:
+        type: relation
+        target: brands
+        required: true
+      role:
+        type: select
+        options:
+          - CEO
+          - Ops Lead
+          - Designer
+          - Editor
+          - Copywriter
+          - Strategist
+          - Developer
+          - Setter
+          - Contractor
+        required: true
+      email:
+        type: email
+        required: false
+      status:
+        type: select
+        options:
+          - Active
+          - On Leave
+          - Inactive
+        required: true
+      max_concurrent_tasks:
+        type: number
+        required: false
+      current_tasks:
+        type: number
+        required: false
+      utilization_pct:
+        type: number
+        required: false
+      system_managed:
+        type: checkbox
+        required: true
+    required_views:
+      - Active Team
+      - By Role
+
+# ════════════════════════════════════════════
+# COMMAND CENTER — Widget coverage requirements
+# ════════════════════════════════════════════
+
+command_center:
+  required_blocks:
+    - block_key: "cc.brand_switcher.heading"
+      type: "heading_2"
+      text: "Choose a Brand"
+    - block_key: "cc.brand_switcher.row"
+      type: "column_list"
+      children:
+        - block_key: "cc.brand_switcher.fulldigital"
+          type: "callout"
+          emoji: "\U0001f3e2"
+          title: "Full Digital"
+          one_liner: "Run the agency engine."
+          funnels: "Primary funnels: High-ticket agency"
+          kpi: "Primary KPI: booked calls"
+          badge_markers: true
+          link_target: "fd_hq"
+        - block_key: "cc.brand_switcher.cutmv"
+          type: "callout"
+          emoji: "\U0001f9e9"
+          title: "CUTMV"
+          one_liner: "Run the product engine."
+          funnels: "Primary funnels: Self-serve SaaS"
+          kpi: "Primary KPI: trials \u2192 paid"
+          badge_markers: true
+          link_target: "cutmv_hq"
+
+  required_widgets:
+    - widget_key: "cc.executive_strip"
+      title: "Executive Strip"
+      purpose: "KPI row + status pills — at-a-glance business health"
+      required_view_keys:
+        - "cc.active_combos"
+        - "cc.pipeline_quality"
+        - "cc.finance_snapshot"
+    - widget_key: "cc.active_combos_table"
+      title: "Active Combos"
+      purpose: "Active client outcomes dashboard"
+      required_view_keys:
+        - "cc.active_combos"
+    - widget_key: "cc.pipeline_quality_panel"
+      title: "Pipeline Quality"
+      purpose: "Calls booked/showed/close-rate metrics"
+      required_view_keys:
+        - "cc.pipeline_quality"
+        - "meetings.showed_7d"
+    - widget_key: "cc.fulfillment_watchlist"
+      title: "Fulfillment Watchlist"
+      purpose: "Tasks due today + overdue items"
+      required_view_keys:
+        - "cc.fulfillment_watchlist"
+        - "tasks.today"
+    - widget_key: "cc.finance_snapshot"
+      title: "Finance Snapshot"
+      purpose: "Money in, money out, open invoices"
+      required_view_keys:
+        - "cc.finance_snapshot"
+    - widget_key: "cc.systems_reliability"
+      title: "Systems Reliability"
+      purpose: "Drift count, last heal, audit errors, backup status"
+      required_view_keys:
+        - "audit.recent"
+    - widget_key: "cc.fix_list"
+      title: "Fix List"
+      purpose: "Compliance-driven repair checklist — shows what needs fixing"
+      required_view_keys: []
+    - widget_key: "cc.skills_recommendations"
+      title: "Skills to Fork"
+      purpose: "Advisory widget showing scout-discovered skill candidates"
+      required_view_keys: []
+    - widget_key: "cc.db_registry"
+      title: "Database Registry"
+      purpose: "Shows OpenClaw DB existence and compliance status"
+      required_view_keys: []
+    - widget_key: "cc.kpis"
+      title: "Today (KPIs)"
+      purpose: "At-a-glance KPI strip — leads, calls, sales, revenue, ad spend"
+      required_view_keys:
+        - "cc.active_combos"
+        - "cc.pipeline_quality"
+        - "cc.finance_snapshot"
+    - widget_key: "cc.pipeline"
+      title: "Pipeline"
+      purpose: "CRM pipeline stage counts and conversion metrics"
+      required_view_keys:
+        - "cc.pipeline_quality"
+        - "meetings.showed_7d"
+    - widget_key: "cc.cash"
+      title: "Cash & Profit"
+      purpose: "Revenue, spend, profit, outstanding invoices, CAC"
+      required_view_keys:
+        - "cc.finance_snapshot"
+    - widget_key: "cc.calendar"
+      title: "Meetings"
+      purpose: "Today's call schedule — booked, showed, no-shows"
+      required_view_keys:
+        - "meetings.showed_7d"
+    - widget_key: "cc.alerts"
+      title: "Alerts"
+      purpose: "System and business alerts needing attention"
+      required_view_keys: []
+    - widget_key: "cc.projects"
+      title: "Active Work"
+      purpose: "Projects and tasks in progress, needs review, blocked"
+      required_view_keys:
+        - "cc.fulfillment_watchlist"
+        - "tasks.today"
+    - widget_key: "cc.quick_actions"
+      title: "Quick Actions"
+      purpose: "One-click admin tool links and shortcuts"
+      required_view_keys: []
+    - widget_key: "cc.schedule_today"
+      title: "Today's Schedule"
+      purpose: "Unified schedule — meetings, deadlines, focus blocks from GCal + Trello + GHL"
+      required_view_keys:
+        - "schedule.today"
+    - widget_key: "cc.schedule_week"
+      title: "This Week"
+      purpose: "Calendar view of the unified schedule for the current week"
+      required_view_keys:
+        - "schedule.this_week"
+    - widget_key: "cc.today.panel"
+      title: "Today"
+      purpose: "Today Command Center panel (brand chips + schedule + overdue + start button)"
+      required_view_keys:
+        - "schedule.today_simple"
+        - "schedule.overdue_deadlines"
+    - widget_key: "cc.today.brand_chips"
+      title: "Brand Chips"
+      purpose: "Brand KPI chip + goal chip for Full Digital + CUTMV"
+      required_view_keys: []
+    - widget_key: "cc.today.overdue_count"
+      title: "Overdue Count"
+      purpose: "Overdue Trello due deadlines count"
+      required_view_keys:
+        - "schedule.overdue_deadlines"
+    - widget_key: "cc.today.schedule_preview"
+      title: "Schedule Preview"
+      purpose: "Next N items from today's unified schedule"
+      required_view_keys:
+        - "schedule.today_simple"
+
+  required_views_registry_entries:
+    # Global (both brands)
+    - { view_key: "cc.active_combos", db_key: "outcomes", required: true }
+    - { view_key: "cc.pipeline_quality", db_key: "meetings", required: true }
+    - { view_key: "cc.finance_snapshot", db_key: "invoices", required: true }
+    - { view_key: "cc.fulfillment_watchlist", db_key: "tasks", required: true }
+    - { view_key: "audit.recent", db_key: "system_audit_log", required: true }
+    - { view_key: "tasks.today", db_key: "tasks", required: true }
+    - { view_key: "meetings.showed_7d", db_key: "meetings", required: true }
+    # Global CC sections
+    - { view_key: "cc.global.kpis", db_key: "outcomes", required: true }
+    - { view_key: "cc.global.pipeline", db_key: "crm_pipeline", required: true }
+    - { view_key: "cc.global.cash", db_key: "invoices", required: true }
+    - { view_key: "cc.global.delivery", db_key: "tasks", required: true }
+    - { view_key: "cc.global.webops", db_key: "system_audit_log", required: true }
+    # Full Digital brand views
+    - { view_key: "cc.fd.kpis", db_key: "outcomes", required: true }
+    - { view_key: "cc.fd.pipeline", db_key: "crm_pipeline", required: true }
+    - { view_key: "cc.fd.cash", db_key: "invoices", required: true }
+    - { view_key: "cc.fd.delivery", db_key: "tasks", required: true }
+    - { view_key: "cc.fd.webops", db_key: "system_audit_log", required: true }
+    # CUTMV brand views
+    - { view_key: "cc.cutmv.kpis", db_key: "outcomes", required: true }
+    - { view_key: "cc.cutmv.pipeline", db_key: "crm_pipeline", required: true }
+    - { view_key: "cc.cutmv.cash", db_key: "invoices", required: true }
+    - { view_key: "cc.cutmv.delivery", db_key: "tasks", required: true }
+    - { view_key: "cc.cutmv.webops", db_key: "system_audit_log", required: true }
+    # Schedule views (unified from GCal + Trello + GHL)
+    - { view_key: "schedule.today", db_key: "schedule", required: true }
+    - { view_key: "schedule.this_week", db_key: "schedule", required: true }
+    - { view_key: "schedule.conflicts", db_key: "schedule", required: false }
+    - { view_key: "schedule.by_source", db_key: "schedule", required: false }
+    - { view_key: "schedule.fd_week", db_key: "schedule", required: false }
+    - { view_key: "schedule.cutmv_week", db_key: "schedule", required: false }
+    - { view_key: "schedule.overdue", db_key: "schedule", required: false }
+    - { view_key: "schedule.today_simple", db_key: "schedule", required: true }
+    - { view_key: "schedule.overdue_deadlines", db_key: "schedule", required: true }
+    # Daily plan views
+    - { view_key: "daily_plan.today", db_key: "daily_plan", required: true }
+    - { view_key: "daily_plan.this_week", db_key: "daily_plan", required: false }
+    # Goals views
+    - { view_key: "goals.active", db_key: "goals", required: true }
+    - { view_key: "goals.by_brand", db_key: "goals", required: false }
+
+# ════════════════════════════════════════════
+# PORTAL TEMPLATES — required sections per client portal
+# ════════════════════════════════════════════
+
+portal_templates:
+  required_sections:
+    - section_key: "start_here"
+      title: "Start Here"
+    - section_key: "trello"
+      title: "Trello & Requests"
+    - section_key: "dropbox"
+      title: "Dropbox & References"
+    - section_key: "delivery"
+      title: "Delivery Links"
+    - section_key: "finance"
+      title: "Invoices & Payments (Mirror)"
+    - section_key: "system_notes"
+      title: "System Notes"
+
+# ════════════════════════════════════════════
+# SYSTEM SETTINGS PAGE — required properties
+# ════════════════════════════════════════════
+
+system_settings_page:
+  page_key: "system_settings"
+  required_properties:
+    - { key: "template_version", type: "rich_text" }
+    - { key: "os_version", type: "rich_text" }
+    - { key: "write_lock", type: "checkbox" }
+    - { key: "last_verified_at", type: "date" }
+    - { key: "safe_mode", type: "checkbox" }
+    - { key: "default_timezone", type: "select", options: ["America/New_York"] }
+    - { key: "integrations_mode", type: "select", options: ["clawdcursor_preferred", "api_preferred", "hybrid"] }
+    - { key: "notion_widget_style", type: "select", options: ["polished", "plain"] }
+    - { key: "max_write_ops_per_run", type: "number" }
+    - { key: "cooldown_seconds", type: "number" }

@@ -1,0 +1,376 @@
+{
+  "manifest_version": "2026-02-28",
+  "workspace": {
+    "root_page_required": true,
+    "root_page_title": "Full Digital — AgencyOS",
+    "required_child_pages": [
+      "CEO Overview",
+      "Sales Dashboard",
+      "Project Command Center",
+      "Financial Dashboard",
+      "Team & Capacity",
+      "Databases",
+      "Admin / Config"
+    ]
+  },
+  "databases": [
+    {
+      "key": "clients",
+      "name": "Clients",
+      "required": true,
+      "primary_title_property": "Client Name",
+      "properties": {
+        "Client Name": { "type": "title" },
+        "Status": { "type": "select", "options": ["Active", "Onboarding", "Paused", "Churned", "Prospect"] },
+        "Service Package": { "type": "select" },
+        "MRR": { "type": "number", "format": "dollar" },
+        "Start Date": { "type": "date" },
+        "Account Manager": { "type": "people" },
+        "Client Portal": { "type": "page_reference" },
+        "Outcomes": { "type": "relation", "target_db_key": "outcomes" },
+        "Invoices": { "type": "relation", "target_db_key": "invoices" },
+        "Expenses": { "type": "relation", "target_db_key": "expenses" },
+        "Contacts": { "type": "relation", "target_db_key": "contacts" },
+        "Client Assets": { "type": "relation", "target_db_key": "client_assets" },
+        "Meetings": { "type": "relation", "target_db_key": "meetings" },
+        "Source": { "type": "select" },
+        "Campaign": { "type": "rich_text" },
+        "Notes": { "type": "rich_text" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true },
+        "sync.source_system": { "type": "select", "options": ["notion", "trello", "stripe", "quickbooks", "ghl", "clickfunnels", "system"] },
+        "sync.source_id": { "type": "rich_text" },
+        "sync.locked": { "type": "checkbox" },
+        "sync.override_owner": { "type": "select", "options": ["trello", "notion", "system"] },
+        "sync.health": { "type": "select", "options": ["ok", "warning", "broken"] },
+        "sync.error": { "type": "rich_text" },
+        "sync.last_mirrored_at": { "type": "date" }
+      },
+      "required_views": [
+        { "name": "All Clients", "type": "table" },
+        { "name": "Active Clients", "type": "table", "filter": { "Status": "Active" } },
+        { "name": "Onboarding", "type": "table", "filter": { "Status": "Onboarding" } }
+      ],
+      "required_templates": [
+        { "name": "Client Portal Template", "required": true }
+      ]
+    },
+    {
+      "key": "crm_pipeline",
+      "name": "CRM Pipeline",
+      "required": true,
+      "primary_title_property": "Lead Name",
+      "properties": {
+        "Lead Name": { "type": "title" },
+        "Pipeline Stage": {
+          "type": "status",
+          "options": ["New Lead", "Qualified", "Booked", "Called", "Proposal Sent", "Negotiating", "Closed Won", "Closed Lost"]
+        },
+        "Source": { "type": "select", "options": ["meta_ad", "organic_reel", "story_reply", "click_to_dm", "referral", "cold_outreach", "clickfunnels", "ghl"] },
+        "Campaign": { "type": "rich_text" },
+        "Revenue Tier": { "type": "select", "options": ["Under $5K", "$5K–$15K", "$15K–$50K", "$50K+"] },
+        "Pain Point": { "type": "select", "options": ["Acquisition", "Retention", "Team", "Operations", "All"] },
+        "Assigned Setter": { "type": "people" },
+        "IG Handle": { "type": "url" },
+        "Email": { "type": "email" },
+        "Phone": { "type": "phone_number" },
+        "Call Date": { "type": "date" },
+        "Call Notes": { "type": "rich_text" },
+        "Deal Value": { "type": "number", "format": "dollar" },
+        "Follow-Up Date": { "type": "date" },
+        "Last Contacted": { "type": "date" },
+        "ManyChat Tags": { "type": "multi_select" },
+        "Objections": { "type": "multi_select", "options": ["Price", "Timing", "Trust", "Need", "Already have provider"] },
+        "Converted to Client": { "type": "relation", "target_db_key": "clients" },
+        "Created": { "type": "created_time" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true },
+        "sync.source_system": { "type": "select", "options": ["notion", "ghl", "manychat", "clickfunnels", "system"] },
+        "sync.source_id": { "type": "rich_text" },
+        "sync.locked": { "type": "checkbox" },
+        "sync.override_owner": { "type": "select", "options": ["source", "notion", "system"] },
+        "sync.health": { "type": "select", "options": ["ok", "warning", "broken"] },
+        "sync.error": { "type": "rich_text" },
+        "sync.last_mirrored_at": { "type": "date" }
+      },
+      "required_views": [
+        { "name": "Pipeline Board", "type": "board", "group_by": "Pipeline Stage" },
+        { "name": "Follow-Up Queue", "type": "table", "filter": { "Follow-Up Date": "on_or_before_today" }, "sort": ["Follow-Up Date asc"] },
+        { "name": "By Campaign", "type": "table", "group_by": "Campaign" }
+      ]
+    },
+    {
+      "key": "outcomes",
+      "name": "Outcomes",
+      "required": true,
+      "primary_title_property": "Outcome Name",
+      "properties": {
+        "Outcome Name": { "type": "title" },
+        "Client": { "type": "relation", "target_db_key": "clients" },
+        "Status": { "type": "status", "options": ["Not Started", "In Progress", "Completed", "On Hold"] },
+        "Target Date": { "type": "date" },
+        "Projects": { "type": "relation", "target_db_key": "projects" },
+        "Owner": { "type": "people" },
+        "KPI": { "type": "rich_text" },
+        "Priority": { "type": "select", "options": ["Critical", "High", "Medium", "Low"] },
+        "Notes": { "type": "rich_text" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "Outcomes by Client", "type": "table", "group_by": "Client" }
+      ]
+    },
+    {
+      "key": "projects",
+      "name": "Projects",
+      "required": true,
+      "primary_title_property": "Project Name",
+      "properties": {
+        "Project Name": { "type": "title" },
+        "Outcome": { "type": "relation", "target_db_key": "outcomes" },
+        "Status": { "type": "status", "options": ["Not Started", "In Progress", "Review", "Completed", "Blocked"] },
+        "Start Date": { "type": "date" },
+        "Due Date": { "type": "date" },
+        "Assigned To": { "type": "people" },
+        "Tasks": { "type": "relation", "target_db_key": "tasks" },
+        "Budget": { "type": "number", "format": "dollar" },
+        "SOP Link": { "type": "url" },
+        "Deliverables": { "type": "files" },
+        "Priority": { "type": "select", "options": ["Critical", "High", "Medium", "Low"] },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "Active Projects Board", "type": "board", "group_by": "Status" }
+      ]
+    },
+    {
+      "key": "tasks",
+      "name": "Tasks",
+      "required": true,
+      "primary_title_property": "Task Name",
+      "properties": {
+        "Task Name": { "type": "title" },
+        "Project": { "type": "relation", "target_db_key": "projects" },
+        "Status": { "type": "status", "options": ["To Do", "In Progress", "In Review", "Revisions", "Done", "Blocked"] },
+        "Assignee": { "type": "people" },
+        "Due Date": { "type": "date" },
+        "Priority": { "type": "select", "options": ["Urgent", "High", "Normal", "Low"] },
+        "Effort (hours)": { "type": "number" },
+        "Actual Hours": { "type": "number" },
+        "SOP": { "type": "relation", "target_db_key": "sops" },
+        "Dependencies": { "type": "relation", "target_db_key": "tasks" },
+        "Blocked By": { "type": "rich_text" },
+        "Notes": { "type": "rich_text" },
+        "Attachments": { "type": "files" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true },
+        "sync.source_system": { "type": "select", "options": ["trello", "notion", "system"] },
+        "sync.source_id": { "type": "rich_text" },
+        "sync.locked": { "type": "checkbox" },
+        "sync.override_owner": { "type": "select", "options": ["trello", "notion", "system"] },
+        "sync.health": { "type": "select", "options": ["ok", "warning", "broken"] },
+        "sync.error": { "type": "rich_text" },
+        "sync.last_mirrored_at": { "type": "date" },
+        "trello.url": { "type": "url" }
+      },
+      "required_views": [
+        { "name": "Tasks Board", "type": "board", "group_by": "Status" },
+        { "name": "By Assignee", "type": "table", "group_by": "Assignee" },
+        { "name": "Overdue", "type": "table", "filter": { "Due Date": "before_today", "Status": "not_done" } }
+      ]
+    },
+    {
+      "key": "efforts",
+      "name": "Efforts",
+      "required": true,
+      "primary_title_property": "Description",
+      "properties": {
+        "Description": { "type": "title" },
+        "Task": { "type": "relation", "target_db_key": "tasks" },
+        "Team Member": { "type": "people" },
+        "Date": { "type": "date" },
+        "Duration (hours)": { "type": "number" },
+        "Billable": { "type": "checkbox" },
+        "Rate": { "type": "number", "format": "dollar" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "This Week", "type": "table", "filter": { "Date": "this_week" } }
+      ]
+    },
+    {
+      "key": "invoices",
+      "name": "Invoices",
+      "required": true,
+      "primary_title_property": "Invoice #",
+      "properties": {
+        "Invoice #": { "type": "title" },
+        "Client": { "type": "relation", "target_db_key": "clients" },
+        "Amount": { "type": "number", "format": "dollar" },
+        "Status": { "type": "status", "options": ["Draft", "Sent", "Paid", "Overdue", "Cancelled"] },
+        "Issue Date": { "type": "date" },
+        "Due Date": { "type": "date" },
+        "Paid Date": { "type": "date" },
+        "Payment Method": { "type": "select", "options": ["Stripe", "Wire", "Check", "Other"] },
+        "Stripe ID": { "type": "rich_text" },
+        "QB ID": { "type": "rich_text" },
+        "Period": { "type": "rich_text" },
+        "Notes": { "type": "rich_text" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true },
+        "sync.source_system": { "type": "select", "options": ["stripe", "quickbooks", "system"] },
+        "sync.source_id": { "type": "rich_text" },
+        "sync.last_mirrored_at": { "type": "date" }
+      },
+      "required_views": [
+        { "name": "Outstanding", "type": "table", "filter": { "Status": ["Sent", "Overdue"] } },
+        { "name": "This Month Paid", "type": "table", "filter": { "Status": "Paid", "Paid Date": "this_month" } }
+      ]
+    },
+    {
+      "key": "expenses",
+      "name": "Expenses",
+      "required": true,
+      "primary_title_property": "Expense Name",
+      "properties": {
+        "Expense Name": { "type": "title" },
+        "Client": { "type": "relation", "target_db_key": "clients" },
+        "Project": { "type": "relation", "target_db_key": "projects" },
+        "Category": { "type": "select", "options": ["Ad Spend", "Software", "Contractor", "Equipment", "Travel", "Other"] },
+        "Amount": { "type": "number", "format": "dollar" },
+        "Date": { "type": "date" },
+        "Recurring": { "type": "checkbox" },
+        "Receipt": { "type": "files" },
+        "Approved": { "type": "checkbox" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true },
+        "sync.source_system": { "type": "select", "options": ["quickbooks", "system"] },
+        "sync.source_id": { "type": "rich_text" },
+        "sync.last_mirrored_at": { "type": "date" }
+      },
+      "required_views": [
+        { "name": "This Month", "type": "table", "filter": { "Date": "this_month" } }
+      ]
+    },
+    {
+      "key": "meetings",
+      "name": "Meetings",
+      "required": true,
+      "primary_title_property": "Meeting Title",
+      "properties": {
+        "Meeting Title": { "type": "title" },
+        "Client": { "type": "relation", "target_db_key": "clients" },
+        "CRM Lead": { "type": "relation", "target_db_key": "crm_pipeline" },
+        "Date & Time": { "type": "date" },
+        "Type": { "type": "select", "options": ["Discovery Call", "Strategy Session", "Check-In", "Onboarding", "Internal"] },
+        "Attendees": { "type": "people" },
+        "Status": { "type": "select", "options": ["Scheduled", "Completed", "No-Show", "Cancelled"] },
+        "Recording Link": { "type": "url" },
+        "Notes": { "type": "rich_text" },
+        "Follow-Up Tasks": { "type": "relation", "target_db_key": "tasks" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true },
+        "sync.source_system": { "type": "select", "options": ["calendly", "ghl", "system"] },
+        "sync.source_id": { "type": "rich_text" }
+      },
+      "required_views": [
+        { "name": "This Week", "type": "table", "filter": { "Date & Time": "this_week" } }
+      ]
+    },
+    {
+      "key": "contacts",
+      "name": "Contacts",
+      "required": true,
+      "primary_title_property": "Name",
+      "properties": {
+        "Name": { "type": "title" },
+        "Client": { "type": "relation", "target_db_key": "clients" },
+        "Role": { "type": "rich_text" },
+        "Email": { "type": "email" },
+        "Phone": { "type": "phone_number" },
+        "Instagram": { "type": "url" },
+        "Preferred Contact": { "type": "select", "options": ["Email", "Phone", "DM", "Text"] },
+        "Notes": { "type": "rich_text" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "By Client", "type": "table", "group_by": "Client" }
+      ]
+    },
+    {
+      "key": "client_assets",
+      "name": "Client Assets",
+      "required": true,
+      "primary_title_property": "Asset Name",
+      "properties": {
+        "Asset Name": { "type": "title" },
+        "Client": { "type": "relation", "target_db_key": "clients" },
+        "Type": { "type": "select", "options": ["Brand Guide", "Logo Files", "Credentials", "Fonts", "Color Palette", "Photo Library", "Other"] },
+        "Files": { "type": "files" },
+        "Access Link": { "type": "url" },
+        "Last Updated": { "type": "date" },
+        "Notes": { "type": "rich_text" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "By Client", "type": "table", "group_by": "Client" }
+      ]
+    },
+    {
+      "key": "agency_assets",
+      "name": "Agency Assets",
+      "required": true,
+      "primary_title_property": "Asset Name",
+      "properties": {
+        "Asset Name": { "type": "title" },
+        "Category": { "type": "select", "options": ["Templates", "Legal", "Brand", "Software", "Training"] },
+        "Files": { "type": "files" },
+        "Link": { "type": "url" },
+        "Owner": { "type": "people" },
+        "Last Updated": { "type": "date" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "By Category", "type": "table", "group_by": "Category" }
+      ]
+    },
+    {
+      "key": "sops",
+      "name": "SOP Library",
+      "required": true,
+      "primary_title_property": "SOP Title",
+      "properties": {
+        "SOP Title": { "type": "title" },
+        "Department": { "type": "select", "options": ["Sales", "Fulfillment", "Operations", "Finance", "Hiring", "Client Success"] },
+        "Video Walkthrough": { "type": "url" },
+        "Owner": { "type": "people" },
+        "Last Updated": { "type": "date" },
+        "Related Tasks": { "type": "relation", "target_db_key": "tasks" },
+        "Difficulty": { "type": "select", "options": ["Simple", "Moderate", "Complex"] },
+        "Status": { "type": "select", "options": ["Active", "Needs Update", "Deprecated"] },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "By Department", "type": "table", "group_by": "Department" },
+        { "name": "Needs Update", "type": "table", "filter": { "Status": "Needs Update" } }
+      ]
+    },
+    {
+      "key": "team",
+      "name": "Team Directory",
+      "required": true,
+      "primary_title_property": "Name",
+      "properties": {
+        "Name": { "type": "title" },
+        "Role": { "type": "select", "options": ["Account Manager", "Designer", "Editor", "Motion Artist", "Setter", "VA", "Operations"] },
+        "Type": { "type": "select", "options": ["Full-Time", "Part-Time", "Contractor"] },
+        "Email": { "type": "email" },
+        "Slack Handle": { "type": "rich_text" },
+        "Capacity (hrs/week)": { "type": "number" },
+        "Rate": { "type": "number", "format": "dollar" },
+        "Start Date": { "type": "date" },
+        "SOPs Completed": { "type": "relation", "target_db_key": "sops" },
+        "Performance Notes": { "type": "rich_text" },
+        "canonical_id": { "type": "rich_text", "required_for_sync": true }
+      },
+      "required_views": [
+        { "name": "Directory (Gallery)", "type": "gallery" },
+        { "name": "Utilization Heatmap", "type": "table", "sort": ["Utilization desc"] }
+      ]
+    }
+  ]
+}

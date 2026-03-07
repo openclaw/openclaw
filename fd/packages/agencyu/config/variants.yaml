@@ -1,0 +1,240 @@
+# OpenClaw Revenue OS — Variant Configuration
+# All testable ad creatives, CTAs, DM copy, offers, and audience segments.
+# Referenced by experiment_matrix.py for Cartesian test generation.
+
+brands:
+  cutmv:
+    display_name: "CUTMV"
+    default_daily_budget: 50
+    max_daily_budget: 300
+    default_trigger_keyword: "CUT"
+    pricing:
+      starter: 19
+      pro: 49
+      agency: 99
+    ad_creatives:
+      - id: cutmv_ad_01
+        name: "Before/After Split Screen"
+        hook: "Your editor charges $500. CUTMV does it in 60 seconds."
+        format: ugc_video
+        duration_seconds: 30
+      - id: cutmv_ad_02
+        name: "Speed Demo Reel"
+        hook: "Watch us turn 1 music video into 15 clips — live."
+        format: screen_recording
+        duration_seconds: 45
+      - id: cutmv_ad_03
+        name: "Testimonial Stack"
+        hook: "I stopped paying editors. Here's what I use instead."
+        format: ugc_testimonial
+        duration_seconds: 60
+      - id: cutmv_ad_04
+        name: "Pain Point Carousel"
+        hook: "Still uploading one video at a time?"
+        format: carousel
+        slides: 5
+      - id: cutmv_ad_05
+        name: "Product Walkthrough"
+        hook: "Upload → Cut → Post. That's it."
+        format: screen_recording
+        duration_seconds: 90
+      - id: cutmv_ad_06
+        name: "Creator Day-in-Life"
+        hook: "How I repurpose every shoot in under 5 minutes"
+        format: ugc_video
+        duration_seconds: 60
+      - id: cutmv_ad_07
+        name: "Stats Overlay"
+        hook: "500+ editors switched to AI cutdowns this month"
+        format: motion_graphic
+        duration_seconds: 15
+      - id: cutmv_ad_08
+        name: "Batch Processing Demo"
+        hook: "10 videos. 60 seconds. Zero editing."
+        format: screen_recording
+        duration_seconds: 30
+      - id: cutmv_ad_09
+        name: "Price Comparison"
+        hook: "$49/mo vs $500/video. You do the math."
+        format: static_image
+      - id: cutmv_ad_10
+        name: "Behind the Algorithm"
+        hook: "How our AI knows exactly where to cut"
+        format: ugc_video
+        duration_seconds: 45
+    ctas:
+      - id: cta_comment_cut
+        text: "Comment 'CUT' below to try free"
+        trigger_keyword: "CUT"
+        default: true
+      - id: cta_comment_demo
+        text: "Comment 'DEMO' — I'll DM you access"
+        trigger_keyword: "DEMO"
+      - id: cta_link_free
+        text: "Get 5 free cuts →"
+        trigger_keyword: "FREE"
+      - id: cta_link_trial
+        text: "Start free trial →"
+        trigger_keyword: "TRIAL"
+    dm_copy_variants:
+      - id: dm_direct
+        opener: "Hey! Saw you're interested in CUTMV. Here's your free access link:"
+        style: direct
+      - id: dm_qualifying
+        opener: "Hey! Quick question — are you an editor, artist, or label?"
+        style: qualifying
+      - id: dm_social_proof
+        opener: "Hey! 500+ editors are using this. Wanted to make sure you didn't miss it:"
+        style: social_proof
+    offers:
+      - id: offer_free_5
+        name: "5 Free Cuts"
+        description: "No card required. First 5 cuts free."
+        default: true
+      - id: offer_trial_14
+        name: "14-Day Free Trial"
+        description: "Full access for 14 days, cancel anytime."
+      - id: offer_discount_50
+        name: "50% Off First Month"
+        description: "Half price on any plan for month 1."
+    audience_segments:
+      - id: aud_editors_broad
+        name: "Music Video Editors (Broad)"
+        interests: ["video editing", "adobe premiere", "final cut pro", "davinci resolve"]
+        age_range: [18, 45]
+      - id: aud_editors_lookalike
+        name: "Editor Lookalike 1%"
+        type: lookalike
+        source: "cutmv_signups"
+        percent: 1
+      - id: aud_artists_content
+        name: "Independent Artists (Content Creators)"
+        interests: ["music production", "spotify for artists", "distrokid"]
+        age_range: [18, 35]
+      - id: aud_labels_managers
+        name: "Labels & Managers"
+        interests: ["music business", "artist management", "record label"]
+        age_range: [25, 55]
+      - id: aud_retargeting_visitors
+        name: "Website Visitors (Retargeting)"
+        type: retargeting
+        source: "pixel_visitors_30d"
+
+  fulldigital:
+    display_name: "Full Digital"
+    default_daily_budget: 30
+    max_daily_budget: 500
+    default_trigger_keyword: "STRATEGY"
+    pricing:
+      starter_retainer: 3000
+      growth_retainer: 5000
+      premium_retainer: 10000
+    ad_creatives:
+      - id: fd_ad_01
+        name: "Portfolio Showcase Reel"
+        hook: "We designed the visual identity for 200+ major releases."
+        format: portfolio_reel
+        duration_seconds: 45
+      - id: fd_ad_02
+        name: "Case Study Breakdown"
+        hook: "How we built a $2M rollout system for [Artist]"
+        format: ugc_video
+        duration_seconds: 90
+      - id: fd_ad_03
+        name: "DA Authority Video"
+        hook: "I've worked with Sony, OVO, Def Jam. Here's what nobody tells you."
+        format: talking_head
+        duration_seconds: 60
+      - id: fd_ad_04
+        name: "Before/After Transformation"
+        hook: "This artist went from 5K to 500K monthly listeners in 90 days."
+        format: carousel
+        slides: 6
+      - id: fd_ad_05
+        name: "Behind the Scenes"
+        hook: "Inside a $50K album rollout"
+        format: bts_video
+        duration_seconds: 120
+      - id: fd_ad_06
+        name: "Client Testimonial"
+        hook: "They changed my entire career."
+        format: ugc_testimonial
+        duration_seconds: 45
+      - id: fd_ad_07
+        name: "Process Breakdown"
+        hook: "Our 6-step rollout framework"
+        format: carousel
+        slides: 7
+      - id: fd_ad_08
+        name: "Results Stack"
+        hook: "3 clients. 3 months. Combined 2M new streams."
+        format: motion_graphic
+        duration_seconds: 30
+      - id: fd_ad_09
+        name: "Pain Point Story"
+        hook: "Your music deserves better than a Canva cover"
+        format: ugc_video
+        duration_seconds: 60
+      - id: fd_ad_10
+        name: "Free Training Teaser"
+        hook: "Watch the strategy behind every #1 album"
+        format: talking_head
+        duration_seconds: 30
+    ctas:
+      - id: cta_comment_strategy
+        text: "Comment 'STRATEGY' for a free visual audit"
+        trigger_keyword: "STRATEGY"
+        default: true
+      - id: cta_comment_brand
+        text: "Comment 'BRAND' — I'll review your IG for free"
+        trigger_keyword: "BRAND"
+      - id: cta_link_training
+        text: "Watch the free training →"
+        trigger_keyword: "TRAINING"
+      - id: cta_link_apply
+        text: "Apply for a free strategy call →"
+        trigger_keyword: "APPLY"
+    dm_copy_variants:
+      - id: dm_authority
+        opener: "Hey! I'm DA from Full Digital. We've built rollout systems for major-label artists — happy to take a look at yours."
+        style: authority
+      - id: dm_qualifying_fd
+        opener: "Hey! Quick question — are you an independent artist, signed, or managing talent?"
+        style: qualifying
+      - id: dm_case_study
+        opener: "Hey! Just finished a rollout that hit 500K streams in the first week. Want to see the playbook?"
+        style: case_study
+    offers:
+      - id: offer_strategy_call
+        name: "Free Strategy Call"
+        description: "30-min 1-on-1 with DA to map your rollout."
+        default: true
+      - id: offer_visual_audit
+        name: "Free Visual Audit"
+        description: "We review your brand and provide a visual report."
+      - id: offer_rollout_plan
+        name: "Custom Rollout Plan"
+        description: "Detailed 90-day rollout plan for your next release."
+    audience_segments:
+      - id: aud_artists_50k
+        name: "Artists 50K+ Monthly Listeners"
+        interests: ["spotify for artists", "music marketing"]
+        behaviors: ["50k+ monthly listeners"]
+        age_range: [18, 40]
+      - id: aud_artists_emerging
+        name: "Emerging Artists (10K-50K)"
+        interests: ["distrokid", "music promotion"]
+        age_range: [18, 35]
+      - id: aud_managers_labels
+        name: "Managers & Labels"
+        interests: ["artist management", "record label", "A&R"]
+        age_range: [25, 55]
+      - id: aud_fd_lookalike
+        name: "FD Client Lookalike 1%"
+        type: lookalike
+        source: "fd_clients"
+        percent: 1
+      - id: aud_retargeting_vsl
+        name: "VSL Viewers (Retargeting)"
+        type: retargeting
+        source: "vsl_viewers_14d"

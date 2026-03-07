@@ -1,0 +1,12 @@
+services:
+  openclaw:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      OPENCLAW_ENV: "dev"
+      OPENCLAW_DB: "/app/data/openclaw.db"
+      OPENCLAW_MIGRATIONS: "/app/db/migrations"
+      OPENCLAW_AUTO_MIGRATE: "true"
+    volumes:
+      - ./data:/app/data
