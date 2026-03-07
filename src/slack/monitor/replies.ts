@@ -1,3 +1,4 @@
+import type { WebClient } from "@slack/web-api";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
@@ -11,7 +12,12 @@ import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
-  token: string;
+  /** Bot token for outbound Slack API calls. When omitted, `client` must be
+   *  provided (e.g. in mux mode where the app.client is a mux proxy). */
+  token?: string;
+  /** Pre-built WebClient to use instead of resolving via `token`. Takes
+   *  precedence over `token` when provided (required in mux-only configs). */
+  client?: WebClient;
   accountId?: string;
   runtime: RuntimeEnv;
   textLimit: number;
@@ -37,6 +43,7 @@ export async function deliverReplies(params: {
       }
       await sendMessageSlack(params.target, trimmed, {
         token: params.token,
+        client: params.client,
         threadTs,
         accountId: params.accountId,
         ...(params.identity ? { identity: params.identity } : {}),
@@ -48,6 +55,7 @@ export async function deliverReplies(params: {
         first = false;
         await sendMessageSlack(params.target, caption, {
           token: params.token,
+          client: params.client,
           mediaUrl,
           threadTs,
           accountId: params.accountId,

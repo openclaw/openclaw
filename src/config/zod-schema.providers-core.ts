@@ -790,10 +790,22 @@ const SlackReplyToModeByChatTypeSchema = z
   })
   .strict();
 
+export const SlackMuxSchema = z
+  .object({
+    // url is optional at the schema level — account-level mux objects can
+    // inherit the URL from the base channels.slack.mux.url via the
+    // SlackConfigSchema superRefine validation.
+    url: z.string().min(1).optional(),
+    mcpServerUrl: z.string().optional(),
+    token: z.string().optional().register(sensitive),
+  })
+  .strict();
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
-    mode: z.enum(["socket", "http"]).optional(),
+    mode: z.enum(["socket", "http", "mux"]).optional(),
+    mux: SlackMuxSchema.optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -865,10 +877,11 @@ export const SlackAccountSchema = z
 
     // DM allowlist validation is enforced at SlackConfigSchema so account entries
     // can inherit top-level allowFrom via runtime shallow merge.
+    // Mux URL validation is enforced at SlackConfigSchema (account + top-level).
   });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
-  mode: z.enum(["socket", "http"]).optional().default("socket"),
+  mode: z.enum(["socket", "http", "mux"]).optional().default("socket"),
   signingSecret: SecretInputSchema.optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -897,6 +910,13 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   });
 
   const baseMode = value.mode ?? "socket";
+  if (baseMode === "mux" && !value.mux?.url) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.mode="mux" requires channels.slack.mux.url',
+      path: ["mux", "url"],
+    });
+  }
   if (!value.accounts) {
     validateSlackSigningSecretRequirements(value, ctx);
     return;
@@ -929,8 +949,16 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       message:
         'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
     });
-    if (accountMode !== "http") {
-      continue;
+    if (accountMode === "mux") {
+      const muxUrl = account.mux?.url ?? value.mux?.url;
+      if (!muxUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'channels.slack.accounts.*.mode="mux" requires channels.slack.mux.url or channels.slack.accounts.*.mux.url',
+          path: ["accounts", accountId, "mux", "url"],
+        });
+      }
     }
   }
   validateSlackSigningSecretRequirements(value, ctx);

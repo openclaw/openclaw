@@ -268,13 +268,18 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken({
-    explicit: opts.token,
-    accountId: account.accountId,
-    fallbackToken: account.botToken,
-    fallbackSource: account.botTokenSource,
-  });
-  const client = opts.client ?? createSlackWebClient(token);
+  // When a pre-built client is provided (e.g. in mux mode where app.client is
+  // the mux proxy), skip token resolution to avoid throwing on an absent token.
+  const client =
+    opts.client ??
+    createSlackWebClient(
+      resolveToken({
+        explicit: opts.token,
+        accountId: account.accountId,
+        fallbackToken: account.botToken,
+        fallbackSource: account.botTokenSource,
+      }),
+    );
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient);
   if (blocks) {

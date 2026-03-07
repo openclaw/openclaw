@@ -50,8 +50,8 @@ function resolveRequestUrl(input: RequestInfo | URL): string {
   throw new Error("Unsupported fetch input: expected string, URL, or Request");
 }
 
-function createSlackMediaFetch(token: string): FetchLike {
-  let includeAuth = true;
+function createSlackMediaFetch(token: string | undefined): FetchLike {
+  let includeAuth = Boolean(token);
   return async (input, init) => {
     const url = resolveRequestUrl(input);
     const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
@@ -75,12 +75,16 @@ function createSlackMediaFetch(token: string): FetchLike {
  * Slack's file URLs redirect to CDN domains with pre-signed URLs that don't need the
  * Authorization header, so we handle the initial auth request manually.
  */
-export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
+export async function fetchWithSlackAuth(
+  url: string,
+  token: string | undefined,
+): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
 
   // Initial request with auth and manual redirect handling
+  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const initialRes = await fetch(parsed.href, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders,
     redirect: "manual",
   });
 
@@ -198,7 +202,7 @@ async function mapLimit<T, R>(
  */
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
-  token: string;
+  token: string | undefined;
   maxBytes: number;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
@@ -269,7 +273,7 @@ export async function resolveSlackMedia(params: {
 /** Extracts text and media from forwarded-message attachments. Returns null when empty. */
 export async function resolveSlackAttachmentContent(params: {
   attachments?: SlackAttachment[];
-  token: string;
+  token: string | undefined;
   maxBytes: number;
 }): Promise<{ text: string; media: SlackMediaResult[] } | null> {
   const attachments = params.attachments;

@@ -21,7 +21,9 @@ export { inferSlackChannelType, normalizeSlackChannelType } from "./channel-type
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
   accountId: string;
-  botToken: string;
+  /** Undefined in mux mode when no direct bot token is configured; API calls
+   *  are proxied through the mux WebSocket and do not require a local token. */
+  botToken: string | undefined;
   app: App;
   runtime: RuntimeEnv;
 
@@ -87,7 +89,7 @@ export type SlackMonitorContext = {
 export function createSlackMonitorContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  botToken: string;
+  botToken: string | undefined;
   app: App;
   runtime: RuntimeEnv;
 
@@ -136,6 +138,13 @@ export function createSlackMonitorContext(params: {
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
 
+  // Mutable live bindings for auth state so that post-construction updates
+  // (e.g. after runAuthTest() in mux mode) are visible inside closures that
+  // filter and route events.  Setting ctx.teamId / ctx.apiAppId (via the
+  // getters/setters on the returned object) updates these bindings.
+  let liveTeamId = params.teamId;
+  let liveApiAppId = params.apiAppId;
+
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
   const groupDmChannelsLower = normalizeAllowListLower(groupDmChannels);
@@ -180,7 +189,7 @@ export function createSlackMonitorContext(params: {
           cfg: params.cfg,
           channel: "slack",
           accountId: params.accountId,
-          teamId: params.teamId,
+          teamId: liveTeamId,
           peer: { kind: peerKind, id: peerId },
         });
         return route.sessionKey;
@@ -203,7 +212,7 @@ export function createSlackMonitorContext(params: {
     }
     try {
       const info = await params.app.client.conversations.info({
-        token: params.botToken,
+        ...(params.botToken ? { token: params.botToken } : {}),
         channel: channelId,
       });
       const name = info.channel && "name" in info.channel ? info.channel.name : undefined;
@@ -235,7 +244,7 @@ export function createSlackMonitorContext(params: {
     }
     try {
       const info = await params.app.client.users.info({
-        token: params.botToken,
+        ...(params.botToken ? { token: params.botToken } : {}),
         user: userId,
       });
       const profile = info.user?.profile;
@@ -257,7 +266,7 @@ export function createSlackMonitorContext(params: {
       return;
     }
     const payload = {
-      token: params.botToken,
+      ...(params.botToken ? { token: params.botToken } : {}),
       channel_id: p.channelId,
       thread_ts: p.threadTs,
       status: p.status,
@@ -371,14 +380,14 @@ export function createSlackMonitorContext(params: {
           ? raw.team.id
           : "";
 
-    if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
+    if (liveApiAppId && incomingApiAppId && incomingApiAppId !== liveApiAppId) {
       logVerbose(
-        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${params.apiAppId})`,
+        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${liveApiAppId})`,
       );
       return true;
     }
-    if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
-      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`);
+    if (liveTeamId && incomingTeamId && incomingTeamId !== liveTeamId) {
+      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${liveTeamId})`);
       return true;
     }
     return false;
@@ -391,8 +400,21 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     botUserId: params.botUserId,
-    teamId: params.teamId,
-    apiAppId: params.apiAppId,
+    // Getters/setters keep liveTeamId and liveApiAppId in sync with external
+    // assignments (e.g. ctx.teamId = teamId after runAuthTest() in mux mode),
+    // so closures that captured those live bindings always see the current value.
+    get teamId() {
+      return liveTeamId;
+    },
+    set teamId(v: string) {
+      liveTeamId = v;
+    },
+    get apiAppId() {
+      return liveApiAppId;
+    },
+    set apiAppId(v: string) {
+      liveApiAppId = v;
+    },
     historyLimit: params.historyLimit,
     channelHistories,
     sessionScope: params.sessionScope,

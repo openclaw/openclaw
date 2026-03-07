@@ -812,7 +812,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             return;
           }
           await ctx.app.client.chat.postEphemeral({
-            token: ctx.botToken,
+            ...(ctx.botToken ? { token: ctx.botToken } : {}),
             channel: body.channel.id,
             user: body.user.id,
             text: payload.text,

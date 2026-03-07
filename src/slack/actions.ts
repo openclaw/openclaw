@@ -65,8 +65,13 @@ function normalizeEmoji(raw: string) {
 }
 
 async function getClient(opts: SlackActionClientOpts = {}) {
+  // When a pre-built client is provided (e.g. in mux mode where app.client is
+  // the mux proxy), return it directly without resolving a token.
+  if (opts.client) {
+    return opts.client;
+  }
   const token = resolveToken(opts.token, opts.accountId);
-  return opts.client ?? createSlackWebClient(token);
+  return createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {

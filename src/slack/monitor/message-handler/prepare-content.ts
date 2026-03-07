@@ -40,7 +40,7 @@ export async function resolveSlackMessageContent(params: {
   isThreadReply: boolean;
   threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
-  botToken: string;
+  botToken: string | undefined;
   mediaMaxBytes: number;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
