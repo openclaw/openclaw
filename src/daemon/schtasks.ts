@@ -152,41 +152,31 @@ function normalizeTaskResultCode(value?: string): string | null {
     }
   }
 
-  return raw;
+  return null;
 }
+
+const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const UNKNOWN_STATUS_DETAIL =
+  "Task status is locale-dependent and no numeric Last Run Result was available.";
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {
-  const statusRaw = parsed.status?.trim().toLowerCase();
-  if (!statusRaw) {
-    return { status: "unknown" };
-  }
-
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
-  const runningCodes = new Set(["0x41301"]);
-  const isRunningByCode = normalizedResult != null && runningCodes.has(normalizedResult);
-  const isRunningByStatus = statusRaw === "running";
-
-  // schtasks.exe localizes its Status field ("Running" in English,
-  // "Wird ausgeführt" in German, "En cours" in French, etc.).
-  // Prefer the locale-invariant Last Run Result code 0x41301
-  // ("task is currently running") over string matching. (#39057)
-  if (!isRunningByStatus && !isRunningByCode) {
-    return { status: "stopped" };
-  }
-
-  // Cross-check: if the English status says "running" but the result
-  // code disagrees, the runtime state is likely stale.
-  if (isRunningByStatus && normalizedResult && !isRunningByCode) {
+  if (normalizedResult != null) {
+    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
+      return { status: "running" };
+    }
     return {
       status: "stopped",
-      detail: `Task reports Running but Last Run Result=${parsed.lastRunResult}; treating as stale runtime state.`,
+      detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
     };
   }
-
-  return { status: "running" };
+  if (parsed.status?.trim()) {
+    return { status: "unknown", detail: UNKNOWN_STATUS_DETAIL };
+  }
+  return { status: "unknown" };
 }
 
 function buildTaskScript({
