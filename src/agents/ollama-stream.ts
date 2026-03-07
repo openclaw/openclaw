@@ -594,7 +594,8 @@ export function createOllamaStreamFn(
         // The usage dashboard reads transcript-level assistant usage. Some
         // Ollama builds omit prompt/eval counts, so estimate enough usage here
         // to keep local-model runs visible in the existing dashboard. This
-        // must run after accumulated output is copied onto the final response.
+        // must happen after accumulated output is copied onto the final
+        // response so reasoning-mode output is counted correctly.
         const usageFallback = {
           input: estimateOllamaPromptTokens({
             messages: ollamaMessages,
