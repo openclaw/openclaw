@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyWarning,
+  formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import {
   buildBaseAccountStatusSnapshot,
@@ -118,7 +119,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
         (entry) => String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean),
+      formatNormalizedAllowFromEntries({
+        allowFrom,
+        normalizeEntry: normalizeIrcAllowEntry,
+      }),
     resolveDefaultTo: ({ cfg, accountId }) =>
       resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.defaultTo?.trim() ||
       undefined,
