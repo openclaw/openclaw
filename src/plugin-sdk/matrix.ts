@@ -92,6 +92,7 @@ export {
   resolveDmGroupAccessWithLists,
 } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { normalizeStringEntries } from "../shared/string-normalization.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export {
   evaluateGroupRouteAccessForPolicy,
