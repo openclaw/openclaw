@@ -49,8 +49,12 @@ function parseStringRecord(node: ts.Expression): Record<string, string> {
         key = prop.name.text;
       }
       const value = ts.isStringLiteral(prop.initializer) ? prop.initializer.text : undefined;
-      if (key && value) {
+      if (key && value !== undefined) {
         result[key] = value;
+      } else if (key && value === undefined) {
+        console.warn(
+          `[parse-policies] Warning: alias key "${key}" has a non-string-literal value and was skipped`,
+        );
       }
     }
   }
@@ -148,6 +152,10 @@ export function parsePolicies(srcDir: string): ParsedPolicies {
     ownerOnlyFallbacks,
     subagentDenyAlways: denyAlways,
     subagentDenyLeaf: denyLeaf,
+    // extraTools is intentionally hardcoded here because `whatsapp_login` is an intrinsic
+    // security boundary that is treated as a core tool, despite not being in the
+    // `CORE_TOOL_DEFINITIONS` catalog array itself. Without full cross-file resolution
+    // joining `ParsedToolCatalog` and `ParsedPolicies`, we cannot dynamically compute this.
     extraTools: ["whatsapp_login"],
   };
 }

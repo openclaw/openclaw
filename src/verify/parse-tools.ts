@@ -32,11 +32,19 @@ function findVariableDeclaration(
   return result;
 }
 
-function resolveExpression(node: ts.Expression, sourceFile: ts.SourceFile): ts.Expression {
+function resolveExpression(
+  node: ts.Expression,
+  sourceFile: ts.SourceFile,
+  visited = new Set<string>(),
+): ts.Expression {
   if (ts.isIdentifier(node)) {
+    if (visited.has(node.text)) {
+      return node;
+    }
     const decl = findVariableDeclaration(sourceFile, node.text);
     if (decl?.initializer) {
-      return resolveExpression(decl.initializer, sourceFile);
+      visited.add(node.text);
+      return resolveExpression(decl.initializer, sourceFile, visited);
     }
   }
   return node;

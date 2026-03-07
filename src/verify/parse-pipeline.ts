@@ -107,6 +107,9 @@ function extractParamName(node: ts.Expression): string {
   return "";
 }
 
+/** Must match the number of steps in buildDefaultToolPolicyPipelineSteps */
+const EXPECTED_PIPELINE_STEPS = 7;
+
 export function parsePipeline(srcDir: string): ParsedPipeline {
   const filePath = path.join(srcDir, "agents", "tool-policy-pipeline.ts");
   const sourceFile = parseSourceFile(filePath);
@@ -127,9 +130,9 @@ export function parsePipeline(srcDir: string): ParsedPipeline {
     }
   }
 
-  if (steps.length !== 7) {
+  if (steps.length !== EXPECTED_PIPELINE_STEPS) {
     throw new Error(
-      `[parse-pipeline] Expected 7 pipeline steps, got ${steps.length}. ` +
+      `[parse-pipeline] Expected ${EXPECTED_PIPELINE_STEPS} pipeline steps, got ${steps.length}. ` +
         `If buildDefaultToolPolicyPipelineSteps was intentionally changed, update the expected count.`,
     );
   }
