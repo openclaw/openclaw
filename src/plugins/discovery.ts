@@ -433,7 +433,40 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) {
+
+    // Handle symlinks: resolve to target type
+    let isDir = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      try {
+        const stat = fs.statSync(fullPath); // follows symlinks
+        isDir = stat.isDirectory();
+        isFile = stat.isFile();
+      } catch {
+        // broken symlink — skip
+        continue;
+      }
+    }
+
+    // Handle extension files (including file symlinks)
+    if (isFile) {
+      if (!isExtensionFile(fullPath)) {
+        continue;
+      }
+      addCandidate({
+        candidates: params.candidates,
+        diagnostics: params.diagnostics,
+        seen: params.seen,
+        idHint: path.basename(entry.name, path.extname(entry.name)),
+        source: fullPath,
+        rootDir: path.dirname(fullPath),
+        origin: params.origin,
+        ownershipUid: params.ownershipUid,
+        workspaceDir: params.workspaceDir,
+      });
+    }
+
+    if (!isDir) {
       continue;
     }
     if (shouldIgnoreScannedDirectory(entry.name)) {
