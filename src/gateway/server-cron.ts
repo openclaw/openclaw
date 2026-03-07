@@ -284,6 +284,23 @@ export function buildGatewayCronService(params: {
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+
+      // Support custom session IDs (session:xxx format) for persistent cron sessions
+      // Note: "current" should have been resolved at creation time, but handle it
+      // gracefully by falling back to isolated behavior if it somehow appears in storage
+      let sessionKey: string;
+      if (job.sessionTarget.startsWith("session:")) {
+        const customSessionId = job.sessionTarget.slice(8); // Remove "session:" prefix
+        sessionKey = customSessionId;
+      } else if (job.sessionTarget === "current") {
+        // Fallback: "current" should have been resolved at creation time
+        // If it's somehow in storage, treat it as isolated with cron: prefix
+        sessionKey = `cron:${job.id}`;
+      } else {
+        // "isolated" or any other value
+        sessionKey = `cron:${job.id}`;
+      }
+
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
@@ -291,7 +308,7 @@ export function buildGatewayCronService(params: {
         message,
         abortSignal,
         agentId,
-        sessionKey: `cron:${job.id}`,
+        sessionKey,
         lane: "cron",
       });
     },

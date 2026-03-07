@@ -72,6 +72,23 @@ function createLegacyIsolatedAgentTurnJob(
 }
 
 describe("CronService store migrations", () => {
+  it("treats stored current session targets as isolated-like for default delivery migration", async () => {
+    const { store, cron } = await startCronWithStoredJobs([
+      createLegacyIsolatedAgentTurnJob({
+        id: "stored-current-job",
+        name: "stored current",
+        sessionTarget: "current",
+      }),
+    ]);
+
+    const job = await listJobById(cron, "stored-current-job");
+    expect(job).toBeDefined();
+    expect(job?.sessionTarget).toBe("isolated");
+    expect(job?.delivery).toEqual({ mode: "announce" });
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("migrates legacy top-level agentTurn fields and initializes missing state", async () => {
     const { store, cron } = await startCronWithStoredJobs([
       createLegacyIsolatedAgentTurnJob({
