@@ -5,10 +5,13 @@ import {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 import { loadWebMedia } from "../web/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -42,6 +45,7 @@ export type SlackSendIdentity = {
 };
 
 type SlackSendOpts = {
+  cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -211,17 +215,18 @@ async function uploadSlackFile(params: {
 
   // Upload the file content to the presigned URL
   const uploadBody = new Uint8Array(buffer) as BodyInit;
-  const { response: uploadResp, release } = await fetchWithSsrFGuard({
-    url: uploadUrlResp.upload_url,
-    init: {
-      method: "POST",
-      ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
-      body: uploadBody,
-    },
-    policy: SLACK_UPLOAD_SSRF_POLICY,
-    proxy: "env",
-    auditContext: "slack-upload-file",
-  });
+  const { response: uploadResp, release } = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url: uploadUrlResp.upload_url,
+      init: {
+        method: "POST",
+        ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+        body: uploadBody,
+      },
+      policy: SLACK_UPLOAD_SSRF_POLICY,
+      auditContext: "slack-upload-file",
+    }),
+  );
   try {
     if (!uploadResp.ok) {
       throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
@@ -258,7 +263,7 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,

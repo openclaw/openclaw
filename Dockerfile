@@ -1,3 +1,22 @@
+# Opt-in extension dependencies at build time (space-separated directory names).
+# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
+#
+# A multi-stage build is used instead of `RUN --mount=type=bind` because
+# bind mounts require BuildKit, which is not available in plain Docker.
+# This stage extracts only the package.json files we need from extensions/,
+# so the main build layer is not invalidated by unrelated extension source changes.
+ARG OPENCLAW_EXTENSIONS=""
+FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935 AS ext-deps
+ARG OPENCLAW_EXTENSIONS
+COPY extensions /tmp/extensions
+RUN mkdir -p /out && \
+    for ext in $OPENCLAW_EXTENSIONS; do \
+      if [ -f "/tmp/extensions/$ext/package.json" ]; then \
+        mkdir -p "/out/$ext" && \
+        cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
+      fi; \
+    done
+
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
 # OCI base-image metadata for downstream image consumers.
@@ -35,6 +54,8 @@ COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
+COPY --from=ext-deps --chown=node:node /out/ ./extensions/
+
 USER node
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
@@ -53,6 +74,38 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node /home/node/.cache/ms-playwright && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
+
+# Optionally install Docker CLI for sandbox container management.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
+# Adds ~50MB. Only the CLI is installed — no Docker daemon.
+# Required for agents.defaults.sandbox to function in Docker deployments.
+ARG OPENCLAW_INSTALL_DOCKER_CLI=""
+ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg && \
+      install -m 0755 -d /etc/apt/keyrings && \
+      # Verify Docker apt signing key fingerprint before trusting it as a root key.
+      # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
+      curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
+      expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
+      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" && \
+      if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
+        echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
+        exit 1; \
+      fi && \
+      gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg.asc && \
+      rm -f /tmp/docker.gpg.asc && \
+      chmod a+r /etc/apt/keyrings/docker.gpg && \
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
+        "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list && \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        docker-ce-cli docker-compose-plugin && \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi

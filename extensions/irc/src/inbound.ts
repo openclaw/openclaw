@@ -1,8 +1,7 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
-  createNormalizedOutboundDeliverer,
-  createReplyPrefixOptions,
+  dispatchInboundReplyWithBase,
   formatTextWithAttachmentLinks,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
@@ -16,7 +15,7 @@ import {
   type OutboundReplyPayload,
   type OpenClawConfig,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/irc";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -332,44 +331,31 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.session.recordInboundSession({
+  await dispatchInboundReplyWithBase({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    route,
     storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
+    ctxPayload,
+    core,
+    deliver: async (payload) => {
+      await deliverIrcReply({
+        payload,
+        target: peerId,
+        accountId: account.accountId,
+        sendReply: params.sendReply,
+        statusSink,
+      });
+    },
     onRecordError: (err) => {
       runtime.error?.(`irc: failed updating session meta: ${String(err)}`);
     },
-  });
-
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg: config as OpenClawConfig,
-    agentId: route.agentId,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-  });
-  const deliverReply = createNormalizedOutboundDeliverer(async (payload) => {
-    await deliverIrcReply({
-      payload,
-      target: peerId,
-      accountId: account.accountId,
-      sendReply: params.sendReply,
-      statusSink,
-    });
-  });
-
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config as OpenClawConfig,
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: deliverReply,
-      onError: (err, info) => {
-        runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
-      },
+    onDispatchError: (err, info) => {
+      runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
     },
     replyOptions: {
       skillFilter: groupMatch.groupConfig?.skills,
-      onModelSelected,
       disableBlockStreaming:
         typeof account.config.blockStreaming === "boolean"
           ? !account.config.blockStreaming

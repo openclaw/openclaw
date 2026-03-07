@@ -122,6 +122,12 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  pdfModel?: AgentModelConfig;
+  /** Maximum PDF file size in megabytes (default: 10). */
+  pdfMaxBytesMb?: number;
+  /** Maximum number of PDF pages to process (default: 20). */
+  pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
@@ -134,6 +140,13 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /**
+   * Agent-visible bootstrap truncation warning mode:
+   * - off: do not inject warning text
+   * - once: inject once per unique truncation signature (default)
+   * - always: inject on every run with truncation
+   */
+  bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
@@ -275,6 +288,12 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionQualityGuardConfig = {
+  /** Enable compaction summary quality audits and regeneration retries. Default: false. */
+  enabled?: boolean;
+  /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
+  maxRetries?: number;
+};
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -291,8 +310,16 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Optional quality-audit retries for safeguard compaction summaries. */
+  qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /**
+   * H2/H3 section names from AGENTS.md to inject after compaction.
+   * Defaults to ["Session Startup", "Red Lines"] when unset.
+   * Set to [] to disable post-compaction context injection entirely.
+   */
+  postCompactionSections?: string[];
 };
 
 export type AgentCompactionMemoryFlushConfig = {

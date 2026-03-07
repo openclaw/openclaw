@@ -81,3 +81,8 @@ export type AgentCommandOpts = {
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
 };
+
+export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {
+  /** Ingress callsites must always pass explicit owner authorization state. */
+  senderIsOwner: boolean;
+};

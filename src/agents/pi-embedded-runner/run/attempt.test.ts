@@ -1,16 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  buildAfterTurnLegacyCompactionParams,
+  composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
+  prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
+  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+
+function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        ollama: {
+          baseUrl: "http://127.0.0.1:11434/v1",
+          api: "openai-completions",
+          injectNumCtxForOpenAICompat,
+          models: [],
+        },
+      },
+    },
+  };
+}
 
 describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
@@ -38,6 +57,8 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result).toEqual({
       prependContext: "from-cache",
       systemPrompt: "legacy-system",
+      prependSystemContext: undefined,
+      appendSystemContext: undefined,
     });
   });
 
@@ -54,6 +75,58 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+  });
+
+  it("merges prompt-build and legacy context fields in deterministic order", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "prompt context",
+        prependSystemContext: "prompt prepend",
+        appendSystemContext: "prompt append",
+      })),
+      runBeforeAgentStart: vi.fn(async () => ({
+        prependContext: "legacy context",
+        prependSystemContext: "legacy prepend",
+        appendSystemContext: "legacy append",
+      })),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
+    expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("composeSystemPromptWithHookContext", () => {
+  it("returns undefined when no hook system context is provided", () => {
+    expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
+  });
+
+  it("builds prepend/base/append system prompt order", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "  base system  ",
+        prependSystemContext: "  prepend  ",
+        appendSystemContext: "  append  ",
+      }),
+    ).toBe("prepend\n\nbase system\n\nappend");
+  });
+
+  it("avoids blank separators when base system prompt is empty", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "   ",
+        appendSystemContext: "  append only  ",
+      }),
+    ).toBe("append only");
   });
 });
 
@@ -109,7 +182,6 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
-
 describe("wrapStreamFnTrimToolCallNames", () => {
   function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
     result: () => Promise<unknown>;
@@ -129,6 +201,25 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
   }
 
+  async function invokeWrappedStream(
+    baseFn: (...args: never[]) => unknown,
+    allowedToolNames?: Set<string>,
+  ) {
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
+    return await wrappedFn({} as never, {} as never, {} as never);
+  }
+
+  function createEventStream(params: {
+    event: unknown;
+    finalToolCall: { type: string; name: string };
+  }) {
+    const finalMessage = { role: "assistant", content: [params.finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({ events: [params.event], resultMessage: finalMessage }),
+    );
+    return { baseFn, finalMessage };
+  }
+
   it("trims whitespace from live streamed tool call names and final result message", async () => {
     const partialToolCall = { type: "toolCall", name: " read " };
     const messageToolCall = { type: "toolCall", name: " exec " };
@@ -138,13 +229,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       partial: { role: "assistant", content: [partialToolCall] },
       message: { role: "assistant", content: [messageToolCall] },
     };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
+    const { baseFn, finalMessage } = createEventStream({ event, finalToolCall });
 
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never);
-    const stream = wrappedFn({} as never, {} as never, {} as never) as Awaited<
-      ReturnType<typeof wrappedFn>
-    >;
+    const stream = await invokeWrappedStream(baseFn);
 
     const seenEvents: unknown[] = [];
     for await (const item of stream) {
@@ -170,8 +257,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       }),
     );
 
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never);
-    const stream = await wrappedFn({} as never, {} as never, {} as never);
+    const stream = await invokeWrappedStream(baseFn);
     const result = await stream.result();
 
     expect(finalToolCall.name).toBe("browser");
@@ -188,10 +274,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       }),
     );
 
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
-    const stream = wrappedFn({} as never, {} as never, {} as never) as Awaited<
-      ReturnType<typeof wrappedFn>
-    >;
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
     const result = await stream.result();
 
     expect(finalToolCall.name).toBe("exec");
@@ -205,13 +288,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       type: "toolcall_delta",
       partial: { role: "assistant", content: [partialToolCall] },
     };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
+    const { baseFn } = createEventStream({ event, finalToolCall });
 
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never);
-    const stream = wrappedFn({} as never, {} as never, {} as never) as Awaited<
-      ReturnType<typeof wrappedFn>
-    >;
+    const stream = await invokeWrappedStream(baseFn);
 
     for await (const _item of stream) {
       // drain
@@ -221,6 +300,57 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(partialToolCall.name).toBe("   ");
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
+    const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
+    const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
+    const finalToolCallB: { type: string; name: string; id?: string } = {
+      type: "toolCall",
+      name: " write ",
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(finalToolCallA.name).toBe("exec");
+    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("trims surrounding whitespace on tool call ids", async () => {
+    const finalToolCall = { type: "toolCall", name: " read ", id: "  call_42  " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+    expect(finalToolCall.id).toBe("call_42");
   });
 });
 
@@ -346,18 +476,7 @@ describe("resolveOllamaCompatNumCtxEnabled", () => {
   it("returns false when provider flag is explicitly disabled", () => {
     expect(
       resolveOllamaCompatNumCtxEnabled({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434/v1",
-                api: "openai-completions",
-                injectNumCtxForOpenAICompat: false,
-                models: [],
-              },
-            },
-          },
-        },
+        config: createOllamaProviderConfig(false),
         providerId: "ollama",
       }),
     ).toBe(false);
@@ -385,20 +504,99 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
           api: "openai-completions",
           baseUrl: "http://127.0.0.1:11434/v1",
         },
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434/v1",
-                api: "openai-completions",
-                injectNumCtxForOpenAICompat: false,
-                models: [],
-              },
-            },
-          },
-        },
+        config: createOllamaProviderConfig(false),
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("decodeHtmlEntitiesInObject", () => {
+  it("decodes HTML entities in string values", () => {
+    const result = decodeHtmlEntitiesInObject(
+      "source .env &amp;&amp; psql &quot;$DB&quot; -c &lt;query&gt;",
+    );
+    expect(result).toBe('source .env && psql "$DB" -c <query>');
+  });
+
+  it("recursively decodes nested objects", () => {
+    const input = {
+      command: "cd ~/dev &amp;&amp; npm run build",
+      args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
+      nested: { deep: "a &amp; b" },
+    };
+    const result = decodeHtmlEntitiesInObject(input) as Record<string, unknown>;
+    expect(result.command).toBe("cd ~/dev && npm run build");
+    expect((result.args as string[])[0]).toBe('--flag="value"');
+    expect((result.args as string[])[1]).toBe("<input>");
+    expect((result.nested as Record<string, string>).deep).toBe("a & b");
+  });
+
+  it("passes through non-string primitives unchanged", () => {
+    expect(decodeHtmlEntitiesInObject(42)).toBe(42);
+    expect(decodeHtmlEntitiesInObject(null)).toBe(null);
+    expect(decodeHtmlEntitiesInObject(true)).toBe(true);
+    expect(decodeHtmlEntitiesInObject(undefined)).toBe(undefined);
+  });
+
+  it("returns strings without entities unchanged", () => {
+    const input = "plain string with no entities";
+    expect(decodeHtmlEntitiesInObject(input)).toBe(input);
+  });
+
+  it("decodes numeric character references", () => {
+    expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
+    expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
+  });
+});
+describe("prependSystemPromptAddition", () => {
+  it("prepends context-engine addition to the system prompt", () => {
+    const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+      systemPromptAddition: "extra behavior",
+    });
+
+    expect(result).toBe("extra behavior\n\nbase system");
+  });
+
+  it("returns the original system prompt when no addition is provided", () => {
+    const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+    });
+
+    expect(result).toBe("base system");
+  });
+});
+
+describe("buildAfterTurnLegacyCompactionParams", () => {
+  it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
+    const legacy = buildAfterTurnLegacyCompactionParams({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      authProfileId: "openai:p1",
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
   });
 });

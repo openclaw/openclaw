@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -7,12 +8,20 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { ensureContextEnginesInitialized } from "../context-engine/init.js";
+import { resolveContextEngine } from "../context-engine/registry.js";
+import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
-import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
+import {
+  captureSubagentCompletionReply,
+  runSubagentAnnounceFlow,
+  type SubagentRunOutcome,
+} from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -32,10 +41,13 @@ import {
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
+  countPendingDescendantRunsExcludingRunFromRuns,
+  countPendingDescendantRunsFromRuns,
   findRunIdsByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
+  shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import {
   getSubagentRunsSnapshotForRead,
@@ -46,6 +58,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
+const log = createSubsystemLogger("agents/subagent-registry");
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
@@ -63,10 +76,15 @@ const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
  */
 const MAX_ANNOUNCE_RETRY_COUNT = 3;
 /**
- * Announce entries older than this are force-expired even if delivery never
- * succeeded. Guards against stale registry entries surviving gateway restarts.
+ * Non-completion announce entries older than this are force-expired even if
+ * delivery never succeeded.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+/**
+ * Completion-message flows can wait for descendants to finish, but this hard
+ * cap prevents indefinite pending state when descendants never fully settle.
+ */
+const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000; // 30 minutes
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
@@ -74,6 +92,25 @@ type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
+
+function capFrozenResultText(resultText: string): string {
+  const trimmed = resultText.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const totalBytes = Buffer.byteLength(trimmed, "utf8");
+  if (totalBytes <= FROZEN_RESULT_TEXT_MAX_BYTES) {
+    return trimmed;
+  }
+  const notice = `\n\n[truncated: frozen completion output exceeded ${Math.round(FROZEN_RESULT_TEXT_MAX_BYTES / 1024)}KB (${Math.round(totalBytes / 1024)}KB)]`;
+  const maxPayloadBytes = Math.max(
+    0,
+    FROZEN_RESULT_TEXT_MAX_BYTES - Buffer.byteLength(notice, "utf8"),
+  );
+  const payload = Buffer.from(trimmed, "utf8").subarray(0, maxPayloadBytes).toString("utf8");
+  return `${payload}${notice}`;
+}
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -273,6 +310,22 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
   });
 }
 
+async function notifyContextEngineSubagentEnded(params: {
+  childSessionKey: string;
+  reason: SubagentEndReason;
+}) {
+  try {
+    ensureContextEnginesInitialized();
+    const engine = await resolveContextEngine(loadConfig());
+    if (!engine.onSubagentEnded) {
+      return;
+    }
+    await engine.onSubagentEnded(params);
+  } catch (err) {
+    log.warn("context-engine onSubagentEnded failed (best-effort)", { err });
+  }
+}
+
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
   return entry?.suppressAnnounceReason === "steer-restart";
 }
@@ -315,6 +368,78 @@ async function emitSubagentEndedHookForRun(params: {
   });
 }
 
+async function freezeRunResultAtCompletion(entry: SubagentRunRecord): Promise<boolean> {
+  if (entry.frozenResultText !== undefined) {
+    return false;
+  }
+  try {
+    const captured = await captureSubagentCompletionReply(entry.childSessionKey);
+    entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
+  } catch {
+    entry.frozenResultText = null;
+  }
+  entry.frozenResultCapturedAt = Date.now();
+  return true;
+}
+
+function listPendingCompletionRunsForSession(sessionKey: string): SubagentRunRecord[] {
+  const key = sessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const out: SubagentRunRecord[] = [];
+  for (const entry of subagentRuns.values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (entry.expectsCompletionMessage !== true) {
+      continue;
+    }
+    if (typeof entry.endedAt !== "number") {
+      continue;
+    }
+    if (typeof entry.cleanupCompletedAt === "number") {
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+async function refreshFrozenResultFromSession(sessionKey: string): Promise<boolean> {
+  const candidates = listPendingCompletionRunsForSession(sessionKey);
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  let captured: string | undefined;
+  try {
+    captured = await captureSubagentCompletionReply(sessionKey);
+  } catch {
+    return false;
+  }
+  const trimmed = captured?.trim();
+  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+    return false;
+  }
+
+  const nextFrozen = capFrozenResultText(trimmed);
+  const capturedAt = Date.now();
+  let changed = false;
+  for (const entry of candidates) {
+    if (entry.frozenResultText === nextFrozen) {
+      continue;
+    }
+    entry.frozenResultText = nextFrozen;
+    entry.frozenResultCapturedAt = capturedAt;
+    changed = true;
+  }
+  if (changed) {
+    persistSubagentRuns();
+  }
+  return changed;
+}
+
 async function completeSubagentRun(params: {
   runId: string;
   endedAt?: number;
@@ -331,6 +456,19 @@ async function completeSubagentRun(params: {
   }
 
   let mutated = false;
+  // If a late lifecycle completion arrives after an earlier kill marker, allow
+  // completion cleanup/announce to run instead of staying permanently suppressed.
+  if (
+    params.reason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    entry.suppressAnnounceReason === "killed" &&
+    (entry.cleanupHandled || typeof entry.cleanupCompletedAt === "number")
+  ) {
+    entry.suppressAnnounceReason = undefined;
+    entry.cleanupHandled = false;
+    entry.cleanupCompletedAt = undefined;
+    mutated = true;
+  }
+
   const endedAt = typeof params.endedAt === "number" ? params.endedAt : Date.now();
   if (entry.endedAt !== endedAt) {
     entry.endedAt = endedAt;
@@ -342,6 +480,10 @@ async function completeSubagentRun(params: {
   }
   if (entry.endedReason !== params.reason) {
     entry.endedReason = params.reason;
+    mutated = true;
+  }
+
+  if (await freezeRunResultAtCompletion(entry)) {
     mutated = true;
   }
 
@@ -393,6 +535,8 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     task: entry.task,
     timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
     cleanup: entry.cleanup,
+    roundOneReply: entry.frozenResultText ?? undefined,
+    fallbackReply: entry.fallbackFrozenResultText ?? undefined,
     waitForCompletion: false,
     startedAt: entry.startedAt,
     endedAt: entry.endedAt,
@@ -400,6 +544,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     outcome: entry.outcome,
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
+    wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
     .then((didAnnounce) => {
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
@@ -445,7 +590,11 @@ function resumeSubagentRun(runId: string) {
     persistSubagentRuns();
     return;
   }
-  if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
+  if (
+    entry.expectsCompletionMessage !== true &&
+    typeof entry.endedAt === "number" &&
+    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
+  ) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
@@ -462,6 +611,7 @@ function resumeSubagentRun(runId: string) {
   ) {
     const waitMs = Math.max(1, earliestRetryAt - now);
     setTimeout(() => {
+      resumedRuns.delete(runId);
       resumeSubagentRun(runId);
     }, waitMs).unref?.();
     resumedRuns.add(runId);
@@ -561,6 +711,10 @@ async function sweepSubagentRuns() {
       continue;
     }
     clearPendingLifecycleError(runId);
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: entry.childSessionKey,
+      reason: "swept",
+    });
     subagentRuns.delete(runId);
     mutated = true;
     // Archive/purge is terminal for the run record; remove any retained attachments too.
@@ -597,11 +751,14 @@ function ensureListener() {
       if (!evt || evt.stream !== "lifecycle") {
         return;
       }
+      const phase = evt.data?.phase;
       const entry = subagentRuns.get(evt.runId);
       if (!entry) {
+        if (phase === "end" && typeof evt.sessionKey === "string") {
+          await refreshFrozenResultFromSession(evt.sessionKey);
+        }
         return;
       }
-      const phase = evt.data?.phase;
       if (phase === "start") {
         clearPendingLifecycleError(evt.runId);
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
@@ -689,12 +846,19 @@ async function finalizeSubagentCleanup(
     return;
   }
   if (didAnnounce) {
+    entry.wakeOnDescendantSettle = undefined;
+    entry.fallbackFrozenResultText = undefined;
+    entry.fallbackFrozenResultCapturedAt = undefined;
     const completionReason = resolveCleanupCompletionReason(entry);
     await emitCompletionEndedHookIfNeeded(entry, completionReason);
     // Clean up attachments before the run record is removed.
     const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
     if (shouldDeleteAttachments) {
       await safeRemoveAttachmentsDir(entry);
+    }
+    if (cleanup === "delete") {
+      entry.frozenResultText = undefined;
+      entry.frozenResultCapturedAt = undefined;
     }
     completeCleanupBookkeeping({
       runId,
@@ -709,8 +873,10 @@ async function finalizeSubagentCleanup(
   const deferredDecision = resolveDeferredCleanupDecision({
     entry,
     now,
-    activeDescendantRuns: Math.max(0, countActiveDescendantRuns(entry.childSessionKey)),
+    // Defer until descendants are fully settled, including post-end cleanup.
+    activeDescendantRuns: Math.max(0, countPendingDescendantRuns(entry.childSessionKey)),
     announceExpiryMs: ANNOUNCE_EXPIRY_MS,
+    announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
     maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
     deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
     resolveAnnounceRetryDelayMs,
@@ -718,6 +884,7 @@ async function finalizeSubagentCleanup(
 
   if (deferredDecision.kind === "defer-descendants") {
     entry.lastAnnounceRetryAt = now;
+    entry.wakeOnDescendantSettle = true;
     entry.cleanupHandled = false;
     resumedRuns.delete(runId);
     persistSubagentRuns();
@@ -733,6 +900,9 @@ async function finalizeSubagentCleanup(
   }
 
   if (deferredDecision.kind === "give-up") {
+    entry.wakeOnDescendantSettle = undefined;
+    entry.fallbackFrozenResultText = undefined;
+    entry.fallbackFrozenResultCapturedAt = undefined;
     const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
     if (shouldDeleteAttachments) {
       await safeRemoveAttachmentsDir(entry);
@@ -749,10 +919,10 @@ async function finalizeSubagentCleanup(
     return;
   }
 
-  // Allow retry on the next wake if announce was deferred or failed.
-  // Applies to both keep/delete cleanup modes so delete-runs are only removed
-  // after a successful announce (or terminal give-up).
+  // Keep both cleanup modes retryable after deferred/failed announce.
+  // Delete-mode is finalized only after announce succeeds or give-up triggers.
   entry.cleanupHandled = false;
+  // Clear the in-flight resume marker so the scheduled retry can run again.
   resumedRuns.delete(runId);
   persistSubagentRuns();
   if (deferredDecision.resumeDelayMs == null) {
@@ -790,11 +960,19 @@ function completeCleanupBookkeeping(params: {
 }) {
   if (params.cleanup === "delete") {
     clearPendingLifecycleError(params.runId);
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: params.entry.childSessionKey,
+      reason: "deleted",
+    });
     subagentRuns.delete(params.runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(params.runId);
     return;
   }
+  void notifyContextEngineSubagentEnded({
+    childSessionKey: params.entry.childSessionKey,
+    reason: "completed",
+  });
   params.entry.cleanupCompletedAt = params.completedAt;
   persistSubagentRuns();
   retryDeferredCompletedAnnounces(params.runId);
@@ -815,9 +993,10 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     if (suppressAnnounceForSteerRestart(entry)) {
       continue;
     }
-    // Force-expire announces that have been pending too long (#18264).
+    // Force-expire stale non-completion announces; completion-message flows can
+    // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
-    if (endedAgo > ANNOUNCE_EXPIRY_MS) {
+    if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
       logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
       persistSubagentRuns();
@@ -889,6 +1068,7 @@ export function replaceSubagentRunAfterSteer(params: {
   nextRunId: string;
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
+  preserveFrozenResultFallback?: boolean;
 }) {
   const previousRunId = params.previousRunId.trim();
   const nextRunId = params.nextRunId.trim();
@@ -916,6 +1096,7 @@ export function replaceSubagentRunAfterSteer(params: {
     spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
+  const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
 
   const next: SubagentRunRecord = {
     ...source,
@@ -924,7 +1105,14 @@ export function replaceSubagentRunAfterSteer(params: {
     endedAt: undefined,
     endedReason: undefined,
     endedHookEmittedAt: undefined,
+    wakeOnDescendantSettle: undefined,
     outcome: undefined,
+    frozenResultText: undefined,
+    frozenResultCapturedAt: undefined,
+    fallbackFrozenResultText: preserveFrozenResultFallback ? source.frozenResultText : undefined,
+    fallbackFrozenResultCapturedAt: preserveFrozenResultFallback
+      ? source.frozenResultCapturedAt
+      : undefined,
     cleanupCompletedAt: undefined,
     cleanupHandled: false,
     suppressAnnounceReason: undefined,
@@ -988,6 +1176,7 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    wakeOnDescendantSettle: undefined,
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
@@ -1091,6 +1280,13 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 
 export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
+  const entry = subagentRuns.get(runId);
+  if (entry) {
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: entry.childSessionKey,
+      reason: "released",
+    });
+  }
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();
@@ -1133,6 +1329,13 @@ export function isSubagentSessionRunActive(childSessionKey: string): boolean {
     }
   }
   return false;
+}
+
+export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
+  return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    childSessionKey,
+  );
 }
 
 export function markSubagentRunTerminated(params: {
@@ -1196,8 +1399,11 @@ export function markSubagentRunTerminated(params: {
   return updated;
 }
 
-export function listSubagentRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {
-  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey);
+export function listSubagentRunsForRequester(
+  requesterSessionKey: string,
+  options?: { requesterRunId?: string },
+): SubagentRunRecord[] {
+  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
 export function countActiveRunsForSession(requesterSessionKey: string): number {
@@ -1211,6 +1417,24 @@ export function countActiveDescendantRuns(rootSessionKey: string): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
+  );
+}
+
+export function countPendingDescendantRuns(rootSessionKey: string): number {
+  return countPendingDescendantRunsFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+  );
+}
+
+export function countPendingDescendantRunsExcludingRun(
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  return countPendingDescendantRunsExcludingRunFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
   );
 }
 

@@ -41,8 +41,8 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 - You can override per-message (`/think:<level>`) or in model params:
   `agents.defaults.models["anthropic/<model>"].params.thinking`.
 - Related Anthropic docs:
-  - https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
-  - https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 
 ## Prompt caching (Anthropic API)
 

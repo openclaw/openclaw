@@ -2,6 +2,7 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronJob, CronSchedule } from "../../cron/types.js";
+import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
@@ -10,6 +11,15 @@ import { callGatewayFromCli } from "../gateway-rpc.js";
 
 export const getCronChannelOptions = () =>
   ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
+
+export function printCronJson(value: unknown) {
+  defaultRuntime.log(JSON.stringify(value, null, 2));
+}
+
+export function handleCronCliError(err: unknown) {
+  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.exit(1);
+}
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
@@ -60,6 +70,23 @@ export function parseDurationMs(input: string): number | null {
             ? 3_600_000
             : 86_400_000;
   return Math.floor(n * factor);
+}
+
+export function parseCronStaggerMs(params: {
+  staggerRaw: string;
+  useExact: boolean;
+}): number | undefined {
+  if (params.useExact) {
+    return 0;
+  }
+  if (!params.staggerRaw) {
+    return undefined;
+  }
+  const parsed = parseDurationMs(params.staggerRaw);
+  if (!parsed) {
+    throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
+  return parsed;
 }
 
 export function parseAt(input: string): string | null {

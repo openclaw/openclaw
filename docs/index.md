@@ -54,7 +54,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
 - **Open source**: MIT licensed, community-driven
 
-**What do you need?** Node 22+, an API key (Anthropic recommended), and 5 minutes.
+**What do you need?** Node 22+, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 
@@ -124,7 +124,7 @@ Open the browser Control UI after the Gateway starts.
 - Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
 </p>
 
 ## Configuration (optional)

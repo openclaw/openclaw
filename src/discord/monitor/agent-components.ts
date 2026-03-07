@@ -34,11 +34,15 @@ import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
-import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
+} from "../../security/dm-policy-shared.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -58,6 +62,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -761,18 +766,15 @@ function resolveComponentCommandAuthorized(params: {
     return true;
   }
 
-  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, ["discord:", "user:", "pk:"]);
-  const ownerOk = ownerAllowList
-    ? resolveDiscordAllowListMatch({
-        allowList: ownerAllowList,
-        candidate: {
-          id: interactionCtx.user.id,
-          name: interactionCtx.user.username,
-          tag: formatDiscordUserTag(interactionCtx.user),
-        },
-        allowNameMatching: params.allowNameMatching,
-      }).allowed
-    : false;
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: ctx.allowFrom,
+    sender: {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: formatDiscordUserTag(interactionCtx.user),
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
 
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
@@ -861,6 +863,17 @@ async function dispatchDiscordComponentEvent(params: {
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
     allowNameMatching,
   });
+  const pinnedMainDmOwner = interactionCtx.isDirectMessage
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: ctx.cfg.session?.dmScope,
+        allowFrom: channelConfig?.users ?? guildInfo?.users,
+        normalizeEntry: (entry) => {
+          const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
+          const candidate = normalized?.ids.values().next().value;
+          return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
+        },
+      })
+    : null;
   const commandAuthorized = resolveComponentCommandAuthorized({
     ctx,
     interactionCtx,
@@ -929,6 +942,17 @@ async function dispatchDiscordComponentEvent(params: {
           channel: "discord",
           to: `user:${interactionCtx.userId}`,
           accountId,
+          mainDmOwnerPin: pinnedMainDmOwner
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: interactionCtx.userId,
+                onSkip: ({ ownerRecipient, senderRecipient }) => {
+                  logVerbose(
+                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
         }
       : undefined,
     onRecordError: (err) => {
@@ -953,6 +977,7 @@ async function dispatchDiscordComponentEvent(params: {
     fallbackLimit: 2000,
   });
   const token = ctx.token ?? "";
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
   const replyReference = createReplyReferencePlanner({
@@ -982,6 +1007,7 @@ async function dispatchDiscordComponentEvent(params: {
           maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
+          mediaLocalRoots,
         });
         replyReference.markSent();
       },

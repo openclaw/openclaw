@@ -10,17 +10,22 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;
-  gatewayToken?: string;
   daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
-  const loaded = await service.isLoaded({ env: process.env });
+  let loaded = false;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
   let shouldCheckLinger = false;
   let shouldInstall = true;
   let daemonRuntime = params.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
@@ -88,10 +93,26 @@ export async function maybeInstallDaemon(params: {
         progress.setLabel("Preparing Gateway service…");
 
         const cfg = loadConfig();
+        const tokenResolution = await resolveGatewayInstallToken({
+          config: cfg,
+          env: process.env,
+        });
+        for (const warning of tokenResolution.warnings) {
+          note(warning, "Gateway");
+        }
+        if (tokenResolution.unavailableReason) {
+          installError = [
+            "Gateway install blocked:",
+            tokenResolution.unavailableReason,
+            "Fix gateway auth config/token input and rerun configure.",
+          ].join(" ");
+          progress.setLabel("Gateway service install blocked.");
+          return;
+        }
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: params.port,
-          token: params.gatewayToken,
+          token: tokenResolution.token,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
           config: cfg,

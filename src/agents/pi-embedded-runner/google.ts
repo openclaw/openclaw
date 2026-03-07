@@ -25,7 +25,12 @@ import {
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { makeZeroUsageSnapshot } from "../usage.js";
+import {
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type AssistantUsageSnapshot,
+  type UsageLike,
+} from "../usage.js";
 import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
@@ -200,7 +205,112 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
-function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
+function normalizeAssistantUsageSnapshot(usage: unknown) {
+  const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
+  if (!normalized) {
+    return makeZeroUsageSnapshot();
+  }
+  const input = normalized.input ?? 0;
+  const output = normalized.output ?? 0;
+  const cacheRead = normalized.cacheRead ?? 0;
+  const cacheWrite = normalized.cacheWrite ?? 0;
+  const totalTokens = normalized.total ?? input + output + cacheRead + cacheWrite;
+  const cost = normalizeAssistantUsageCost(usage);
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    ...(cost ? { cost } : {}),
+  };
+}
+
+function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] | undefined {
+  const base = makeZeroUsageSnapshot().cost;
+  if (!usage || typeof usage !== "object") {
+    return undefined;
+  }
+  const rawCost = (usage as { cost?: unknown }).cost;
+  if (!rawCost || typeof rawCost !== "object") {
+    return undefined;
+  }
+  const cost = rawCost as Record<string, unknown>;
+  const inputRaw = toFiniteCostNumber(cost.input);
+  const outputRaw = toFiniteCostNumber(cost.output);
+  const cacheReadRaw = toFiniteCostNumber(cost.cacheRead);
+  const cacheWriteRaw = toFiniteCostNumber(cost.cacheWrite);
+  const totalRaw = toFiniteCostNumber(cost.total);
+  if (
+    inputRaw === undefined &&
+    outputRaw === undefined &&
+    cacheReadRaw === undefined &&
+    cacheWriteRaw === undefined &&
+    totalRaw === undefined
+  ) {
+    return undefined;
+  }
+  const input = inputRaw ?? base.input;
+  const output = outputRaw ?? base.output;
+  const cacheRead = cacheReadRaw ?? base.cacheRead;
+  const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
+  const total = totalRaw ?? input + output + cacheRead + cacheWrite;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
+function toFiniteCostNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i] as (AgentMessage & { role?: unknown; usage?: unknown }) | undefined;
+    if (!message || message.role !== "assistant") {
+      continue;
+    }
+    const normalizedUsage = normalizeAssistantUsageSnapshot(message.usage);
+    const usageCost =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { cost?: unknown }).cost
+        : undefined;
+    const normalizedCost = normalizedUsage.cost;
+    if (
+      message.usage &&
+      typeof message.usage === "object" &&
+      (message.usage as { input?: unknown }).input === normalizedUsage.input &&
+      (message.usage as { output?: unknown }).output === normalizedUsage.output &&
+      (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
+      (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
+      (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      ((normalizedCost &&
+        usageCost &&
+        typeof usageCost === "object" &&
+        (usageCost as { input?: unknown }).input === normalizedCost.input &&
+        (usageCost as { output?: unknown }).output === normalizedCost.output &&
+        (usageCost as { cacheRead?: unknown }).cacheRead === normalizedCost.cacheRead &&
+        (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedCost.cacheWrite &&
+        (usageCost as { total?: unknown }).total === normalizedCost.total) ||
+        (!normalizedCost && usageCost === undefined))
+    ) {
+      continue;
+    }
+    out[i] = {
+      ...(message as unknown as Record<string, unknown>),
+      usage: normalizedUsage,
+    } as AgentMessage;
+    touched = true;
+  }
+
+  return touched ? out : messages;
+}
+
+export function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
@@ -449,8 +559,9 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
-  const sanitizedCompactionUsage =
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults);
+  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+  );
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
