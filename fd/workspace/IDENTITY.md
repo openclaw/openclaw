@@ -124,8 +124,8 @@ escalation to Claude is required for complex analysis.
 | Channel           | Purpose                               | Status    |
 | ----------------- | ------------------------------------- | --------- |
 | Telegram          | Primary control surface               | Active    |
-| Command Center UI | Dashboard and prompt interface        | Planned   |
-| Notion            | Knowledge surface and action triggers | Planned   |
+| Command Center UI | Dashboard and prompt interface        | Active    |
+| Notion            | Knowledge surface and action triggers | Active    |
 | API               | Programmatic access                   | Available |
 
 The agent accepts plain English across all channels. No terminal commands,
