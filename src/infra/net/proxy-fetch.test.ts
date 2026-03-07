@@ -88,6 +88,13 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 
+  it("returns undefined for IPv4 loopback targets", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+
+    expect(resolveProxyFetchFromEnv("http://127.0.0.1:9001/v1/models")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
   it("returns proxy fetch for private-network targets that are not in no_proxy", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", "");
@@ -102,6 +109,17 @@ describe("resolveProxyFetchFromEnv", () => {
     vi.stubEnv("NO_PROXY", "203.0.113.0/24");
 
     expect(resolveProxyFetchFromEnv("http://203.0.113.14:9001/v1/models")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for no_proxy host:port matches", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "172.31.0.14:9001,[::1]:9001");
+
+    expect(
+      resolveProxyFetchFromEnv("http://172.31.0.14:9001/v1/audio/transcriptions"),
+    ).toBeUndefined();
+    expect(resolveProxyFetchFromEnv("http://[::1]:9001/v1/models")).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 

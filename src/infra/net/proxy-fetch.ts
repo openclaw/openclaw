@@ -2,10 +2,28 @@ import { isIP } from "node:net";
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
 
+function normalizeNoProxyEntry(entry: string): string {
+  const value = entry.trim().toLowerCase();
+  if (!value) {
+    return "";
+  }
+  if (value.startsWith("[")) {
+    const closingBracket = value.indexOf("]");
+    if (closingBracket > 0) {
+      return value.slice(1, closingBracket);
+    }
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount === 1 && !value.startsWith(".")) {
+    return value.slice(0, value.lastIndexOf(":"));
+  }
+  return value;
+}
+
 function getNoProxyEntries(env: NodeJS.ProcessEnv): string[] {
   return [env.NO_PROXY, env.no_proxy]
     .flatMap((value) => String(value ?? "").split(","))
-    .map((value) => value.trim().toLowerCase())
+    .map(normalizeNoProxyEntry)
     .filter(Boolean);
 }
 
@@ -62,6 +80,9 @@ function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   if (hostname === "localhost" || hostname === "::1") {
+    return true;
+  }
+  if (isIP(hostname) === 4 && matchesIpv4Cidr(hostname, "127.0.0.0/8")) {
     return true;
   }
 
