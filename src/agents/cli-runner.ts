@@ -168,6 +168,7 @@ export async function runCliAgent(params: {
     sessionId: params.sessionId,
     workspaceDir,
   };
+  let resolvedPrompt = params.prompt;
   if (hookRunner?.hasHooks("before_prompt_build")) {
     try {
       const hookResult = await hookRunner.runBeforePromptBuild(
@@ -182,6 +183,9 @@ export async function runCliAgent(params: {
         const appendSystem = hookResult.appendSystemContext?.trim();
         if (prependSystem || appendSystem) {
           systemPrompt = [prependSystem, systemPrompt, appendSystem].filter(Boolean).join("\n");
+        }
+        if (hookResult.prependContext?.trim()) {
+          resolvedPrompt = `${hookResult.prependContext.trim()}\n\n${resolvedPrompt}`;
         }
       }
     } catch (hookErr) {
@@ -241,7 +245,7 @@ export async function runCliAgent(params: {
 
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
-    let prompt = params.prompt;
+    let prompt = resolvedPrompt;
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
       imagePaths = imagePayload.paths;
@@ -483,39 +487,59 @@ export async function runCliAgent(params: {
         // We'll need to modify the caller to handle this case
 
         // For now, retry without the session ID to create a new session
-        const output = await executeCliWithSession(undefined);
-        const text = output.text?.trim();
-        const payloads = text ? [{ text }] : undefined;
+        try {
+          const output = await executeCliWithSession(undefined);
+          const text = output.text?.trim();
+          const payloads = text ? [{ text }] : undefined;
 
-        // Fire-and-forget: notify plugins the agent run completed (after retry)
-        if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: [],
-                success: true,
-                durationMs: Date.now() - started,
+          // Fire-and-forget: notify plugins the agent run completed (after retry)
+          if (hookRunner?.hasHooks("agent_end")) {
+            hookRunner
+              .runAgentEnd(
+                {
+                  messages: [],
+                  success: true,
+                  durationMs: Date.now() - started,
+                },
+                hookCtx,
+              )
+              .catch((hookErr) => {
+                log.warn(`agent_end hook failed: ${String(hookErr)}`);
+              });
+          }
+
+          return {
+            payloads,
+            meta: {
+              durationMs: Date.now() - started,
+              systemPromptReport,
+              agentMeta: {
+                sessionId: output.sessionId ?? params.sessionId ?? "",
+                provider: params.provider,
+                model: modelId,
+                usage: output.usage,
               },
-              hookCtx,
-            )
-            .catch((hookErr) => {
-              log.warn(`agent_end hook failed: ${String(hookErr)}`);
-            });
-        }
-
-        return {
-          payloads,
-          meta: {
-            durationMs: Date.now() - started,
-            systemPromptReport,
-            agentMeta: {
-              sessionId: output.sessionId ?? params.sessionId ?? "",
-              provider: params.provider,
-              model: modelId,
-              usage: output.usage,
             },
-          },
-        };
+          };
+        } catch (retryErr) {
+          // Fire-and-forget: notify plugins the retry also failed
+          if (hookRunner?.hasHooks("agent_end")) {
+            hookRunner
+              .runAgentEnd(
+                {
+                  messages: [],
+                  success: false,
+                  error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+                  durationMs: Date.now() - started,
+                },
+                hookCtx,
+              )
+              .catch((hookErr) => {
+                log.warn(`agent_end hook failed: ${String(hookErr)}`);
+              });
+          }
+          throw retryErr;
+        }
       }
 
       // Fire-and-forget: notify plugins the agent run failed
