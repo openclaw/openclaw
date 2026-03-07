@@ -14,6 +14,7 @@ const {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveBraveRequestHeaders,
   extractKimiCitations,
 } = __testing;
 
@@ -68,6 +69,15 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31", "brave")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01", "brave")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01", "brave")).toBeUndefined();
+  });
+});
+
+describe("web_search brave headers", () => {
+  it("uses lowercase subscription header and accept header", () => {
+    const headers = new Headers(resolveBraveRequestHeaders("brave-key"));
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.get("x-subscription-token")).toBe("brave-key");
+    expect(headers.get("X-Subscription-Token")).toBe("brave-key");
   });
 });
 
