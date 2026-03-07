@@ -362,13 +362,19 @@ export function checkTokenDrift(params: {
 }): ServiceConfigIssue | null {
   const { serviceToken, configToken } = params;
 
+  // Normalise both tokens before comparing: service-file parsers (systemd,
+  // launchd) can return values with trailing newlines or whitespace that
+  // cause a false-positive mismatch against the config value.
+  const normService = serviceToken?.trim() || undefined;
+  const normConfig = configToken?.trim() || undefined;
+
   // No drift if both are undefined/empty
-  if (!serviceToken && !configToken) {
+  if (!normService && !normConfig) {
     return null;
   }
 
   // Drift: config has token, service has different or no token
-  if (configToken && serviceToken !== configToken) {
+  if (normConfig && normService !== normConfig) {
     return {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:

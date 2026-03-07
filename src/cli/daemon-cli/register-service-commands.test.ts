@@ -64,7 +64,7 @@ describe("addGatewayServiceCommands", () => {
       expect.objectContaining({
         rpc: expect.objectContaining({
           token: "tok_status",
-          password: "pw_status",
+          password: "pw_status", // pragma: allowlist secret
         }),
       }),
     );

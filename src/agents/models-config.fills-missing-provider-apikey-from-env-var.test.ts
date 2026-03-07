@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { validateConfigObject } from "../config/validation.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -43,7 +44,7 @@ async function writeAgentModelsJson(content: unknown): Promise<void> {
 function createMergeConfigProvider() {
   return {
     baseUrl: "https://config.example/v1",
-    apiKey: "CONFIG_KEY",
+    apiKey: "CONFIG_KEY", // pragma: allowlist secret
     api: "openai-responses" as const,
     models: [
       {
@@ -114,7 +115,7 @@ describe("models-config", () => {
           providers: {
             anthropic: {
               baseUrl: "https://relay.example.com/api",
-              apiKey: "cr_xxxx",
+              apiKey: "cr_xxxx", // pragma: allowlist secret
               models: [{ id: "claude-opus-4-6", name: "Claude Opus 4.6" }],
             },
           },
@@ -166,7 +167,7 @@ describe("models-config", () => {
         const parsed = await readGeneratedModelsJson<{
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
         }>();
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-VL-01");
       });
@@ -178,7 +179,7 @@ describe("models-config", () => {
         providers: {
           existing: {
             baseUrl: "http://localhost:1234/v1",
-            apiKey: "EXISTING_KEY",
+            apiKey: "EXISTING_KEY", // pragma: allowlist secret
             api: "openai-completions",
             models: [
               {
@@ -211,12 +212,123 @@ describe("models-config", () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
-        apiKey: "AGENT_KEY",
+        apiKey: "AGENT_KEY", // pragma: allowlist secret
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+    });
+  });
+
+  it("replaces stale merged apiKey when provider is SecretRef-managed in current config", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          custom: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+            api: "openai-responses",
+            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+          },
+        },
+      });
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              ...createMergeConfigProvider(),
+              apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" }, // pragma: allowlist secret
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+      }>();
+      expect(parsed.providers.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
+      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+    });
+  });
+
+  it("replaces stale merged apiKey when provider is SecretRef-managed via auth-profiles", async () => {
+    await withTempHome(async () => {
+      const agentDir = resolveOpenClawAgentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "minimax:default": {
+                type: "api_key",
+                provider: "minimax",
+                keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" }, // pragma: allowlist secret
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await writeAgentModelsJson({
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+            api: "anthropic-messages",
+            models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5", input: ["text"] }],
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {},
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
+    });
+  });
+
+  it("replaces stale non-env marker when provider transitions back to plaintext config", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          custom: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+            api: "openai-responses",
+            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              ...createMergeConfigProvider(),
+              apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(parsed.providers.custom?.apiKey).toBe("ALLCAPS_SAMPLE");
     });
   });
 
