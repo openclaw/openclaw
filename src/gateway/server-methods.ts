@@ -34,6 +34,71 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
+const ADMIN_SCOPE = "operator.admin";
+const READ_SCOPE = "operator.read";
+const WRITE_SCOPE = "operator.write";
+const APPROVALS_SCOPE = "operator.approvals";
+const PAIRING_SCOPE = "operator.pairing";
+
+const APPROVAL_METHODS = new Set(["exec.approval.request", "exec.approval.resolve"]);
+const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
+const PAIRING_METHODS = new Set([
+  "node.pair.request",
+  "node.pair.list",
+  "node.pair.approve",
+  "node.pair.reject",
+  "node.pair.verify",
+  "device.pair.list",
+  "device.pair.approve",
+  "device.pair.reject",
+  "device.token.rotate",
+  "device.token.revoke",
+  "node.rename",
+]);
+const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
+const READ_METHODS = new Set([
+  "health",
+  "logs.tail",
+  "channels.status",
+  "status",
+  "usage.status",
+  "usage.cost",
+  "tts.status",
+  "tts.providers",
+  "models.list",
+  "agents.list",
+  "agent.identity.get",
+  "skills.status",
+  "voicewake.get",
+  "sessions.list",
+  "sessions.preview",
+  "cron.list",
+  "cron.status",
+  "cron.runs",
+  "system-presence",
+  "last-heartbeat",
+  "node.list",
+  "node.describe",
+  "chat.history",
+]);
+const WRITE_METHODS = new Set([
+  "send",
+  "agent",
+  "agent.wait",
+  "wake",
+  "talk.mode",
+  "tts.enable",
+  "tts.disable",
+  "tts.convert",
+  "tts.setProvider",
+  "voicewake.set",
+  "node.invoke",
+  "chat.send",
+  "chat.abort",
+  "abort", // Legacy alias for chat.abort (#5239)
+  "browser.request",
+]);
+
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
   if (!client?.connect) {
