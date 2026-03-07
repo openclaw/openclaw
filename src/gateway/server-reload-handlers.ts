@@ -1,5 +1,6 @@
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -127,6 +128,61 @@ export function createGatewayReloadHandlers(params: {
         };
         for (const channel of plan.restartChannels) {
           await restartChannel(channel);
+        }
+      }
+    }
+
+    // Handle channel groups hot reload (without restarting channel)
+    if (
+      (plan.reloadChannelGroups?.size ?? 0) > 0 &&
+      !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
+      !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+    ) {
+      for (const channelId of plan.reloadChannelGroups ?? []) {
+        const plugin = getChannelPlugin(channelId);
+        if (plugin?.reload?.reloadGroups) {
+          try {
+            // Get actual account IDs for this channel (not generic keys like 'accounts')
+            const accountIds = plugin.config.listAccountIds(nextConfig);
+            for (const accountId of accountIds) {
+              await plugin.reload.reloadGroups({ cfg: nextConfig, accountId });
+            }
+            params.logChannels.info(`hot reloaded groups for channel: ${channelId}`);
+          } catch (err) {
+            params.logChannels.error(
+              `failed to hot reload groups for ${channelId}: ${String(err)}`,
+            );
+            // Fallback: restart the channel (only if not already restarted in this reload)
+            if (
+              !plan.restartChannels.has(channelId) &&
+              !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
+              !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+            ) {
+              await params.stopChannel(channelId);
+              await params.startChannel(channelId);
+            } else {
+              params.logChannels.info(
+                `skipping channel restart for ${channelId} (already restarted in this reload cycle)`,
+              );
+            }
+          }
+        } else {
+          params.logChannels.info(
+            `channel ${channelId} does not support group hot reload, falling back to restart`,
+          );
+          // Fallback: restart the channel (only if not already restarted)
+          if (
+            !plan.restartChannels.has(channelId) &&
+            !isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) &&
+            !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+          ) {
+            await params.stopChannel(channelId);
+            await params.startChannel(channelId);
+          } else {
+            params.logChannels.info(
+              `skipping channel restart for ${channelId} (already restarted in this reload cycle)`,
+            );
+          }
         }
       }
     }
