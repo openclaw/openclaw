@@ -208,6 +208,43 @@ export function updateConfigFormValue(
   }
 }
 
+export function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
+  const trimmedAgentId = agentId.trim();
+  const current = (state.configForm ?? state.configSnapshot?.config ?? {}) as {
+    agents?: { list?: unknown[] };
+  };
+  const existingList = current.agents?.list;
+  if (Array.isArray(existingList)) {
+    const existingIndex = existingList.findIndex(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        "id" in entry &&
+        typeof (entry as { id?: unknown }).id === "string" &&
+        (entry as { id: string }).id === trimmedAgentId,
+    );
+    if (existingIndex >= 0) {
+      return existingIndex;
+    }
+  }
+
+  const base = cloneConfigObject(current);
+  const next = base as { agents?: { list?: Array<Record<string, unknown>> } };
+  if (!next.agents || typeof next.agents !== "object") {
+    next.agents = {};
+  }
+  if (!Array.isArray(next.agents.list)) {
+    next.agents.list = [];
+  }
+  next.agents.list.push({ id: trimmedAgentId });
+  state.configForm = base;
+  state.configFormDirty = true;
+  if (state.configFormMode === "form") {
+    state.configRaw = serializeConfigForm(base);
+  }
+  return next.agents.list.length - 1;
+}
+
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
   const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
   removePathValue(base, path);

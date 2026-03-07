@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
   applyConfig,
+  ensureAgentConfigEntry,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
@@ -143,6 +144,45 @@ describe("updateConfigFormValue", () => {
     expect(state.configRaw).toBe(
       '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n',
     );
+  });
+});
+
+describe("ensureAgentConfigEntry", () => {
+  it("adds a missing agent entry from snapshot-backed form state", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: { agents: { defaults: { workspace: "~/workspace" } } },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        defaults: { workspace: "~/workspace" },
+        list: [{ id: "main" }],
+      },
+    });
+  });
+
+  it("reuses an existing agent entry without dirtying the form", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: { agents: { list: [{ id: "main", tools: { profile: "messaging" } }] } },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toBeNull();
   });
 });
 
