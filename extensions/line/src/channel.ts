@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
+  mapAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import {
   buildChannelConfigSchema,
@@ -147,10 +148,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (
+      mapAllowFromEntries(
         getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined })
-          .config.allowFrom ?? []
-      ).map((entry) => String(entry)),
+          .config.allowFrom,
+      ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
