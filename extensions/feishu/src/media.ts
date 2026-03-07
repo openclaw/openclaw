@@ -480,10 +480,11 @@ export async function sendMediaFeishu(params: {
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else if (isAudio) {
     // For audio files, force use opus type for Feishu API
+    // Keep original filename - don't rename to .opus since content encoding isn't changed
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
-      fileName: name.endsWith(".opus") ? name : name.replace(/\.[^.]+$/, ".opus"),
+      fileName: name,
       fileType: "opus",
       accountId,
     });
