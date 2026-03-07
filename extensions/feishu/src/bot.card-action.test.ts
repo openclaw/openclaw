@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 
 // Mock resolveFeishuAccount
@@ -16,6 +16,10 @@ import { handleFeishuMessage } from "./bot.js";
 describe("Feishu Card Action Handler", () => {
   const cfg = {} as any; // Minimal mock
   const runtime = { log: vi.fn(), error: vi.fn() } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("handles card action with text payload", async () => {
     const event: FeishuCardActionEvent = {
@@ -53,19 +57,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: expect.stringContaining('"field1":"hello"'),
-            chat_id: "chat1",
-          }),
-        }),
-      }),
-    );
-
     // Verify the merged object includes both value and form_value fields
     const call = vi.mocked(handleFeishuMessage).mock.calls.at(-1)![0];
+    expect(call.event.message.chat_id).toBe("chat1");
     const parsed = JSON.parse(JSON.parse(call.event.message.content).text);
     expect(parsed).toEqual({ command: "submit-form", field1: "hello", field2: "world" });
   });
@@ -106,15 +100,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"{\\"key\\":\\"val\\"}"}',
-            chat_id: "u123", // Fallback to open_id
-          }),
-        }),
-      }),
-    );
+    const call = vi.mocked(handleFeishuMessage).mock.calls.at(-1)![0];
+    expect(call.event.message.chat_id).toBe("u123"); // Fallback to open_id
+    const parsed = JSON.parse(call.event.message.content);
+    expect(parsed).toEqual({ text: JSON.stringify({ key: "val" }) });
   });
 });
