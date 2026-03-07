@@ -203,6 +203,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupChannel?: string;
       groupSpace?: string;
       lane?: string;
+      continuationTrigger?: "work-wake" | "delegate-return";
       extraSystemPrompt?: string;
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
@@ -642,6 +643,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
+        continuationTrigger: request.continuationTrigger,
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
         inputProvenance,

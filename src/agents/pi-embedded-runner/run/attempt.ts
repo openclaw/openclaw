@@ -1019,6 +1019,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      continuationEnabled: params.config?.agents?.defaults?.continuation?.enabled === true,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

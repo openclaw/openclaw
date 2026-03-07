@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { runPreparedReply } from "./get-reply-run.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -42,6 +47,8 @@ vi.mock("../command-detection.js", () => ({
 
 vi.mock("./agent-runner.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
+  cancelContinuationTimer: vi.fn(),
+  clearDelegatePending: vi.fn(),
 }));
 
 vi.mock("./body.js", () => ({
@@ -159,6 +166,7 @@ function baseParams(
 describe("runPreparedReply media-only handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSystemEventsForTest();
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -395,5 +403,38 @@ describe("runPreparedReply media-only handling", () => {
     expect(call).toBeTruthy();
     // Queue body (used by steer mode) must keep the full original text.
     expect(call?.followupRun.prompt).toContain("low steer this conversation");
+  });
+
+  it("classifies delegate-return heartbeats via continuationTrigger without queue markers", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          isHeartbeat: true,
+          continuationTrigger: "delegate-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("does not treat delegate-pending markers as a wake without a structured trigger", async () => {
+    enqueueSystemEvent("[continuation:delegate-pending] waiting", { sessionKey: "session-key" });
+
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
+  });
+
+  it("drops legacy delegate-returned markers instead of classifying them as wakes", async () => {
+    enqueueSystemEvent("[continuation:delegate-returned]", { sessionKey: "session-key" });
+
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
+    expect(peekSystemEventEntries("session-key")).toEqual([]);
   });
 });

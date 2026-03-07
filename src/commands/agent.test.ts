@@ -418,6 +418,24 @@ describe("agentCommand", () => {
     });
   });
 
+  it("maps ingress continuationTrigger to the embedded run trigger", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      await agentCommandFromIngress(
+        {
+          message: "hi",
+          to: "+1555",
+          senderIsOwner: false,
+          continuationTrigger: "delegate-return",
+        },
+        runtime,
+      );
+      const ingressCall = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(ingressCall?.trigger).toBe("delegate-return");
+    });
+  });
+
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
