@@ -99,7 +99,7 @@ describe("feishuOnboardingAdapter.getStatus", () => {
             accounts: {
               main: {
                 appId: "",
-                appSecret: "secret_123",
+                appSecret: "sample-app-credential", // pragma: allowlist secret
               },
             },
           },
@@ -113,11 +113,11 @@ describe("feishuOnboardingAdapter.getStatus", () => {
 
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
-    const appSecretKey = "FEISHU_APP_SECRET_STATUS_MISSING_TEST";
+    const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret
     await withEnvVars(
       {
         [appIdKey]: undefined,
-        [appSecretKey]: "secret_env_456",
+        [appSecretKey]: "env-credential-456", // pragma: allowlist secret
       },
       async () => {
         const status = await getStatusWithEnvRefs({ appIdKey, appSecretKey });
@@ -128,11 +128,11 @@ describe("feishuOnboardingAdapter.getStatus", () => {
 
   it("treats env SecretRef appId/appSecret as configured in status", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_TEST";
-    const appSecretKey = "FEISHU_APP_SECRET_STATUS_TEST";
+    const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_TEST"; // pragma: allowlist secret
     await withEnvVars(
       {
         [appIdKey]: "cli_env_123",
-        [appSecretKey]: "secret_env_456",
+        [appSecretKey]: "env-credential-456", // pragma: allowlist secret
       },
       async () => {
         const status = await getStatusWithEnvRefs({ appIdKey, appSecretKey });
