@@ -97,11 +97,34 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
     await Promise.all(
       dirEntries.map(async (entry) => {
         const full = path.join(dir, entry);
-        const stat = await fs.stat(full).catch(() => null);
-        if (!stat || !stat.isFile()) {
+        // Use lstat so symlinks are identified explicitly rather than
+        // being transparently followed to their target.
+        const lstat = await fs.lstat(full).catch(() => null);
+        if (!lstat) {
           return;
         }
-        if (now - stat.mtimeMs > ttlMs) {
+        if (lstat.isSymbolicLink()) {
+          // For symlinks, use the target's mtime when available so the
+          // alias expires together with the real file it points to.
+          const targetStat = await fs.stat(full).catch(() => null);
+          const mtime = targetStat?.mtimeMs ?? lstat.mtimeMs;
+          if (now - mtime > ttlMs) {
+            await fs.rm(full).catch(() => {});
+          }
+          return;
+        }
+        if (lstat.isDirectory()) {
+          // Recurse one level to handle uuid-named alias subdirectories
+          // created by resolveOutboundAttachmentFromUrl(). After cleaning
+          // their contents, remove the directory itself if it is empty.
+          await removeExpiredFilesInDir(full);
+          const remaining = await fs.readdir(full).catch(() => ["."]);
+          if (remaining.length === 0) {
+            await fs.rmdir(full).catch(() => {});
+          }
+          return;
+        }
+        if (lstat.isFile() && now - lstat.mtimeMs > ttlMs) {
           await fs.rm(full).catch(() => {});
         }
       }),
