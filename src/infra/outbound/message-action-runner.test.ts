@@ -15,13 +15,11 @@ import { loadWebMedia } from "../../web/media.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
-vi.mock("../../web/media.js", async () => {
-  const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
-  return {
-    ...actual,
-    loadWebMedia: vi.fn(actual.loadWebMedia),
-  };
-});
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../web/media.js", () => ({
+  loadWebMedia: loadWebMediaMock,
+}));
 
 const slackConfig = {
   channels: {
