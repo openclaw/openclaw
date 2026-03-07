@@ -103,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/HTTP tools invoke media compatibility: preserve raw media payload access for direct `/tools/invoke` clients by allowing media `nodes` invoke commands only in HTTP tool context, while keeping agent-context media invoke blocking to prevent base64 prompt bloat. (#34365) Thanks @obviyus.
 - Agents/Nodes media outputs: add dedicated `photos_latest` action handling, block media-returning `nodes invoke` commands, keep metadata-only `camera.list` invoke allowed, and normalize empty `photos_latest` results to a consistent response shape to prevent base64 context bloat. (#34332) Thanks @obviyus.
 - TUI/session-key canonicalization: normalize `openclaw tui --session` values to lowercase so uppercase session names no longer drop real-time streaming updates due to gateway/TUI key mismatches. (#33866, #34013) thanks @lynnzc.
+- iMessage/echo loop hardening: strip leaked assistant-internal scaffolding from outbound iMessage replies, drop reflected assistant-content messages before they re-enter inbound processing, extend echo-cache text retention for delayed reflections, and suppress repeated loop traffic before it amplifies into queue overflow. (#33295) Thanks @joelnishanth.
 - Outbound/send config threading: pass resolved SecretRef config through outbound adapters and helper send paths so send flows do not reload unresolved runtime config. (#33987) Thanks @joshavant.
 - Sessions/subagent attachments: remove `attachments[].content.maxLength` from `sessions_spawn` schema to avoid llama.cpp GBNF repetition overflow, and preflight UTF-8 byte size before buffer allocation while keeping runtime file-size enforcement unchanged. (#33648) Thanks @anisoptera.
 - Runtime/tool-state stability: recover from dangling Anthropic `tool_use` after compaction, serialize long-running Discord handler runs without blocking new inbound events, and prevent stale busy snapshots from suppressing stuck-channel recovery. (from #33630, #33583) Thanks @kevinWangSheng and @theotarr.
@@ -215,6 +216,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/media downloads: drop invalid timeout fields from SDK method calls now that client-level `httpTimeoutMs` applies to requests. (#38267) Thanks @ant1eicher and @thewilloftheshadow.
 - PI embedded runner/Feishu docs: propagate sender identity into embedded attempts so Feishu doc auto-grant restores requester access for embedded-runner executions. (#32915) thanks @cszhouwei.
 - Agents/usage normalization: normalize missing or partial assistant usage snapshots before compaction accounting so `openclaw agent --json` no longer crashes when provider payloads omit `totalTokens` or related usage fields. (#34977) thanks @sp-hk2ldn.
+- Venice/default model refresh: switch the built-in Venice default to `kimi-k2-5`, update onboarding aliasing, and refresh Venice provider docs/recommendations to match the current private and anonymized catalog. (from #12964) Fixes #20156. Thanks @sabrinaaquino and @vincentkoc.
 
 ## 2026.3.2
 
