@@ -72,6 +72,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xai-api-key"],
   },
   {
+    alue: "groq",
+    label: "Groq",
+    hint: "API key",
+    choices: ["groq-api-key"],
+  },
+  {
     value: "mistral",
     label: "Mistral AI",
     hint: "API key",
