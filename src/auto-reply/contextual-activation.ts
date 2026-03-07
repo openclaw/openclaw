@@ -792,7 +792,43 @@ export function touchEngagement(groupKey: string) {
 // Main entry point
 // ---------------------------------------------------------------------------
 
+/** Per-group cache of the last decided messageId → result, to avoid re-deciding the same message. */
+const lastDecisionByGroup = new Map<
+  string,
+  { messageId: string; result: ContextualActivationResult }
+>();
+
 export async function shouldParticipateInGroup(params: {
+  cfg: OpenClawConfig;
+  config: ContextualActivationConfig;
+  recentMessages: GroupHistoryMessage[];
+  currentMessage: GroupHistoryMessage;
+  groupKey: string;
+  botName?: string;
+}): Promise<ContextualActivationResult> {
+  const { currentMessage, groupKey } = params;
+
+  // Deduplicate: if we already decided on this exact message, return the cached result.
+  if (currentMessage.messageId) {
+    const cached = lastDecisionByGroup.get(groupKey);
+    if (cached?.messageId === currentMessage.messageId) {
+      logVerbose(
+        `[contextual-activation] ${groupKey}: dedup — reusing decision for #${currentMessage.messageId}`,
+      );
+      return cached.result;
+    }
+  }
+
+  const result = await shouldParticipateInGroupImpl(params);
+
+  // Cache the result for dedup
+  if (currentMessage.messageId) {
+    lastDecisionByGroup.set(groupKey, { messageId: currentMessage.messageId, result });
+  }
+  return result;
+}
+
+async function shouldParticipateInGroupImpl(params: {
   cfg: OpenClawConfig;
   config: ContextualActivationConfig;
   recentMessages: GroupHistoryMessage[];
