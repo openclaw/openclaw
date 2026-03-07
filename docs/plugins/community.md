@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **PIC Standard Guard** — Provenance & Intent Contract verification for OpenClaw tool calls. Enforces fail-closed governance on every tool call via a three-hook system (gate, init, audit).
+  npm: `pic-guard`
+  repo: `https://github.com/madeinplutofabio/pic-standard`
+  install: `openclaw plugins install pic-guard`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
