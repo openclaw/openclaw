@@ -284,6 +284,7 @@ Docs: https://docs.openclaw.ai
 - Daemon/Windows PATH freeze fix: stop persisting install-time `PATH` snapshots into Scheduled Task scripts so runtime tool lookup follows current host PATH updates; also refresh local TUI history on silent local finals. (#39139) Thanks @Narcooo.
 - Gateway/systemd service restart hardening: clear stale gateway listeners by explicit run-port before service bind, add restart stale-pid port-override support, tune systemd start/stop/exit handling, and disable detached child mode only in service-managed runtime so cgroup stop semantics clean up descendants reliably. (#38463) Thanks @spirittechie.
 - Discord/plugin native command aliases: let plugins declare provider-specific slash names so native Discord registration can avoid built-in command collisions; the bundled Talk voice plugin now uses `/talkvoice` natively on Discord while keeping text `/voice`.
+- Daemon/Windows schtasks status normalization: derive runtime state from locale-neutral numeric `Last Run Result` codes only (without language string matching) and surface unknown when numeric result data is unavailable, preventing locale-specific misclassification drift. (#39153) Thanks @scoootscooob.
 
 ## 2026.3.2
 
