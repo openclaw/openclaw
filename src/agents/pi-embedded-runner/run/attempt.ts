@@ -2618,7 +2618,12 @@ export async function runEmbeddedAttempt(
                       {
                         iteration: hookTurnIteration,
                         toolCallsMade: toolResults.length,
-                        newMessagesAdded: activeSession.messages.length - hookTurnMessageCount,
+                        // Clamp to 0: mid-turn compaction can reduce messages.length
+                        // below the turn_start snapshot, yielding a negative delta.
+                        newMessagesAdded: Math.max(
+                          0,
+                          activeSession.messages.length - hookTurnMessageCount,
+                        ),
                         hasToolResults: toolResults.length > 0,
                       },
                       hookCtx,
