@@ -44,8 +44,7 @@ export function isRecentlyDelivered(
   }
   const currentTime = now ?? Date.now();
   return recentDelivered.some(
-    (entry) =>
-      currentTime - entry.timestamp < RECENT_DELIVERED_TTL_MS && entry.hash === hash,
+    (entry) => currentTime - entry.timestamp < RECENT_DELIVERED_TTL_MS && entry.hash === hash,
   );
 }
 
