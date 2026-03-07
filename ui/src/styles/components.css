@@ -29,6 +29,20 @@
   background: rgba(239, 68, 68, 0.15);
 }
 
+.update-banner__close {
+  margin-left: 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 14px;
+}
+
+.update-banner__close:hover {
+  opacity: 1;
+}
+
 /* ===========================================
    Cards - Refined with depth
    =========================================== */
