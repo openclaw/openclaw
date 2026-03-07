@@ -19,6 +19,33 @@ function throwPathEscapesBoundary(params: {
   throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
 }
 
+function validateRelativePathWithinBoundary(params: {
+  relativePath: string;
+  isAbsolutePath: (path: string) => boolean;
+  options?: RelativePathOptions;
+  rootResolved: string;
+  candidate: string;
+}): string {
+  if (params.relativePath === "" || params.relativePath === ".") {
+    if (params.options?.allowRoot) {
+      return "";
+    }
+    throwPathEscapesBoundary({
+      options: params.options,
+      rootResolved: params.rootResolved,
+      candidate: params.candidate,
+    });
+  }
+  if (params.relativePath.startsWith("..") || params.isAbsolutePath(params.relativePath)) {
+    throwPathEscapesBoundary({
+      options: params.options,
+      rootResolved: params.rootResolved,
+      candidate: params.candidate,
+    });
+  }
+  return params.relativePath;
+}
+
 function toRelativePathUnderRoot(params: {
   root: string;
   candidate: string;
@@ -35,47 +62,44 @@ function toRelativePathUnderRoot(params: {
     const rootForCompare = normalizeWindowsPathForComparison(rootResolved);
     const targetForCompare = normalizeWindowsPathForComparison(resolvedCandidate);
     const relative = path.win32.relative(rootForCompare, targetForCompare);
-    if (relative === "" || relative === ".") {
-      if (params.options?.allowRoot) {
-        return "";
-      }
-      throwPathEscapesBoundary({
-        options: params.options,
-        rootResolved,
-        candidate: params.candidate,
-      });
-    }
-    if (relative.startsWith("..") || path.win32.isAbsolute(relative)) {
-      throwPathEscapesBoundary({
-        options: params.options,
-        rootResolved,
-        candidate: params.candidate,
-      });
-    }
-    return relative;
+    return validateRelativePathWithinBoundary({
+      relativePath: relative,
+      isAbsolutePath: path.win32.isAbsolute,
+      options: params.options,
+      rootResolved,
+      candidate: params.candidate,
+    });
   }
 
   const rootResolved = path.resolve(params.root);
   const resolvedCandidate = path.resolve(resolvedInput);
   const relative = path.relative(rootResolved, resolvedCandidate);
-  if (relative === "" || relative === ".") {
-    if (params.options?.allowRoot) {
-      return "";
-    }
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  return relative;
+  return validateRelativePathWithinBoundary({
+    relativePath: relative,
+    isAbsolutePath: path.isAbsolute,
+    options: params.options,
+    rootResolved,
+    candidate: params.candidate,
+  });
+}
+
+function toRelativeBoundaryPath(params: {
+  root: string;
+  candidate: string;
+  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">;
+  boundaryLabel: string;
+  includeRootInError?: boolean;
+}): string {
+  return toRelativePathUnderRoot({
+    root: params.root,
+    candidate: params.candidate,
+    options: {
+      allowRoot: params.options?.allowRoot,
+      cwd: params.options?.cwd,
+      boundaryLabel: params.boundaryLabel,
+      includeRootInError: params.includeRootInError,
+    },
+  });
 }
 
 export function toRelativeWorkspacePath(
@@ -83,14 +107,11 @@ export function toRelativeWorkspacePath(
   candidate: string,
   options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
 ): string {
-  return toRelativePathUnderRoot({
+  return toRelativeBoundaryPath({
     root,
     candidate,
-    options: {
-      allowRoot: options?.allowRoot,
-      cwd: options?.cwd,
-      boundaryLabel: "workspace root",
-    },
+    options,
+    boundaryLabel: "workspace root",
   });
 }
 
@@ -99,15 +120,12 @@ export function toRelativeSandboxPath(
   candidate: string,
   options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
 ): string {
-  return toRelativePathUnderRoot({
+  return toRelativeBoundaryPath({
     root,
     candidate,
-    options: {
-      allowRoot: options?.allowRoot,
-      cwd: options?.cwd,
-      boundaryLabel: "sandbox root",
-      includeRootInError: true,
-    },
+    options,
+    boundaryLabel: "sandbox root",
+    includeRootInError: true,
   });
 }
 

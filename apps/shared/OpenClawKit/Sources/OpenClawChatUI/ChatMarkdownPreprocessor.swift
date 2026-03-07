@@ -13,6 +13,8 @@ enum ChatMarkdownPreprocessor {
         "Chat history since last reply (untrusted, for context):",
     ]
 
+    private static let markdownImagePattern = #"!\[([^\]]*)\]\(([^)]+)\)"#
+
     struct InlineImage: Identifiable {
         let id = UUID()
         let label: String
@@ -27,8 +29,7 @@ enum ChatMarkdownPreprocessor {
     static func preprocess(markdown raw: String) -> Result {
         let withoutContextBlocks = self.stripInboundContextBlocks(raw)
         let withoutTimestamps = self.stripPrefixedTimestamps(withoutContextBlocks)
-        let pattern = #"!\[([^\]]*)\]\((data:image\/[^;]+;base64,[^)]+)\)"#
-        guard let re = try? NSRegularExpression(pattern: pattern) else {
+        guard let re = try? NSRegularExpression(pattern: self.markdownImagePattern) else {
             return Result(cleaned: self.normalize(withoutTimestamps), images: [])
         }
 
@@ -39,27 +40,42 @@ enum ChatMarkdownPreprocessor {
         if matches.isEmpty { return Result(cleaned: self.normalize(withoutTimestamps), images: []) }
 
         var images: [InlineImage] = []
-        var cleaned = withoutTimestamps
+        let cleaned = NSMutableString(string: withoutTimestamps)
 
         for match in matches.reversed() {
             guard match.numberOfRanges >= 3 else { continue }
             let label = ns.substring(with: match.range(at: 1))
-            let dataURL = ns.substring(with: match.range(at: 2))
+            let source = ns.substring(with: match.range(at: 2))
 
-            let image: OpenClawPlatformImage? = {
-                guard let comma = dataURL.firstIndex(of: ",") else { return nil }
-                let b64 = String(dataURL[dataURL.index(after: comma)...])
-                guard let data = Data(base64Encoded: b64) else { return nil }
-                return OpenClawPlatformImage(data: data)
-            }()
-            images.append(InlineImage(label: label, image: image))
-
-            let start = cleaned.index(cleaned.startIndex, offsetBy: match.range.location)
-            let end = cleaned.index(start, offsetBy: match.range.length)
-            cleaned.replaceSubrange(start..<end, with: "")
+            if let inlineImage = self.inlineImage(label: label, source: source) {
+                images.append(inlineImage)
+                cleaned.replaceCharacters(in: match.range, with: "")
+            } else {
+                cleaned.replaceCharacters(in: match.range, with: self.fallbackImageLabel(label))
+            }
         }
 
-        return Result(cleaned: self.normalize(cleaned), images: images.reversed())
+        return Result(cleaned: self.normalize(cleaned as String), images: images.reversed())
+    }
+
+    private static func inlineImage(label: String, source: String) -> InlineImage? {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let comma = trimmed.firstIndex(of: ","),
+              trimmed[..<comma].range(
+                  of: #"^data:image\/[^;]+;base64$"#,
+                  options: [.regularExpression, .caseInsensitive]) != nil
+        else {
+            return nil
+        }
+
+        let b64 = String(trimmed[trimmed.index(after: comma)...])
+        let image = Data(base64Encoded: b64).flatMap(OpenClawPlatformImage.init(data:))
+        return InlineImage(label: label, image: image)
+    }
+
+    private static func fallbackImageLabel(_ label: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "image" : trimmed
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {

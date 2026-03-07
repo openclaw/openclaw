@@ -39,6 +39,34 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
 
 const { buildProbeTargets } = await import("./list.probe.js");
 
+async function buildAnthropicProbePlan(order: string[]) {
+  return buildProbeTargets({
+    cfg: {
+      auth: {
+        order: {
+          anthropic: order,
+        },
+      },
+    } as OpenClawConfig,
+    providers: ["anthropic"],
+    modelCandidates: ["anthropic/claude-sonnet-4-6"],
+    options: {
+      timeoutMs: 5_000,
+      concurrency: 1,
+      maxTokens: 16,
+    },
+  });
+}
+
+function expectLegacyMissingCredentialsError(
+  result: { reasonCode?: string; error?: string } | undefined,
+  reasonCode: string,
+) {
+  expect(result?.reasonCode).toBe(reasonCode);
+  expect(result?.error?.split("\n")[0]).toBe("Auth profile credentials are missing or expired.");
+  expect(result?.error).toContain(`[${reasonCode}]`);
+}
+
 describe("buildProbeTargets reason codes", () => {
   beforeEach(() => {
     mockStore = {
@@ -67,52 +95,18 @@ describe("buildProbeTargets reason codes", () => {
   });
 
   it("reports invalid_expires with a legacy-compatible first error line", async () => {
-    const plan = await buildProbeTargets({
-      cfg: {
-        auth: {
-          order: {
-            anthropic: ["anthropic:default"],
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+    const plan = await buildAnthropicProbePlan(["anthropic:default"]);
 
     expect(plan.targets).toHaveLength(0);
     expect(plan.results).toHaveLength(1);
-    expect(plan.results[0]?.reasonCode).toBe("invalid_expires");
-    expect(plan.results[0]?.error?.split("\n")[0]).toBe(
-      "Auth profile credentials are missing or expired.",
-    );
-    expect(plan.results[0]?.error).toContain("[invalid_expires]");
+    expectLegacyMissingCredentialsError(plan.results[0], "invalid_expires");
   });
 
   it("reports excluded_by_auth_order when profile id is not present in explicit order", async () => {
     mockStore.order = {
       anthropic: ["anthropic:work"],
     };
-    const plan = await buildProbeTargets({
-      cfg: {
-        auth: {
-          order: {
-            anthropic: ["anthropic:work"],
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+    const plan = await buildAnthropicProbePlan(["anthropic:work"]);
 
     expect(plan.targets).toHaveLength(0);
     expect(plan.results).toHaveLength(1);
@@ -137,30 +131,11 @@ describe("buildProbeTargets reason codes", () => {
     mockAllowedProfiles = ["anthropic:default"];
     resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
 
-    const plan = await buildProbeTargets({
-      cfg: {
-        auth: {
-          order: {
-            anthropic: ["anthropic:default"],
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+    const plan = await buildAnthropicProbePlan(["anthropic:default"]);
 
     expect(plan.targets).toHaveLength(0);
     expect(plan.results).toHaveLength(1);
-    expect(plan.results[0]?.reasonCode).toBe("unresolved_ref");
-    expect(plan.results[0]?.error?.split("\n")[0]).toBe(
-      "Auth profile credentials are missing or expired.",
-    );
-    expect(plan.results[0]?.error).toContain("[unresolved_ref]");
+    expectLegacyMissingCredentialsError(plan.results[0], "unresolved_ref");
     expect(plan.results[0]?.error).toContain("env:default:MISSING_ANTHROPIC_TOKEN");
   });
 });
