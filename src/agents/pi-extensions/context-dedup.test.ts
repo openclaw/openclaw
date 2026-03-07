@@ -506,6 +506,58 @@ describe("context-dedup", () => {
     expect(compactedFileBlock).not.toContain("Same as earlier chunk lines 2-21");
   });
 
+  it("supports read lineage compaction for text blocks encoded via parts arrays", () => {
+    const baseLines = Array.from(
+      { length: 24 },
+      (_, idx) => `line ${idx + 1} :: ${"p".repeat(48)}`,
+    );
+    const changedLines = [...baseLines];
+    changedLines[4] = "line 5 changed :: PPPPPPPP";
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_parts_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/parts-block.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_parts_1",
+        content: [{ type: "text", parts: [{ type: "text", text: baseLines.join("\n") }] }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_parts_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/parts-block.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_parts_2",
+        content: [{ type: "text", parts: [{ type: "text", text: changedLines.join("\n") }] }],
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const compacted = String((result.messages[3].content as any[])[0]?.parts?.[0]?.text ?? "");
+
+    expect(compacted).toContain("[Read delta from earlier chunk]");
+    expect(compacted).toContain("lines 5 now read");
+  });
+
   it("does not treat real file chunks that start with Path: as metadata headers", () => {
     const baseFirstBlock = [
       "Path: /tmp/real-content.txt",
@@ -963,6 +1015,69 @@ describe("context-dedup", () => {
 
     expect(postRewrite).toContain("Same as context message #0, block #0 (toolCallId call_root).");
     expect(postRewrite).toContain("Same as context message #1, block #0 (literal text).");
+  });
+
+  it("ignores pointer-like payload lines when resolving lineage roots", () => {
+    const rootChunk = "root chunk line ".repeat(20);
+    const lineageWithPayloadPointer =
+      "[Read delta from earlier chunk]\n" +
+      "Path: /tmp/root-parse-scope.txt\n" +
+      "Earlier chunk: context message #0 (toolCallId call_root)\n" +
+      "Same as earlier chunk lines 1-20, except:\n" +
+      "- lines 20 now read:\n" +
+      "Same as context message #2, block #0.";
+    const nestedLineage =
+      "[Read overlap trimmed]\n" +
+      "Path: /tmp/root-parse-scope.txt\n" +
+      "Earlier chunk: context message #1 (toolCallId call_mid)\n" +
+      "Earlier lines omitted: 1-19\n" +
+      "New/changed lines 20-20:\nline 20";
+
+    const messages = [
+      { role: "toolResult", toolCallId: "call_root", content: rootChunk },
+      { role: "toolResult", toolCallId: "call_mid", content: lineageWithPayloadPointer },
+      { role: "toolResult", toolCallId: "call_leaf", content: nestedLineage },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String(rewritten[2].content);
+
+    expect(postRewrite).toContain("Earlier chunk: context message #0");
+    expect(postRewrite).not.toContain("Earlier chunk: context message #2");
+  });
+
+  it("rewrites pointers in parts blocks while ignoring payload pointer-like lines", () => {
+    const rootChunk = "root chunk line ".repeat(20);
+    const lineageWithPayloadPointer =
+      "[Read delta from earlier chunk]\n" +
+      "Path: /tmp/root-parse-parts.txt\n" +
+      "Earlier chunk: context message #0 (toolCallId call_root)\n" +
+      "Same as earlier chunk lines 1-20, except:\n" +
+      "- lines 20 now read:\n" +
+      "Same as context message #2, block #0.";
+    const pointerToLineage =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #1, block #0 (toolCallId call_mid).";
+
+    const messages = [
+      { role: "toolResult", toolCallId: "call_root", content: rootChunk },
+      {
+        role: "toolResult",
+        toolCallId: "call_mid",
+        content: [{ type: "text", parts: [{ type: "text", text: lineageWithPayloadPointer }] }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_leaf",
+        content: [{ type: "text", parts: [{ type: "text", text: pointerToLineage }] }],
+      },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String((rewritten[2].content as any[])[0]?.parts?.[0]?.text ?? "");
+
+    expect(postRewrite).toContain("Same as context message #0, block #0");
+    expect(postRewrite).not.toContain("Same as context message #2, block #0");
   });
 
   it("clamps block index when lineage hops land on string source messages", () => {

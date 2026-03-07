@@ -221,6 +221,7 @@ function extractBlockText(block: unknown): string | undefined {
   if (!block || typeof block !== "object") {
     return undefined;
   }
+
   const obj = block as Record<string, unknown>;
   const blockType = typeof obj.type === "string" ? obj.type.toLowerCase() : "";
   if (blockType && blockType !== "text") {
@@ -232,6 +233,15 @@ function extractBlockText(block: unknown): string | undefined {
   if (typeof obj.content === "string") {
     return obj.content;
   }
+  if (Array.isArray(obj.parts)) {
+    const parts = obj.parts
+      .map((part) => extractBlockText(part))
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
+
   return undefined;
 }
 
@@ -242,6 +252,7 @@ function setBlockText(block: unknown, nextText: string): unknown {
   if (!block || typeof block !== "object") {
     return block;
   }
+
   const obj = block as Record<string, unknown>;
   if (typeof obj.text === "string") {
     return { ...obj, text: nextText };
@@ -249,6 +260,13 @@ function setBlockText(block: unknown, nextText: string): unknown {
   if (typeof obj.content === "string") {
     return { ...obj, content: nextText };
   }
+  if (Array.isArray(obj.parts)) {
+    return {
+      ...obj,
+      parts: [{ type: "text", text: nextText }],
+    };
+  }
+
   return block;
 }
 
@@ -947,40 +965,73 @@ type ParsedDedupPointerTarget = {
   toolHint: string;
 };
 
+const SOURCE_HINT_HEADER_SCAN_LIMIT = 4;
+
+function forEachSyntheticHeaderLine(text: string, visitor: (line: string) => boolean): void {
+  const lines = text.split("\n");
+  const headerLimit = Math.min(lines.length, SOURCE_HINT_HEADER_SCAN_LIMIT);
+
+  for (let index = 0; index < headerLimit; index++) {
+    const line = (lines[index] ?? "").trim();
+    if (!line) {
+      continue;
+    }
+    if (visitor(line)) {
+      return;
+    }
+  }
+}
+
 function parseDedupPointerTarget(text: string): ParsedDedupPointerTarget | undefined {
-  const match = text.match(
-    /Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\./,
-  );
-  if (!match) {
-    return undefined;
-  }
+  let parsed: ParsedDedupPointerTarget | undefined;
 
-  const messageIndex = Number.parseInt(match[1] ?? "", 10);
-  const blockIndex = Number.parseInt(match[2] ?? "", 10);
-  if (!Number.isFinite(messageIndex) || messageIndex < 0) {
-    return undefined;
-  }
-  if (!Number.isFinite(blockIndex) || blockIndex < 0) {
-    return undefined;
-  }
+  forEachSyntheticHeaderLine(text, (line) => {
+    const match = line.match(
+      /^Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\.$/,
+    );
+    if (!match) {
+      return false;
+    }
 
-  return {
-    messageIndex,
-    blockIndex,
-    toolHint: typeof match[3] === "string" ? match[3] : "",
-  };
+    const messageIndex = Number.parseInt(match[1] ?? "", 10);
+    const blockIndex = Number.parseInt(match[2] ?? "", 10);
+    if (!Number.isFinite(messageIndex) || messageIndex < 0) {
+      return false;
+    }
+    if (!Number.isFinite(blockIndex) || blockIndex < 0) {
+      return false;
+    }
+
+    parsed = {
+      messageIndex,
+      blockIndex,
+      toolHint: typeof match[3] === "string" ? match[3] : "",
+    };
+    return true;
+  });
+
+  return parsed;
 }
 
 function parseLineageSourceMessageIndex(text: string): number | undefined {
-  const match = text.match(/Earlier chunk: context message #(\d+)(?: \(toolCallId [^)]+\))?/);
-  if (!match) {
-    return undefined;
-  }
-  const value = Number.parseInt(match[1] ?? "", 10);
-  if (!Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return value;
+  let parsed: number | undefined;
+
+  forEachSyntheticHeaderLine(text, (line) => {
+    const match = line.match(/^Earlier chunk: context message #(\d+)(?: \(toolCallId [^)]+\))?$/);
+    if (!match) {
+      return false;
+    }
+
+    const value = Number.parseInt(match[1] ?? "", 10);
+    if (!Number.isFinite(value) || value < 0) {
+      return false;
+    }
+
+    parsed = value;
+    return true;
+  });
+
+  return parsed;
 }
 
 const SYNTHETIC_POINTER_NOTE_HEADER =
@@ -1681,8 +1732,6 @@ function resolveRootDedupPointerTarget(params: {
     toolHint: currentToolHint,
   };
 }
-
-const SOURCE_HINT_HEADER_SCAN_LIMIT = 4;
 
 function rewriteSyntheticHeaderLines(text: string, lineRewriter: (line: string) => string): string {
   const lines = text.split("\n");
