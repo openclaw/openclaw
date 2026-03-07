@@ -120,6 +120,56 @@ export function migrateBaseNameToDefaultAccount(params: {
   } as OpenClawConfig;
 }
 
+export function applySetupAccountConfigPatch(params: {
+  cfg: OpenClawConfig;
+  channelKey: string;
+  accountId: string;
+  patch: Record<string, unknown>;
+}): OpenClawConfig {
+  const accountId = normalizeAccountId(params.accountId);
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const channelConfig = channels?.[params.channelKey];
+  const base =
+    typeof channelConfig === "object" && channelConfig
+      ? (channelConfig as Record<string, unknown> & {
+          accounts?: Record<string, Record<string, unknown>>;
+        })
+      : undefined;
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        [params.channelKey]: {
+          ...base,
+          enabled: true,
+          ...params.patch,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  const accounts = base?.accounts ?? {};
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channelKey]: {
+        ...base,
+        enabled: true,
+        accounts: {
+          ...accounts,
+          [accountId]: {
+            ...accounts[accountId],
+            enabled: true,
+            ...params.patch,
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 type ChannelSectionRecord = Record<string, unknown> & {
   accounts?: Record<string, Record<string, unknown>>;
 };

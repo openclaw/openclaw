@@ -1,5 +1,6 @@
 import {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -449,43 +450,18 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
               channelKey: "mattermost",
             })
           : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            mattermost: {
-              ...next.channels?.mattermost,
-              enabled: true,
-              ...(input.useEnv
-                ? {}
-                : {
-                    ...(token ? { botToken: token } : {}),
-                    ...(baseUrl ? { baseUrl } : {}),
-                  }),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          mattermost: {
-            ...next.channels?.mattermost,
-            enabled: true,
-            accounts: {
-              ...next.channels?.mattermost?.accounts,
-              [accountId]: {
-                ...next.channels?.mattermost?.accounts?.[accountId],
-                enabled: true,
-                ...(token ? { botToken: token } : {}),
-                ...(baseUrl ? { baseUrl } : {}),
-              },
-            },
-          },
-        },
-      };
+      const patch = input.useEnv
+        ? {}
+        : {
+            ...(token ? { botToken: token } : {}),
+            ...(baseUrl ? { baseUrl } : {}),
+          };
+      return applySetupAccountConfigPatch({
+        cfg: next,
+        channelKey: "mattermost",
+        accountId,
+        patch,
+      });
     },
   },
   gateway: {
