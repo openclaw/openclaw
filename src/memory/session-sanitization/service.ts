@@ -368,6 +368,13 @@ function normalizeText(value: string | undefined): string {
   return (value ?? "").trim();
 }
 
+function escapePromptXmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function isNonEmptyText(value: string | undefined): boolean {
   return normalizeText(value).length > 0;
 }
@@ -559,6 +566,7 @@ function formatAutomaticRecallPrompt(result: SessionMemoryRecallResult): string 
   if (!text) {
     return undefined;
   }
+  const escapedText = escapePromptXmlText(text);
   const confidenceNote =
     result.confidence === "high"
       ? "This transcript-derived recall is current-session only and is backed by unexpired raw transcript data."
@@ -571,7 +579,7 @@ function formatAutomaticRecallPrompt(result: SessionMemoryRecallResult): string 
     `Confidence: ${result.confidence}`,
     confidenceNote,
     "<session_memory>",
-    text,
+    escapedText,
     "</session_memory>",
   ].join("\n");
 }

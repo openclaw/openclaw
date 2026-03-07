@@ -71,29 +71,51 @@ function redactMessage(message: unknown): unknown {
  * they appear — inside messages, options.images, or any other nested location.
  * Returns the same reference when nothing was redacted (zero allocation).
  */
-function redactDeep(value: unknown): unknown {
+function redactDeep(
+  value: unknown,
+  seen: WeakSet<object>,
+  memo: WeakMap<object, unknown>,
+): unknown {
   if (!value || typeof value !== "object") {
     return value;
   }
-  if (Array.isArray(value)) {
-    const next = value.map(redactDeep);
-    return next.every((v, i) => v === (value as unknown[])[i]) ? value : next;
+  if (memo.has(value)) {
+    return memo.get(value);
   }
-  // Try content-block redaction first (fast path for {type:"image", source|data}).
-  const asBlock = redactContentBlock(value);
-  if (asBlock !== value) {
-    return asBlock;
+  if (seen.has(value)) {
+    return value;
   }
-  // Recurse into all object values.
-  const obj = value as Record<string, unknown>;
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    const r = redactDeep(obj[key]);
-    next[key] = r;
-    if (r !== obj[key]) changed = true;
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const next = value.map((item) => redactDeep(item, seen, memo));
+      const result = next.every((v, i) => v === (value as unknown[])[i]) ? value : next;
+      memo.set(value, result);
+      return result;
+    }
+
+    // Try content-block redaction first (fast path for {type:"image", source|data}).
+    const asBlock = redactContentBlock(value);
+    if (asBlock !== value) {
+      memo.set(value, asBlock);
+      return asBlock;
+    }
+
+    // Recurse into all object values.
+    const obj = value as Record<string, unknown>;
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      const r = redactDeep(obj[key], seen, memo);
+      next[key] = r;
+      if (r !== obj[key]) changed = true;
+    }
+    const result = changed ? next : value;
+    memo.set(value, result);
+    return result;
+  } finally {
+    seen.delete(value);
   }
-  return changed ? next : value;
 }
 
 /**
@@ -110,5 +132,5 @@ export function redactImageDataForDiagnostics(payload: unknown): unknown {
   if (!payload || typeof payload !== "object") {
     return payload;
   }
-  return redactDeep(payload);
+  return redactDeep(payload, new WeakSet<object>(), new WeakMap<object, unknown>());
 }
