@@ -270,7 +270,7 @@ describe("handleZaloWebhookRequest", () => {
           const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
             method: "POST",
             headers: {
-              "x-bot-api-secret-token": "invalid-token",
+              "x-bot-api-secret-token": "invalid-token" // pragma: allowlist secret,
               "content-type": "application/json",
             },
             body: "{}",
