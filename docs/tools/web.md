@@ -55,7 +55,7 @@ Use `openclaw configure --section web` to set up your API key and choose a provi
 
 ### Perplexity Search
 
-1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
+1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
 2. Generate an API key in the dashboard
 3. Run `openclaw configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
 
@@ -63,7 +63,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 
 ### Brave Search
 
-1. Create a Brave Search API account at <https://brave.com/search/api/>
+1. Create a Brave Search API account at [brave.com/search/api](https://brave.com/search/api/)
 2. In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
