@@ -153,6 +153,13 @@ describe("version resolution", () => {
     expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
   });
 
+  it("VERSION matches package.json and is not the 0.0.0 fallback", async () => {
+    const raw = await fs.readFile(path.join(import.meta.dirname, "../package.json"), "utf-8");
+    const pkg = JSON.parse(raw) as { version: string };
+    expect(VERSION).toBe(pkg.version);
+    expect(VERSION).not.toBe("0.0.0");
+  });
+
   it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
     expect(
       resolveRuntimeServiceVersion({
