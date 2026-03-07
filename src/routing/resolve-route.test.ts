@@ -923,6 +923,33 @@ describe("mention-based explicit routing", () => {
     expect(route.matchedBy).toBe("mention");
   });
 
+  test("non-token-only aliases do not steal @main via fallback canonicalization", () => {
+    const nonTokenAliasCfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "tim", default: true },
+          { id: "pm-cn", name: "项目经理" },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "tim",
+          match: { channel: "discord", peer: { kind: "channel", id: "c-tim" } },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg: nonTokenAliasCfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c-tim" },
+      text: "@main please join",
+    });
+    expect(route.agentId).toBe("tim");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
   test("email-like text does not trigger mention routing", () => {
     const route = resolveAgentRoute({
       cfg,

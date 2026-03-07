@@ -9,6 +9,7 @@ import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
@@ -83,7 +84,14 @@ function normalizeMentionAlias(value: unknown): string {
   if (!trimmed) {
     return "";
   }
-  return normalizeAgentId(trimmed);
+  const normalized = normalizeAgentId(trimmed);
+  if (normalized !== DEFAULT_AGENT_ID) {
+    return normalized;
+  }
+  // Drop aliases that only resolved via the default-id fallback path, so
+  // non-token-only display names cannot silently steal @main.
+  const hasCanonicalizableToken = /[a-z0-9_-]/i.test(trimmed.replace(/^-+|-+$/g, ""));
+  return hasCanonicalizableToken ? normalized : "";
 }
 
 type AgentMentionAliasCache = {
