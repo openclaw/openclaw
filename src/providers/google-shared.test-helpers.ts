@@ -2,6 +2,25 @@ import type { Model } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
+// ----------------------------------------------------------------------------
+// 🚨 VENDORING NOTICE
+// ----------------------------------------------------------------------------
+// The functions below (convertMessages, convertTools, transformMessages, etc.)
+// are copied from @mariozechner/pi-ai@0.57.0 internals:
+//   - providers/google-shared.js
+//   - providers/transform-messages.js
+//   - utils/sanitize-unicode.js
+//
+// They are vendored because pi-ai 0.57.0 no longer exports these modules
+// publicly, but our tests need them directly.
+//
+// ⚠️  MAINTENANCE: When upgrading @mariozechner/pi-* packages, you MUST
+// re-sync this vendored copy with the new version's internals. Failure to do
+// so may cause tests to pass against stale behavior or miss new bugs.
+//
+// See: src/providers/google-shared.test-helpers.ts:85-87 (original source refs)
+// ----------------------------------------------------------------------------
+
 export const asRecord = (value: unknown): Record<string, unknown> => {
   expect(value).toBeTruthy();
   expect(typeof value).toBe("object");
