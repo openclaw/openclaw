@@ -849,7 +849,11 @@ export async function writeTranscriptTurnToSessionMemory(params: {
   // --- Frequency tracking update ---
   let frequencyTier: EscalationTier = "none";
   let frequencyScore = 0;
-  if (validationCfg.frequency.enabled && preFilter.allRuleIds.length > 0) {
+  // Always check for already-terminated sessions — even clean payloads must be blocked.
+  const existingFreqState = sessionFrequencyState.get(params.sessionId);
+  if (existingFreqState?.terminated) {
+    frequencyTier = "tier3";
+  } else if (validationCfg.frequency.enabled && preFilter.allRuleIds.length > 0) {
     const freq = updateFrequencyScore(
       params.sessionId,
       preFilter.allRuleIds,
