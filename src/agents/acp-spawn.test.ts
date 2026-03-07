@@ -420,6 +420,34 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.timeout).toBe(120);
   });
 
+  it("respects explicit ACP runTimeoutSeconds=0 over config default", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        defaultRunTimeoutSeconds: 900,
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 0,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.timeout).toBe(0);
+  });
+
   it("rejects disallowed ACP agents", async () => {
     hoisted.state.cfg = {
       ...hoisted.state.cfg,

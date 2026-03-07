@@ -172,9 +172,10 @@ function resolveAcpRunTimeoutSeconds(params: {
     return Math.max(0, Math.floor(requested));
   }
 
+  // Config values are schema-validated (`int >= 0`), so keep this path simple.
   const configured = params.cfg.acp?.defaultRunTimeoutSeconds;
-  if (typeof configured === "number" && Number.isFinite(configured)) {
-    return Math.max(0, Math.floor(configured));
+  if (configured != null) {
+    return configured;
   }
 
   return 0;
