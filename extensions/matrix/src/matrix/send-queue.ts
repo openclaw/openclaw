@@ -1,4 +1,4 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/matrix";
 
 export const DEFAULT_SEND_GAP_MS = 150;
 
