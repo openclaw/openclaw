@@ -12,24 +12,19 @@ const thinkingCache = new WeakMap<object, string | null>();
 
 /**
  * Strip plugin-injected memory context from user messages.
- * Checks for any field ending with "PluginMemoryContext" (e.g., lancedbPluginMemoryContext).
- * Each plugin provides its own stripRegex to remove its injected context.
+ * Currently handles lancedbPluginMemoryContext.
  */
 function stripPluginMemoryContext(text: string, message: Record<string, unknown>): string {
   let result = text;
 
-  // Check all fields ending with "PluginMemoryContext" for stripping logic
-  for (const key of Object.keys(message)) {
-    if (key.endsWith("PluginMemoryContext")) {
-      const ctx = message[key] as PluginMemoryContext | undefined;
-      if (ctx?.stripRegex) {
-        try {
-          const regex = new RegExp(ctx.stripRegex, "i");
-          result = result.replace(regex, "").trim();
-        } catch (e) {
-          // Invalid regex, skip
-        }
-      }
+  // Check for lancedbPluginMemoryContext
+  const ctx = message.lancedbPluginMemoryContext as PluginMemoryContext | undefined;
+  if (ctx?.stripRegex) {
+    try {
+      const regex = new RegExp(ctx.stripRegex, "i");
+      result = result.replace(regex, "").trim();
+    } catch (e) {
+      // Invalid regex, skip
     }
   }
 
