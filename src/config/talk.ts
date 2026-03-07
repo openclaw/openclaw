@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { TalkConfig, TalkProviderConfig, TalkSttConfig } from "./types.gateway.js";
+import type { TalkConfig, TalkProviderConfig } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 
@@ -82,22 +82,6 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
   }
 
   return Object.keys(provider).length > 0 ? provider : undefined;
-}
-
-function normalizeSttConfig(value: unknown): TalkSttConfig | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-  const stt: TalkSttConfig = {};
-  const provider = normalizeString(value.provider);
-  if (provider) {
-    stt.provider = provider;
-  }
-  const language = normalizeString(value.language);
-  if (language) {
-    stt.language = language;
-  }
-  return Object.keys(stt).length > 0 ? stt : undefined;
 }
 
 function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConfig> | undefined {
@@ -212,10 +196,6 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
   }
-  const stt = normalizeSttConfig(source.stt);
-  if (stt) {
-    normalized.stt = stt;
-  }
 
   if (hasNormalizedShape) {
     const providers = normalizeTalkProviders(source.providers);
@@ -286,9 +266,6 @@ export function buildTalkConfigResponse(value: unknown): TalkConfig | undefined 
   const payload: TalkConfig = {};
   if (typeof normalized.interruptOnSpeech === "boolean") {
     payload.interruptOnSpeech = normalized.interruptOnSpeech;
-  }
-  if (normalized.stt) {
-    payload.stt = normalized.stt;
   }
   if (normalized.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;

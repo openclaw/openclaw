@@ -63,13 +63,6 @@ export type TalkProviderConfig = {
   [key: string]: unknown;
 };
 
-export type TalkSttConfig = {
-  /** STT provider: "apple" (default on-device) or "gateway" (server-side transcription). */
-  provider?: string;
-  /** Optional ISO-639-1 language hint for transcription. */
-  language?: string;
-};
-
 export type TalkConfig = {
   /** Active Talk TTS provider (for example "elevenlabs"). */
   provider?: string;
@@ -77,8 +70,6 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
-  /** Speech-to-text configuration. */
-  stt?: TalkSttConfig;
 
   /**
    * Legacy ElevenLabs compatibility fields.

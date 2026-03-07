@@ -593,13 +593,6 @@ export const OpenClawSchema = z
         outputFormat: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
         interruptOnSpeech: z.boolean().optional(),
-        stt: z
-          .object({
-            provider: z.string().optional(),
-            language: z.string().optional(),
-          })
-          .strict()
-          .optional(),
       })
       .strict()
       .optional(),
