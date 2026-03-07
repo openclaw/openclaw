@@ -67,6 +67,27 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    // Clear all streaming state — history includes tool results and text
+    // inline, so keeping streaming artifacts would cause duplicates.
+    // Also clear the underlying tool stream maps so the 80ms sync timer
+    // doesn't rebuild chatToolMessages after we clear it.
+    const toolHost = state as unknown as {
+      chatToolMessages: unknown[];
+      chatStreamSegments: Array<{ text: string; ts: number }>;
+      toolStreamById: Map<string, unknown>;
+      toolStreamOrder: string[];
+      toolStreamSyncTimer: number | null;
+    };
+    toolHost.chatToolMessages = [];
+    toolHost.chatStreamSegments = [];
+    toolHost.toolStreamById.clear();
+    toolHost.toolStreamOrder = [];
+    if (toolHost.toolStreamSyncTimer != null) {
+      clearTimeout(toolHost.toolStreamSyncTimer);
+      toolHost.toolStreamSyncTimer = null;
+    }
+    state.chatStream = null;
+    state.chatStreamStartedAt = null;
   } catch (err) {
     state.lastError = String(err);
   } finally {
