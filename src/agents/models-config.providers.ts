@@ -923,6 +923,7 @@ export function buildKilocodeProvider(): ProviderConfig {
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
+  config?: OpenClawConfig;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -1041,6 +1042,8 @@ export async function resolveImplicitProviders(params: {
   // Use the user's configured baseUrl (from explicit providers) for model
   // discovery so that remote / non-default Ollama instances are reachable.
   // Skip discovery when explicit models are already defined.
+  // Respect models.ollamaDiscovery.enabled toggle.
+  const ollamaDiscoveryEnabled = params.config?.models?.ollamaDiscovery?.enabled;
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
@@ -1048,13 +1051,17 @@ export async function resolveImplicitProviders(params: {
   const hasExplicitModels =
     Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
   if (hasExplicitModels && explicitOllama) {
+    // Always register explicitly configured Ollama models, regardless of
+    // the discovery toggle — the toggle controls network probing, not
+    // explicit-provider defaulting (#33329 review feedback).
     providers.ollama = {
       ...explicitOllama,
       baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
       api: explicitOllama.api ?? "ollama",
       apiKey: ollamaKey ?? explicitOllama.apiKey ?? "ollama-local",
     };
-  } else {
+  } else if (ollamaDiscoveryEnabled !== false) {
+    // No explicit models; probe only when discovery is not disabled.
     const ollamaBaseUrl = explicitOllama?.baseUrl;
     const hasExplicitOllamaConfig = Boolean(explicitOllama);
     // Only suppress warnings for implicit local probing when user has not
@@ -1097,15 +1104,18 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
-  const huggingfaceKey =
-    resolveEnvApiKeyVarName("huggingface") ??
-    resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
-  if (huggingfaceKey) {
-    const hfProvider = await buildHuggingfaceProvider(huggingfaceKey);
-    providers.huggingface = {
-      ...hfProvider,
-      apiKey: huggingfaceKey,
-    };
+  // HuggingFace discovery: respect models.huggingfaceDiscovery.enabled toggle.
+  if (params.config?.models?.huggingfaceDiscovery?.enabled !== false) {
+    const huggingfaceKey =
+      resolveEnvApiKeyVarName("huggingface") ??
+      resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
+    if (huggingfaceKey) {
+      const hfProvider = await buildHuggingfaceProvider(huggingfaceKey);
+      providers.huggingface = {
+        ...hfProvider,
+        apiKey: huggingfaceKey,
+      };
+    }
   }
 
   const qianfanKey =
@@ -1141,8 +1151,14 @@ export async function resolveImplicitProviders(params: {
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
+  // Respect models.copilotDiscovery.enabled toggle.
+  if (params.config?.models?.copilotDiscovery?.enabled === false) {
+    return null;
+  }
+
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,

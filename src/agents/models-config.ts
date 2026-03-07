@@ -117,7 +117,11 @@ async function resolveProvidersForModelsJson(params: {
 }): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir } = params;
   const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
+  const implicitProviders = await resolveImplicitProviders({
+    agentDir,
+    explicitProviders,
+    config: cfg,
+  });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
@@ -131,7 +135,7 @@ async function resolveProvidersForModelsJson(params: {
       : implicitBedrock;
   }
 
-  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
+  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir, config: cfg });
   if (implicitCopilot && !providers["github-copilot"]) {
     providers["github-copilot"] = implicitCopilot;
   }
