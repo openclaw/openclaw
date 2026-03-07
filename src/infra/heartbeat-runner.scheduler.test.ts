@@ -157,10 +157,16 @@ describe("startHeartbeatRunner", () => {
     // First heartbeat returns requests-in-flight
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
 
-    // Timer should be rescheduled; next heartbeat should still fire
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // Retry wake should run quickly and bypass interval due-time checks.
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ reason: "retry" }));
+
+    // Regular interval schedule still fires after the original cadence.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
 
     runner.stop();
   });

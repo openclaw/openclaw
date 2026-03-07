@@ -59,7 +59,7 @@ describe("heartbeat-wake", () => {
     expect(hasPendingHeartbeatWake()).toBe(false);
   });
 
-  it("retries requests-in-flight after the default retry delay", async () => {
+  it("retries interval requests-in-flight after the default retry delay with reason=retry", async () => {
     vi.useFakeTimers();
     const handler = vi
       .fn()
@@ -68,7 +68,7 @@ describe("heartbeat-wake", () => {
     await expectRetryAfterDefaultDelay({
       handler,
       initialReason: "interval",
-      expectedRetryReason: "interval",
+      expectedRetryReason: "retry",
     });
   });
 
