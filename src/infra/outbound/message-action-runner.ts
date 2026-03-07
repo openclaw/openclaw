@@ -14,11 +14,13 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
-import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import {
   listConfiguredMessageChannels,
@@ -227,6 +229,19 @@ async function resolveChannel(
     params.channel = selection.channel;
   }
   return selection.channel;
+}
+
+function resolveAgentBoundAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  agentId?: string;
+}): string | undefined {
+  const agentId = params.agentId?.trim();
+  if (!agentId) {
+    return undefined;
+  }
+  const byAgent = buildChannelAccountBindings(params.cfg).get(params.channel);
+  return byAgent?.get(agentId)?.[0];
 }
 
 async function resolveActionTarget(params: {
@@ -726,6 +741,42 @@ export async function runMessageAction(
       accountId = boundAccountIds[0];
     }
   }
+  if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
+    const legacyTo = typeof params.to === "string" ? params.to.trim() : "";
+    const legacyChannelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+    const legacyTarget = legacyTo || legacyChannelId;
+    if (legacyTarget) {
+      params.target = legacyTarget;
+      delete params.to;
+      delete params.channelId;
+    }
+  }
+  const explicitChannel = typeof params.channel === "string" ? params.channel.trim() : "";
+  if (!explicitChannel) {
+    const inferredChannel = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
+    if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
+      params.channel = inferredChannel;
+    }
+  }
+
+  applyTargetToParams({ action, args: params });
+  if (actionRequiresTarget(action)) {
+    if (!actionHasTarget(action, params)) {
+      throw new Error(`Action ${action} requires a target.`);
+    }
+  }
+
+  const channel = await resolveChannel(cfg, params);
+  const explicitAccountId = readStringParam(params, "accountId");
+  const agentBoundAccountId =
+    !explicitAccountId && resolvedAgentId
+      ? resolveAgentBoundAccountId({
+          cfg,
+          channel,
+          agentId: resolvedAgentId,
+        })
+      : undefined;
+  const accountId = explicitAccountId ?? agentBoundAccountId ?? input.defaultAccountId;
   if (accountId) {
     params.accountId = accountId;
   }
