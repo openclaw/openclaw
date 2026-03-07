@@ -81,6 +81,7 @@ describe("ContinuityService", () => {
     const preferencesPath = path.join(workspaceDir, "memory", "continuity", "preferences.md");
     const markdown = await fs.readFile(preferencesPath, "utf8");
     expect(markdown).toContain("I prefer concise release notes with concrete dates.");
+    expect(markdown).not.toContain("- Excerpt:");
   });
 
   it("keeps paired direct captures pending until approved, then removes them cleanly", async () => {
