@@ -89,11 +89,19 @@ function readActRequestParam(params: Record<string, unknown>) {
     if (typeof params.ref === "string" && params.ref.trim() && request.ref === undefined) {
       request.ref = params.ref;
     }
-    if (typeof params.targetId === "string" && params.targetId.trim() && request.targetId === undefined) {
+    if (
+      typeof params.targetId === "string" &&
+      params.targetId.trim() &&
+      request.targetId === undefined
+    ) {
       request.targetId = params.targetId;
     }
-    if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
-      request.timeoutMs ??= params.timeoutMs;
+    if (
+      typeof params.timeoutMs === "number" &&
+      Number.isFinite(params.timeoutMs) &&
+      request.timeoutMs === undefined
+    ) {
+      request.timeoutMs = params.timeoutMs;
     }
     return request as Parameters<typeof browserAct>[1];
   }

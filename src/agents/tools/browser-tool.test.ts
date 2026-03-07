@@ -469,6 +469,28 @@ describe("browser tool act compatibility", () => {
       expect.objectContaining({ profile: undefined }),
     );
   });
+
+  it("keeps nested request timeoutMs when both nested and top-level timeoutMs are provided", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      timeoutMs: 1234,
+      request: { kind: "click", ref: "e146", timeoutMs: 5678 },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "click",
+        ref: "e146",
+        timeoutMs: 5678,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+    const [, request] = browserActionsMocks.browserAct.mock.calls.at(-1) ?? [];
+    expect(request).not.toMatchObject({ timeoutMs: 1234 });
+  });
 });
 
 describe("browser tool snapshot labels", () => {
