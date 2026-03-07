@@ -644,8 +644,9 @@ async function agentCommandInternal(
 
     if (acpResolution?.kind === "ready" && sessionKey) {
       const startedAt = Date.now();
+      const acpSessionKey = acpResolution.sessionKey || sessionKey;
       if (sessionStore) {
-        const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
+        const threadIdFromSessionKey = parseSessionThreadInfo(acpSessionKey).threadId;
         const fallbackSessionFile = !sessionEntry?.sessionFile
           ? resolveSessionTranscriptPath(
               sessionId,
@@ -655,7 +656,7 @@ async function agentCommandInternal(
           : undefined;
         const resolvedSessionFile = await resolveAndPersistSessionFile({
           sessionId,
-          sessionKey,
+          acpSessionKey,
           sessionStore,
           storePath,
           sessionEntry,
@@ -669,7 +670,7 @@ async function agentCommandInternal(
         sessionEntry = resolvedSessionFile.sessionEntry;
       }
       registerAgentRunContext(runId, {
-        sessionKey,
+        sessionKey: acpSessionKey,
       });
       emitAgentEvent({
         runId,
@@ -688,7 +689,7 @@ async function agentCommandInternal(
           throw dispatchPolicyError;
         }
         const acpAgent = normalizeAgentId(
-          acpResolution.meta.agent || resolveAgentIdFromSessionKey(sessionKey),
+          acpResolution.meta.agent || resolveAgentIdFromSessionKey(acpSessionKey),
         );
         const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
         if (agentPolicyError) {
@@ -697,7 +698,7 @@ async function agentCommandInternal(
 
         await acpManager.runTurn({
           cfg,
-          sessionKey,
+          sessionKey: acpSessionKey,
           text: body,
           mode: "prompt",
           requestId: runId,
@@ -749,10 +750,10 @@ async function agentCommandInternal(
       }
 
       const finalVisibleText = visibleTextAccumulator.finalize();
-      if (finalVisibleText && sessionKey) {
+      if (finalVisibleText) {
         await appendAssistantMessageToSessionTranscript({
           agentId: sessionAgentId,
-          sessionKey,
+          sessionKey: acpSessionKey,
           text: finalVisibleText,
           storePath,
         });
