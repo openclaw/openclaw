@@ -729,7 +729,7 @@ jobs:
           submodules: false
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           # setup-android's sdkmanager currently crashes on JDK 21 in CI.
