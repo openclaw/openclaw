@@ -2,7 +2,13 @@
 name: fin-onchain
 description: "On-chain analytics - blockchain valuation metrics, DeFi protocol analysis, whale tracking, yield comparison, and token unlock impact assessment."
 metadata:
-  { "openclaw": { "emoji": "🔗", "requires": { "extensions": ["fin-core", "fin-market-data"] } } }
+  {
+    "openclaw":
+      {
+        "emoji": "🔗",
+        "requires": { "extensions": ["findoo-trader-plugin", "findoo-datahub-plugin"] },
+      },
+  }
 ---
 
 # On-Chain Analytics

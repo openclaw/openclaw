@@ -1,70 +1,50 @@
-# OpenFinClaw Heartbeat — Financial Monitoring Checklist
+# OpenFinClaw Heartbeat — Agent-Driven Financial Management
 
-> This template defines the periodic checks your financial butler performs.
-> Customize frequencies and thresholds in your `openfinclaw.yaml` config.
+> Your autonomous financial butler checklist. Each heartbeat, you ARE the fund manager.
+> Execute these checks using your fin\_\* tools. Make decisions. Act.
 
-## Every 30 Seconds — Critical Monitors
+## Every Heartbeat — Risk Patrol + Strategy Tick
 
-- [ ] **Stop-loss proximity**: Any position within 2% of stop-loss price?
-- [ ] **Liquidation risk**: Any leveraged position above 80% margin usage?
-- [ ] **Open order status**: Any orders stuck or partially filled beyond timeout?
+1. **Risk check**: Call `fin_fund_risk` — if riskLevel is "warning" or "critical", immediately notify user via `message_send` with the risk details and recommended actions.
 
-## Every 5 Minutes — Price Alerts & KOL Urgent
+2. **Strategy tick**: Call `fin_strategy_tick` — this drives all L2 (paper) and L3 (live) strategies:
+   - Fetches latest candles, runs onBar(), places orders automatically
+   - If any signals were generated, log them in your memory
+   - If errors occurred (e.g., data provider unavailable), note and retry next heartbeat
 
-- [ ] **User-defined price alerts**: Check all active alerts against current prices
-- [ ] **Significant moves**: Any watched asset moved >3% in the last 5 minutes?
-- [ ] **Spread anomalies**: Unusual bid-ask spreads on actively traded pairs?
-- [ ] **KOL urgent check** (grok): Call `fin_info_digest period=urgent` — if items returned, push immediately to user
+3. **Lifecycle scan**: Call `fin_lifecycle_scan` — check for pending actions:
+   - `promote`: Auto-promote eligible strategies (L0→L1, L1→L2)
+   - `approve_promotion`: L2→L3 requires user confirmation — call `message_send` with strategy details and ask for approval
+   - `run_backtest`: Call `fin_backtest_run` for strategies missing backtest results
+   - `review_health`: Investigate degrading strategies, consider demotion via `fin_fund_rebalance`
 
-## Every Hour — Market Scan
+4. **Update memory**: Write a brief summary of this heartbeat's actions to your MEMORY.md
 
-- [ ] **Portfolio P&L update**: Calculate unrealized P&L across all exchanges
-- [ ] **Correlation check**: Are portfolio assets moving in unexpected correlation?
-- [ ] **Volume anomalies**: Unusual volume spikes on held assets?
-- [ ] **Funding rates**: Check perpetual funding rates for held positions
+## Morning Brief (09:00 daily via cron)
 
-## Daily at 07:00 — Morning Brief
+Call `fin_fund_status` and compose a morning brief:
 
-- [ ] **Overnight summary**: What happened while you were away?
-- [ ] **Portfolio snapshot**: Current holdings, P&L, allocation percentages
-- [ ] **Market overview**: Major index moves, crypto market cap, fear/greed index
-- [ ] **Calendar events**: Earnings, FOMC, token unlocks, options expiry today
-- [ ] **Pending actions**: Unfilled orders, expiring alerts, due rebalances
-- [ ] **KOL morning brief** (grok): Call `fin_info_digest period=morning` — overnight KOL intelligence summary
-- [ ] **Fund status** (quant): Call `fin_fund_status` — total equity, risk level, active strategies
-- [ ] **Regime check** (quant): Call `fin_data_regime` for each active market — detect regime changes
-- [ ] **Decay scan** (quant): Check paper/live strategies for degrading or critical decay levels
-- [ ] **Strategy lifecycle** (quant): Call `fin_list_promotions_ready` — promote L0→L1 strategies, run `fin_backtest_run` for L1 strategies missing backtest results, check L1→L2 eligibility
+- Total equity, risk level, active strategy count by level
+- Overnight signals and order fills
+- Any strategies needing attention
+- Send via `message_send` to the user
 
-## Daily at 17:00 — End of Day Review
+## Evening Review (18:00 daily via cron)
 
-- [ ] **Day's trades**: Summary of all executed trades with P&L
-- [ ] **Portfolio drift**: Has allocation drifted from target? Suggest rebalance?
-- [ ] **Risk assessment**: Updated risk metrics (VaR, max drawdown, Sharpe)
-- [ ] **News impact**: Key news events and their observed portfolio impact
-- [ ] **KOL evening review** (grok): Call `fin_info_digest period=evening` — day's KOL intelligence recap with stats
-- [ ] **Trade review** (quant): Call `fin_review_trades` — update error/success books
-- [ ] **Promotion check** (quant): Any L2 strategies ready for L3 promotion?
+1. Call `fin_leaderboard` — identify top and bottom performers
+2. Call `fin_list_promotions_ready` — any promotions to recommend?
+3. Compose a day-end summary and send via `message_send`
 
-## Weekly (Sunday 10:00) — Weekly Report
+## Weekly Rebalance (Sunday 10:00 via cron)
 
-- [ ] **Weekly P&L**: Detailed breakdown by asset and strategy
-- [ ] **Benchmark comparison**: Performance vs. BTC, ETH, S&P 500
-- [ ] **Trade review**: Win rate, average R:R, best/worst trades
-- [ ] **Strategy assessment**: Are current strategies performing as expected?
-- [ ] **Rebalance recommendation**: Suggested portfolio adjustments
-- [ ] **Upcoming week**: Key events and potential trading opportunities
-- [ ] **Fund rebalance** (quant): Call `fin_fund_rebalance` — re-profile, correlate, re-allocate
-- [ ] **Correlation matrix** (quant): Recalculate strategy correlations, flag high-corr pairs
-- [ ] **Weekly review** (quant): Call `fin_review_trades period=7d` — weekly error/success summary
+1. Call `fin_fund_rebalance` — re-profile, correlate, re-allocate capital
+2. Call `fin_leaderboard` — review weekly fitness scores
+3. If any strategy has been at L2 for 30+ days with good metrics, recommend L3 promotion
+4. Send weekly report via `message_send`
 
-## Monthly (1st, 09:00) — Monthly Report
+## Decision Principles
 
-- [ ] **Monthly performance**: Returns, fees, slippage analysis
-- [ ] **Asset allocation evolution**: How has the portfolio changed?
-- [ ] **Tax events**: Capital gains/losses for tax reporting
-- [ ] **Goal progress**: Are financial goals on track?
-- [ ] **Risk profile review**: Should risk parameters be adjusted?
-- [ ] **Evolution cycle** (quant): Call `fin_fund_rebalance` — full evolution: score, cull bottom 20%, mutate, re-backtest
-- [ ] **Capital reallocation** (quant): Call `fin_fund_allocate` — redistribute based on updated fitness
-- [ ] **Monthly report** (quant): Generate quant fund monthly report with leaderboard, promotions, kills
+- **You decide**: L0→L1→L2 promotions, demotions, stop-loss actions
+- **User decides**: L2→L3 promotions (real money), emergency stops, parameter changes
+- **Always check risk first**: Never promote or increase exposure when riskLevel > "normal"
+- **Be transparent**: Every action gets logged to the activity feed; summarize decisions to the user

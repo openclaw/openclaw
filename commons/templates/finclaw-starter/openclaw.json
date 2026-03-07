@@ -5,5 +5,37 @@
   "skills": {
     "autoDiscover": true,
     "skillsDir": "./skills"
-  }
+  },
+  "cron": [
+    {
+      "schedule": "0 9 * * *",
+      "prompt": "Morning brief: Call fin_fund_status, summarize overnight activity, identify strategies needing attention. Send the brief via message_send.",
+      "model": "sonnet",
+      "name": "morning-brief"
+    },
+    {
+      "schedule": "0 18 * * *",
+      "prompt": "Evening review: Call fin_leaderboard and fin_list_promotions_ready. Analyze top/bottom performers, recommend promotions. Send summary via message_send.",
+      "model": "sonnet",
+      "name": "ranking-promotion"
+    },
+    {
+      "schedule": "0 */6 * * *",
+      "prompt": "Evolution sweep: Call fin_evolve_trigger to run RDAVD evolution on eligible strategies. Report results.",
+      "model": "sonnet",
+      "name": "evolution-sweep"
+    },
+    {
+      "schedule": "0 10 * * 1",
+      "prompt": "Weekly report: Call fin_fund_status, fin_leaderboard, fin_fund_rebalance. Compile a comprehensive weekly performance report covering returns, risk metrics, strategy lifecycle changes, and capital allocation. Send via message_send.",
+      "model": "opus",
+      "name": "weekly-report"
+    },
+    {
+      "schedule": "0 20 * * *",
+      "prompt": "Daily rebalance: Call fin_fund_rebalance to re-profile strategies, compute correlations, and re-allocate capital. Report any changes.",
+      "model": "sonnet",
+      "name": "daily-rebalance"
+    }
+  ]
 }

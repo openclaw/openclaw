@@ -1,5 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import type { OHLCV, StrategyContext, StrategyDefinition, Signal } from "../shared/types.js";
+import { buildIndicatorLib } from "../strategy/indicator-lib.js";
 import type { CapitalFlowStore } from "./capital-flow-store.js";
 import type { FundManager } from "./fund-manager.js";
 import type {
@@ -19,7 +21,7 @@ type RegistryLike = {
     name: string;
     version: string;
     level: string;
-    definition: unknown;
+    definition: StrategyDefinition;
     createdAt: number;
     updatedAt: number;
     lastBacktest?: unknown;
@@ -35,10 +37,43 @@ type PaperLike = {
     id: string;
     initialCapital: number;
     equity: number;
+    cash?: number;
+    positions: Array<Record<string, unknown>>;
     orders: Array<{ strategyId?: string }>;
     createdAt: number;
   } | null;
   getMetrics: (id: string) => unknown;
+  submitOrder: (
+    accountId: string,
+    order: Record<string, unknown>,
+    currentPrice: number,
+  ) => Record<string, unknown>;
+  recordSnapshot: (accountId: string) => void;
+};
+
+type DataProviderLike = {
+  getOHLCV: (params: {
+    symbol: string;
+    market: string;
+    timeframe: string;
+    limit?: number;
+  }) => Promise<OHLCV[]>;
+  getTicker?: (symbol: string, market: string) => Promise<{ close?: number } | null>;
+};
+
+type LiveExecutorLike = {
+  placeOrder: (params: {
+    symbol: string;
+    side: "buy" | "sell";
+    type: "market" | "limit";
+    amount: number;
+    price?: number;
+    exchangeId?: string;
+  }) => Promise<{ orderId: string; status: string; filled?: number }>;
+};
+
+type RegimeDetectorLike = {
+  detect: (ohlcv: OHLCV[]) => string;
 };
 
 export type FundToolDeps = {
@@ -48,6 +83,9 @@ export type FundToolDeps = {
   perfStore: PerformanceSnapshotStore;
   getRegistry: () => RegistryLike | undefined;
   getPaper: () => PaperLike | undefined;
+  getDataProvider?: () => DataProviderLike | undefined;
+  getLiveExecutor?: () => LiveExecutorLike | undefined;
+  getRegimeDetector?: () => RegimeDetectorLike | undefined;
 };
 
 export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): void {
@@ -408,6 +446,210 @@ export function registerFundTools(api: OpenClawPluginApi, deps: FundToolDeps): v
       },
     },
     { names: ["fin_list_promotions_ready"] },
+  );
+
+  // ── fin_strategy_tick ──
+
+  api.registerTool(
+    {
+      name: "fin_strategy_tick",
+      label: "Strategy Tick",
+      description:
+        "Drive strategy execution: fetch latest candles, run onBar() for L2 (paper) and L3 (live) strategies, place orders, record snapshots. " +
+        "Omit strategyId to tick all running strategies. Set dryRun=true to compute signals without placing orders.",
+      parameters: Type.Object({
+        strategyId: Type.Optional(
+          Type.String({ description: "Strategy ID to tick. Omit to tick all L2+L3 strategies." }),
+        ),
+        dryRun: Type.Optional(
+          Type.Boolean({
+            description: "If true, compute signals but do not place orders (default: false)",
+          }),
+        ),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        const registry = getRegistry();
+        if (!registry) return json({ error: "Strategy registry not available" });
+
+        const dataProvider = deps.getDataProvider?.();
+        if (!dataProvider)
+          return json({ error: "Data provider not available (findoo-datahub-plugin not loaded)" });
+
+        const paper = getPaper();
+        const liveExecutor = deps.getLiveExecutor?.();
+        const regimeDetector = deps.getRegimeDetector?.();
+        const dryRun = params.dryRun === true;
+
+        // Select strategies to tick
+        const targetId = params.strategyId as string | undefined;
+        const allStrategies = registry.list();
+        const strategies = allStrategies.filter((s) => {
+          if (targetId && s.id !== targetId) return false;
+          return s.level === "L2_PAPER" || s.level === "L3_LIVE";
+        });
+
+        if (strategies.length === 0) {
+          return json({
+            ticked: 0,
+            signals: [],
+            snapshots: 0,
+            note: targetId
+              ? `Strategy ${targetId} not found or not at L2/L3 level`
+              : "No L2_PAPER or L3_LIVE strategies found",
+          });
+        }
+
+        const signals: Array<{
+          strategyId: string;
+          strategyName: string;
+          level: string;
+          symbol: string;
+          action: string;
+          confidence: number;
+          reason: string;
+          orderResult?: Record<string, unknown>;
+        }> = [];
+        let tickedCount = 0;
+        let snapshotCount = 0;
+        const errors: string[] = [];
+
+        for (const record of strategies) {
+          try {
+            const def = record.definition;
+            if (typeof def.onBar !== "function") {
+              errors.push(`${record.id}: onBar not a function (strategy not hydrated)`);
+              continue;
+            }
+
+            const symbol = def.symbols[0] ?? "BTC/USDT";
+            const timeframe = def.timeframes[0] ?? "1h";
+            const market = def.markets[0] ?? "crypto";
+
+            const ohlcv = await dataProvider.getOHLCV({ symbol, market, timeframe, limit: 200 });
+            if (!ohlcv || ohlcv.length === 0) {
+              errors.push(`${record.id}: no OHLCV data for ${symbol} ${timeframe}`);
+              continue;
+            }
+
+            const latestBar = ohlcv[ohlcv.length - 1]!;
+            const indicators = buildIndicatorLib(ohlcv);
+
+            // Build portfolio context from paper account
+            let portfolio = {
+              equity: 10000,
+              cash: 10000,
+              positions: [] as Array<Record<string, unknown>>,
+            };
+            let activeAccountId: string | undefined;
+            if (paper) {
+              const accounts = paper.listAccounts();
+              activeAccountId = accounts[0]?.id;
+              if (activeAccountId) {
+                const state = paper.getAccountState(activeAccountId);
+                if (state) {
+                  portfolio = {
+                    equity: state.equity,
+                    cash: state.cash ?? state.equity,
+                    positions: state.positions ?? [],
+                  };
+                }
+              }
+            }
+
+            const ctx: StrategyContext = {
+              portfolio: {
+                equity: portfolio.equity,
+                cash: portfolio.cash,
+                positions: [],
+              },
+              history: ohlcv,
+              indicators,
+              regime: (regimeDetector?.detect(ohlcv) ?? "sideways") as StrategyContext["regime"],
+              memory: new Map(),
+              log: () => {},
+            };
+
+            const signal: Signal | null = await def.onBar(latestBar, ctx);
+            tickedCount++;
+
+            if (!signal) continue;
+
+            const signalEntry: (typeof signals)[number] = {
+              strategyId: record.id,
+              strategyName: record.name,
+              level: record.level,
+              symbol: signal.symbol || symbol,
+              action: signal.action,
+              confidence: signal.confidence,
+              reason: signal.reason,
+            };
+
+            if (!dryRun) {
+              const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
+
+              if (record.level === "L2_PAPER" && paper && activeAccountId) {
+                // Paper trading
+                const orderResult = paper.submitOrder(
+                  activeAccountId,
+                  {
+                    symbol: signal.symbol || symbol,
+                    side: signal.action === "buy" ? "buy" : "sell",
+                    type: signal.orderType,
+                    quantity,
+                    strategyId: record.id,
+                    reason: signal.reason,
+                  },
+                  latestBar.close,
+                );
+                signalEntry.orderResult = orderResult as Record<string, unknown>;
+              } else if (record.level === "L3_LIVE" && liveExecutor) {
+                // Live trading — risk gate is handled by before_tool_call hook
+                try {
+                  const orderResult = await liveExecutor.placeOrder({
+                    symbol: signal.symbol || symbol,
+                    side: signal.action === "buy" ? "buy" : "sell",
+                    type: signal.orderType,
+                    amount: quantity,
+                    price: signal.limitPrice,
+                  });
+                  signalEntry.orderResult = orderResult as Record<string, unknown>;
+                } catch (err) {
+                  signalEntry.orderResult = {
+                    error: err instanceof Error ? err.message : String(err),
+                  };
+                }
+              }
+            }
+
+            signals.push(signalEntry);
+          } catch (err) {
+            errors.push(`${record.id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        // Record snapshots for paper accounts
+        if (!dryRun && paper) {
+          const accounts = paper.listAccounts();
+          for (const acct of accounts) {
+            try {
+              paper.recordSnapshot(acct.id);
+              snapshotCount++;
+            } catch {
+              // non-critical
+            }
+          }
+        }
+
+        return json({
+          ticked: tickedCount,
+          signals,
+          snapshots: snapshotCount,
+          dryRun,
+          ...(errors.length > 0 ? { errors } : {}),
+        });
+      },
+    },
+    { names: ["fin_strategy_tick"] },
   );
 
   // ── fin_lifecycle_scan ──

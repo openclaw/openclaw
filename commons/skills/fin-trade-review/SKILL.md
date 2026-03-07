@@ -1,11 +1,7 @@
 ---
 name: fin-trade-review
 description: "Trade review and learning — replay trades, analyze mistakes via error book, track success patterns, and generate experience insights."
-metadata:
-  {
-    "openclaw":
-      { "emoji": "📓", "requires": { "extensions": ["fin-core", "fin-strategy-memory"] } },
-  }
+metadata: { "openclaw": { "emoji": "📓", "requires": { "extensions": ["findoo-trader-plugin"] } } }
 ---
 
 # Trade Review & Learning

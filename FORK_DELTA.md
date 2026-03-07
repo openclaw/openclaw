@@ -1,6 +1,6 @@
 # FORK_DELTA.md — OpenFinClaw vs Upstream OpenClaw
 
-**Last updated**: 2026-02-28
+**Last updated**: 2026-03-07
 **Upstream merged**: 2026.2.25 (395 commits)
 
 This document catalogs every OpenFinClaw-specific customization that diverges from upstream. Use it as a checklist when merging upstream changes.
@@ -20,46 +20,39 @@ This document catalogs every OpenFinClaw-specific customization that diverges fr
 | `openfinclaw.mjs`                | Custom CLI entry point                  | N/A (ours only)                |
 | `README.md`                      | OpenFinClaw brand, features, roadmap    | OpenClaw docs                  |
 
-## 2. Financial Extensions (15)
+## 2. Financial Extensions (5 active + 1 shared types)
 
-All in `extensions/fin-*/`, each with `devDependencies: { "openfinclaw": "workspace:*" }`.
+All in `extensions/`, each with `devDependencies: { "openfinclaw": "workspace:*" }`.
 
-| Extension              | Purpose                                                            | AI Tools |
-| ---------------------- | ------------------------------------------------------------------ | -------- |
-| `fin-core`             | Exchange registry, risk controller, CCXT bridge, SSE, events       | 0        |
-| `fin-trading`          | Order execution with risk gates (Binance, OKX, Bybit, Hyperliquid) | 5        |
-| `fin-portfolio`        | Balance aggregation, performance metrics, rebalancing              | 5        |
-| `fin-market-data`      | Price feeds, OHLCV, market depth                                   | 4        |
-| `fin-expert-sdk`       | Professional analysis API bridge                                   | 3        |
-| `fin-info-feed`        | Market intelligence, sentiment, earnings data                      | 3        |
-| `fin-monitoring`       | Price alerts, portfolio health checks, anomaly detection           | 4        |
-| `fin-data-bus`         | Unified data provider, OHLCV cache, regime detection               | 3        |
-| `fin-data-hub`         | External data source proxy (stock/crypto/macro/FX/derivatives)     | 7        |
-| `fin-evolution-engine` | GEP gene evolution, LLM mutation, RDAVD fitness                    | 2        |
-| `fin-fund-manager`     | Capital flow tracking, performance snapshots                       | 6        |
-| `fin-openbb-data`      | OpenBB data bridge (162+ fetchers, 38+ providers)                  | 0        |
-| `fin-paper-trading`    | Multi-market paper trading (US/HK/A-shares/Crypto)                 | 6        |
-| `fin-strategy-engine`  | Strategy registry, backtesting engine, custom rule engine          | 4        |
-| `fin-strategy-memory`  | Strategy persistence, time-decayed fitness scoring                 | 4        |
-| `fin-shared-types`     | Cross-extension shared types (OHLCV, StrategyDefinition, etc.)     | 0        |
+| Extension                | Purpose                                                                                           | AI Tools | Status |
+| ------------------------ | ------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `findoo-trader-plugin`   | Unified trading: exchange registry, risk control, paper trading, strategy engine, fund management | 23       | Active |
+| `findoo-datahub-plugin`  | Market data provider: OHLCV, ticker, indicators, regime detection                                 | 40+      | Active |
+| `findoo-backtest-plugin` | Remote backtesting via datahub                                                                    | 2        | Active |
+| `fin-evolution-engine`   | GEP gene evolution, LLM mutation, RDAVD fitness                                                   | 2        | Active |
+| `fin-shared-types`       | Cross-extension shared types (OHLCV, StrategyDefinition, etc.)                                    | 0        | Stable |
 
-**Total AI tools**: 56
+**Total AI tools**: 67+
 
-## 3. Financial Skills (9)
+### Retired Extensions (merged into findoo-trader-plugin)
 
-All in `skills/fin-*/SKILL.md` — runtime-discoverable skill definitions.
+The following extensions were consolidated into `findoo-trader-plugin` and no longer exist as separate directories:
+`fin-core`, `fin-trading`, `fin-portfolio`, `fin-market-data`, `fin-paper-trading`, `fin-strategy-engine`, `fin-fund-manager`, `fin-expert-sdk`, `fin-info-feed`, `fin-monitoring`, `fin-data-bus`, `fin-data-hub`, `fin-openbb-data`, `fin-strategy-memory`.
 
-| Skill             | Purpose                                  |
-| ----------------- | ---------------------------------------- |
-| `fin-alerts`      | Real-time alerts, price triggers         |
-| `fin-budget`      | Budgeting, spending analysis, cash flow  |
-| `fin-expert`      | Institutional-grade analysis             |
-| `fin-market-data` | Market data queries, technical analysis  |
-| `fin-portfolio`   | Portfolio analysis, rebalancing          |
-| `fin-report`      | Automated daily/weekly/monthly reports   |
-| `fin-screener`    | Security screening, quantitative ranking |
-| `fin-trading`     | Trade execution, order management        |
-| `fin-watchlist`   | Custom watchlist management              |
+## 3. Financial Skills
+
+### Extension-bundled Skills (current architecture)
+
+Skills are bundled with their extensions under `extensions/*/skills/`:
+
+| Extension                | Skills | Examples                                        |
+| ------------------------ | ------ | ----------------------------------------------- |
+| `findoo-datahub-plugin`  | 27     | crypto, a-share, us-equity, macro, derivatives… |
+| `findoo-backtest-plugin` | 1      | remote-backtest                                 |
+
+### Community Skills (commons/skills/fin-\*)
+
+20 community skills in `commons/skills/fin-*/SKILL.md` — these reference generic tool names and work with the current extension architecture.
 
 ## 4. Financial Configuration
 
@@ -91,14 +84,14 @@ All in `skills/fin-*/SKILL.md` — runtime-discoverable skill definitions.
 
 ## 7. FinClaw Commons
 
-| Path                                 | Purpose                                                             |
-| ------------------------------------ | ------------------------------------------------------------------- |
-| `commons/index.json`                 | Central registry (8 entries)                                        |
-| `commons/skills/fin-*/`              | 7 community skills (DCA, tax, risk, news, backtest, onchain, macro) |
-| `commons/templates/finclaw-starter/` | Starter workspace template                                          |
-| `commons/dashboard/`                 | HTML dashboard generator                                            |
-| `commons/fcs/`                       | FinClaw Score system                                                |
-| `commons/site/`                      | Static browsing site                                                |
+| Path                                 | Purpose                    |
+| ------------------------------------ | -------------------------- |
+| `commons/index.json`                 | Central registry           |
+| `commons/skills/fin-*/`              | 20 community skills        |
+| `commons/templates/finclaw-starter/` | Starter workspace template |
+| `commons/dashboard/`                 | HTML dashboard generator   |
+| `commons/fcs/`                       | FinClaw Score system       |
+| `commons/site/`                      | Static browsing site       |
 
 ## 8. UI Extensions
 
@@ -135,7 +128,7 @@ When merging upstream, restore these after conflict resolution:
 - [ ] `pnpm-lock.yaml` — delete conflicted version, run `pnpm install`
 - [ ] `tsconfig.json` paths — verify dual `openfinclaw/` + `openclaw/` aliases
 - [ ] `src/config/types.ts` — verify `export * from "./types.financial.js"` present
-- [ ] Fix any upstream API changes in `extensions/fin-*` (check `pnpm tsgo`)
+- [ ] Fix any upstream API changes in `extensions/findoo-*` (check `pnpm tsgo`)
 - [ ] Run `pnpm format:fix` then `pnpm check` to verify
 
 ## 11. Environment Variables
@@ -144,6 +137,22 @@ When merging upstream, restore these after conflict resolution:
 - Fallback: `OPENCLAW_*`
 - Financial: `FINANCE_ENABLED`, exchange API keys in config
 
+## 12. Runtime Services Registry
+
+| Service ID              | Extension      | Purpose                  |
+| ----------------------- | -------------- | ------------------------ |
+| `fin-data-provider`     | findoo-datahub | OHLCV/Ticker/market data |
+| `fin-regime-detector`   | findoo-datahub | Market regime detection  |
+| `fin-strategy-registry` | findoo-trader  | Strategy management      |
+| `fin-backtest-engine`   | findoo-trader  | Backtest engine          |
+| `fin-paper-engine`      | findoo-trader  | Paper trading            |
+| `fin-exchange-registry` | findoo-trader  | Exchange management      |
+| `fin-risk-controller`   | findoo-trader  | Risk control             |
+| `fin-fund-manager`      | findoo-trader  | Fund management          |
+| `fin-live-executor`     | findoo-trader  | Live trading execution   |
+| `fin-event-store`       | findoo-trader  | Event sourcing           |
+| `fin-alert-engine`      | findoo-trader  | Alert management         |
+
 ---
 
-**File count**: ~200+ OpenFinClaw-specific files across 15 extensions (56 AI tools), 9 skills, config, UI, commons, and deploy.
+**File count**: ~150+ OpenFinClaw-specific files across 5 extensions (67+ AI tools), 20+ skills, config, UI, commons, and deploy.

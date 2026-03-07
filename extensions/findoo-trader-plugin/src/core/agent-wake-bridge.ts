@@ -213,6 +213,51 @@ export class AgentWakeBridge {
     );
   }
 
+  /**
+   * Lifecycle engine detected actions that need Agent decision.
+   * Instead of auto-executing, it delegates to the Agent via this wake event.
+   */
+  onLifecycleRecommendation(info: {
+    promotions: Array<{
+      strategyId: string;
+      name: string;
+      from: string;
+      to: string;
+      reasons: string[];
+    }>;
+    demotions: Array<{
+      strategyId: string;
+      name: string;
+      from: string;
+      to: string;
+      reasons: string[];
+    }>;
+  }): void {
+    const promoCount = info.promotions.length;
+    const demoCount = info.demotions.length;
+    if (promoCount === 0 && demoCount === 0) return;
+
+    const summary = [
+      promoCount > 0 ? `${promoCount} promotion(s) recommended` : "",
+      demoCount > 0 ? `${demoCount} demotion(s) recommended` : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    this.activityLog?.append({
+      category: "lifecycle",
+      action: "lifecycle_recommendation",
+      detail: `Lifecycle scan: ${summary}`,
+      metadata: { promotions: info.promotions, demotions: info.demotions },
+    });
+    this.wake(
+      `[findoo-trader] Lifecycle scan found actions: ${summary}. ` +
+        `Call fin_lifecycle_scan to review the full action list and make decisions. ` +
+        `Use fin_fund_rebalance to execute promotions/demotions.`,
+      "cron:findoo:lifecycle-recommendation",
+    );
+  }
+
   /** L2→L3 requires user approval — wake Agent to notify user. */
   onApprovalNeeded(info: { strategyId: string; strategyName: string }): void {
     this.activityLog?.append({

@@ -76,6 +76,7 @@ function createMockWakeBridge() {
     onSeedBacktestComplete: vi.fn(),
     onPromotionReady: vi.fn(),
     onApprovalNeeded: vi.fn(),
+    onLifecycleRecommendation: vi.fn(),
   };
 }
 
@@ -132,7 +133,7 @@ describe("LifecycleEngine", () => {
     expect(engine.getStats().cycleCount).toBe(1);
   });
 
-  it("auto-promotes L1 to L2 when eligible", async () => {
+  it("recommends L1→L2 promotion to Agent (no auto-execute)", async () => {
     registry._add({ id: "s1", name: "Test Strategy", level: "L1_BACKTEST" });
 
     fundManager.checkPromotion.mockReturnValue({
@@ -146,12 +147,20 @@ describe("LifecycleEngine", () => {
 
     const result = await engine.runCycle();
     expect(result.promoted).toBe(1);
-    expect(registry.updateLevel).toHaveBeenCalledWith("s1", "L2_PAPER");
 
-    // Activity log should have promotion entry
-    const logs = activityLog.listRecent(10, "promotion");
-    expect(logs.length).toBeGreaterThanOrEqual(1);
-    expect(logs[0].strategyId).toBe("s1");
+    // LifecycleEngine no longer directly executes — it recommends via wake bridge
+    expect(registry.updateLevel).not.toHaveBeenCalled();
+    expect(wakeBridge.onLifecycleRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promotions: [
+          expect.objectContaining({
+            strategyId: "s1",
+            from: "L1_BACKTEST",
+            to: "L2_PAPER",
+          }),
+        ],
+      }),
+    );
   });
 
   it("sends approval for L2→L3 (never auto-promotes)", async () => {
@@ -198,7 +207,7 @@ describe("LifecycleEngine", () => {
     expect(result2.approvalsSent).toBe(0); // already pending
   });
 
-  it("executes demotion when triggered", async () => {
+  it("recommends demotion to Agent (no auto-execute)", async () => {
     registry._add({ id: "s3", name: "Failing Strategy", level: "L3_LIVE" });
 
     fundManager.checkDemotion.mockReturnValue({
@@ -211,10 +220,20 @@ describe("LifecycleEngine", () => {
 
     const result = await engine.runCycle();
     expect(result.demoted).toBe(1);
-    expect(registry.updateLevel).toHaveBeenCalledWith("s3", "L2_PAPER");
 
-    const logs = activityLog.listRecent(10, "demotion");
-    expect(logs.length).toBeGreaterThanOrEqual(1);
+    // LifecycleEngine no longer directly executes — it recommends via wake bridge
+    expect(registry.updateLevel).not.toHaveBeenCalled();
+    expect(wakeBridge.onLifecycleRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        demotions: [
+          expect.objectContaining({
+            strategyId: "s3",
+            from: "L3_LIVE",
+            to: "L2_PAPER",
+          }),
+        ],
+      }),
+    );
   });
 
   it("handleApproval promotes L2→L3", () => {

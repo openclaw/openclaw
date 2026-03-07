@@ -2,7 +2,13 @@
 name: fin-backtest
 description: "Strategy backtesting engine - test trading strategies against historical data, compute performance metrics, optimize parameters, and run Monte Carlo simulations."
 metadata:
-  { "openclaw": { "emoji": "🧪", "requires": { "extensions": ["fin-core", "fin-market-data"] } } }
+  {
+    "openclaw":
+      {
+        "emoji": "🧪",
+        "requires": { "extensions": ["findoo-trader-plugin", "findoo-datahub-plugin"] },
+      },
+  }
 ---
 
 # Strategy Backtester

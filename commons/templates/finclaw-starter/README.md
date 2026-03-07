@@ -19,28 +19,36 @@ A starter workspace for financial intelligence with OpenClaw. This template incl
 3. Install recommended skills:
 
    ```bash
-   openclaw commons install fin-dca-strategy
-   openclaw commons install fin-tax-report
+   openclaw commons install fin-quant-fund
+   openclaw commons install fin-strategy-research
    ```
 
 4. Configure your exchange connections in `openclaw.json`.
 
-## Included Configuration
+## Required Extensions
 
-- **openclaw.json** - Base configuration with finance-focused defaults
-- **skills.json** - List of recommended financial skills
+| Extension              | Purpose                                            |
+| ---------------------- | -------------------------------------------------- |
+| findoo-trader-plugin   | Trading, paper trading, strategy engine, fund mgmt |
+| findoo-datahub-plugin  | Market data, indicators, regime detection          |
+| findoo-backtest-plugin | Remote backtesting                                 |
+| fin-evolution-engine   | GEP gene evolution, RDAVD fitness                  |
 
 ## Recommended Skills
 
-| Skill            | Description                                 |
-| ---------------- | ------------------------------------------- |
-| fin-market-data  | Real-time prices, charts, and market data   |
-| fin-portfolio    | Portfolio tracking and P&L analysis         |
-| fin-trading      | Order execution with safety confirmations   |
-| fin-dca-strategy | Dollar-cost averaging plan builder          |
-| fin-tax-report   | Tax reporting and capital gains calculation |
-| fin-alerts       | Price and portfolio alert monitoring        |
-| fin-expert       | Deep financial analysis and research        |
+| Skill                  | Description                                       |
+| ---------------------- | ------------------------------------------------- |
+| fin-quant-fund         | One-person quant fund management                  |
+| fin-strategy-research  | Strategy research and Walk-Forward validation     |
+| fin-strategy-evolution | Strategy lifecycle — promotion, mutation, culling |
+| fin-trade-review       | Trade review and learning                         |
+| fin-backtest           | Strategy backtesting with Monte Carlo             |
+| fin-risk-manager       | Position sizing, VaR, stress testing              |
+| fin-news-intel         | AI-powered news analysis and sentiment            |
+| fin-macro-calendar     | Economic calendar and regime classification       |
+| fin-onchain            | On-chain analytics, DeFi yields                   |
+| fin-dca-strategy       | Dollar-cost averaging plan builder                |
+| fin-tax-report         | Tax reporting and capital gains                   |
 
 ## Learn More
 

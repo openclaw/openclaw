@@ -19,6 +19,13 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import { CapacityEstimator } from "./src/alpha-factory/capacity-estimator.js";
+import { EvolutionScheduler } from "./src/alpha-factory/evolution-scheduler.js";
+import { GarbageCollector } from "./src/alpha-factory/garbage-collector.js";
+import { GradualScaleIn } from "./src/alpha-factory/gradual-scale-in.js";
+import { AlphaFactoryOrchestrator } from "./src/alpha-factory/orchestrator.js";
+import { ScreeningPipeline } from "./src/alpha-factory/screening-pipeline.js";
+import { ValidationOrchestrator } from "./src/alpha-factory/validation-orchestrator.js";
 import { resolveConfig } from "./src/config.js";
 import { ActivityLogStore } from "./src/core/activity-log-store.js";
 import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
@@ -49,7 +56,9 @@ import { registerPackRoutes } from "./src/fund/routes-packs.js";
 import { registerFundRoutes } from "./src/fund/routes.js";
 import { registerFundTools } from "./src/fund/tools.js";
 import type { FundConfig } from "./src/fund/types.js";
+import { BatchHypothesisGenerator } from "./src/ideation/batch-generator.js";
 import { DeduplicationFilter } from "./src/ideation/dedup-filter.js";
+import { FailureFeedbackStore } from "./src/ideation/failure-feedback-store.js";
 import { IdeationEngine } from "./src/ideation/ideation-engine.js";
 import { IdeationScheduler } from "./src/ideation/ideation-scheduler.js";
 import { MarketScanner } from "./src/ideation/market-scanner.js";
@@ -108,6 +117,15 @@ export { MarketScanner } from "./src/ideation/market-scanner.js";
 export { IdeationEngine } from "./src/ideation/ideation-engine.js";
 export { IdeationScheduler } from "./src/ideation/ideation-scheduler.js";
 export { DeduplicationFilter } from "./src/ideation/dedup-filter.js";
+export { AlphaFactoryOrchestrator } from "./src/alpha-factory/orchestrator.js";
+export { ScreeningPipeline } from "./src/alpha-factory/screening-pipeline.js";
+export { ValidationOrchestrator } from "./src/alpha-factory/validation-orchestrator.js";
+export { EvolutionScheduler } from "./src/alpha-factory/evolution-scheduler.js";
+export { GarbageCollector } from "./src/alpha-factory/garbage-collector.js";
+export { GradualScaleIn } from "./src/alpha-factory/gradual-scale-in.js";
+export { CapacityEstimator } from "./src/alpha-factory/capacity-estimator.js";
+export { FailureFeedbackStore } from "./src/ideation/failure-feedback-store.js";
+export { BatchHypothesisGenerator } from "./src/ideation/batch-generator.js";
 export * from "./src/types.js";
 
 const findooTraderPlugin = {
@@ -288,6 +306,8 @@ const findooTraderPlugin = {
 
     // lifecycleEngine is created later — use a lazy reference
     const lifecycleRef: { engine?: InstanceType<typeof LifecycleEngine> } = {};
+    // GC is created later (Alpha Factory section) — lazy reference for lifecycle engine
+    const gcRef: { gc?: InstanceType<typeof GarbageCollector> } = {};
 
     // ideationScheduler is created later — use a lazy reference
     const ideationRef: { scheduler?: InstanceType<typeof IdeationScheduler> } = {};
@@ -429,6 +449,36 @@ const findooTraderPlugin = {
       perfStore,
       getRegistry,
       getPaper,
+      getDataProvider: () => {
+        try {
+          return runtime.services?.get?.("fin-data-provider") as Parameters<
+            typeof registerFundTools
+          >[1]["getDataProvider"] extends () => infer R
+            ? R extends undefined
+              ? never
+              : R
+            : never | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      getLiveExecutor: () =>
+        liveExecutor as Parameters<
+          typeof registerFundTools
+        >[1]["getLiveExecutor"] extends () => infer R
+          ? R extends undefined
+            ? never
+            : R
+          : never,
+      getRegimeDetector: () => {
+        try {
+          return runtime.services?.get?.("fin-regime-detector") as
+            | { detect: (ohlcv: unknown[]) => string }
+            | undefined;
+        } catch {
+          return undefined;
+        }
+      },
     };
 
     // ── Register fund AI tools (7 tools) ──
@@ -480,6 +530,11 @@ const findooTraderPlugin = {
         liveHealthMonitor,
         liveReconciler,
         alertEngine,
+        garbageCollector: {
+          collect(profiles: Parameters<GarbageCollector["collect"]>[0]) {
+            return gcRef.gc?.collect(profiles) ?? { killed: [], reasons: new Map() };
+          },
+        },
         dataProvider: {
           async getTicker(symbol: string, market: string) {
             try {
@@ -645,6 +700,132 @@ const findooTraderPlugin = {
     });
     setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
 
+    // ── Alpha Factory (S1-S6 pipeline) ──
+
+    const failureFeedbackStore = new FailureFeedbackStore();
+
+    const screeningPipeline = new ScreeningPipeline({
+      backtestService: {
+        async runBacktest(params: { strategyId: string; months?: number }) {
+          try {
+            const svc = runtime.services?.get?.("fin-remote-backtest") as
+              | { runBacktest?: (p: { strategyId: string; months?: number }) => Promise<unknown> }
+              | undefined;
+            return (await svc?.runBacktest?.(params)) as
+              | import("./src/shared/types.js").BacktestResult
+              | null;
+          } catch {
+            return null;
+          }
+        },
+      },
+    });
+
+    const garbageCollector = new GarbageCollector();
+    gcRef.gc = garbageCollector;
+
+    const evolutionScheduler = new EvolutionScheduler(
+      {
+        strategyRegistry,
+        evolutionEngineResolver: () => {
+          try {
+            const svc = runtime.services?.get?.("fin-evolution-engine");
+            return svc as
+              | { runRdavdCycle?: (id: string) => Promise<{ evolved: boolean; reason: string }> }
+              | undefined;
+          } catch {
+            return undefined;
+          }
+        },
+        paperEngine,
+        activityLog,
+      },
+      86_400_000, // 24h
+    );
+
+    const alphaFactory = new AlphaFactoryOrchestrator({
+      screeningPipeline,
+      evolutionScheduler,
+      garbageCollector,
+      activityLog,
+    });
+    alphaFactory.start();
+
+    api.registerService({
+      id: "fin-alpha-factory",
+      start: () => {},
+      instance: alphaFactory,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // Alpha Factory AI tools
+    api.registerTool({
+      name: "fin_alpha_factory_run",
+      description: "Trigger the Alpha Factory screening pipeline on specified strategies",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          strategyIds: {
+            type: "array" as const,
+            items: { type: "string" as const },
+            description: "Strategy IDs to screen",
+          },
+        },
+        required: ["strategyIds"],
+      },
+      handler: async (params: { strategyIds: string[] }) => {
+        const result = await alphaFactory.runScreening(params.strategyIds);
+        return { text: JSON.stringify(result, null, 2) };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    api.registerTool({
+      name: "fin_alpha_factory_status",
+      description: "Get Alpha Factory pipeline statistics (funnel data across all stages)",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        return { text: JSON.stringify(alphaFactory.getStats(), null, 2) };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    // Alpha Factory HTTP routes
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/alpha-factory/stats",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(alphaFactory.getStats()));
+      },
+    });
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/alpha-factory/trigger",
+      method: "POST",
+      handler: async (req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        const ids = strategyRegistry.list().map((s) => s.id);
+        const result = await alphaFactory.runFullPipeline(ids);
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(result));
+      },
+    });
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/alpha-factory/failures",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(
+          JSON.stringify({
+            summary: failureFeedbackStore.getSummary(),
+            recent: failureFeedbackStore.getRecentPatterns(20),
+          }),
+        );
+      },
+    });
+
     // ── Strategy Pack HTTP Routes ──
 
     registerPackRoutes(api, { strategyRegistry, eventStore, riskController });
@@ -652,6 +833,7 @@ const findooTraderPlugin = {
     // ── Daily Brief HTTP endpoint ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/daily-brief",
       handler: async (_req: unknown, res: unknown) => {
         const httpRes = res as import("./src/types-http.js").HttpRes;
@@ -739,6 +921,7 @@ const findooTraderPlugin = {
 
       // Register notification stats endpoint
       api.registerHttpRoute({
+        auth: "gateway",
         path: "/api/v1/finance/notifications/stats",
         handler: async (_req: unknown, res: unknown) => {
           const httpRes = res as import("./src/types-http.js").HttpRes;
