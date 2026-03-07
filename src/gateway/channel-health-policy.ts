@@ -88,6 +88,17 @@ export function evaluateChannelHealth(
       if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
       }
+      if (
+        policy.channelId !== "telegram" &&
+        snapshot.connected === true &&
+        snapshot.lastEventAt != null &&
+        (lastStartAt == null || snapshot.lastEventAt >= lastStartAt)
+      ) {
+        const eventAge = Math.max(0, policy.now - snapshot.lastEventAt);
+        if (eventAge <= policy.staleEventThresholdMs) {
+          return { healthy: true, reason: "healthy" };
+        }
+      }
       return { healthy: false, reason: "stuck" };
     }
   }

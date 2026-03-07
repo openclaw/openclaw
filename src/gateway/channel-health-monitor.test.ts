@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
@@ -265,6 +265,26 @@ describe("channel-health-monitor", () => {
       },
     });
     await expectRestartedChannel(manager, "discord");
+  });
+
+  it("skips restart when stale busy flags coexist with recent channel events", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          activeRuns: 1,
+          busy: true,
+          lastRunActivityAt: now - 26 * 60_000,
+          lastEventAt: now - 5_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
   });
 
   it("restarts disconnected channels when busy flags are inherited from a prior lifecycle", async () => {
