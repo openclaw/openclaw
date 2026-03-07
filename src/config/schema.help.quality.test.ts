@@ -491,6 +491,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
 
 const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.defaults.memorySearch.chunking.overlap",
+  "agents.defaults.memorySearch.chunking.strategy",
   "agents.defaults.memorySearch.chunking.tokens",
   "agents.defaults.memorySearch.enabled",
   "agents.defaults.memorySearch.model",
