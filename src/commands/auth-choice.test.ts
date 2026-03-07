@@ -222,7 +222,9 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       OPENAI_CODEX_DEFAULT_MODEL,
     );
-    expect(result.config.agents?.defaults?.models?.[OPENAI_CODEX_DEFAULT_MODEL]).toBeUndefined();
+    expect(
+      result.config.agents?.defaults?.models?.[OPENAI_CODEX_DEFAULT_MODEL],
+    ).toBeUndefined();
   });
 
   it("prompts and writes provider API key for common providers", async () => {
