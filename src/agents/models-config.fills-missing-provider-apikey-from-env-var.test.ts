@@ -207,7 +207,7 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey/baseUrl for matching providers in merge mode", async () => {
+  it("overwrites agent apiKey/baseUrl when config provides non-empty values in merge mode", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
@@ -215,8 +215,9 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+      // Config values should take precedence over agent values
+      expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
     });
   });
 
