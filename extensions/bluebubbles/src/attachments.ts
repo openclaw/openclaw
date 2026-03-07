@@ -156,13 +156,6 @@ export async function sendBlueBubblesAttachment(params: {
   filename = sanitizeFilename(filename, fallbackName);
   contentType = contentType?.trim() || undefined;
   const { baseUrl, password, accountId } = resolveAccount(opts);
-  const privateApiStatus = await resolveBlueBubblesPrivateApiStatus({
-    baseUrl,
-    password,
-    accountId,
-    timeoutMs: opts.timeoutMs,
-  });
-  const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
   const isAudioMessage = wantsVoice;
@@ -185,6 +178,13 @@ export async function sendBlueBubblesAttachment(params: {
   }
 
   const target = resolveBlueBubblesSendTarget(to);
+  const privateApiStatus = await resolveBlueBubblesPrivateApiStatus({
+    baseUrl,
+    password,
+    accountId,
+    timeoutMs: opts.timeoutMs,
+  });
+  const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
   const chatGuid = await resolveChatGuidForTarget({
     baseUrl,
     password,

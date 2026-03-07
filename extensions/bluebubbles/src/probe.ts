@@ -26,6 +26,7 @@ export type BlueBubblesPrivateApiStatusParams = {
 /** Cache server info by account ID to avoid repeated API calls.
  * Size-capped to prevent unbounded growth (#4948). */
 const MAX_SERVER_INFO_CACHE_SIZE = 64;
+const MAX_UNKNOWN_PRIVATE_API_STATUS_CACHE_SIZE = 64;
 const serverInfoCache = new Map<string, { info: BlueBubblesServerInfo; expires: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const UNKNOWN_PRIVATE_API_STATUS_TTL_MS = 30_000;
@@ -121,10 +122,24 @@ function hasRecentUnknownPrivateApiStatus(accountId?: string): boolean {
 }
 
 function setUnknownPrivateApiStatus(accountId?: string): void {
-  unknownPrivateApiStatusCache.set(
-    buildCacheKey(accountId),
-    Date.now() + UNKNOWN_PRIVATE_API_STATUS_TTL_MS,
-  );
+  const cacheKey = buildCacheKey(accountId);
+  const now = Date.now();
+  for (const [key, expires] of unknownPrivateApiStatusCache) {
+    if (expires <= now) {
+      unknownPrivateApiStatusCache.delete(key);
+    }
+  }
+  if (unknownPrivateApiStatusCache.has(cacheKey)) {
+    unknownPrivateApiStatusCache.delete(cacheKey);
+  }
+  unknownPrivateApiStatusCache.set(cacheKey, now + UNKNOWN_PRIVATE_API_STATUS_TTL_MS);
+  while (unknownPrivateApiStatusCache.size > MAX_UNKNOWN_PRIVATE_API_STATUS_CACHE_SIZE) {
+    const oldest = unknownPrivateApiStatusCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    unknownPrivateApiStatusCache.delete(oldest);
+  }
 }
 
 function clearUnknownPrivateApiStatus(accountId?: string): void {
