@@ -209,6 +209,22 @@ export async function monitorWebChannel(
         _lastInboundMsg = msg;
         await onMessage(msg);
       },
+      onRawInbound: account.rawInboundFeedPath
+        ? (msg) => {
+            try {
+              const line = JSON.stringify(msg) + "\n";
+              import("node:fs/promises")
+                .then((fs) => fs.appendFile(account.rawInboundFeedPath, line, "utf-8"))
+                .catch((err) => {
+                  logVerbose(
+                    `Failed to write raw inbound to ${account.rawInboundFeedPath}: ${String(err)}`,
+                  );
+                });
+            } catch (err) {
+              logVerbose(`onRawInbound handler error: ${String(err)}`);
+            }
+          }
+        : undefined,
     });
 
     Object.assign(status, createConnectedChannelStatusPatch());

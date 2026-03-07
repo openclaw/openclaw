@@ -20,7 +20,7 @@ import {
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
-import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type { RawInboundMessage, WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 export async function monitorWebInbox(options: {
   verbose: boolean;
@@ -34,6 +34,11 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /**
+   * Optional callback fired for EVERY incoming message, before access control filtering.
+   * This is observe-only and cannot influence routing or response.
+   */
+  onRawInbound?: (msg: RawInboundMessage) => void;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -404,6 +409,48 @@ export async function monitorWebInbox(options: {
         accountId: options.accountId,
         direction: "inbound",
       });
+
+      // Fire raw inbound hook before any filtering
+      if (options.onRawInbound) {
+        try {
+          const rawBody = extractText(msg.message ?? undefined) || "";
+          const remoteJid = msg.key?.remoteJid;
+          if (remoteJid && !remoteJid.endsWith("@status") && !remoteJid.endsWith("@broadcast")) {
+            const isGroup = isJidGroup(remoteJid) === true;
+            const participantJid = msg.key?.participant ?? undefined;
+            const senderE164 = isGroup
+              ? participantJid
+                ? await resolveInboundJid(participantJid)
+                : null
+              : await resolveInboundJid(remoteJid);
+
+            let groupSubject: string | undefined;
+            if (isGroup) {
+              const meta = await getGroupMeta(remoteJid);
+              groupSubject = meta.subject;
+            }
+
+            options.onRawInbound({
+              channel: "whatsapp",
+              accountId: options.accountId,
+              chatId: remoteJid,
+              group: isGroup,
+              groupSubject,
+              senderJid: participantJid,
+              senderE164: senderE164 ?? undefined,
+              senderName: msg.pushName ?? undefined,
+              body: rawBody,
+              timestampMs: msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : undefined,
+              messageId: msg.key?.id ?? undefined,
+              fromMe: Boolean(msg.key?.fromMe),
+              accessAllowed: false,
+            });
+          }
+        } catch (err) {
+          logVerbose(`onRawInbound hook error: ${String(err)}`);
+        }
+      }
+
       const inbound = await normalizeInboundMessage(msg);
       if (!inbound) {
         continue;

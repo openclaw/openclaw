@@ -7,6 +7,39 @@ export type WebListenerCloseReason = {
   error?: unknown;
 };
 
+/**
+ * Raw inbound message emitted BEFORE access control filtering.
+ * This is an observe-only hook; it cannot influence message routing or responses.
+ */
+export type RawInboundMessage = {
+  /** Channel this message came from */
+  channel: "whatsapp";
+  /** Account ID */
+  accountId: string;
+  /** Chat JID (group or individual) */
+  chatId: string;
+  /** Whether this is a group message */
+  group: boolean;
+  /** Group subject/name if available */
+  groupSubject?: string;
+  /** Sender JID */
+  senderJid?: string;
+  /** Sender E164 phone number if resolved */
+  senderE164?: string;
+  /** Sender push name */
+  senderName?: string;
+  /** Message body text (extracted) */
+  body: string;
+  /** Message timestamp (ms) */
+  timestampMs?: number;
+  /** Message ID */
+  messageId?: string;
+  /** Whether message was from the bot itself */
+  fromMe: boolean;
+  /** Whether this message passed access control (was it allowed through?) */
+  accessAllowed: boolean;
+};
+
 export type WebInboundMessage = {
   id?: string;
   from: string; // conversation id: E.164 for direct chats, group JID for groups
