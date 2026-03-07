@@ -818,6 +818,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     roomLabel: string;
     teamId?: string;
     postId: string;
+    deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
     const fromLabel =
@@ -862,27 +863,83 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       channel: "mattermost",
       accountId: account.accountId,
     });
+    const textLimit = core.channel.text.resolveTextChunkLimit(
+      cfg,
+      "mattermost",
+      account.accountId,
+      {
+        fallbackLimit: account.textChunkLimit ?? 4000,
+      },
+    );
     const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
       cfg,
       agentId: params.route.agentId,
       channel: "mattermost",
       accountId: account.accountId,
     });
+    const shouldDeliverReplies = params.deliverReplies === true;
     const capturedTexts: string[] = [];
+    const typingCallbacks = shouldDeliverReplies
+      ? createTypingCallbacks({
+          start: () => sendTypingIndicator(params.channelId),
+          onStartError: (err) => {
+            logTypingFailure({
+              log: (message) => logger.debug?.(message),
+              channel: "mattermost",
+              target: params.channelId,
+              error: err,
+            });
+          },
+        })
+      : undefined;
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
         deliver: async (payload: ReplyPayload) => {
+          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text
             .convertMarkdownTables(payload.text ?? "", tableMode)
             .trim();
-          if (text) {
-            capturedTexts.push(text);
+
+          if (!shouldDeliverReplies) {
+            if (text) {
+              capturedTexts.push(text);
+            }
+            return;
+          }
+
+          if (mediaUrls.length === 0) {
+            const chunkMode = core.channel.text.resolveChunkMode(
+              cfg,
+              "mattermost",
+              account.accountId,
+            );
+            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
+            for (const chunk of chunks.length > 0 ? chunks : [text]) {
+              if (!chunk) {
+                continue;
+              }
+              await sendMessageMattermost(to, chunk, {
+                accountId: account.accountId,
+              });
+            }
+            return;
+          }
+
+          let first = true;
+          for (const mediaUrl of mediaUrls) {
+            const caption = first ? text : "";
+            first = false;
+            await sendMessageMattermost(to, caption, {
+              accountId: account.accountId,
+              mediaUrl,
+            });
           }
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
         },
+        onReplyStart: typingCallbacks?.onReplyStart,
       });
 
     await core.channel.reply.withReplyDispatcher({
@@ -998,7 +1055,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       };
     }
 
-    const replyText = await runModelPickerCommand({
+    await runModelPickerCommand({
       commandText: `/model ${targetModelRef}`,
       route,
       channelId: params.payload.channel_id,
@@ -1011,6 +1068,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       roomLabel,
       teamId,
       postId: params.payload.post_id,
+      deliverReplies: true,
     });
     const updatedModel = resolveMattermostModelPickerCurrentModel({
       cfg,
@@ -1024,16 +1082,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       page: pickerState.page,
       currentModel: updatedModel,
     });
-    const statusText =
-      replyText ||
-      (updatedModel === targetModelRef
-        ? `Switched to ${targetModelRef}.`
-        : `Current model: ${updatedModel}`);
 
     return await updateModelPickerPost({
       channelId: params.payload.channel_id,
       postId: params.payload.post_id,
-      message: `${statusText}\n\n${view.text}`,
+      message: view.text,
       buttons: view.buttons,
     });
   }
