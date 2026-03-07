@@ -45,10 +45,13 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
       continue;
     }
     const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
-    const value = cleaned
+    let value = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_]+|[*_]+$/g, "")
       .trim();
+    if (value.startsWith("`") && value.endsWith("`")) {
+      value = value.slice(1, -1).trim();
+    }
     if (!value) {
       continue;
     }
