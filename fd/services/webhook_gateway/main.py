@@ -96,7 +96,7 @@ app.include_router(admin_marketing_router, prefix="/admin/marketing")
 # Command Center static serving (production)
 # Serves the built frontend at /cc/ when packages/command-center/dist/ exists.
 # In dev, use Vite dev server on port 5174 instead.
-_cc_dist = Path(__file__).resolve().parents[2] / "packages" / "command-center" / "dist"
+_cc_dist = Path(__file__).resolve().parents[3] / "packages" / "command-center" / "dist"
 if _cc_dist.is_dir():
     app.mount("/cc", StaticFiles(directory=str(_cc_dist), html=True), name="command-center")
 
