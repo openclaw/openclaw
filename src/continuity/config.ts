@@ -24,6 +24,7 @@ const DEFAULT_SCOPE: SessionSendPolicyConfig = {
   default: "deny",
   rules: [{ action: "allow", match: { chatType: "direct" } }],
 };
+const DEFAULT_SCOPE_DEFAULT: "allow" | "deny" = "deny";
 
 export const DEFAULT_CONTINUITY_CONFIG: ResolvedContinuityConfig = {
   capture: {
@@ -70,7 +71,7 @@ function resolvePositiveNumber(
 }
 
 function resolveScopeDefault(value: unknown): "allow" | "deny" {
-  return value === "allow" || value === "deny" ? value : DEFAULT_SCOPE.default;
+  return value === "allow" || value === "deny" ? value : DEFAULT_SCOPE_DEFAULT;
 }
 
 function cloneScope(scope?: SessionSendPolicyConfig): SessionSendPolicyConfig {
