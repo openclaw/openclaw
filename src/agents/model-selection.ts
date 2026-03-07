@@ -320,6 +320,42 @@ export function resolveConfiguredModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
+/**
+ * Resolve a ModelRef that may point to a CLI provider (claude-cli, codex-cli,
+ * or a custom cliBackend) to a real API provider.
+ *
+ * - Non-CLI providers are returned as-is.
+ * - `claude-cli` maps to `anthropic`; `codex-cli` maps to `openai`.
+ * - Unknown custom CLI backends fall back to DEFAULT_PROVIDER.
+ * - The model string is resolved through the alias index for the target provider.
+ */
+export function resolveNonCliModelRef(ref: ModelRef, cfg?: OpenClawConfig): ModelRef {
+  if (!isCliProvider(ref.provider, cfg)) {
+    return ref;
+  }
+
+  const normalized = normalizeProviderId(ref.provider);
+  let realProvider: string;
+  if (normalized === "claude-cli") {
+    realProvider = "anthropic";
+  } else if (normalized === "codex-cli") {
+    realProvider = "openai";
+  } else {
+    realProvider = DEFAULT_PROVIDER;
+  }
+
+  if (cfg) {
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: realProvider });
+    const aliasKey = normalizeAliasKey(ref.model);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+  }
+
+  return { provider: realProvider, model: ref.model };
+}
+
 export function resolveDefaultModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId?: string;

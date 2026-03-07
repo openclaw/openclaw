@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import { type ImageContent, completeSimple } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -26,6 +26,12 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
 } from "./bootstrap-budget.js";
+import {
+  COMPACTION_SYSTEM_PROMPT,
+  DEFAULT_COMPACTION_TIMEOUT_MS,
+  compactBootstrapFiles,
+  resolveCompactionConfig,
+} from "./bootstrap-compaction.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
@@ -47,6 +53,12 @@ import {
 import { resolveContextWindowInfo } from "./context-window-guard.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import {
+  isCliProvider,
+  resolveDefaultModelForAgent,
+  resolveNonCliModelRef,
+} from "./model-selection.js";
 import {
   buildBootstrapContextFiles,
   classifyFailoverReason,
@@ -59,6 +71,7 @@ import {
   type BootstrapProfile,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { resolveModel } from "./pi-embedded-runner/model.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -609,18 +622,150 @@ export async function runCliAgent(params: {
     // Estimate total prompt: system prompt + user task prompt (promptForRun includes prepended context)
     let estimatedTokens = estimatePromptTokens(systemPrompt) + estimatePromptTokens(promptForRun);
 
+    // Compaction observability state
+    let compactionAttempted = false;
+    let compactedFilesList: string[] = [];
+    let compactionCharsBefore = 0;
+    let compactionCharsAfter = 0;
+    let compactionModelUsed = "";
+    let compactionFallbackReason: string | undefined;
+
     if (estimatedTokens > hardLimitTokens) {
       const warnForProfile = makeBootstrapWarn({
         sessionLabel,
         warn: (message) => log.warn(message),
       });
-      for (const profile of ["reduced", "minimal"] as BootstrapProfile[]) {
+
+      // Track last-built profile context files so compaction can compact them
+      let lastProfileContextFiles = contextFiles;
+
+      for (const profile of ["reduced", "compaction", "minimal"] as (
+        | BootstrapProfile
+        | "compaction"
+      )[]) {
+        if (profile === "compaction") {
+          compactionAttempted = true;
+          const compactionCfg = resolveCompactionConfig(params.config);
+          // Resolve compaction model: config.model (may be "provider/model") or
+          // inherit the agent's current model + provider.
+          let compactionProvider: string;
+          let compactionModelRef: string;
+          if (compactionCfg.model?.includes("/")) {
+            compactionProvider = compactionCfg.model.split("/")[0];
+            compactionModelRef = compactionCfg.model.split("/").slice(1).join("/");
+          } else if (compactionCfg.model) {
+            compactionProvider = params.provider;
+            compactionModelRef = compactionCfg.model;
+          } else {
+            compactionProvider = params.provider;
+            compactionModelRef = modelId;
+          }
+
+          // CLI backends (claude-cli, codex-cli) are wrappers around real LLM
+          // providers — they don't exist in the model registry. Resolve the
+          // agent's configured default model to get the real provider + model.
+          if (isCliProvider(compactionProvider, params.config)) {
+            const agentDefault = resolveDefaultModelForAgent({
+              cfg: params.config ?? {},
+              agentId: params.agentId,
+            });
+            const resolved = resolveNonCliModelRef(agentDefault, params.config);
+            compactionProvider = resolved.provider;
+            compactionModelRef = resolved.model;
+          }
+
+          compactionModelUsed = `${compactionProvider}/${compactionModelRef}`;
+          try {
+            // Resolve model via the unified model registry (provider-agnostic).
+            const resolved = resolveModel(
+              compactionProvider,
+              compactionModelRef,
+              undefined,
+              params.config,
+            );
+            if (!resolved.model) {
+              throw new Error(
+                resolved.error ??
+                  `Unknown compaction model: ${compactionProvider}/${compactionModelRef}`,
+              );
+            }
+            const apiKey = requireApiKey(
+              await getApiKeyForModel({ model: resolved.model, cfg: params.config }),
+              compactionProvider,
+            );
+
+            const isTextBlock = (b: { type: string }): b is { type: "text"; text: string } =>
+              b.type === "text";
+            const compactionSignal = AbortSignal.timeout(
+              compactionCfg.timeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS,
+            );
+
+            const { contextFiles: compactedContextFiles, results } = await compactBootstrapFiles({
+              contextFiles: lastProfileContextFiles,
+              config: compactionCfg,
+              modelRef: compactionModelUsed,
+              llmFn: async (userPrompt, signal) => {
+                const res = await completeSimple(
+                  resolved.model!,
+                  {
+                    systemPrompt: COMPACTION_SYSTEM_PROMPT,
+                    messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],
+                  },
+                  { apiKey, maxTokens: 4096, temperature: 0, signal },
+                );
+                const texts = res.content.filter(isTextBlock);
+                if (texts.length === 0) {
+                  throw new Error("No text content in compaction response");
+                }
+                return texts.map((b) => b.text).join("\n");
+              },
+              signal: compactionSignal,
+            });
+
+            compactedFilesList = results.filter((r) => r.success).map((r) => r.path);
+            compactionCharsBefore = results.reduce((sum, r) => sum + r.charsBefore, 0);
+            compactionCharsAfter = results.reduce((sum, r) => sum + r.charsAfter, 0);
+
+            if (compactedFilesList.length > 0) {
+              const compactedSystemPrompt = buildSystemPrompt({
+                workspaceDir,
+                config: params.config,
+                defaultThinkLevel: params.thinkLevel,
+                extraSystemPrompt,
+                skillsPrompt,
+                ownerNumbers: params.ownerNumbers,
+                heartbeatPrompt,
+                docsPath: docsPath ?? undefined,
+                tools: [],
+                contextFiles: compactedContextFiles,
+                bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
+                modelDisplay,
+                agentId: sessionAgentId,
+              });
+              const compactedTokens =
+                estimatePromptTokens(compactedSystemPrompt) + estimatePromptTokens(promptForRun);
+              if (compactedTokens <= hardLimitTokens) {
+                systemPrompt = compactedSystemPrompt;
+                estimatedTokens = compactedTokens;
+                break;
+              }
+            }
+          } catch (err) {
+            compactionFallbackReason = err instanceof Error ? err.message : String(err);
+            log.warn(
+              `cli-runner: bootstrap compaction failed, falling back to minimal profile: ${compactionFallbackReason}`,
+            );
+          }
+          continue;
+        }
+
         const profileConfig = getBootstrapProfileConfig(profile);
         const profileContextFiles = buildBootstrapContextFiles(bootstrapFiles, {
           maxChars: profileConfig.maxCharsPerFile,
           totalMaxChars: profileConfig.totalMaxChars,
           warn: warnForProfile,
         });
+        lastProfileContextFiles = profileContextFiles;
         const profileSystemPrompt = buildSystemPrompt({
           workspaceDir,
           config: params.config,
@@ -660,6 +805,14 @@ export async function runCliAgent(params: {
       files_injected: contextFiles.length,
       files_truncated: bootstrapAnalysis.truncatedFiles.length,
       files_skipped: bootstrapFiles.length - contextFiles.length,
+      compaction_attempted: compactionAttempted,
+      ...(compactionAttempted && {
+        compacted_files: compactedFilesList,
+        chars_before: compactionCharsBefore,
+        chars_after: compactionCharsAfter,
+        compaction_model: compactionModelUsed,
+        ...(compactionFallbackReason ? { fallback_reason: compactionFallbackReason } : {}),
+      }),
     });
   }
 

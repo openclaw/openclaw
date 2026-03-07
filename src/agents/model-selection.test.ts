@@ -12,6 +12,7 @@ import {
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveNonCliModelRef,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -538,6 +539,71 @@ describe("model-selection", () => {
         }),
       ).toBe("adaptive");
     });
+  });
+});
+
+describe("resolveNonCliModelRef", () => {
+  it("returns non-CLI provider ref as-is", () => {
+    const ref = { provider: "anthropic", model: "claude-opus-4-6" };
+    expect(resolveNonCliModelRef(ref)).toEqual(ref);
+  });
+
+  it("returns non-CLI openai ref as-is", () => {
+    const ref = { provider: "openai", model: "gpt-4o" };
+    expect(resolveNonCliModelRef(ref)).toEqual(ref);
+  });
+
+  it("maps claude-cli to anthropic", () => {
+    const ref = { provider: "claude-cli", model: "claude-opus-4-6" };
+    const result = resolveNonCliModelRef(ref);
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+  });
+
+  it("maps codex-cli to openai", () => {
+    const ref = { provider: "codex-cli", model: "o4-mini" };
+    const result = resolveNonCliModelRef(ref);
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("o4-mini");
+  });
+
+  it("falls back to DEFAULT_PROVIDER (anthropic) for unknown custom CLI backend", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "my-custom-cli": {},
+          },
+        },
+      },
+    } as never;
+    const ref = { provider: "my-custom-cli", model: "some-model" };
+    const result = resolveNonCliModelRef(ref, cfg);
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("some-model");
+  });
+
+  it("resolves through alias when cfg + alias index match", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-haiku-4-5-20251001": { alias: "haiku" },
+          },
+        },
+      },
+    } as never;
+    const ref = { provider: "claude-cli", model: "haiku" };
+    const result = resolveNonCliModelRef(ref, cfg);
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("returns mapped provider + original model when no alias matches", () => {
+    const ref = { provider: "claude-cli", model: "claude-opus-4-6" };
+    const result = resolveNonCliModelRef(ref, undefined);
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
   });
 });
 
