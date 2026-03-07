@@ -1,0 +1,9 @@
+{
+  "id": "gohighlevel",
+  "channels": ["gohighlevel"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
