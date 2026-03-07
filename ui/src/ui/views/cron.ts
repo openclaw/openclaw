@@ -62,6 +62,7 @@ export type CronProps = {
   timezoneSuggestions: string[];
   deliveryToSuggestions: string[];
   accountSuggestions: string[];
+  defaultAgentId?: string;
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
@@ -1490,6 +1491,10 @@ function renderFieldError(message?: string, id?: string) {
 function renderJob(job: CronJob, props: CronProps) {
   const isSelected = props.runsJobId === job.id;
   const itemClass = `list-item list-item-clickable cron-job${isSelected ? " list-item-selected" : ""}`;
+  const effectiveAgentId =
+    (typeof job.agentId === "string" && job.agentId.trim()) ||
+    (typeof props.defaultAgentId === "string" && props.defaultAgentId.trim()) ||
+    "main";
   const selectAnd = (action: () => void) => {
     props.onLoadRuns(job.id);
     action();
@@ -1500,7 +1505,7 @@ function renderJob(job: CronJob, props: CronProps) {
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>
         ${renderJobPayload(job)}
-        ${job.agentId ? html`<div class="muted cron-job-agent">${t("cron.jobDetail.agent")}: ${job.agentId}</div>` : nothing}
+        <div class="muted cron-job-agent">${t("cron.jobDetail.agent")}: ${effectiveAgentId}</div>
       </div>
       <div class="list-meta">
         ${renderJobState(job)}

@@ -1,0 +1,1 @@
+- control-ui (Cron): Always show an Agent label in the jobs list. When a job does not store `agentId`, the UI now displays the effective default agent instead of leaving the line blank.

@@ -166,6 +166,16 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const helloSnapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const cronDefaultAgentId =
+    (typeof helloSnapshot?.sessionDefaults?.defaultAgentId === "string" &&
+      helloSnapshot.sessionDefaults.defaultAgentId.trim()) ||
+    (typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()) ||
+    (typeof state.agentsList?.agents?.[0]?.id === "string" &&
+      state.agentsList.agents[0].id.trim()) ||
+    "main";
   const cronAgentSuggestions = sortLocaleStrings(
     new Set(
       [
@@ -484,6 +494,7 @@ export function renderApp(state: AppViewState) {
                 timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
                 deliveryToSuggestions,
                 accountSuggestions,
+                defaultAgentId: cronDefaultAgentId,
                 onFormChange: (patch) => {
                   state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
                   state.cronFieldErrors = validateCronForm(state.cronForm);
