@@ -1,10 +1,30 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
 const pnpm = "pnpm";
+const a2uiBundlePath = path.join("src", "canvas-host", "a2ui", "a2ui.bundle.js");
+
+function ensureA2uiBundle() {
+  if (fs.existsSync(a2uiBundlePath)) {
+    return;
+  }
+  console.log(`[test-parallel] Missing ${a2uiBundlePath}; running "pnpm canvas:a2ui:bundle"...`);
+  const result = spawnSync(pnpm, ["canvas:a2ui:bundle"], {
+    stdio: "inherit",
+    env: process.env,
+    shell: isWindows,
+  });
+  if (result.status !== 0) {
+    const exitCode = result.status ?? 1;
+    console.error(
+      `[test-parallel] Failed to generate A2UI bundle (exit ${exitCode}). Run "pnpm canvas:a2ui:bundle" and retry.`,
+    );
+    process.exit(exitCode);
+  }
+}
 
 const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
@@ -433,6 +453,8 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+ensureA2uiBundle();
 
 if (passthroughArgs.length > 0) {
   const maxWorkers = maxWorkersForRun("unit");
