@@ -202,10 +202,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (process.env.OPENCLAW_SERVICE_MODE?.trim()) {
-    const stale = cleanStaleGatewayProcessesSync();
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    const stale = cleanStaleGatewayProcessesSync(port);
     if (stale.length > 0) {
-      gatewayLog.info(`service-mode: cleared ${stale.length} stale gateway pid(s) before bind`);
+      gatewayLog.info(
+        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+      );
     }
   }
   if (opts.force) {
