@@ -17,47 +17,68 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
-  private var lastRequiresMic = false
-  private var didStartForeground = false
+  @Volatile private var lastRequiresMic = false
+  @Volatile private var lastRequiresMediaProjection = false
+  @Volatile private var didStartForeground = false
+  private var lastNotificationTitle = "OpenClaw Node"
+  private var lastNotificationText = "Starting…"
 
   override fun onCreate() {
     super.onCreate()
+    currentInstance = this
     ensureChannel()
-    val initial = buildNotification(title = "OpenClaw Node", text = "Starting…")
-    startForegroundWithTypes(notification = initial, requiresMic = false)
+    val initial = buildNotification(title = lastNotificationTitle, text = lastNotificationText)
+    startForegroundWithTypes(notification = initial, requiresMic = false, requiresMediaProjection = false)
 
     val runtime = (application as NodeApp).runtime
+    val connectionStateFlow =
+      combine(
+        runtime.statusText,
+        runtime.serverName,
+        runtime.isConnected,
+      ) { status: String, server: String?, connected: Boolean ->
+        ConnectionState(status = status, server = server, connected = connected)
+      }
+    val captureStateFlow =
+      combine(
+        runtime.micEnabled,
+        runtime.micIsListening,
+        runtime.screenRecordActive,
+      ) { micEnabled: Boolean, micListening: Boolean, screenRecordActive: Boolean ->
+        CaptureState(
+          micEnabled = micEnabled,
+          micListening = micListening,
+          screenRecordActive = screenRecordActive,
+        )
+      }
     notificationJob =
       scope.launch {
-        combine(
-          runtime.statusText,
-          runtime.serverName,
-          runtime.isConnected,
-          runtime.micEnabled,
-          runtime.micIsListening,
-        ) { status, server, connected, micEnabled, micListening ->
-          Quint(status, server, connected, micEnabled, micListening)
-        }.collect { (status, server, connected, micEnabled, micListening) ->
-          val title = if (connected) "OpenClaw Node · Connected" else "OpenClaw Node"
+        combine(connectionStateFlow, captureStateFlow) { connection, capture ->
+          ServiceNotificationState(connection = connection, capture = capture)
+        }.collect { state ->
+          val title = if (state.connection.connected) "OpenClaw Node · Connected" else "OpenClaw Node"
           val micSuffix =
-            if (micEnabled) {
-              if (micListening) " · Mic: Listening" else " · Mic: Pending"
+            if (state.capture.micEnabled) {
+              if (state.capture.micListening) " · Mic: Listening" else " · Mic: Pending"
             } else {
               ""
             }
-          val text = (server?.let { "$status · $it" } ?: status) + micSuffix
+          val screenSuffix = if (state.capture.screenRecordActive) " · Screen: Recording" else ""
+          val text = (state.connection.server?.let { "${state.connection.status} · $it" } ?: state.connection.status) + micSuffix + screenSuffix
 
-          val requiresMic =
-            micEnabled && hasRecordAudioPermission()
+          val requiresMic = state.capture.micEnabled && hasRecordAudioPermission()
           startForegroundWithTypes(
             notification = buildNotification(title = title, text = text),
             requiresMic = requiresMic,
+            requiresMediaProjection = state.capture.screenRecordActive,
           )
         }
       }
@@ -70,6 +91,12 @@ class NodeForegroundService : Service() {
         stopSelf()
         return START_NOT_STICKY
       }
+      ACTION_UPDATE_CAPTURE_TYPES -> {
+        applyCaptureTypes(
+          requiresMic = intent.getBooleanExtra(EXTRA_REQUIRES_MIC, false),
+          requiresMediaProjection = intent.getBooleanExtra(EXTRA_REQUIRES_MEDIA_PROJECTION, false),
+        )
+      }
     }
     // Keep running; connection is managed by NodeRuntime (auto-reconnect + manual).
     return START_STICKY
@@ -78,6 +105,9 @@ class NodeForegroundService : Service() {
   override fun onDestroy() {
     notificationJob?.cancel()
     scope.cancel()
+    if (currentInstance === this) {
+      currentInstance = null
+    }
     super.onDestroy()
   }
 
@@ -98,6 +128,9 @@ class NodeForegroundService : Service() {
   }
 
   private fun buildNotification(title: String, text: String): Notification {
+    lastNotificationTitle = title
+    lastNotificationText = text
+
     val launchIntent = Intent(this, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
@@ -135,22 +168,51 @@ class NodeForegroundService : Service() {
     mgr.notify(NOTIFICATION_ID, notification)
   }
 
-  private fun startForegroundWithTypes(notification: Notification, requiresMic: Boolean) {
-    if (didStartForeground && requiresMic == lastRequiresMic) {
+  private fun startForegroundWithTypes(
+    notification: Notification,
+    requiresMic: Boolean,
+    requiresMediaProjection: Boolean,
+  ) {
+    if (
+      didStartForeground &&
+        requiresMic == lastRequiresMic &&
+        requiresMediaProjection == lastRequiresMediaProjection
+    ) {
       updateNotification(notification)
       return
     }
 
     lastRequiresMic = requiresMic
-    val types =
-      if (requiresMic) {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-      } else {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-      }
+    lastRequiresMediaProjection = requiresMediaProjection
+    var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+    if (requiresMic) {
+      types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    }
+    if (requiresMediaProjection) {
+      types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+    }
     startForeground(NOTIFICATION_ID, notification, types)
     didStartForeground = true
   }
+
+  private fun applyCaptureTypes(
+    requiresMic: Boolean,
+    requiresMediaProjection: Boolean,
+  ) {
+    startForegroundWithTypes(
+      notification = buildNotification(title = lastNotificationTitle, text = lastNotificationText),
+      requiresMic = requiresMic,
+      requiresMediaProjection = requiresMediaProjection,
+    )
+  }
+
+  private fun hasForegroundTypes(
+    requiresMic: Boolean,
+    requiresMediaProjection: Boolean,
+  ): Boolean =
+    didStartForeground &&
+      lastRequiresMic == requiresMic &&
+      lastRequiresMediaProjection == requiresMediaProjection
 
   private fun hasRecordAudioPermission(): Boolean {
     return (
@@ -164,6 +226,11 @@ class NodeForegroundService : Service() {
     private const val NOTIFICATION_ID = 1
 
     private const val ACTION_STOP = "ai.openclaw.android.action.STOP"
+    private const val ACTION_UPDATE_CAPTURE_TYPES = "ai.openclaw.android.action.UPDATE_CAPTURE_TYPES"
+    private const val EXTRA_REQUIRES_MIC = "requiresMic"
+    private const val EXTRA_REQUIRES_MEDIA_PROJECTION = "requiresMediaProjection"
+
+    @Volatile private var currentInstance: NodeForegroundService? = null
 
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
@@ -174,7 +241,63 @@ class NodeForegroundService : Service() {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
     }
+
+    private fun requestCaptureTypes(
+      context: Context,
+      requiresMic: Boolean,
+      requiresMediaProjection: Boolean,
+    ) {
+      val intent =
+        Intent(context, NodeForegroundService::class.java)
+          .setAction(ACTION_UPDATE_CAPTURE_TYPES)
+          .putExtra(EXTRA_REQUIRES_MIC, requiresMic)
+          .putExtra(EXTRA_REQUIRES_MEDIA_PROJECTION, requiresMediaProjection)
+
+      if (currentInstance == null) {
+        context.startForegroundService(intent)
+      } else {
+        context.startService(intent)
+      }
+    }
+
+    suspend fun ensureCaptureTypes(
+      context: Context,
+      requiresMic: Boolean,
+      requiresMediaProjection: Boolean,
+      timeoutMs: Long = 2_000,
+    ) {
+      requestCaptureTypes(
+        context = context,
+        requiresMic = requiresMic,
+        requiresMediaProjection = requiresMediaProjection,
+      )
+
+      withTimeout(timeoutMs) {
+        while (true) {
+          val service = currentInstance
+          if (service != null && service.hasForegroundTypes(requiresMic, requiresMediaProjection)) {
+            return@withTimeout
+          }
+          delay(25)
+        }
+      }
+    }
   }
 }
 
-private data class Quint<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
+private data class ConnectionState(
+  val status: String,
+  val server: String?,
+  val connected: Boolean,
+)
+
+private data class CaptureState(
+  val micEnabled: Boolean,
+  val micListening: Boolean,
+  val screenRecordActive: Boolean,
+)
+
+private data class ServiceNotificationState(
+  val connection: ConnectionState,
+  val capture: CaptureState,
+)
