@@ -29,7 +29,11 @@ export function classifyContinuitySource(sessionKey?: string): ContinuitySourceC
   if (!rest || rest === "main") {
     return "main_direct";
   }
-  return "paired_direct";
+  if (parsed.chatType === "direct") {
+    return "paired_direct";
+  }
+  // Unknown session keys (cron/internal/background) should never be treated as direct.
+  return "channel";
 }
 
 export function isContinuityScopeAllowed(
@@ -100,7 +104,10 @@ function parseContinuitySessionScope(key?: string): ParsedContinuityScope {
   if (normalized.includes(":channel:")) {
     return { normalizedKey: normalized, channel, chatType: "channel" };
   }
-  return { normalizedKey: normalized, channel, chatType: "direct" };
+  if (normalized.includes(":direct:") || normalized.includes(":dm:")) {
+    return { normalizedKey: normalized, channel, chatType: "direct" };
+  }
+  return { normalizedKey: normalized, channel };
 }
 
 function normalizeSessionKey(key?: string): string | undefined {

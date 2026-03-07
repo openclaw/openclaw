@@ -12,6 +12,7 @@ describe("classifyContinuitySource", () => {
     expect(classifyContinuitySource("agent:alpha:discord:direct:bob")).toBe("paired_direct");
     expect(classifyContinuitySource("agent:alpha:discord:work:direct:bob")).toBe("paired_direct");
     expect(classifyContinuitySource("agent:alpha:subagent:task-123")).toBe("channel");
+    expect(classifyContinuitySource("agent:main:cron:job-1:run:run-1")).toBe("channel");
   });
 });
 
@@ -95,6 +96,22 @@ describe("isContinuityScopeAllowed", () => {
         "agent:alpha:subagent:task-123",
       ),
     ).toBe(true);
+  });
+
+  it("does not match unknown internal session keys as direct", () => {
+    const scope = {
+      default: "deny",
+      rules: [
+        {
+          action: "allow",
+          match: {
+            chatType: "direct",
+          },
+        },
+      ],
+    } satisfies SessionSendPolicyConfig;
+
+    expect(isContinuityScopeAllowed(scope, "agent:main:cron:job-1:run:run-1")).toBe(false);
   });
 
   it("skips empty rules and handles legacy group and channel session formats", () => {

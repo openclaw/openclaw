@@ -64,6 +64,16 @@ describe("extractContinuityMatches", () => {
     expect(matches[1]?.text).toBe("I will use Bun for that.");
   });
 
+  it("keeps dotted values intact when extracting continuity facts", () => {
+    const matches = extractContinuityMatches({
+      sessionId: "session-fact-values",
+      messages: [makeMessage("Remember this: my email is alice@example.com.")],
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.text).toBe("Remember this: my email is alice@example.com.");
+  });
+
   it("sanitizes tags and truncates overlong first sentences", () => {
     const longFact = `Remember this: <b>my email is</b> ${"a".repeat(320)}`;
 
