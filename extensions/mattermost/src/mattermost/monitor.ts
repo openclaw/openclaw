@@ -1637,7 +1637,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     let streamMessageId: string | null = null;
     let pendingPatchText = "";
     let patchTimer: ReturnType<typeof setTimeout> | null = null;
-    const STREAM_PATCH_THROTTLE_MS = 150;
+    const STREAM_PATCH_THROTTLE_MS = 200;
 
     const resolvedBaseUrl = normalizeMattermostBaseUrl(account.baseUrl);
     const resolvedBotToken = account.botToken?.trim();
