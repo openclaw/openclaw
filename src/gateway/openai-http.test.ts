@@ -577,6 +577,74 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(msg.content).toBe("No response from OpenClaw.");
       }
 
+      // usage should reflect agentMeta when available
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: { agentMeta: { usage: { input: 42, output: 17 } } },
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(42);
+        expect(usage?.completion_tokens).toBe(17);
+        expect(usage?.total_tokens).toBe(59);
+        expect((usage as Record<string, unknown>)?.prompt_tokens_details).toBeUndefined();
+      }
+
+      // usage includes cache tokens in total
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: { agentMeta: { usage: { input: 10, output: 5, cacheRead: 20, cacheWrite: 3 } } },
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(10);
+        expect(usage?.completion_tokens).toBe(5);
+        expect(usage?.total_tokens).toBe(38);
+        expect((usage as Record<string, unknown>)?.prompt_tokens_details).toEqual({
+          cached_tokens: 20,
+        });
+      }
+
+      // usage respects precomputed total from agentMeta
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: { agentMeta: { usage: { input: 10, output: 5, total: 100 } } },
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(10);
+        expect(usage?.completion_tokens).toBe(5);
+        expect(usage?.total_tokens).toBe(100);
+      }
+
+      // usage defaults to zeros when agentMeta has no usage
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "hi back" }],
+          meta: {},
+        } as never);
+        const json = await postSyncUserMessage("hi");
+        const usage = json.usage as
+          | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+          | undefined;
+        expect(usage?.prompt_tokens).toBe(0);
+        expect(usage?.completion_tokens).toBe(0);
+        expect(usage?.total_tokens).toBe(0);
+      }
+
       {
         const res = await postChatCompletions(port, {
           model: "openclaw",

@@ -483,6 +483,27 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
       const content = resolveAgentResponseText(result);
+      const agentUsage = (
+        result as {
+          meta?: {
+            agentMeta?: {
+              usage?: {
+                input?: number;
+                output?: number;
+                cacheRead?: number;
+                cacheWrite?: number;
+                total?: number;
+              };
+            };
+          };
+        }
+      )?.meta?.agentMeta?.usage;
+      const promptTokens = agentUsage?.input ?? 0;
+      const completionTokens = agentUsage?.output ?? 0;
+      const cacheRead = agentUsage?.cacheRead ?? 0;
+      const cacheWrite = agentUsage?.cacheWrite ?? 0;
+      const totalTokens =
+        agentUsage?.total ?? promptTokens + completionTokens + cacheRead + cacheWrite;
 
       sendJson(res, 200, {
         id: runId,
@@ -496,7 +517,21 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage: {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: totalTokens,
+          ...(cacheRead > 0 || cacheWrite > 0
+            ? {
+                prompt_tokens_details: {
+                  cached_tokens: cacheRead,
+                },
+                completion_tokens_details: {
+                  reasoning_tokens: 0,
+                },
+              }
+            : {}),
+        },
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
