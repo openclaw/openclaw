@@ -352,13 +352,17 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Use custom content from upstream hook if available, otherwise use built entry.
     // An empty string is a valid redaction signal — hooks may intentionally
     // set it to persist a blank marker while avoiding transcript retention.
-    const customContent = context.sessionSaveContent;
-    if (typeof customContent === "string") {
+    // Use custom content from upstream hook if available, otherwise use built entry.
+    // hasCustomContent (set above) already gates session loading + slug generation.
+    let entry: string;
+    if (hasCustomContent) {
+      entry = context.sessionSaveContent as string;
       log.debug("Using custom session content from upstream hook", {
-        length: customContent.length,
+        length: entry.length,
       });
+    } else {
+      entry = entryParts.join("\n");
     }
-    const entry = typeof customContent === "string" ? customContent : entryParts.join("\n");
 
     // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
