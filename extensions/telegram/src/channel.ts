@@ -1,4 +1,8 @@
 import {
+  buildOpenGroupPolicyNoRouteAllowlistWarning,
+  buildOpenGroupPolicyRestrictSendersWarning,
+} from "openclaw/plugin-sdk";
+import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
@@ -216,11 +220,22 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         account.config.groups && Object.keys(account.config.groups).length > 0;
       if (groupAllowlistConfigured) {
         return [
-          `- Telegram groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set channels.telegram.groupPolicy="allowlist" + channels.telegram.groupAllowFrom to restrict senders.`,
+          buildOpenGroupPolicyRestrictSendersWarning({
+            surface: "Telegram groups",
+            openScope: "any member in allowed groups",
+            groupPolicyPath: "channels.telegram.groupPolicy",
+            groupAllowFromPath: "channels.telegram.groupAllowFrom",
+          }),
         ];
       }
       return [
-        `- Telegram groups: groupPolicy="open" with no channels.telegram.groups allowlist; any group can add + ping (mention-gated). Set channels.telegram.groupPolicy="allowlist" + channels.telegram.groupAllowFrom or configure channels.telegram.groups.`,
+        buildOpenGroupPolicyNoRouteAllowlistWarning({
+          surface: "Telegram groups",
+          routeAllowlistPath: "channels.telegram.groups",
+          routeScope: "group",
+          groupPolicyPath: "channels.telegram.groupPolicy",
+          groupAllowFromPath: "channels.telegram.groupAllowFrom",
+        }),
       ];
     },
   },

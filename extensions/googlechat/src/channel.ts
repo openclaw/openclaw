@@ -1,3 +1,4 @@
+import { buildOpenGroupPolicyConfigureRouteAllowlistWarning } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -212,7 +213,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       });
       if (groupPolicy === "open") {
         warnings.push(
-          `- Google Chat spaces: groupPolicy="open" allows any space to trigger (mention-gated). Set channels.googlechat.groupPolicy="allowlist" and configure channels.googlechat.groups.`,
+          buildOpenGroupPolicyConfigureRouteAllowlistWarning({
+            surface: "Google Chat spaces",
+            openScope: "any space",
+            groupPolicyPath: "channels.googlechat.groupPolicy",
+            routeAllowlistPath: "channels.googlechat.groups",
+          }),
         );
       }
       if (account.config.dm?.policy === "open") {
