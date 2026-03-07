@@ -46,6 +46,7 @@ import {
   validateChatInjectParams,
   validateChatSendParams,
 } from "../protocol/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
@@ -140,9 +141,16 @@ function resolveChatSendOriginatingRoute(params: {
     params.entry?.deliveryContext?.accountId ?? params.entry?.lastAccountId ?? undefined;
   const routeThreadIdCandidate =
     params.entry?.deliveryContext?.threadId ?? params.entry?.lastThreadId;
+  if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
   const parsedSessionKey = parseAgentSessionKey(params.sessionKey);
   const sessionScopeParts = (parsedSessionKey?.rest ?? params.sessionKey)
-    .split(":")
+    .split(":", 3)
     .filter(Boolean);
   const sessionScopeHead = sessionScopeParts[0];
   const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
