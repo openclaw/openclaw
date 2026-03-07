@@ -274,6 +274,7 @@ export {
 } from "../routing/session-key.js";
 export {
   formatAllowFromLowercase,
+  formatNormalizedAllowFromEntries,
   isAllowedParsedChatSender,
   isNormalizedSenderAllowed,
 } from "./allow-from.js";

@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
+  formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
@@ -118,11 +119,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.replace(/^bluebubbles:/i, ""))
-        .map((entry) => normalizeBlueBubblesHandle(entry)),
+      formatNormalizedAllowFromEntries({
+        allowFrom,
+        normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
+      }),
   },
   actions: bluebubblesMessageActions,
   security: {

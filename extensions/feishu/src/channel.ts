@@ -1,4 +1,7 @@
-import { collectOpenGroupPolicyRestrictSendersWarnings } from "openclaw/plugin-sdk";
+import {
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  formatAllowFromLowercase,
+} from "openclaw/plugin-sdk";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildProbeChannelStatusSummary,
@@ -251,11 +254,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       const account = resolveFeishuAccount({ cfg, accountId });
       return (account.config?.allowFrom ?? []).map((entry) => String(entry));
     },
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.toLowerCase()),
+    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
   },
   security: {
     collectWarnings: ({ cfg, accountId }) => {

@@ -1,4 +1,7 @@
-import { collectOpenGroupPolicyRestrictSendersWarnings } from "openclaw/plugin-sdk";
+import {
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  formatAllowFromLowercase,
+} from "openclaw/plugin-sdk";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -126,11 +129,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       configured: account.configured,
     }),
     resolveAllowFrom: ({ cfg }) => cfg.channels?.msteams?.allowFrom ?? [],
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.toLowerCase()),
+    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
     resolveDefaultTo: ({ cfg }) => cfg.channels?.msteams?.defaultTo?.trim() || undefined,
   },
   security: {
