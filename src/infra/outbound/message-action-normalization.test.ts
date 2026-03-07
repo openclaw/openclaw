@@ -29,6 +29,20 @@ describe("normalizeMessageActionInput", () => {
     expect(normalized.to).toBe("channel:C1");
   });
 
+  it("ignores empty legacy target fields when explicit target is present", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {
+        target: "channel:C1",
+        to: "",
+        channelId: "   ",
+      },
+    });
+
+    expect(normalized.target).toBe("channel:C1");
+    expect(normalized.to).toBe("channel:C1");
+  });
+
   it("infers target from tool context when required", () => {
     const normalized = normalizeMessageActionInput({
       action: "send",
