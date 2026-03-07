@@ -11,6 +11,11 @@ function stripThreadSuffix(value: string): string {
 /**
  * Limits conversation history to the last N user turns (and their associated
  * assistant responses). This reduces token usage for long-running DM sessions.
+ *
+ * The cut point is adjusted to avoid splitting tool_use/toolResult pairs: if a
+ * toolResult message would appear in the kept portion without a preceding
+ * assistant message (its tool_use was sliced off), the cut point is moved back
+ * to include the assistant that originated the tool call.
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
@@ -27,7 +32,28 @@ export function limitHistoryTurns(
     if (messages[i].role === "user") {
       userCount++;
       if (userCount > limit) {
-        return messages.slice(lastUserIndex);
+        let cutIndex = lastUserIndex;
+        // Check if any toolResult message appears in the kept portion
+        // before the first assistant message. That indicates the user
+        // interrupted a tool call and the matching tool_use is before the
+        // cut — extend the cut backward to include it.
+        let hasOrphanedToolResult = false;
+        for (let k = cutIndex; k < messages.length; k++) {
+          const role = messages[k].role;
+          if (role === "assistant") {
+            break;
+          }
+          if (role === "toolResult") {
+            hasOrphanedToolResult = true;
+            break;
+          }
+        }
+        if (hasOrphanedToolResult) {
+          while (cutIndex > 0 && messages[cutIndex - 1].role !== "user") {
+            cutIndex--;
+          }
+        }
+        return messages.slice(cutIndex);
       }
       lastUserIndex = i;
     }
