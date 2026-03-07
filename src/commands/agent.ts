@@ -645,30 +645,6 @@ async function agentCommandInternal(
     if (acpResolution?.kind === "ready" && sessionKey) {
       const startedAt = Date.now();
       const acpSessionKey = acpResolution.sessionKey || sessionKey;
-      if (sessionStore) {
-        const threadIdFromSessionKey = parseSessionThreadInfo(acpSessionKey).threadId;
-        const fallbackSessionFile = !sessionEntry?.sessionFile
-          ? resolveSessionTranscriptPath(
-              sessionId,
-              sessionAgentId,
-              opts.threadId ?? threadIdFromSessionKey,
-            )
-          : undefined;
-        const resolvedSessionFile = await resolveAndPersistSessionFile({
-          sessionId,
-          sessionKey: acpSessionKey,
-          sessionStore,
-          storePath,
-          sessionEntry,
-          agentId: sessionAgentId,
-          sessionsDir: resolveSessionFilePathOptions({
-            agentId: sessionAgentId,
-            storePath,
-          })?.sessionsDir,
-          fallbackSessionFile,
-        });
-        sessionEntry = resolvedSessionFile.sessionEntry;
-      }
       registerAgentRunContext(runId, {
         sessionKey: acpSessionKey,
       });
@@ -694,6 +670,30 @@ async function agentCommandInternal(
         const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
         if (agentPolicyError) {
           throw agentPolicyError;
+        }
+        if (sessionStore) {
+          const threadIdFromSessionKey = parseSessionThreadInfo(acpSessionKey).threadId;
+          const fallbackSessionFile = !sessionEntry?.sessionFile
+            ? resolveSessionTranscriptPath(
+                sessionId,
+                sessionAgentId,
+                opts.threadId ?? threadIdFromSessionKey,
+              )
+            : undefined;
+          const resolvedSessionFile = await resolveAndPersistSessionFile({
+            sessionId,
+            sessionKey: acpSessionKey,
+            sessionStore,
+            storePath,
+            sessionEntry,
+            agentId: sessionAgentId,
+            sessionsDir: resolveSessionFilePathOptions({
+              agentId: sessionAgentId,
+              storePath,
+            })?.sessionsDir,
+            fallbackSessionFile,
+          });
+          sessionEntry = resolvedSessionFile.sessionEntry;
         }
 
         await acpManager.runTurn({
