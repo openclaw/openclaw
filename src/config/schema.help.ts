@@ -695,6 +695,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
+  "models.providers.*.apiVersion":
+    "Optional API version query param appended to OpenAI-compatible chat completion requests (for example: 2025-01-01-preview for Azure OpenAI).",
   "models.providers.*.auth":
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":

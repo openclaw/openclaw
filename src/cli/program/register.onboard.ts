@@ -94,6 +94,7 @@ export function registerOnboardCommand(program: Command) {
   command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
+    .option("--custom-api-version <version>", "Custom provider API version (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
@@ -172,6 +173,7 @@ export function registerOnboardCommand(program: Command) {
           byteplusApiKey: opts.byteplusApiKey as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,
+          customApiVersion: opts.customApiVersion as string | undefined,
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
           customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,

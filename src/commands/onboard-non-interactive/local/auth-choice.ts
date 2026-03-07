@@ -930,6 +930,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: opts.customModelId,
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
+        apiVersion: opts.customApiVersion,
         providerId: opts.customProviderId,
       });
       const resolvedProviderId = resolveCustomProviderId({
@@ -966,6 +967,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: customAuth.modelId,
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
+        apiVersion: customAuth.apiVersion,
         providerId: customAuth.providerId,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
