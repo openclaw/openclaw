@@ -84,6 +84,7 @@ export {
   resolveAccountWithDefaultFallback,
 } from "./account-resolution.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
