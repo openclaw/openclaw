@@ -244,6 +244,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: acp-standard":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/acp-standard/**"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:

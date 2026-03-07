@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/acp-standard",
+  "version": "2026.2.26",
+  "description": "OpenClaw ACP runtime backend for standard ACP agents (JSON-RPC 2.0 over stdio)",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
