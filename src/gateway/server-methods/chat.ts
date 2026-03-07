@@ -3,6 +3,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -1062,7 +1063,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          const rawError = String(err);
+          const userFacingError = sanitizeUserFacingText(rawError, { errorContext: true });
+          const error = errorShape(ErrorCodes.UNAVAILABLE, userFacingError);
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -1072,7 +1075,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               payload: {
                 runId: clientRunId,
                 status: "error" as const,
-                summary: String(err),
+                summary: userFacingError,
               },
               error,
             },
@@ -1081,18 +1084,20 @@ export const chatHandlers: GatewayRequestHandlers = {
             context,
             runId: clientRunId,
             sessionKey: rawSessionKey,
-            errorMessage: String(err),
+            errorMessage: userFacingError,
           });
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+      const rawError = String(err);
+      const userFacingError = sanitizeUserFacingText(rawError, { errorContext: true });
+      const error = errorShape(ErrorCodes.UNAVAILABLE, userFacingError);
       const payload = {
         runId: clientRunId,
         status: "error" as const,
-        summary: String(err),
+        summary: userFacingError,
       };
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
