@@ -102,11 +102,32 @@ export const GOOGLE_VERTEX_PRO_TEMPLATE_MODEL = {
   maxTokens: 64000,
 };
 
+export const GOOGLE_VERTEX_FLASH_TEMPLATE_MODEL = {
+  id: "gemini-3-flash-preview",
+  name: "Gemini 3 Flash Preview (Vertex)",
+  provider: "google-vertex",
+  api: "openai-completions",
+  baseUrl: "https://us-central1-aiplatform.googleapis.com/v1beta/openai",
+  reasoning: false,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
 export function mockGoogleVertexProTemplateModel(): void {
   mockDiscoveredModel({
     provider: "google-vertex",
     modelId: "gemini-3-pro-preview",
     templateModel: GOOGLE_VERTEX_PRO_TEMPLATE_MODEL,
+  });
+}
+
+export function mockGoogleVertexFlashTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google-vertex",
+    modelId: "gemini-3-flash-preview",
+    templateModel: GOOGLE_VERTEX_FLASH_TEMPLATE_MODEL,
   });
 }
 
