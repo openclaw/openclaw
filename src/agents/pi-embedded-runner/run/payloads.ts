@@ -124,6 +124,13 @@ export function buildEmbeddedRunPayloads(params: {
     replyToCurrent?: boolean;
   }> = [];
 
+  // Defensive null checks for timeout/abort edge cases where the result may be undefined.
+  // When LLM requests time out or are aborted, the subscription may not have initialized
+  // these arrays properly. Ensure they're always treated as arrays to prevent
+  // "Cannot convert undefined or null to object" errors.
+  const assistantTexts = params.assistantTexts ?? [];
+  const toolMetas = params.toolMetas ?? [];
+
   const useMarkdown = params.toolResultFormat === "markdown";
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText = params.lastAssistant
@@ -157,9 +164,9 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const inlineToolResults =
-    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
+    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && toolMetas.length > 0;
   if (inlineToolResults) {
-    for (const { toolName, meta } of params.toolMetas) {
+    for (const { toolName, meta } of toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
         markdown: useMarkdown,
       });
@@ -244,13 +251,8 @@ export function buildEmbeddedRunPayloads(params: {
     return isRawApiErrorPayload(trimmed);
   };
   const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
+    assistantTexts.length ? assistantTexts : fallbackAnswerText ? [fallbackAnswerText] : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
-
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
     const {
