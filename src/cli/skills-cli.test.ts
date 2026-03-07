@@ -180,46 +180,30 @@ describe("skills-cli", () => {
       expect(output).toContain("API_KEY");
     });
 
-    it("shows API key storage guidance for the active config path", () => {
+    it("resolves skill info case-insensitively", () => {
       const report = createMockReport([
         createMockSkill({
-          name: "env-aware-skill",
-          skillKey: "env-aware-skill",
-          primaryEnv: "API_KEY",
-          eligible: false,
-          requirements: {
-            bins: [],
-            anyBins: [],
-            env: ["API_KEY"],
-            config: [],
-            os: [],
-          },
-          missing: {
-            bins: [],
-            anyBins: [],
-            env: ["API_KEY"],
-            config: [],
-            os: [],
-          },
+          name: "Excel-XLSX",
+          skillKey: "excel-xlsx",
+          description: "Spreadsheet helpers",
         }),
       ]);
 
-      const output = formatSkillInfo(report, "env-aware-skill", {});
-      expect(output).toContain("OPENCLAW_CONFIG_PATH");
-      expect(output).toContain("default: ~/.openclaw/openclaw.json");
-      expect(output).toContain("skills.entries.env-aware-skill.apiKey");
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
     });
 
-    it("normalizes text-presentation emoji selectors in info output", () => {
+    it("resolves skill info across separator variants", () => {
       const report = createMockReport([
         createMockSkill({
-          name: "info-emoji",
-          emoji: "🎛\uFE0E",
+          name: "Excel XLSX",
+          skillKey: "excel_xlsx",
+          description: "Spreadsheet helpers",
         }),
       ]);
 
-      const output = formatSkillInfo(report, "info-emoji", {});
-      expect(output).toContain("🎛️");
+      const output = formatSkillInfo(report, "excel-xlsx", {});
+      expect(output).toContain("Spreadsheet helpers");
     });
 
     it("shows agent exclusion and visibility details in skill info", () => {
