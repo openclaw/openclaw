@@ -1346,7 +1346,7 @@ async function dispatchDiscordCommandInteraction(params: {
       name: sender.name,
       tag: sender.tag,
     },
-    chatType: isDirectMessage ? "direct" : isThreadChannel ? "thread" : "group",
+    chatType: isDirectMessage ? "direct" : isThreadChannel ? "thread" : "channel",
     conversationId: rawChannelId || undefined,
   });
   const guildInfo = resolveDiscordGuildEntry({
