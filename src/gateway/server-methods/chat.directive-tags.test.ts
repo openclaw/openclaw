@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import { ErrorCodes } from "../protocol/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -323,6 +325,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("rejects oversized chat.send session keys before dispatch", async () => {
+    createTranscriptFixture("openclaw-chat-send-session-key-too-long-");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: `agent:main:${"x".repeat(CHAT_SEND_SESSION_KEY_MAX_LENGTH)}`,
+        message: "hello",
+        idempotencyKey: "idem-session-key-too-long",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+      }),
+    );
+    expect(context.broadcast).not.toHaveBeenCalled();
   });
 
   it("chat.inject strips external untrusted wrapper metadata from final payload text", async () => {
