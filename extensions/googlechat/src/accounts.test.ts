@@ -105,4 +105,27 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.credentialsFile).toBe("/tmp/andy-sa.json");
     expect(resolved.config.audienceType).toBe("app-url");
   });
+
+  it("does not inherit dangerous name matching from accounts.default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            default: {
+              dangerouslyAllowNameMatching: true,
+              audienceType: "app-url",
+              audience: "https://example.com/googlechat",
+            },
+            andy: {
+              serviceAccountFile: "/tmp/andy-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
+    expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
+    expect(resolved.config.audienceType).toBe("app-url");
+  });
 });

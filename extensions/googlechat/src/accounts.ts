@@ -78,6 +78,7 @@ function mergeGoogleChatAccountConfig(
   }
   const {
     enabled: _ignoredEnabled,
+    dangerouslyAllowNameMatching: _ignoredDangerouslyAllowNameMatching,
     serviceAccount: _ignoredServiceAccount,
     serviceAccountRef: _ignoredServiceAccountRef,
     serviceAccountFile: _ignoredServiceAccountFile,
