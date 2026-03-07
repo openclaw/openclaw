@@ -6,13 +6,13 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/zalo";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
   normalizeAccountId,
   promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/zalo";
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
@@ -24,19 +24,11 @@ function setZaloDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ) {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalo?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalo: {
-        ...cfg.channels?.zalo,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  } as OpenClawConfig;
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "zalo",
+    dmPolicy,
+  }) as OpenClawConfig;
 }
 
 function setZaloUpdateMode(
