@@ -758,4 +758,35 @@ describe("loadChatHistory", () => {
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
   });
+
+  it("invalidates cached input-history snapshot after async history replacement", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "new-session-entry" }] }],
+    });
+    const state = {
+      ...createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+        sessionKey: "next",
+        chatMessages: [{ role: "user", content: [{ type: "text", text: "old-session-entry" }] }],
+      }),
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+    } as ChatState & ChatInputHistoryState;
+    state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
+
+    expect(navigateChatInputHistory(state, "up")).toBe(true);
+    expect(state.chatMessage).toBe("old-session-entry");
+    expect(state.chatInputHistoryItems).toEqual(["old-session-entry"]);
+
+    await loadChatHistory(state);
+
+    expect(state.chatInputHistoryItems).toBeNull();
+    expect(state.chatInputHistorySessionKey).toBeNull();
+    state.chatMessage = "";
+    expect(navigateChatInputHistory(state, "up")).toBe(true);
+    expect(state.chatMessage).toBe("new-session-entry");
+  });
 });
