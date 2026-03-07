@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  evaluateGroupRouteAccessForPolicy,
   evaluateSenderGroupAccess,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
@@ -55,6 +56,66 @@ describe("evaluateSenderGroupAccessForPolicy", () => {
       allowed: false,
       reason: "empty_allowlist",
       groupPolicy: "allowlist",
+    });
+  });
+});
+
+describe("evaluateGroupRouteAccessForPolicy", () => {
+  it("blocks disabled policy", () => {
+    expect(
+      evaluateGroupRouteAccessForPolicy({
+        groupPolicy: "disabled",
+        routeAllowlistConfigured: true,
+        routeMatched: true,
+        routeEnabled: true,
+      }),
+    ).toEqual({
+      allowed: false,
+      groupPolicy: "disabled",
+      reason: "disabled",
+    });
+  });
+
+  it("blocks allowlist without configured routes", () => {
+    expect(
+      evaluateGroupRouteAccessForPolicy({
+        groupPolicy: "allowlist",
+        routeAllowlistConfigured: false,
+        routeMatched: false,
+      }),
+    ).toEqual({
+      allowed: false,
+      groupPolicy: "allowlist",
+      reason: "empty_allowlist",
+    });
+  });
+
+  it("blocks unmatched allowlist route", () => {
+    expect(
+      evaluateGroupRouteAccessForPolicy({
+        groupPolicy: "allowlist",
+        routeAllowlistConfigured: true,
+        routeMatched: false,
+      }),
+    ).toEqual({
+      allowed: false,
+      groupPolicy: "allowlist",
+      reason: "route_not_allowlisted",
+    });
+  });
+
+  it("blocks disabled matched route even when group policy is open", () => {
+    expect(
+      evaluateGroupRouteAccessForPolicy({
+        groupPolicy: "open",
+        routeAllowlistConfigured: true,
+        routeMatched: true,
+        routeEnabled: false,
+      }),
+    ).toEqual({
+      allowed: false,
+      groupPolicy: "open",
+      reason: "route_disabled",
     });
   });
 });
