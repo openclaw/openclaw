@@ -1,9 +1,19 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as routingBindings from "./bindings.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
+  const resolveDiscordGuildRoute = (cfg: OpenClawConfig) =>
+    resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c1" },
+      guildId: "g1",
+    });
+
   test("defaults to main/default when no bindings exist", () => {
     const cfg: OpenClawConfig = {};
     const route = resolveAgentRoute({
@@ -123,13 +133,7 @@ describe("resolveAgentRoute", () => {
         },
       ],
     };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: "channel", id: "c1" },
-      guildId: "g1",
-    });
+    const route = resolveDiscordGuildRoute(cfg);
     expect(route.agentId).toBe("chan");
     expect(route.sessionKey).toBe("agent:chan:discord:channel:c1");
     expect(route.matchedBy).toBe("binding.peer");
@@ -163,13 +167,7 @@ describe("resolveAgentRoute", () => {
         },
       ],
     };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: "channel", id: "c1" },
-      guildId: "g1",
-    });
+    const route = resolveDiscordGuildRoute(cfg);
     expect(route.agentId).toBe("guild");
     expect(route.matchedBy).toBe("binding.guild");
   });
@@ -547,6 +545,74 @@ describe("backward compatibility: peer.kind dm → direct", () => {
   });
 });
 
+describe("backward compatibility: peer.kind group ↔ channel", () => {
+  test("config group binding matches runtime channel scope", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "slack-group-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "group", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "channel", id: "C123456" },
+    });
+    expect(route.agentId).toBe("slack-group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("config channel binding matches runtime group scope", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "slack-channel-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "group", id: "C123456" },
+    });
+    expect(route.agentId).toBe("slack-channel-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("group/channel compatibility does not match direct peer kind", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "group-only-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "group", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "direct", id: "C123456" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+});
+
 describe("role-based agent routing", () => {
   type DiscordBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 
@@ -701,5 +767,45 @@ describe("role-based agent routing", () => {
       expectedAgentId: "guild-roles",
       expectedMatchedBy: "binding.guild+roles",
     });
+  });
+});
+
+describe("binding evaluation cache scalability", () => {
+  test("does not rescan full bindings after channel/account cache rollover (#36915)", () => {
+    const bindingCount = 2_205;
+    const cfg: OpenClawConfig = {
+      bindings: Array.from({ length: bindingCount }, (_, idx) => ({
+        agentId: `agent-${idx}`,
+        match: {
+          channel: "dingtalk",
+          accountId: `acct-${idx}`,
+          peer: { kind: "direct", id: `user-${idx}` },
+        },
+      })),
+    };
+    const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
+    try {
+      for (let idx = 0; idx < bindingCount; idx += 1) {
+        const route = resolveAgentRoute({
+          cfg,
+          channel: "dingtalk",
+          accountId: `acct-${idx}`,
+          peer: { kind: "direct", id: `user-${idx}` },
+        });
+        expect(route.agentId).toBe(`agent-${idx}`);
+        expect(route.matchedBy).toBe("binding.peer");
+      }
+
+      const repeated = resolveAgentRoute({
+        cfg,
+        channel: "dingtalk",
+        accountId: "acct-0",
+        peer: { kind: "direct", id: "user-0" },
+      });
+      expect(repeated.agentId).toBe("agent-0");
+      expect(listBindingsSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      listBindingsSpy.mockRestore();
+    }
   });
 });

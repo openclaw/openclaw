@@ -1,12 +1,13 @@
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
-  buildBaseChannelStatusSummary,
+  buildProbeChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/feishu";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -37,6 +38,46 @@ const meta: ChannelMeta = {
   aliases: ["lark"],
   order: 70,
 };
+
+const secretInputJsonSchema = {
+  oneOf: [
+    { type: "string" },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["source", "provider", "id"],
+      properties: {
+        source: { type: "string", enum: ["env", "file", "exec"] },
+        provider: { type: "string", minLength: 1 },
+        id: { type: "string", minLength: 1 },
+      },
+    },
+  ],
+} as const;
+
+function setFeishuNamedAccountEnabled(
+  cfg: ClawdbotConfig,
+  accountId: string,
+  enabled: boolean,
+): ClawdbotConfig {
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      feishu: {
+        ...feishuCfg,
+        accounts: {
+          ...feishuCfg?.accounts,
+          [accountId]: {
+            ...feishuCfg?.accounts?.[accountId],
+            enabled,
+          },
+        },
+      },
+    },
+  };
+}
 
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   id: "feishu",
@@ -72,6 +113,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   groups: {
     resolveToolPolicy: resolveFeishuGroupToolPolicy,
   },
+  mentions: {
+    stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
+  },
   reload: { configPrefixes: ["channels.feishu"] },
   configSchema: {
     schema: {
@@ -79,10 +123,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       additionalProperties: false,
       properties: {
         enabled: { type: "boolean" },
+        defaultAccount: { type: "string" },
         appId: { type: "string" },
-        appSecret: { type: "string" },
+        appSecret: secretInputJsonSchema,
         encryptKey: { type: "string" },
-        verificationToken: { type: "string" },
+        verificationToken: secretInputJsonSchema,
         domain: {
           oneOf: [
             { type: "string", enum: ["feishu", "lark"] },
@@ -121,9 +166,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               enabled: { type: "boolean" },
               name: { type: "string" },
               appId: { type: "string" },
-              appSecret: { type: "string" },
+              appSecret: secretInputJsonSchema,
               encryptKey: { type: "string" },
-              verificationToken: { type: "string" },
+              verificationToken: secretInputJsonSchema,
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
               webhookHost: { type: "string" },
@@ -158,23 +203,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       }
 
       // For named accounts, set enabled in accounts[accountId]
-      const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          feishu: {
-            ...feishuCfg,
-            accounts: {
-              ...feishuCfg?.accounts,
-              [accountId]: {
-                ...feishuCfg?.accounts?.[accountId],
-                enabled,
-              },
-            },
-          },
-        },
-      };
+      return setFeishuNamedAccountEnabled(cfg, accountId, enabled);
     },
     deleteAccount: ({ cfg, accountId }) => {
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
@@ -261,23 +290,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         };
       }
 
-      const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          feishu: {
-            ...feishuCfg,
-            accounts: {
-              ...feishuCfg?.accounts,
-              [accountId]: {
-                ...feishuCfg?.accounts?.[accountId],
-                enabled: true,
-              },
-            },
-          },
-        },
-      };
+      return setFeishuNamedAccountEnabled(cfg, accountId, true);
     },
   },
   onboarding: feishuOnboardingAdapter,
@@ -322,12 +335,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   outbound: feishuOutbound,
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
-    buildChannelSummary: ({ snapshot }) => ({
-      ...buildBaseChannelStatusSummary(snapshot),
-      port: snapshot.port ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildProbeChannelStatusSummary(snapshot, {
+        port: snapshot.port ?? null,
+      }),
     probeAccount: async ({ account }) => await probeFeishu(account),
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
@@ -336,12 +347,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       name: account.name,
       appId: account.appId,
       domain: account.domain,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
+      ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
       port: runtime?.port ?? null,
-      probe,
     }),
   },
   gateway: {

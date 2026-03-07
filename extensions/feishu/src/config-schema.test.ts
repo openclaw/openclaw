@@ -24,6 +24,14 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
+  it("normalizes legacy groupPolicy allowall to open", () => {
+    const result = FeishuConfigSchema.parse({
+      groupPolicy: "allowall",
+    });
+
+    expect(result.groupPolicy).toBe("open");
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
@@ -85,6 +93,25 @@ describe("FeishuConfigSchema webhook validation", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts SecretRef verificationToken in webhook mode", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      appId: "cli_top",
+      appSecret: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_APP_SECRET",
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("FeishuConfigSchema replyInThread", () => {
@@ -136,5 +163,34 @@ describe("FeishuConfigSchema optimization flags", () => {
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema defaultAccount", () => {
+  it("accepts defaultAccount when it matches an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        "router-d": { appId: "cli_router", appSecret: "secret_router" },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects defaultAccount when it does not match an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        backup: { appId: "cli_backup", appSecret: "secret_backup" },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
+        true,
+      );
+    }
   });
 });

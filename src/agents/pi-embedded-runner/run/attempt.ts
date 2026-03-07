@@ -11,6 +11,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -19,6 +20,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -29,6 +31,12 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapPromptWarning,
+  buildBootstrapTruncationReportMeta,
+  buildBootstrapInjectionStats,
+} from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -41,21 +49,27 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
+import { supportsModelTools } from "../../model-tool-support.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
+  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
+import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { isXaiProvider } from "../../schema/clean-for-xai.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
@@ -67,17 +81,18 @@ import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -96,6 +111,7 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
+import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -225,7 +241,114 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function trimWhitespaceFromToolCallNamesInMessage(message: unknown): void {
+function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    // Keep whitespace-only placeholders unchanged so they do not collapse to
+    // empty names (which can later surface as toolName="" loops).
+    return rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+  if (allowedToolNames.has(trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeToolName(trimmed);
+  if (allowedToolNames.has(normalized)) {
+    return normalized;
+  }
+  const folded = trimmed.toLowerCase();
+  let caseInsensitiveMatch: string | null = null;
+  for (const name of allowedToolNames) {
+    if (name.toLowerCase() !== folded) {
+      continue;
+    }
+    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+      return trimmed;
+    }
+    caseInsensitiveMatch = name;
+  }
+  return caseInsensitiveMatch ?? trimmed;
+}
+
+function isToolCallBlockType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+function normalizeToolCallIdsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+
+  const usedIds = new Set<string>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+      continue;
+    }
+    const trimmedId = typedBlock.id.trim();
+    if (!trimmedId) {
+      continue;
+    }
+    usedIds.add(trimmedId);
+  }
+
+  let fallbackIndex = 1;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    if (typeof typedBlock.id === "string") {
+      const trimmedId = typedBlock.id.trim();
+      if (trimmedId) {
+        if (typedBlock.id !== trimmedId) {
+          typedBlock.id = trimmedId;
+        }
+        usedIds.add(trimmedId);
+        continue;
+      }
+    }
+
+    let fallbackId = "";
+    while (!fallbackId || usedIds.has(fallbackId)) {
+      fallbackId = `call_auto_${fallbackIndex++}`;
+    }
+    typedBlock.id = fallbackId;
+    usedIds.add(fallbackId);
+  }
+}
+
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  const providerBaseUrl = params.providerBaseUrl?.trim() ?? "";
+  if (providerBaseUrl) {
+    return providerBaseUrl;
+  }
+  const modelBaseUrl = params.modelBaseUrl?.trim() ?? "";
+  if (modelBaseUrl) {
+    return modelBaseUrl;
+  }
+  return OLLAMA_NATIVE_BASE_URL;
+}
+
+function trimWhitespaceFromToolCallNamesInMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+): void {
   if (!message || typeof message !== "object") {
     return;
   }
@@ -241,20 +364,22 @@ function trimWhitespaceFromToolCallNamesInMessage(message: unknown): void {
     if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
       continue;
     }
-    const trimmed = typedBlock.name.trim();
-    if (trimmed !== typedBlock.name) {
-      typedBlock.name = trimmed;
+    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
+    if (normalized !== typedBlock.name) {
+      typedBlock.name = normalized;
     }
   }
+  normalizeToolCallIdsInMessage(message);
 }
 
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
+  allowedToolNames?: Set<string>,
 ): ReturnType<typeof streamSimple> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message);
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
     return message;
   };
 
@@ -270,8 +395,8 @@ function wrapStreamTrimToolCallNames(
               partial?: unknown;
               message?: unknown;
             };
-            trimWhitespaceFromToolCallNamesInMessage(event.partial);
-            trimWhitespaceFromToolCallNamesInMessage(event.message);
+            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
+            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
           }
           return result;
         },
@@ -287,13 +412,122 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
-export function wrapStreamFnTrimToolCallNames(baseFn: StreamFn): StreamFn {
+export function wrapStreamFnTrimToolCallNames(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) => wrapStreamTrimToolCallNames(stream));
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamTrimToolCallNames(stream, allowedToolNames),
+      );
     }
-    return wrapStreamTrimToolCallNames(maybeStream);
+    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// xAI / Grok: decode HTML entities in tool call arguments
+// ---------------------------------------------------------------------------
+
+const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/gi, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)));
+}
+
+export function decodeHtmlEntitiesInObject(obj: unknown): unknown {
+  if (typeof obj === "string") {
+    return HTML_ENTITY_RE.test(obj) ? decodeHtmlEntities(obj) : obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(decodeHtmlEntitiesInObject);
+  }
+  if (obj && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+      result[key] = decodeHtmlEntitiesInObject(val);
+    }
+    return result;
+  }
+  return obj;
+}
+
+function decodeXaiToolCallArgumentsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; arguments?: unknown };
+    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
+      continue;
+    }
+    if (typeof typedBlock.arguments === "object") {
+      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
+    }
+  }
+}
+
+function wrapStreamDecodeXaiToolCallArguments(
+  stream: ReturnType<typeof streamSimple>,
+): ReturnType<typeof streamSimple> {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    decodeXaiToolCallArgumentsInMessage(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as { partial?: unknown; message?: unknown };
+            decodeXaiToolCallArgumentsInMessage(event.partial);
+            decodeXaiToolCallArgumentsInMessage(event.message);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+  return stream;
+}
+
+function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamDecodeXaiToolCallArguments(stream),
+      );
+    }
+    return wrapStreamDecodeXaiToolCallArguments(maybeStream);
   };
 }
 
@@ -338,10 +572,35 @@ export async function resolvePromptBuildHookResult(params: {
       : undefined);
   return {
     systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
-    prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
-      .filter((value): value is string => Boolean(value))
-      .join("\n\n"),
+    prependContext: joinPresentTextSegments([
+      promptBuildResult?.prependContext,
+      legacyResult?.prependContext,
+    ]),
+    prependSystemContext: joinPresentTextSegments([
+      promptBuildResult?.prependSystemContext,
+      legacyResult?.prependSystemContext,
+    ]),
+    appendSystemContext: joinPresentTextSegments([
+      promptBuildResult?.appendSystemContext,
+      legacyResult?.appendSystemContext,
+    ]),
   };
+}
+
+export function composeSystemPromptWithHookContext(params: {
+  baseSystemPrompt?: string;
+  prependSystemContext?: string;
+  appendSystemContext?: string;
+}): string | undefined {
+  const prependSystem = params.prependSystemContext?.trim();
+  const appendSystem = params.appendSystemContext?.trim();
+  if (!prependSystem && !appendSystem) {
+    return undefined;
+  }
+  return joinPresentTextSegments(
+    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
+    { trim: true },
+  );
 }
 
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
@@ -359,6 +618,60 @@ export function resolveAttemptFsWorkspaceOnly(params: {
     cfg: params.config,
     agentId: params.sessionAgentId,
   });
+}
+
+export function prependSystemPromptAddition(params: {
+  systemPrompt: string;
+  systemPromptAddition?: string;
+}): string {
+  if (!params.systemPromptAddition) {
+    return params.systemPrompt;
+  }
+  return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
+}
+
+/** Build legacy compaction params passed into context-engine afterTurn hooks. */
+export function buildAfterTurnLegacyCompactionParams(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "sessionKey"
+    | "messageChannel"
+    | "messageProvider"
+    | "agentAccountId"
+    | "config"
+    | "skillsSnapshot"
+    | "senderIsOwner"
+    | "provider"
+    | "modelId"
+    | "thinkLevel"
+    | "reasoningLevel"
+    | "bashElevated"
+    | "extraSystemPrompt"
+    | "ownerNumbers"
+    | "authProfileId"
+  >;
+  workspaceDir: string;
+  agentDir: string;
+}): Partial<CompactEmbeddedPiSessionParams> {
+  return {
+    sessionKey: params.attempt.sessionKey,
+    messageChannel: params.attempt.messageChannel,
+    messageProvider: params.attempt.messageProvider,
+    agentAccountId: params.attempt.agentAccountId,
+    authProfileId: params.attempt.authProfileId,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    config: params.attempt.config,
+    skillsSnapshot: params.attempt.skillsSnapshot,
+    senderIsOwner: params.attempt.senderIsOwner,
+    provider: params.attempt.provider,
+    model: params.attempt.modelId,
+    thinkLevel: params.attempt.thinkLevel,
+    reasoningLevel: params.attempt.reasoningLevel,
+    bashElevated: params.attempt.bashElevated,
+    extraSystemPrompt: params.attempt.extraSystemPrompt,
+    ownerNumbers: params.attempt.ownerNumbers,
+  };
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -430,6 +743,7 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
+  ensureGlobalUndiciStreamTimeouts();
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
@@ -453,10 +767,11 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
-    const skillEntries = shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(effectiveWorkspace)
-      : [];
+    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      workspaceDir: effectiveWorkspace,
+      config: params.config,
+      skillsSnapshot: params.skillsSnapshot,
+    });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
@@ -482,7 +797,26 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+        contextMode: params.bootstrapContextMode,
+        runKind: params.bootstrapContextRunKind,
       });
+    const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
+    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+    const bootstrapAnalysis = analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles: hookAdjustedBootstrapFiles,
+        injectedFiles: contextFiles,
+      }),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    });
+    const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
+    const bootstrapPromptWarning = buildBootstrapPromptWarning({
+      analysis: bootstrapAnalysis,
+      mode: bootstrapPromptWarningMode,
+      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+      previousSignature: params.bootstrapPromptWarningSignature,
+    });
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
@@ -524,7 +858,9 @@ export async function runEmbeddedAttempt(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -543,10 +879,15 @@ export async function runEmbeddedAttempt(
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
         });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    const toolsEnabled = supportsModelTools(params.model);
+    const tools = sanitizeToolsForGoogle({
+      tools: toolsEnabled ? toolsRaw : [],
+      provider: params.provider,
+    });
+    const clientTools = toolsEnabled ? params.clientTools : undefined;
     const allowedToolNames = collectAllowedToolNames({
       tools,
-      clientTools: params.clientTools,
+      clientTools,
     });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
@@ -676,6 +1017,7 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
+      bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({
@@ -686,12 +1028,17 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
       model: params.modelId,
       workspaceDir: effectiveWorkspace,
-      bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+      bootstrapTruncation: buildBootstrapTruncationReportMeta({
+        analysis: bootstrapAnalysis,
+        warningMode: bootstrapPromptWarningMode,
+        warning: bootstrapPromptWarning,
+      }),
       sandbox: (() => {
         const runtime = resolveSandboxRuntimeStatus({
           cfg: params.config,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
         });
         return { mode: runtime.mode, sandboxed: runtime.sandboxed };
       })(),
@@ -740,6 +1087,17 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
+      if (hadSessionFile && params.contextEngine?.bootstrap) {
+        try {
+          await params.contextEngine.bootstrap({
+            sessionId: params.sessionId,
+            sessionFile: params.sessionFile,
+          });
+        } catch (bootstrapErr) {
+          log.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
+        }
+      }
+
       await prepareSessionManagerForRun({
         sessionManager,
         sessionFile: params.sessionFile,
@@ -752,6 +1110,10 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+      });
+      applyPiAutoCompactionGuard({
+        settingsManager,
+        contextEngineInfo: params.contextEngine?.info,
       });
 
       // Sets compaction/pruning runtime state and returns extension factories
@@ -790,15 +1152,17 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       });
-      const clientToolDefs = params.clientTools
+      const clientToolDefs = clientTools
         ? toClientToolDefinitions(
-            params.clientTools,
+            clientTools,
             (toolName, toolParams) => {
               clientToolCallDetected = { name: toolName, params: toolParams };
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
               loopDetection: clientToolLoopDetection,
             },
           )
@@ -858,14 +1222,27 @@ export async function runEmbeddedAttempt(
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
-        // Use the resolved model baseUrl first so custom provider aliases work.
+        // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const modelBaseUrl =
-          typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : "";
+          typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
         const providerBaseUrl =
-          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
-        const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
-        activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+        const ollamaBaseUrl = resolveOllamaBaseUrlForRun({
+          modelBaseUrl,
+          providerBaseUrl,
+        });
+        activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl, params.model.headers);
+      } else if (params.model.api === "openai-responses" && params.provider === "openai") {
+        const wsApiKey = await params.authStorage.getApiKey(params.provider);
+        if (wsApiKey) {
+          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
+            signal: runAbortController.signal,
+          });
+        } else {
+          log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
+          activeSession.agent.streamFn = streamSimple;
+        }
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
@@ -960,10 +1337,42 @@ export async function runEmbeddedAttempt(
         };
       }
 
+      if (
+        params.model.api === "openai-responses" ||
+        params.model.api === "openai-codex-responses"
+      ) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
       // pi-agent-core dispatches tool calls with exact string matching, so normalize
       // names on the live response stream before tool execution.
-      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(activeSession.agent.streamFn);
+      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
+        activeSession.agent.streamFn,
+        allowedToolNames,
+      );
+
+      if (isXaiProvider(params.provider, params.modelId)) {
+        activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
+          activeSession.agent.streamFn,
+        );
+      }
 
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
@@ -1004,10 +1413,38 @@ export async function runEmbeddedAttempt(
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
+
+        if (params.contextEngine) {
+          try {
+            const assembled = await params.contextEngine.assemble({
+              sessionId: params.sessionId,
+              messages: activeSession.messages,
+              tokenBudget: params.contextTokenBudget,
+            });
+            if (assembled.messages !== activeSession.messages) {
+              activeSession.agent.replaceMessages(assembled.messages);
+            }
+            if (assembled.systemPromptAddition) {
+              systemPromptText = prependSystemPromptAddition({
+                systemPrompt: systemPromptText,
+                systemPromptAddition: assembled.systemPromptAddition,
+              });
+              applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              log.debug(
+                `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
+              );
+            }
+          } catch (assembleErr) {
+            log.warn(
+              `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
+            );
+          }
+        }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
+          clearPendingOnTimeout: true,
         });
         activeSession.dispose();
         throw err;
@@ -1086,7 +1523,9 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        agentId: sessionAgentId,
       });
 
       const {
@@ -1180,6 +1619,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      const prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
 
@@ -1192,6 +1632,8 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
+          trigger: params.trigger,
+          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
@@ -1213,6 +1655,20 @@ export async function runEmbeddedAttempt(
             applySystemPromptOverrideToSession(activeSession, legacySystemPrompt);
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
+          }
+          const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
+            baseSystemPrompt: systemPromptText,
+            prependSystemContext: hookResult?.prependSystemContext,
+            appendSystemContext: hookResult?.appendSystemContext,
+          });
+          if (prependedOrAppendedSystemPrompt) {
+            const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
+            const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
+            applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
+            systemPromptText = prependedOrAppendedSystemPrompt;
+            log.debug(
+              `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
+            );
           }
         }
 
@@ -1340,6 +1796,14 @@ export async function runEmbeddedAttempt(
         const preCompactionSessionId = activeSession.sessionId;
 
         try {
+          // Flush buffered block replies before waiting for compaction so the
+          // user receives the assistant response immediately.  Without this,
+          // coalesced/buffered blocks stay in the pipeline until compaction
+          // finishes — which can take minutes on large contexts (#35074).
+          if (params.onBlockReplyFlush) {
+            await params.onBlockReplyFlush();
+          }
+
           await abortable(waitForCompactionRetry());
         } catch (err) {
           if (isRunnerAbortError(err)) {
@@ -1410,6 +1874,56 @@ export async function runEmbeddedAttempt(
             });
           } catch (entryErr) {
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+          }
+        }
+
+        // Let the active context engine run its post-turn lifecycle.
+        if (params.contextEngine) {
+          const afterTurnLegacyCompactionParams = buildAfterTurnLegacyCompactionParams({
+            attempt: params,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
+          });
+
+          if (typeof params.contextEngine.afterTurn === "function") {
+            try {
+              await params.contextEngine.afterTurn({
+                sessionId: sessionIdUsed,
+                sessionFile: params.sessionFile,
+                messages: messagesSnapshot,
+                prePromptMessageCount,
+                tokenBudget: params.contextTokenBudget,
+                legacyCompactionParams: afterTurnLegacyCompactionParams,
+              });
+            } catch (afterTurnErr) {
+              log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
+            }
+          } else {
+            // Fallback: ingest new messages individually
+            const newMessages = messagesSnapshot.slice(prePromptMessageCount);
+            if (newMessages.length > 0) {
+              if (typeof params.contextEngine.ingestBatch === "function") {
+                try {
+                  await params.contextEngine.ingestBatch({
+                    sessionId: sessionIdUsed,
+                    messages: newMessages,
+                  });
+                } catch (ingestErr) {
+                  log.warn(`context engine ingest failed: ${String(ingestErr)}`);
+                }
+              } else {
+                for (const msg of newMessages) {
+                  try {
+                    await params.contextEngine.ingest({
+                      sessionId: sessionIdUsed,
+                      message: msg,
+                    });
+                  } catch (ingestErr) {
+                    log.warn(`context engine ingest failed: ${String(ingestErr)}`);
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -1514,6 +2028,8 @@ export async function runEmbeddedAttempt(
         timedOutDuringCompaction,
         promptError,
         sessionIdUsed,
+        bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
+        bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,
@@ -1546,8 +2062,10 @@ export async function runEmbeddedAttempt(
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,
+        clearPendingOnTimeout: true,
       });
       session?.dispose();
+      releaseWsSession(params.sessionId);
       await sessionLock.release();
     }
   } finally {

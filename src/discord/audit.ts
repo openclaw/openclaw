@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordGuildChannelConfig, DiscordGuildEntry } from "../config/types.js";
 import { isRecord } from "../utils.js";
-import { resolveDiscordAccount } from "./accounts.js";
+import { inspectDiscordAccount } from "./account-inspect.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 
 export type DiscordChannelPermissionsAuditEntry = {
@@ -56,6 +56,11 @@ function listConfiguredGuildChannelKeys(
       if (!channelId) {
         continue;
       }
+      // Skip wildcard keys (e.g. "*" meaning "all channels") — they are valid
+      // config but are not real channel IDs and should not be audited.
+      if (channelId === "*") {
+        continue;
+      }
       if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
         continue;
       }
@@ -69,7 +74,7 @@ export function collectDiscordAuditChannelIds(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const account = resolveDiscordAccount({
+  const account = inspectDiscordAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });

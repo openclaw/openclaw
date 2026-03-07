@@ -6,14 +6,14 @@
  * run records. The base session (`...:cron:<jobId>`) is kept as-is.
  */
 
-import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
-import type { CronConfig } from "../config/types.cron.js";
 import {
-  archiveSessionTranscripts,
-  cleanupArchivedSessionTranscripts,
-} from "../gateway/session-utils.fs.js";
+  archiveRemovedSessionTranscripts,
+  loadSessionStore,
+  updateSessionStore,
+} from "../config/sessions.js";
+import type { CronConfig } from "../config/types.cron.js";
+import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
@@ -116,22 +116,13 @@ export async function sweepCronRunSessions(params: {
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      const archivedDirs = new Set<string>();
-      for (const [sessionId, sessionFile] of prunedSessions) {
-        if (referencedSessionIds.has(sessionId)) {
-          continue;
-        }
-        const archived = archiveSessionTranscripts({
-          sessionId,
-          storePath,
-          sessionFile,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
-        for (const archivedPath of archived) {
-          archivedDirs.add(path.dirname(archivedPath));
-        }
-      }
+      const archivedDirs = archiveRemovedSessionTranscripts({
+        removedSessionFiles: prunedSessions,
+        referencedSessionIds,
+        storePath,
+        reason: "deleted",
+        restrictToStoreDir: true,
+      });
       if (archivedDirs.size > 0) {
         await cleanupArchivedSessionTranscripts({
           directories: [...archivedDirs],
