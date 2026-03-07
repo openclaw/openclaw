@@ -279,6 +279,21 @@ Successfully processed 1 files`;
       );
     });
 
+    it("does not trust *-prefixed Everyone via USERSID", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-1-0",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries, { USERSID: "*S-1-1-0" });
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.trusted).toHaveLength(0);
+    });
+
     it("classifies unknown SID as group (not world)", () => {
       const entries: WindowsAclEntry[] = [
         {
@@ -404,6 +419,31 @@ Successfully processed 1 files`;
       expect(result.trusted).toHaveLength(3);
       expect(result.untrustedGroup).toHaveLength(0);
       expect(result.untrustedWorld).toHaveLength(0);
+    });
+
+    it("resolves current user SID via whoami when USERSID is missing", async () => {
+      const mockExec = vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout:
+            "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)\n                *S-1-5-18:(F)",
+          stderr: "",
+        })
+        .mockResolvedValueOnce({
+          stdout: '"mock-host\\\\MockUser","S-1-5-21-111-222-333-1001"\r\n',
+          stderr: "",
+        });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { USERNAME: "MockUser", USERDOMAIN: "mock-host" },
+      });
+
+      expectInspectSuccess(result, 2);
+      expect(result.trusted).toHaveLength(2);
+      expect(result.untrustedGroup).toHaveLength(0);
+      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami", ["/user", "/fo", "csv", "/nh"]);
     });
 
     it("returns error state on exec failure", async () => {

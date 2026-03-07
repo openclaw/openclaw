@@ -65,6 +65,11 @@ const STATUS_PREFIXES = [
 
 const normalize = (value: string) => value.trim().toLowerCase();
 
+function normalizeSid(value: string): string {
+  const normalized = normalize(value);
+  return normalized.startsWith("*") ? normalized.slice(1) : normalized;
+}
+
 export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
   const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
   if (!username) {
@@ -85,7 +90,7 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
       trusted.add(normalize(userOnly));
     }
   }
-  const userSid = normalize(env?.USERSID ?? "");
+  const userSid = normalizeSid(env?.USERSID ?? "");
   if (userSid && SID_RE.test(userSid)) {
     trusted.add(userSid);
   }
@@ -100,15 +105,15 @@ function classifyPrincipal(
 
   if (SID_RE.test(normalized)) {
     // Strip the leading * that icacls /sid prefixes to SIDs before lookup.
-    const sid = normalized.startsWith("*") ? normalized.slice(1) : normalized;
-    if (TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid) || trustedPrincipals.has(normalized)) {
-      return "trusted";
-    }
+    const sid = normalizeSid(normalized);
     // World-equivalent SIDs must be classified as "world", not "group", so
     // that callers applying world-write policies catch everyone/authenticated-
     // users entries the same way they would catch the human-readable names.
     if (WORLD_SIDS.has(sid)) {
       return "world";
+    }
+    if (TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid)) {
+      return "trusted";
     }
     return "group";
   }
@@ -262,6 +267,16 @@ export function summarizeWindowsAcl(
   return { trusted, untrustedWorld, untrustedGroup };
 }
 
+async function resolveCurrentUserSid(exec: ExecFn): Promise<string | null> {
+  try {
+    const { stdout, stderr } = await exec("whoami", ["/user", "/fo", "csv", "/nh"]);
+    const match = `${stdout}\n${stderr}`.match(/\*?S-\d+-\d+(?:-\d+)+/i);
+    return match ? normalizeSid(match[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function inspectWindowsAcl(
   targetPath: string,
   opts?: { env?: NodeJS.ProcessEnv; exec?: ExecFn },
@@ -276,7 +291,20 @@ export async function inspectWindowsAcl(
     const { stdout, stderr } = await exec("icacls", [targetPath, "/sid"]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
-    const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, opts?.env);
+    let effectiveEnv = opts?.env;
+    let { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, effectiveEnv);
+
+    const needsUserSidResolution =
+      !effectiveEnv?.USERSID &&
+      untrustedGroup.some((entry) => SID_RE.test(normalize(entry.principal)));
+    if (needsUserSidResolution) {
+      const currentUserSid = await resolveCurrentUserSid(exec);
+      if (currentUserSid) {
+        effectiveEnv = { ...effectiveEnv, USERSID: currentUserSid };
+        ({ trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, effectiveEnv));
+      }
+    }
+
     return { ok: true, entries, trusted, untrustedWorld, untrustedGroup };
   } catch (err) {
     return {
