@@ -164,6 +164,24 @@ const constrainLegacyPromptInjectionHook = (
   };
 };
 
+// Stability safeguard: prevents infinite reset loops from plugin hooks
+const resetCooldownMap = new Map<string, number>();
+const RESET_COOLDOWN_MS = 5_000;
+
+/** Remove expired entries so the cooldown map doesn't grow without bound. */
+function evictExpiredCooldowns(now: number): void {
+  for (const [k, ts] of resetCooldownMap) {
+    if (now - ts >= RESET_COOLDOWN_MS) {
+      resetCooldownMap.delete(k);
+    }
+  }
+}
+
+/** @internal Test helper to clear cooldown state between tests */
+export function clearResetSessionCooldownForTesting(): void {
+  resetCooldownMap.clear();
+}
+
 export function createEmptyPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
@@ -585,6 +603,62 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
       resolvePath: (input: string) => resolveUserPath(input),
+      resetSession: async (key: string, reason?: "new" | "reset") => {
+        if (typeof key !== "string") {
+          return { ok: false, key: "", error: "key must be a string" };
+        }
+        const trimmedKey = key.trim();
+        if (!trimmedKey) {
+          return { ok: false, key: "", error: "key required" };
+        }
+
+        // Lazy imports to avoid circular dependency at module load time
+        const [{ resetSessionByKey }, { resolveSessionStoreKey }, { loadConfig }] =
+          await Promise.all([
+            import("../gateway/session-ops.js"),
+            import("../gateway/session-utils.js"),
+            import("../config/config.js"),
+          ]);
+
+        let canonicalKey: string | undefined;
+        let cooldownArmed = false;
+        try {
+          // Canonicalize key so cooldown works regardless of input casing/format
+          const cfg = loadConfig();
+          canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: trimmedKey });
+
+          // Per-key cooldown to prevent infinite reset loops
+          const now = Date.now();
+          evictExpiredCooldowns(now);
+          const lastReset = resetCooldownMap.get(canonicalKey) ?? 0;
+          if (now - lastReset < RESET_COOLDOWN_MS) {
+            return {
+              ok: false,
+              key: canonicalKey,
+              error: `reset cooldown: last reset was ${now - lastReset}ms ago (minimum ${RESET_COOLDOWN_MS}ms)`,
+            };
+          }
+          resetCooldownMap.set(canonicalKey, now);
+          cooldownArmed = true;
+
+          const result = await resetSessionByKey({
+            key: trimmedKey,
+            reason,
+            commandSource: `plugin:${record.id}`,
+          });
+          if (result.ok) {
+            resetCooldownMap.set(canonicalKey, Date.now());
+            return { ok: true, key: result.key, sessionId: result.entry.sessionId };
+          }
+          resetCooldownMap.delete(canonicalKey);
+          return { ok: false, key: result.key, error: result.error };
+        } catch (err) {
+          if (cooldownArmed && canonicalKey) {
+            resetCooldownMap.delete(canonicalKey);
+          }
+          return { ok: false, key: canonicalKey ?? trimmedKey, error: String(err) };
+        }
+      },
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
     };
