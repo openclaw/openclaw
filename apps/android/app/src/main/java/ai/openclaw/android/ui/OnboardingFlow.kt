@@ -543,7 +543,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             color = onboardingAccent,
           )
           Text(
-            "OpenClaw\nMobile Setup",
+            "Platinum Fang\nMobile Setup",
             style = onboardingDisplayStyle.copy(lineHeight = 38.sp),
             color = onboardingText,
           )
@@ -573,7 +573,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 qrScanLauncher.launch(
                   ScanOptions().apply {
                     setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                    setPrompt("Scan OpenClaw onboarding QR")
+                    setPrompt("Scan Platinum Fang onboarding QR")
                     setBeepEnabled(false)
                     setOrientationLocked(false)
                   },

@@ -135,7 +135,7 @@ class AppUpdateHandler(
           fun buildProgressNotif(progress: Int, max: Int, text: String): android.app.Notification {
             return android.app.Notification.Builder(appContext, channelId)
               .setSmallIcon(android.R.drawable.stat_sys_download)
-              .setContentTitle("OpenClaw Update")
+              .setContentTitle("Platinum Fang Update")
               .setContentText(text)
               .setProgress(max, progress, max == 0)
               

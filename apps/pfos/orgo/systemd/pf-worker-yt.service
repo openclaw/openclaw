@@ -1,0 +1,18 @@
+[Unit]
+Description=Platinum Fang Worker YouTube
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw/apps/pfos
+EnvironmentFile=%h/.config/pf-worker.env
+Environment=PF_WORKER_PROFILE=youtube
+Environment=PF_WORKER_ID=pf-worker-yt
+ExecStart=/usr/bin/env npm run orchestrator:worker
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

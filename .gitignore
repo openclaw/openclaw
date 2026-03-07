@@ -101,6 +101,14 @@ package-lock.json
 .agent/
 skills-lock.json
 
+# Local OpenClaw runtime state and operator-local artifacts
+.openclaw/
+github-recovery-codes.txt
+Codex Installer.exe
+Accomplish-*-win-x64.exe
+Microsoft.Services.Store.winmd
+Futuristic design of Platinum Fang OS.png
+
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=Platinum Fang Discord Bridge
+After=network-online.target pf-main.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw/apps/pfos
+EnvironmentFile=%h/.config/pf-discord.env
+ExecStart=/usr/bin/env npm run orchestrator:discord
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

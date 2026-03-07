@@ -1,0 +1,33 @@
+{
+  "name": "pfos",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/pfos-eslintcache --ext .js,.mjs,.jsx,.ts,.tsx --max-warnings=0",
+    "orchestrator:main": "node ./orgo/main.mjs",
+    "orchestrator:worker": "node ./orgo/worker.mjs",
+    "orchestrator:enqueue": "node ./orgo/enqueue.mjs",
+    "orchestrator:discord": "node ./orgo/discord-gateway.mjs"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "next": "^14.2.32",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^3.5.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.32",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
+  }
+}

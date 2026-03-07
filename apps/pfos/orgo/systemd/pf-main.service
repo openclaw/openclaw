@@ -1,0 +1,16 @@
+[Unit]
+Description=Platinum Fang Main Orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw/apps/pfos
+EnvironmentFile=%h/.config/pf-main.env
+ExecStart=/usr/bin/env npm run orchestrator:main
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

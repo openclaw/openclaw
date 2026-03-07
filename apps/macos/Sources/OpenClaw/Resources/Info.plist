@@ -11,7 +11,7 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>OpenClaw</string>
+    <string>Platinum Fang</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -42,23 +42,23 @@
     <string></string>
 
     <key>NSUserNotificationUsageDescription</key>
-    <string>OpenClaw needs notification permission to show alerts for agent actions.</string>
+    <string>Platinum Fang needs notification permission to show alerts for agent actions.</string>
     <key>NSScreenCaptureDescription</key>
-    <string>OpenClaw captures the screen when the agent needs screenshots for context.</string>
+    <string>Platinum Fang captures the screen when the agent needs screenshots for context.</string>
     <key>NSCameraUsageDescription</key>
-    <string>OpenClaw can capture photos or short video clips when requested by the agent.</string>
+    <string>Platinum Fang can capture photos or short video clips when requested by the agent.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
+	<string>Platinum Fang can share your location when requested by the agent.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
+	<string>Platinum Fang can share your location when requested by the agent.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
+	<string>Platinum Fang can share your location when requested by the agent.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw needs the mic for Voice Wake tests and agent audio capture.</string>
+	<string>Platinum Fang needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
+    <string>Platinum Fang uses speech recognition to detect your Voice Wake trigger phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <string>Platinum Fang needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>

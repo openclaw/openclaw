@@ -55,7 +55,7 @@ class ScreenCaptureRequester(private val activity: ComponentActivity) {
       suspendCancellableCoroutine { cont ->
         AlertDialog.Builder(activity)
           .setTitle("Screen recording required")
-          .setMessage("OpenClaw needs to record the screen for this command.")
+          .setMessage("Platinum Fang needs to record the screen for this command.")
           .setPositiveButton("Continue") { _, _ -> cont.resume(true) }
           .setNegativeButton("Not now") { _, _ -> cont.resume(false) }
           .setOnCancelListener { cont.resume(false) }

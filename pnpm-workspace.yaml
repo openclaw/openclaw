@@ -1,5 +1,6 @@
 packages:
   - .
+  - apps/pfos
   - ui
   - packages/*
   - extensions/*

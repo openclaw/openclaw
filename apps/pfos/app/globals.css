@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 45 96% 58%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 215 27.9% 16.9%;
+  --input: 215 27.9% 16.9%;
+  --ring: 45 96% 58%;
+  --radius: 1rem;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  color: hsl(var(--foreground));
+  background:
+    radial-gradient(1200px 700px at 80% 15%, rgba(10, 30, 64, 0.55), transparent 55%),
+    radial-gradient(900px 600px at 25% 80%, rgba(247, 181, 0, 0.14), transparent 60%),
+    linear-gradient(180deg, #02030a 0%, #05070c 35%, #03040a 100%);
+}
+
+.pf-glow {
+  box-shadow: 0 0 26px rgba(247, 181, 0, 0.12);
+}
+
+@keyframes pfRingSpin {
+  0% {
+    transform: rotate(-18deg) scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: rotate(162deg) scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(342deg) scale(1);
+    opacity: 0.85;
+  }
+}
+
+.pf-ring {
+  animation: pfRingSpin 6.5s ease-in-out infinite;
+}

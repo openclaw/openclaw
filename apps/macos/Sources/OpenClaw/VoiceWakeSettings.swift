@@ -203,7 +203,7 @@ struct VoiceWakeSettings: View {
                     .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
 
             Text(
-                "OpenClaw reacts when any trigger appears in a transcription. "
+                "Platinum Fang reacts when any trigger appears in a transcription. "
                     + "Keep them short to avoid false positives.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
