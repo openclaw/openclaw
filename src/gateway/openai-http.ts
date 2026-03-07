@@ -521,6 +521,16 @@ export async function handleOpenAiHttpRequest(
           prompt_tokens: promptTokens,
           completion_tokens: completionTokens,
           total_tokens: totalTokens,
+          ...(cacheRead > 0 || cacheWrite > 0
+            ? {
+                prompt_tokens_details: {
+                  cached_tokens: cacheRead,
+                },
+                completion_tokens_details: {
+                  reasoning_tokens: 0,
+                },
+              }
+            : {}),
         },
       });
     } catch (err) {
