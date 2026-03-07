@@ -2,6 +2,7 @@ import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 
 export function mapAllowFromEntries(
@@ -11,7 +12,7 @@ export function mapAllowFromEntries(
 }
 
 export function formatTrimmedAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(allowFrom);
 }
 
 export function resolveOptionalConfigString(
