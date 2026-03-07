@@ -150,6 +150,22 @@ describe("evaluateMatchedGroupAccessForPolicy", () => {
     });
   });
 
+  it("blocks allowlist when required match input is missing", () => {
+    expect(
+      evaluateMatchedGroupAccessForPolicy({
+        groupPolicy: "allowlist",
+        requireMatchInput: true,
+        hasMatchInput: false,
+        allowlistConfigured: true,
+        allowlistMatched: false,
+      }),
+    ).toEqual({
+      allowed: false,
+      groupPolicy: "allowlist",
+      reason: "missing_match_input",
+    });
+  });
+
   it("blocks unmatched allowlist sender", () => {
     expect(
       evaluateMatchedGroupAccessForPolicy({
