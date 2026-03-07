@@ -2,6 +2,7 @@ import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import {
   engagementStates,
   shouldParticipateInGroup,
+  shouldRespondToMention,
 } from "../../../auto-reply/contextual-activation.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
@@ -196,7 +197,58 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     );
   }
 
+  // Mention filter: when mentioned/replied to, optionally ask the model if a response is warranted
+  if (contextualConfig?.model && contextualConfig.mentionFilter?.enabled) {
+    const decision = await callMentionFilterDecision(params, contextualConfig);
+    if (!decision.shouldProcess) {
+      return skipGroupMessageAndStoreHistory(
+        params,
+        `[mention-filter] WhatsApp group ${params.conversationId}: filtered mention — ${decision.reason ?? "not warranted"}`,
+      );
+    }
+  }
+
   return { shouldProcess: true };
+}
+
+async function callMentionFilterDecision(
+  params: ApplyGroupGatingParams,
+  contextualConfig: NonNullable<ReturnType<typeof resolveChannelGroupContextualActivation>>,
+) {
+  const existingHistory = params.groupHistories.get(params.groupHistoryKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+    messageId: h.id,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
+  }));
+  const senderLabel =
+    params.msg.senderName && params.msg.senderE164
+      ? `${params.msg.senderName} (${params.msg.senderE164})`
+      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+  const imagePaths =
+    params.msg.mediaPath && params.msg.mediaType?.startsWith("image/")
+      ? [params.msg.mediaPath]
+      : undefined;
+  return shouldRespondToMention({
+    cfg: params.cfg,
+    config: contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: senderLabel,
+      body: params.msg.body,
+      timestamp: params.msg.timestamp,
+      imagePaths,
+      messageId: params.msg.id,
+      replyToId: params.msg.replyToId,
+      replyToBody: params.msg.replyToBody,
+      replyToSender: params.msg.replyToSender,
+    },
+    groupKey: params.groupHistoryKey,
+  });
 }
 
 async function callContextualDecision(

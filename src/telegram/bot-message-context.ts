@@ -12,7 +12,11 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
-import { engagementStates, shouldParticipateInGroup } from "../auto-reply/contextual-activation.js";
+import {
+  engagementStates,
+  shouldParticipateInGroup,
+  shouldRespondToMention,
+} from "../auto-reply/contextual-activation.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -743,6 +747,49 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
+  // Mention filter: when mentioned/replied to, optionally ask the model if a response is warranted
+  if (
+    isGroup &&
+    !mentionGate.shouldSkip &&
+    !contextualActivationHint &&
+    contextualConfig?.model &&
+    contextualConfig.mentionFilter?.enabled
+  ) {
+    const decision = await callTelegramMentionFilterDecision({
+      cfg,
+      contextualConfig,
+      groupHistories,
+      groupKey,
+      msg,
+      rawBody,
+      senderId: senderId || chatId,
+      botName: primaryCtx.me?.first_name ?? primaryCtx.me?.username,
+      allMedia,
+    });
+    if (!decision.shouldProcess) {
+      logVerbose(
+        `[contextual-activation] Telegram group ${chatId}: mention filtered — ${decision.reason ?? "not warranted"}`,
+      );
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: groupHistories,
+        historyKey: groupKey,
+        limit: historyLimit,
+        entry: historyKey
+          ? {
+              sender: buildSenderLabel(msg, senderId || chatId),
+              body: rawBody,
+              timestamp: msg.date ? msg.date * 1000 : undefined,
+              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              replyToId: historyReplyToId,
+              replyToBody: historyReplyToBody,
+              replyToSender: historyReplyToSender,
+            }
+          : null,
+      });
+      return null;
+    }
+  }
+
   if (!(await ensureConfiguredBindingReady())) {
     return null;
   }
@@ -1155,6 +1202,74 @@ async function callTelegramContextualDecision(params: {
       : (replyTo.from?.username ?? undefined)
     : undefined;
   return shouldParticipateInGroup({
+    cfg: params.cfg,
+    config: params.contextualConfig,
+    recentMessages,
+    currentMessage: {
+      sender: buildSenderLabel(params.msg as never, params.senderId),
+      body: params.rawBody,
+      timestamp: params.msg.date ? params.msg.date * 1000 : undefined,
+      imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+      messageId:
+        typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined,
+      replyToId,
+      replyToBody,
+      replyToSender,
+    },
+    groupKey: params.groupKey,
+    botName: params.botName,
+  });
+}
+
+async function callTelegramMentionFilterDecision(params: {
+  cfg: OpenClawConfig;
+  contextualConfig: NonNullable<TelegramGroupConfig["contextualActivation"]>;
+  groupHistories: Map<string, HistoryEntry[]>;
+  groupKey: string;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  msg: any;
+  rawBody: string;
+  senderId: string | number;
+  botName?: string;
+  allMedia?: TelegramMediaRef[];
+}) {
+  const existingHistory = params.groupHistories.get(params.groupKey) ?? [];
+  const recentMessages = existingHistory.map((h) => ({
+    sender: h.sender,
+    body: h.body,
+    timestamp: h.timestamp,
+    messageId: h.messageId,
+    replyToId: h.replyToId,
+    replyToBody: h.replyToBody,
+    replyToSender: h.replyToSender,
+  }));
+  const imagePaths = (params.allMedia ?? [])
+    .filter((m) => m.path && m.contentType?.startsWith("image/"))
+    .map((m) => m.path);
+  const replyTo = params.msg.reply_to_message;
+  const replyToId = replyTo?.message_id != null ? String(replyTo.message_id) : undefined;
+  const replyToBody =
+    replyTo?.text ??
+    replyTo?.caption ??
+    (replyTo?.photo
+      ? "[image]"
+      : replyTo?.sticker
+        ? formatStickerReplyBody(replyTo.sticker)
+        : replyTo?.video
+          ? "[video]"
+          : replyTo?.voice
+            ? "[voice message]"
+            : replyTo?.animation
+              ? "[GIF]"
+              : replyTo?.document
+                ? `[file: ${replyTo.document?.file_name ?? "unknown"}]`
+                : undefined);
+  const replyToSender = replyTo
+    ? replyTo.from?.first_name
+      ? `${replyTo.from.first_name}${replyTo.from.last_name ? ` ${replyTo.from.last_name}` : ""}`
+      : (replyTo.from?.username ?? undefined)
+    : undefined;
+  return shouldRespondToMention({
     cfg: params.cfg,
     config: params.contextualConfig,
     recentMessages,
