@@ -459,6 +459,66 @@ export function pruneHistoryForContextShare(params: {
   };
 }
 
+export function pruneHistoryToTokenBudget(params: {
+  messages: AgentMessage[];
+  budgetTokens: number;
+  parts?: number;
+}): {
+  messages: AgentMessage[];
+  droppedMessagesList: AgentMessage[];
+  droppedChunks: number;
+  droppedMessages: number;
+  droppedTokens: number;
+  keptTokens: number;
+  budgetTokens: number;
+} {
+  const budgetTokens = Math.max(0, Math.floor(params.budgetTokens));
+  let keptMessages = params.messages;
+  const allDroppedMessages: AgentMessage[] = [];
+  let droppedChunks = 0;
+  let droppedMessages = 0;
+  let droppedTokens = 0;
+
+  const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, keptMessages.length);
+
+  while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
+    let dropped: AgentMessage[] = [];
+    let nextKept: AgentMessage[] = [];
+    const chunks = splitMessagesByTokenShare(keptMessages, parts);
+    if (chunks.length <= 1) {
+      dropped = keptMessages.slice(0, 1);
+      nextKept = keptMessages.slice(1);
+    } else {
+      dropped = chunks[0] ?? [];
+      nextKept = chunks.slice(1).flat();
+    }
+
+    if (dropped.length === 0) {
+      break;
+    }
+
+    const repairReport = repairToolUseResultPairing(nextKept);
+    const repairedKept = repairReport.messages;
+    const orphanedCount = repairReport.droppedOrphanCount;
+
+    droppedChunks += 1;
+    droppedMessages += dropped.length + orphanedCount;
+    droppedTokens += estimateMessagesTokens(dropped);
+    allDroppedMessages.push(...dropped);
+    keptMessages = repairedKept;
+  }
+
+  return {
+    messages: keptMessages,
+    droppedMessagesList: allDroppedMessages,
+    droppedChunks,
+    droppedMessages,
+    droppedTokens,
+    keptTokens: estimateMessagesTokens(keptMessages),
+    budgetTokens,
+  };
+}
+
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
 }
