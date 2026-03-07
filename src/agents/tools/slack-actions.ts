@@ -28,6 +28,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
+  ToolInputError,
 } from "./common.js";
 
 const messagingActions = new Set([
@@ -107,12 +108,16 @@ export async function handleSlackAction(
   cfg: OpenClawConfig,
   context?: SlackActionContext,
 ): Promise<AgentToolResult<unknown>> {
-  const resolveChannelId = () =>
-    resolveSlackChannelId(
-      readStringParam(params, "channelId", {
-        required: true,
-      }),
-    );
+  const resolveChannelId = () => {
+    const explicit = readStringParam(params, "channelId");
+    const raw = explicit || context?.currentChannelId;
+    if (!raw) {
+      throw new ToolInputError(
+        "channelId is required (provide it explicitly or ensure the message context includes a channel)",
+      );
+    }
+    return resolveSlackChannelId(raw);
+  };
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
   const account = resolveSlackAccount({ cfg, accountId });
@@ -164,20 +169,20 @@ export async function handleSlackAction(
         } else {
           await removeSlackReaction(channelId, messageId, emoji);
         }
-        return jsonResult({ ok: true, removed: emoji });
+        return jsonResult({ ok: true, channelId, removed: emoji });
       }
       if (isEmpty) {
         const removed = writeOpts
           ? await removeOwnSlackReactions(channelId, messageId, writeOpts)
           : await removeOwnSlackReactions(channelId, messageId);
-        return jsonResult({ ok: true, removed });
+        return jsonResult({ ok: true, channelId, removed });
       }
       if (writeOpts) {
         await reactSlackMessage(channelId, messageId, emoji, writeOpts);
       } else {
         await reactSlackMessage(channelId, messageId, emoji);
       }
-      return jsonResult({ ok: true, added: emoji });
+      return jsonResult({ ok: true, channelId, added: emoji });
     }
     const reactions = readOpts
       ? await listSlackReactions(channelId, messageId, readOpts)
@@ -254,7 +259,7 @@ export async function handleSlackAction(
             blocks,
           });
         }
-        return jsonResult({ ok: true });
+        return jsonResult({ ok: true, channelId });
       }
       case "deleteMessage": {
         const channelId = resolveChannelId();
@@ -266,7 +271,7 @@ export async function handleSlackAction(
         } else {
           await deleteSlackMessage(channelId, messageId);
         }
-        return jsonResult({ ok: true });
+        return jsonResult({ ok: true, channelId });
       }
       case "readMessages": {
         const channelId = resolveChannelId();
@@ -337,7 +342,7 @@ export async function handleSlackAction(
       } else {
         await pinSlackMessage(channelId, messageId);
       }
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, channelId });
     }
     if (action === "unpinMessage") {
       const messageId = readStringParam(params, "messageId", {
@@ -348,7 +353,7 @@ export async function handleSlackAction(
       } else {
         await unpinSlackMessage(channelId, messageId);
       }
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, channelId });
     }
     const pins = writeOpts
       ? await listSlackPins(channelId, readOpts)
