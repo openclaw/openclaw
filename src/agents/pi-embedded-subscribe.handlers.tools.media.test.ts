@@ -251,4 +251,32 @@ describe("handleToolExecutionEnd media emission", () => {
       mediaUrls: ["/tmp/canvas-output.png"],
     });
   });
+
+  it("tracks tool result media URLs in messagingToolSentMediaUrls for deduplication", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitPngMediaToolResult(ctx);
+
+    // Media URL should be tracked for final-reply deduplication
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("/tmp/screenshot.png");
+  });
+
+  it("tracks remote tool result media URLs for untrusted tools", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitUntrustedToolMediaResult(ctx, "https://example.com/file.png");
+
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("https://example.com/file.png");
+  });
+
+  it("does NOT track media when tool result is an error", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitPngMediaToolResult(ctx, { isError: true });
+
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+  });
 });

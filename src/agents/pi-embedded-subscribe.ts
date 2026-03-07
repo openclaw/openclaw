@@ -338,6 +338,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
+    // Track media URLs sent via tool results so that the final reply deduplication
+    // can strip duplicates. Without this, images produced by tools like exec (e.g.
+    // nano-banana-pro) are sent once here and again in the agent's MEDIA: reply.
+    if (filteredMediaUrls.length > 0) {
+      messagingToolSentMediaUrls.push(...filteredMediaUrls);
+      trimMessagingToolSent();
+    }
     try {
       void params.onToolResult({
         text: cleanedText,

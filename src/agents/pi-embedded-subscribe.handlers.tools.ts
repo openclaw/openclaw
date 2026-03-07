@@ -170,6 +170,10 @@ function emitToolResultOutput(params: {
   if (mediaPaths.length === 0) {
     return;
   }
+  // Track media URLs for deduplication against the agent's final reply.
+  if (mediaPaths.length > 0) {
+    ctx.state.messagingToolSentMediaUrls.push(...mediaPaths);
+  }
   try {
     void ctx.params.onToolResult({ mediaUrls: mediaPaths });
   } catch {
