@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MsgContext } from "../templating.js";
 
 // Mock dependencies
 vi.mock("../../agents/model-catalog.js", () => ({
@@ -30,10 +31,10 @@ describe("resolveImageModelAutoSwitch", () => {
     vi.resetAllMocks();
   });
 
-  const baseCtx = {
+  const baseCtx: MsgContext = {
     MediaPath: undefined,
     MediaPaths: undefined,
-  } as never;
+  };
 
   const baseCfg = {} as OpenClawConfig;
   const emptyAliasIndex = { byKey: new Map(), byAlias: new Map() };
@@ -289,7 +290,12 @@ describe("resolveImageModelAutoSwitch", () => {
 
     const aliasIndex = {
       byKey: new Map([["anthropic/claude-opus-4-1", ["claude-opus"]]]),
-      byAlias: new Map([["claude-opus", { provider: "anthropic", model: "claude-opus-4-1" }]]),
+      byAlias: new Map([
+        [
+          "claude-opus",
+          { alias: "claude-opus", ref: { provider: "anthropic", model: "claude-opus-4-1" } },
+        ],
+      ]),
     };
 
     vi.mocked(loadModelCatalog).mockResolvedValue([textOnlyModel, visionModel] as never);
