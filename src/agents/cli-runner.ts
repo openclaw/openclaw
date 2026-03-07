@@ -21,7 +21,6 @@ import {
 } from "./bootstrap-budget.js";
 import {
   COMPACTION_SYSTEM_PROMPT,
-  DEFAULT_COMPACTION_TIMEOUT_MS,
   compactBootstrapFiles,
   resolveCompactionConfig,
 } from "./bootstrap-compaction.js";
@@ -69,10 +68,30 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js"
 
 const log = createSubsystemLogger("agent/claude-cli");
 
-/** Rough token estimate using chars/4 heuristic (conservative for English-heavy content). */
+/**
+ * Rough token estimate. Uses chars/1.5 for CJK-heavy content (>30% CJK chars),
+ * chars/4 for English-heavy content. CJK characters typically tokenize at 1-3
+ * tokens per character, so chars/4 severely underestimates for Chinese/Japanese
+ * text — which is common in feishu/飞书 deployments.
+ */
 function estimatePromptTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  if (!text) {
+    return 0;
+  }
+  // Count CJK Unified Ideographs, Hangul, Hiragana, Katakana, full-width forms
+  const cjkCount =
+    text.match(/[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\u3040-\u30ff\u31f0-\u31ff\uff00-\uffef]/g)
+      ?.length ?? 0;
+  const cjkRatio = cjkCount / text.length;
+  const charsPerToken = cjkRatio > 0.3 ? 1.5 : 4;
+  return Math.ceil(text.length / charsPerToken);
 }
+
+/**
+ * Estimate image token cost for pre-flight context window guard.
+ * Uses a rough average of ~1000 tokens per image (standard resolution).
+ */
+const ESTIMATED_TOKENS_PER_IMAGE = 1000;
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -149,13 +168,26 @@ export async function runCliAgent(params: {
   const sessionLabel = params.sessionKey ?? params.sessionId;
 
   // Resolve context window early — needed by Layer 3 (dynamic budget) and Layer 1 (pre-flight guard).
+  // For CLI backends (claude-cli, codex-cli), resolve to the real provider/model first
+  // so the context window lookup finds the actual model entry in config.
+  let contextWindowRef = resolveNonCliModelRef(
+    { provider: params.provider, model: modelId },
+    params.config,
+  );
+  if (isCliProvider(contextWindowRef.provider, params.config)) {
+    const agentDefault = resolveDefaultModelForAgent({
+      cfg: params.config ?? {},
+      agentId: params.agentId,
+    });
+    contextWindowRef = resolveNonCliModelRef(agentDefault, params.config);
+  }
   const contextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
-    provider: params.provider,
-    modelId: normalizedModel,
+    provider: contextWindowRef.provider,
+    modelId: contextWindowRef.model,
     defaultTokens: 200_000,
   });
-  let contextWindowTokens = contextWindowInfo.tokens;
+  const contextWindowTokens = contextWindowInfo.tokens;
 
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
@@ -213,13 +245,23 @@ export async function runCliAgent(params: {
   });
   let systemPrompt = builtSystemPrompt;
   let activeProfile: BootstrapProfile = "normal";
+  let activeContextFiles = contextFiles;
+
+  // Layer 1: Pre-flight context window guard
+  // Image token estimate is used by both Layer 1 (pre-flight) and Layer 2 (retry).
+  // Only charge multimodal token cost when the backend sends images via imageArg.
+  // When imageArg is absent, images are appended as file paths to the prompt text,
+  // which is already covered by estimatePromptTokens on the prompt string.
+  const imageTokenEstimate = backend.imageArg
+    ? (params.images?.length ?? 0) * ESTIMATED_TOKENS_PER_IMAGE
+    : 0;
 
   // Layer 1: Pre-flight context window guard
   // Estimate tokens for the TOTAL prompt (system + task + images), not just system prompt.
   {
     const hardLimitTokens = Math.floor(contextWindowTokens * 0.7);
-    // Estimate total prompt: system prompt + user task prompt (promptForRun includes prepended context)
-    let estimatedTokens = estimatePromptTokens(systemPrompt) + estimatePromptTokens(params.prompt);
+    let estimatedTokens =
+      estimatePromptTokens(systemPrompt) + estimatePromptTokens(params.prompt) + imageTokenEstimate;
 
     // Compaction observability state
     let compactionAttempted = false;
@@ -261,16 +303,27 @@ export async function runCliAgent(params: {
           }
 
           // CLI backends (claude-cli, codex-cli) are wrappers around real LLM
-          // providers — they don't exist in the model registry. Resolve the
-          // agent's configured default model to get the real provider + model.
+          // providers — they don't exist in the model registry. Resolve to a real
+          // provider/model. Use the current run's model (which may come from
+          // --model override) first, falling back to agent default only if needed.
           if (isCliProvider(compactionProvider, params.config)) {
-            const agentDefault = resolveDefaultModelForAgent({
-              cfg: params.config ?? {},
-              agentId: params.agentId,
-            });
-            const resolved = resolveNonCliModelRef(agentDefault, params.config);
-            compactionProvider = resolved.provider;
-            compactionModelRef = resolved.model;
+            const currentRunRef = resolveNonCliModelRef(
+              { provider: compactionProvider, model: compactionModelRef },
+              params.config,
+            );
+            if (!isCliProvider(currentRunRef.provider, params.config)) {
+              compactionProvider = currentRunRef.provider;
+              compactionModelRef = currentRunRef.model;
+            } else {
+              // Current model alias not resolvable — fall back to agent default
+              const agentDefault = resolveDefaultModelForAgent({
+                cfg: params.config ?? {},
+                agentId: params.agentId,
+              });
+              const resolved = resolveNonCliModelRef(agentDefault, params.config);
+              compactionProvider = resolved.provider;
+              compactionModelRef = resolved.model;
+            }
           }
 
           compactionModelUsed = `${compactionProvider}/${compactionModelRef}`;
@@ -295,10 +348,7 @@ export async function runCliAgent(params: {
 
             const isTextBlock = (b: { type: string }): b is { type: "text"; text: string } =>
               b.type === "text";
-            const compactionSignal = AbortSignal.timeout(
-              compactionCfg.timeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS,
-            );
-
+            // Per-file timeout is handled inside compactBootstrapFiles.
             const { contextFiles: compactedContextFiles, results } = await compactBootstrapFiles({
               contextFiles: lastProfileContextFiles,
               config: compactionCfg,
@@ -318,7 +368,6 @@ export async function runCliAgent(params: {
                 }
                 return texts.map((b) => b.text).join("\n");
               },
-              signal: compactionSignal,
             });
 
             compactedFilesList = results.filter((r) => r.success).map((r) => r.path);
@@ -326,6 +375,24 @@ export async function runCliAgent(params: {
             compactionCharsAfter = results.reduce((sum, r) => sum + r.charsAfter, 0);
 
             if (compactedFilesList.length > 0) {
+              // Compute warning lines using the active profile's budget (not normal)
+              const compactedBudget =
+                activeProfile === "normal"
+                  ? { maxCharsPerFile: bootstrapMaxChars, totalMaxChars: bootstrapTotalMaxChars }
+                  : getBootstrapProfileConfig(activeProfile);
+              const compactedWarning = buildBootstrapPromptWarning({
+                analysis: analyzeBootstrapBudget({
+                  files: buildBootstrapInjectionStats({
+                    bootstrapFiles,
+                    injectedFiles: compactedContextFiles,
+                  }),
+                  bootstrapMaxChars: compactedBudget.maxCharsPerFile,
+                  bootstrapTotalMaxChars: compactedBudget.totalMaxChars,
+                }),
+                mode: bootstrapPromptWarningMode,
+                seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+                previousSignature: params.bootstrapPromptWarningSignature,
+              });
               const compactedSystemPrompt = buildSystemPrompt({
                 workspaceDir,
                 config: params.config,
@@ -336,14 +403,17 @@ export async function runCliAgent(params: {
                 docsPath: docsPath ?? undefined,
                 tools: [],
                 contextFiles: compactedContextFiles,
-                bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
+                bootstrapTruncationWarningLines: compactedWarning.lines,
                 modelDisplay,
                 agentId: sessionAgentId,
               });
               const compactedTokens =
-                estimatePromptTokens(compactedSystemPrompt) + estimatePromptTokens(params.prompt);
+                estimatePromptTokens(compactedSystemPrompt) +
+                estimatePromptTokens(params.prompt) +
+                imageTokenEstimate;
               if (compactedTokens <= hardLimitTokens) {
                 systemPrompt = compactedSystemPrompt;
+                activeContextFiles = compactedContextFiles;
                 estimatedTokens = compactedTokens;
                 break;
               }
@@ -364,6 +434,20 @@ export async function runCliAgent(params: {
           warn: warnForProfile,
         });
         lastProfileContextFiles = profileContextFiles;
+        // Compute warning lines for this profile's context (not the original)
+        const profileWarning = buildBootstrapPromptWarning({
+          analysis: analyzeBootstrapBudget({
+            files: buildBootstrapInjectionStats({
+              bootstrapFiles,
+              injectedFiles: profileContextFiles,
+            }),
+            bootstrapMaxChars: profileConfig.maxCharsPerFile,
+            bootstrapTotalMaxChars: profileConfig.totalMaxChars,
+          }),
+          mode: bootstrapPromptWarningMode,
+          seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+          previousSignature: params.bootstrapPromptWarningSignature,
+        });
         const profileSystemPrompt = buildSystemPrompt({
           workspaceDir,
           config: params.config,
@@ -374,14 +458,17 @@ export async function runCliAgent(params: {
           docsPath: docsPath ?? undefined,
           tools: [],
           contextFiles: profileContextFiles,
-          bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
+          bootstrapTruncationWarningLines: profileWarning.lines,
           modelDisplay,
           agentId: sessionAgentId,
         });
         activeProfile = profile;
         systemPrompt = profileSystemPrompt;
+        activeContextFiles = profileContextFiles;
         estimatedTokens =
-          estimatePromptTokens(profileSystemPrompt) + estimatePromptTokens(params.prompt);
+          estimatePromptTokens(profileSystemPrompt) +
+          estimatePromptTokens(params.prompt) +
+          imageTokenEstimate;
         if (estimatedTokens <= hardLimitTokens) {
           break;
         }
@@ -393,15 +480,30 @@ export async function runCliAgent(params: {
       }
     }
 
+    const logActiveBudget =
+      activeProfile === "normal"
+        ? { maxCharsPerFile: bootstrapMaxChars, totalMaxChars: bootstrapTotalMaxChars }
+        : getBootstrapProfileConfig(activeProfile);
+    const logActiveAnalysis =
+      activeContextFiles !== contextFiles
+        ? analyzeBootstrapBudget({
+            files: buildBootstrapInjectionStats({
+              bootstrapFiles,
+              injectedFiles: activeContextFiles,
+            }),
+            bootstrapMaxChars: logActiveBudget.maxCharsPerFile,
+            bootstrapTotalMaxChars: logActiveBudget.totalMaxChars,
+          })
+        : bootstrapAnalysis;
     log.info("cli-runner prompt stats", {
       estimated_tokens: estimatedTokens,
       context_window: contextWindowTokens,
       reserve: contextWindowTokens - hardLimitTokens,
       trim_profile: activeProfile,
       retry_count: 0,
-      files_injected: contextFiles.length,
-      files_truncated: bootstrapAnalysis.truncatedFiles.length,
-      files_skipped: bootstrapFiles.length - contextFiles.length,
+      files_injected: activeContextFiles.length,
+      files_truncated: logActiveAnalysis.truncatedFiles.length,
+      files_skipped: bootstrapFiles.length - activeContextFiles.length,
       compaction_attempted: compactionAttempted,
       ...(compactionAttempted && {
         compacted_files: compactedFilesList,
@@ -413,28 +515,57 @@ export async function runCliAgent(params: {
     });
   }
 
-  const systemPromptReport = buildSystemPromptReport({
-    source: "run",
-    generatedAt: Date.now(),
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    provider: params.provider,
-    model: modelId,
-    workspaceDir,
-    bootstrapMaxChars,
-    bootstrapTotalMaxChars,
-    bootstrapTruncation: buildBootstrapTruncationReportMeta({
-      analysis: bootstrapAnalysis,
-      warningMode: bootstrapPromptWarningMode,
-      warning: bootstrapPromptWarning,
-    }),
-    sandbox: { mode: "off", sandboxed: false },
-    systemPrompt,
-    bootstrapFiles,
-    injectedFiles: contextFiles,
-    skillsPrompt: "",
-    tools: [],
-  });
+  // Rebuild analysis/report from the final active context files so metadata
+  // reflects the actual profile used (not the initial "normal" profile).
+  const buildReportForActiveContext = () => {
+    const activeBudget =
+      activeProfile === "normal"
+        ? { maxCharsPerFile: bootstrapMaxChars, totalMaxChars: bootstrapTotalMaxChars }
+        : getBootstrapProfileConfig(activeProfile);
+    const analysis =
+      activeContextFiles !== contextFiles
+        ? analyzeBootstrapBudget({
+            files: buildBootstrapInjectionStats({
+              bootstrapFiles,
+              injectedFiles: activeContextFiles,
+            }),
+            bootstrapMaxChars: activeBudget.maxCharsPerFile,
+            bootstrapTotalMaxChars: activeBudget.totalMaxChars,
+          })
+        : bootstrapAnalysis;
+    const warning =
+      activeContextFiles !== contextFiles
+        ? buildBootstrapPromptWarning({
+            analysis,
+            mode: bootstrapPromptWarningMode,
+            seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+            previousSignature: params.bootstrapPromptWarningSignature,
+          })
+        : bootstrapPromptWarning;
+    return buildSystemPromptReport({
+      source: "run",
+      generatedAt: Date.now(),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: modelId,
+      workspaceDir,
+      bootstrapMaxChars: activeBudget.maxCharsPerFile,
+      bootstrapTotalMaxChars: activeBudget.totalMaxChars,
+      bootstrapTruncation: buildBootstrapTruncationReportMeta({
+        analysis,
+        warningMode: bootstrapPromptWarningMode,
+        warning,
+      }),
+      sandbox: { mode: "off", sandboxed: false },
+      systemPrompt,
+      bootstrapFiles,
+      injectedFiles: activeContextFiles,
+      skillsPrompt: "",
+      tools: [],
+    });
+  };
+  let systemPromptReport = buildReportForActiveContext();
 
   // Helper function to execute CLI with given session ID
   const executeCliWithSession = async (
@@ -696,7 +827,10 @@ export async function runCliAgent(params: {
     if (err instanceof FailoverError) {
       // Layer 2: Context overflow retry with minimal bootstrap profile
       if (isContextOverflowError(err.message) && activeProfile !== "minimal") {
-        const preRetryEstimatedTokens = estimatePromptTokens(systemPrompt);
+        const preRetryEstimatedTokens =
+          estimatePromptTokens(systemPrompt) +
+          estimatePromptTokens(params.prompt) +
+          imageTokenEstimate;
         log.warn("cli-runner: context overflow detected, retrying with minimal profile", {
           retry_count: 1,
           trim_profile: "minimal",
@@ -711,6 +845,19 @@ export async function runCliAgent(params: {
           totalMaxChars: minimalConfig.totalMaxChars,
           warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
         });
+        const minimalWarning = buildBootstrapPromptWarning({
+          analysis: analyzeBootstrapBudget({
+            files: buildBootstrapInjectionStats({
+              bootstrapFiles,
+              injectedFiles: minimalContextFiles,
+            }),
+            bootstrapMaxChars: minimalConfig.maxCharsPerFile,
+            bootstrapTotalMaxChars: minimalConfig.totalMaxChars,
+          }),
+          mode: bootstrapPromptWarningMode,
+          seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+          previousSignature: params.bootstrapPromptWarningSignature,
+        });
         const minimalSystemPrompt = buildSystemPrompt({
           workspaceDir,
           config: params.config,
@@ -721,13 +868,16 @@ export async function runCliAgent(params: {
           docsPath: docsPath ?? undefined,
           tools: [],
           contextFiles: minimalContextFiles,
-          bootstrapTruncationWarningLines: [],
+          bootstrapTruncationWarningLines: minimalWarning.lines,
           modelDisplay,
           agentId: sessionAgentId,
         });
-        // Reassign the `let` binding so executeCliWithSession sees the new prompt
+        // Reassign the `let` bindings so executeCliWithSession sees the new prompt
         systemPrompt = minimalSystemPrompt;
+        activeContextFiles = minimalContextFiles;
         activeProfile = "minimal";
+        // Rebuild report to reflect the minimal profile used for retry
+        systemPromptReport = buildReportForActiveContext();
         try {
           const output = await executeCliWithSession(undefined);
           const text = output.text?.trim();
@@ -747,7 +897,10 @@ export async function runCliAgent(params: {
           };
         } catch (retryErr) {
           if (retryErr instanceof FailoverError && isContextOverflowError(retryErr.message)) {
-            const estimatedTks = estimatePromptTokens(minimalSystemPrompt);
+            const estimatedTks =
+              estimatePromptTokens(minimalSystemPrompt) +
+              estimatePromptTokens(params.prompt) +
+              imageTokenEstimate;
             throw new FailoverError(
               `Current task exceeds context window for this runtime (estimated=${estimatedTks} tokens, profile=minimal). 建议改走 pi-embedded runtime 或拆任务。`,
               {

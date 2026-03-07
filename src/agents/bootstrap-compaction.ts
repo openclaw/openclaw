@@ -72,10 +72,25 @@ export type CompactionLlmFn = (userPrompt: string, signal?: AbortSignal) => Prom
 // ── Content-hash cache ────────────────────────────────────────────────────────
 
 /**
- * In-memory cache (process lifetime). Key = file path, value = { hash, compacted }.
+ * In-memory LRU cache (process lifetime). Key = file path, value = { hash, compacted }.
  * Avoids redundant LLM calls when file content hasn't changed.
+ * Capped at MAX_CACHE_ENTRIES to prevent unbounded memory growth.
  */
+const MAX_CACHE_ENTRIES = 100;
 const compactionCache = new Map<string, { hash: string; compacted: string }>();
+
+function cacheSet(key: string, value: { hash: string; compacted: string }): void {
+  // Delete-then-set to refresh LRU order (Map iterates in insertion order)
+  compactionCache.delete(key);
+  compactionCache.set(key, value);
+  // Evict oldest entries when over limit
+  if (compactionCache.size > MAX_CACHE_ENTRIES) {
+    const oldest = compactionCache.keys().next().value;
+    if (oldest !== undefined) {
+      compactionCache.delete(oldest);
+    }
+  }
+}
 
 /** Exported for testing only. */
 export function clearCompactionCache(): void {
@@ -93,14 +108,14 @@ function getContentHash(content: string): string {
  * Config path: cfg.agents.defaults.compaction.model / .timeoutMs
  */
 export function resolveCompactionConfig(cfg?: OpenClawConfig): BootstrapCompactionConfig {
-  // The existing AgentCompactionConfig type doesn't include bootstrap-specific fields,
-  // so we access them via a type-erased cast. They're optional runtime extensions.
-  const raw = cfg?.agents?.defaults?.compaction as unknown as
-    | { model?: unknown; timeoutMs?: unknown }
-    | undefined;
+  const raw = cfg?.agents?.defaults?.compaction;
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const obj = raw as Record<string, unknown>;
   return {
-    model: typeof raw?.model === "string" ? raw.model : undefined,
-    timeoutMs: typeof raw?.timeoutMs === "number" ? raw.timeoutMs : undefined,
+    model: typeof obj.model === "string" ? obj.model : undefined,
+    timeoutMs: typeof obj.timeoutMs === "number" ? obj.timeoutMs : undefined,
   };
 }
 
@@ -169,6 +184,8 @@ export async function compactBootstrapFile(params: {
   const contentHash = getContentHash(hashInput);
   const cached = compactionCache.get(filePath);
   if (cached?.hash === contentHash) {
+    // Refresh LRU position on cache hit
+    cacheSet(filePath, cached);
     return {
       compacted: cached.compacted,
       result: {
@@ -183,7 +200,22 @@ export async function compactBootstrapFile(params: {
   try {
     const compacted = await params.llmFn(inputContent, signal);
 
-    compactionCache.set(filePath, { hash: contentHash, compacted });
+    // Guard: if LLM output is not shorter than original, compaction is
+    // counter-productive — fall back to original content.
+    if (compacted.length >= charsBefore) {
+      return {
+        compacted: content,
+        result: {
+          path: filePath,
+          charsBefore,
+          charsAfter: charsBefore,
+          success: false,
+          fallbackReason: `compacted output (${compacted.length} chars) not shorter than original (${charsBefore} chars)`,
+        },
+      };
+    }
+
+    cacheSet(filePath, { hash: contentHash, compacted });
 
     return {
       compacted,
@@ -242,14 +274,28 @@ export async function compactBootstrapFiles(params: {
   const results: CompactionResult[] = [];
   const compactedMap = new Map<string, string>();
 
+  // Overall compaction deadline: total budget across all files.
+  // Per-file timeout prevents one slow file from starving the rest,
+  // but the overall deadline caps total compaction latency.
+  const rawTimeout = config.timeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS;
+  const sanitizedTimeout =
+    Number.isFinite(rawTimeout) && rawTimeout > 0
+      ? Math.floor(rawTimeout)
+      : DEFAULT_COMPACTION_TIMEOUT_MS;
+  const overallDeadline = AbortSignal.timeout(sanitizedTimeout * compactable.length);
+  const overallSignal = signal ? AbortSignal.any([signal, overallDeadline]) : overallDeadline;
+
   for (const file of compactable) {
+    // Each file gets its own timeout to avoid one slow file starving the rest.
+    const perFileTimeout = AbortSignal.timeout(sanitizedTimeout);
+    const mergedSignal = AbortSignal.any([overallSignal, perFileTimeout]);
     const { compacted, result } = await compactBootstrapFile({
       content: file.content,
       filePath: file.path,
       config,
       llmFn: params.llmFn,
       modelRef: params.modelRef,
-      signal,
+      signal: mergedSignal,
     });
     results.push(result);
     if (result.success) {
