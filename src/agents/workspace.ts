@@ -534,23 +534,29 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
+  // Parallelize file reads for better performance
+  const readResults = await Promise.all(
+    entries.map(async (entry) => {
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
+      });
+      return { entry, loaded };
+    }),
+  );
+
+  const result: WorkspaceBootstrapFile[] = readResults.map(({ entry, loaded }) => {
     if (loaded.ok) {
-      result.push({
+      return {
         name: entry.name,
         path: entry.filePath,
         content: loaded.content,
         missing: false,
-      });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
+      };
     }
-  }
+    return { name: entry.name, path: entry.filePath, missing: true };
+  });
+
   return result;
 }
 
