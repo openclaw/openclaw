@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  buildAfterTurnLegacyCompactionParams,
+  composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
+  prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
@@ -54,6 +57,8 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result).toEqual({
       prependContext: "from-cache",
       systemPrompt: "legacy-system",
+      prependSystemContext: undefined,
+      appendSystemContext: undefined,
     });
   });
 
@@ -70,6 +75,58 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+  });
+
+  it("merges prompt-build and legacy context fields in deterministic order", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "prompt context",
+        prependSystemContext: "prompt prepend",
+        appendSystemContext: "prompt append",
+      })),
+      runBeforeAgentStart: vi.fn(async () => ({
+        prependContext: "legacy context",
+        prependSystemContext: "legacy prepend",
+        appendSystemContext: "legacy append",
+      })),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
+    expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("composeSystemPromptWithHookContext", () => {
+  it("returns undefined when no hook system context is provided", () => {
+    expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
+  });
+
+  it("builds prepend/base/append system prompt order", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "  base system  ",
+        prependSystemContext: "  prepend  ",
+        appendSystemContext: "  append  ",
+      }),
+    ).toBe("prepend\n\nbase system\n\nappend");
+  });
+
+  it("avoids blank separators when base system prompt is empty", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "   ",
+        appendSystemContext: "  append only  ",
+      }),
+    ).toBe("append only");
   });
 });
 
@@ -125,7 +182,6 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
-
 describe("wrapStreamFnTrimToolCallNames", () => {
   function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
     result: () => Promise<unknown>;
@@ -491,5 +547,56 @@ describe("decodeHtmlEntitiesInObject", () => {
   it("decodes numeric character references", () => {
     expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
     expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
+  });
+});
+describe("prependSystemPromptAddition", () => {
+  it("prepends context-engine addition to the system prompt", () => {
+    const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+      systemPromptAddition: "extra behavior",
+    });
+
+    expect(result).toBe("extra behavior\n\nbase system");
+  });
+
+  it("returns the original system prompt when no addition is provided", () => {
+    const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+    });
+
+    expect(result).toBe("base system");
+  });
+});
+
+describe("buildAfterTurnLegacyCompactionParams", () => {
+  it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
+    const legacy = buildAfterTurnLegacyCompactionParams({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      authProfileId: "openai:p1",
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
   });
 });
