@@ -40,24 +40,22 @@ enum ChatMarkdownPreprocessor {
         if matches.isEmpty { return Result(cleaned: self.normalize(withoutTimestamps), images: []) }
 
         var images: [InlineImage] = []
-        var cleaned = withoutTimestamps
+        let cleaned = NSMutableString(string: withoutTimestamps)
 
         for match in matches.reversed() {
             guard match.numberOfRanges >= 3 else { continue }
             let label = ns.substring(with: match.range(at: 1))
             let source = ns.substring(with: match.range(at: 2))
 
-            let start = cleaned.index(cleaned.startIndex, offsetBy: match.range.location)
-            let end = cleaned.index(start, offsetBy: match.range.length)
             if let inlineImage = self.inlineImage(label: label, source: source) {
                 images.append(inlineImage)
-                cleaned.replaceSubrange(start..<end, with: "")
+                cleaned.replaceCharacters(in: match.range, with: "")
             } else {
-                cleaned.replaceSubrange(start..<end, with: self.fallbackImageLabel(label))
+                cleaned.replaceCharacters(in: match.range, with: self.fallbackImageLabel(label))
             }
         }
 
-        return Result(cleaned: self.normalize(cleaned), images: images.reversed())
+        return Result(cleaned: self.normalize(cleaned as String), images: images.reversed())
     }
 
     private static func inlineImage(label: String, source: String) -> InlineImage? {

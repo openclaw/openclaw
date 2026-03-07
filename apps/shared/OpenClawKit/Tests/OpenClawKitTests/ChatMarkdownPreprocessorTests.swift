@@ -42,6 +42,15 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.images.isEmpty)
     }
 
+    @Test func handlesUnicodeBeforeRemoteMarkdownImages() {
+        let markdown = "🙂![Leak](https://example.com/image.png)"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "🙂Leak")
+        #expect(result.images.isEmpty)
+    }
+
     @Test func stripsInboundUntrustedContextBlocks() {
         let markdown = """
         Conversation info (untrusted metadata):
