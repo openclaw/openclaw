@@ -156,6 +156,32 @@ describe("sendMessageMattermost", () => {
       }),
     );
   });
+
+  it("builds interactive button props when buttons are provided", async () => {
+    await sendMessageMattermost("channel:town-square", "Pick a model", {
+      buttons: [[{ callback_data: "mdlprov", text: "Browse providers" }]],
+    });
+
+    expect(mockState.createMattermostPost).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        channelId: "town-square",
+        message: "Pick a model",
+        props: expect.objectContaining({
+          attachments: expect.arrayContaining([
+            expect.objectContaining({
+              actions: expect.arrayContaining([
+                expect.objectContaining({
+                  id: "mdlprov",
+                  name: "Browse providers",
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
 });
 
 describe("parseMattermostTarget", () => {

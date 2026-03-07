@@ -907,6 +907,28 @@ describe("/models command", () => {
     expect(result.reply?.text).toContain("localai/ultra-chat");
     expect(result.reply?.text).not.toContain("Unknown provider");
   });
+
+  it("threads the routed agent through /models replies", async () => {
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as unknown as OpenClawConfig;
+    const params = buildPolicyParams("/models", scopedCfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
+
+    const result = await handleCommands({
+      ...params,
+      agentId: "support",
+      sessionKey: "agent:support:main",
+    });
+
+    expect(result.reply?.text).toContain("localai");
+  });
 });
 
 describe("handleCommands plugin commands", () => {
