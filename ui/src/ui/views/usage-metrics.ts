@@ -1,5 +1,5 @@
 import { html } from "lit";
-import { t } from "../../i18n/index.ts";
+import { t, i18n } from "../../i18n/index.ts";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -95,9 +95,9 @@ type UsageMosaicStats = {
   weekdayTotals: Array<{ label: string; tokens: number }>;
 };
 
-function getWeekdayLabels(): string[] {
-  const fmt = new Intl.DateTimeFormat(undefined, { weekday: "short" });
-  // 1970-01-04 is Sunday (UTC). Build Sun..Sat labels in the user's locale.
+function getWeekdayLabels(locale: string): string[] {
+  const fmt = new Intl.DateTimeFormat(locale, { weekday: "short" });
+  // 1970-01-04 is Sunday (UTC). Build Sun..Sat labels in the active UI locale.
   const base = Date.UTC(1970, 0, 4);
   return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(base + i * 86400000)));
 }
@@ -163,7 +163,7 @@ function buildUsageMosaicStats(
     }
   }
 
-  const weekdayLabels = getWeekdayLabels().map((label, index) => ({
+  const weekdayLabels = getWeekdayLabels(i18n.getLocale()).map((label, index) => ({
     label,
     tokens: weekdayTotals[index],
   }));
