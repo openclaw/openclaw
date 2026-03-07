@@ -32,21 +32,33 @@ export async function searchVector(params: {
     return [];
   }
   if (await params.ensureVectorReady(params.queryVec.length)) {
+    const query = vectorToBlob(params.queryVec);
+    const knnK =
+      params.sourceFilterVec.params.length > 0
+        ? Math.min(2000, Math.max(params.limit, params.limit * 10))
+        : params.limit;
     const rows = params.db
       .prepare(
-        `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
-          `       c.source,\n` +
-          `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
-          `  FROM ${params.vectorTable} v\n` +
-          `  JOIN chunks c ON c.id = v.id\n` +
-          ` WHERE c.model = ?${params.sourceFilterVec.sql}\n` +
+        `WITH knn AS (\n` +
+          `  SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
+          `         c.source,\n` +
+          `         vec_distance_cosine(v.embedding, ?) AS dist\n` +
+          `    FROM ${params.vectorTable} v\n` +
+          `    JOIN chunks c ON c.id = v.id\n` +
+          `   WHERE c.model = ?${params.sourceFilterVec.sql}\n` +
+          `     AND v.embedding MATCH ? AND k = ?\n` +
+          `)\n` +
+          `SELECT id, path, start_line, end_line, text, source, dist\n` +
+          `  FROM knn\n` +
           ` ORDER BY dist ASC\n` +
           ` LIMIT ?`,
       )
       .all(
-        vectorToBlob(params.queryVec),
+        query,
         params.providerModel,
         ...params.sourceFilterVec.params,
+        query,
+        knnK,
         params.limit,
       ) as Array<{
       id: string;
