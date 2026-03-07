@@ -32,6 +32,7 @@ export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-ty
 export {
   promptAccountId,
   promptSingleChannelSecretInput,
+  resolveAccountIdForConfigure,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,

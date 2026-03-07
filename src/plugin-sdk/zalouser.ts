@@ -20,6 +20,7 @@ export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
+  resolveAccountIdForConfigure,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,

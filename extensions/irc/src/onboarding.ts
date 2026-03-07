@@ -2,8 +2,8 @@ import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  promptAccountId,
   promptChannelAccessConfig,
+  resolveAccountIdForConfigure,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type DmPolicy,
@@ -308,19 +308,16 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
     forceAllowFrom,
   }) => {
     let next = cfg as CoreConfig;
-    const ircOverride = accountOverrides.irc?.trim();
     const defaultAccountId = resolveDefaultIrcAccountId(next);
-    let accountId = ircOverride || defaultAccountId;
-    if (shouldPromptAccountIds && !ircOverride) {
-      accountId = await promptAccountId({
-        cfg: next,
-        prompter,
-        label: "IRC",
-        currentId: accountId,
-        listAccountIds: listIrcAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg: next,
+      prompter,
+      label: "IRC",
+      accountOverride: accountOverrides.irc,
+      shouldPromptAccountIds,
+      listAccountIds: listIrcAccountIds,
+      defaultAccountId,
+    });
 
     const resolved = resolveIrcAccount({ cfg: next, accountId });
     const isDefaultAccount = accountId === DEFAULT_ACCOUNT_ID;

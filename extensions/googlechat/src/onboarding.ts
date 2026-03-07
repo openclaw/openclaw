@@ -3,12 +3,11 @@ import {
   addWildcardAllowFrom,
   formatDocsLink,
   mergeAllowFromEntries,
-  promptAccountId,
+  resolveAccountIdForConfigure,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
   DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk/googlechat";
 import {
@@ -241,19 +240,16 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const override = accountOverrides["googlechat"]?.trim();
     const defaultAccountId = resolveDefaultGoogleChatAccountId(cfg);
-    let accountId = override ? normalizeAccountId(override) : defaultAccountId;
-    if (shouldPromptAccountIds && !override) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Google Chat",
-        currentId: accountId,
-        listAccountIds: listGoogleChatAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Google Chat",
+      accountOverride: accountOverrides["googlechat"],
+      shouldPromptAccountIds,
+      listAccountIds: listGoogleChatAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     await noteGoogleChatSetup(prompter);
