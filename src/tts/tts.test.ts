@@ -308,6 +308,27 @@ describe("tts", () => {
       expect(result.overrides.openai?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
     });
+
+    it("recognizes bare [[tts]] tag and sets hasDirective without overrides", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello world [[tts]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleanedText).toBe("Hello world ");
+      expect(result.overrides).toEqual({});
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it("recognizes [[tts]] alongside other content and strips it from visible text", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "[[tts]] This should be spoken aloud.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleanedText).toBe(" This should be spoken aloud.");
+      expect(result.ttsText).toBeUndefined();
+    });
   });
 
   describe("summarizeText", () => {

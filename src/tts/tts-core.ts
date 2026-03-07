@@ -128,6 +128,14 @@ export function parseTtsDirectives(
     return "";
   });
 
+  // Bare [[tts]] tag — the system prompt instructs the model to use this as a TTS signal.
+  // Recognize it as a directive (sets hasDirective=true) and strip it from visible text.
+  const bareTagRegex = /\[\[tts\]\]/gi;
+  cleanedText = cleanedText.replace(bareTagRegex, () => {
+    hasDirective = true;
+    return "";
+  });
+
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
