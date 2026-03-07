@@ -37,6 +37,7 @@ import {
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
+  context?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -150,11 +151,13 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
+  const context = opts.context?.trim() || config?.gateway?.path?.trim() || undefined;
   const { programArguments, workingDirectory, environment, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
       port: port ?? 18789,
+      context,
       tls,
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,

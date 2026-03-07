@@ -248,6 +248,7 @@ export async function resolveGatewayProgramArguments(params: {
 export async function resolveNodeProgramArguments(params: {
   host: string;
   port: number;
+  context?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -257,6 +258,9 @@ export async function resolveNodeProgramArguments(params: {
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
+  if (params.context?.trim()) {
+    args.push("--context", params.context.trim());
+  }
   if (params.tls || params.tlsFingerprint) {
     args.push("--tls");
   }

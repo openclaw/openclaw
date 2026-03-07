@@ -12,7 +12,7 @@ vi.mock("node:fs/promises", () => ({
   realpath: fsMocks.realpath,
 }));
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -86,5 +86,45 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+});
+
+describe("resolveNodeProgramArguments", () => {
+  const entryPath = path.resolve("/tmp/openclaw/dist/entry.js");
+
+  function setupMocks() {
+    process.argv = ["node", path.resolve("/tmp/openclaw/node_modules/.bin/openclaw")];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === entryPath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+  }
+
+  it("includes --context in args when context is provided", async () => {
+    setupMocks();
+    const result = await resolveNodeProgramArguments({
+      host: "gateway.example.com",
+      port: 18789,
+      context: "my/ws/path",
+    });
+    const args = result.programArguments;
+    const runIdx = args.indexOf("run");
+    expect(runIdx).toBeGreaterThan(-1);
+    const slice = args.slice(runIdx + 1);
+    expect(slice).toContain("--context");
+    expect(slice[slice.indexOf("--context") + 1]).toBe("my/ws/path");
+  });
+
+  it("omits --context when context is empty or undefined", async () => {
+    setupMocks();
+    const result = await resolveNodeProgramArguments({
+      host: "127.0.0.1",
+      port: 18789,
+    });
+    const args = result.programArguments;
+    expect(args).not.toContain("--context");
   });
 });
