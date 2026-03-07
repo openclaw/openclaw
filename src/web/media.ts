@@ -324,7 +324,7 @@ async function loadWebMediaInternal(
   if (/^https?:\/\//i.test(mediaUrl)) {
     // Enforce a download cap during fetch to avoid unbounded memory usage.
     // For optimized images, allow fetching larger payloads before compression.
-    const defaultFetchCap = maxBytesForKind("unknown");
+    const defaultFetchCap = maxBytesForKind("document");
     const fetchCap =
       maxBytes === undefined
         ? defaultFetchCap
