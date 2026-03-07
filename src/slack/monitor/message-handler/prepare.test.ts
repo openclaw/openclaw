@@ -14,6 +14,10 @@ import type { SlackMonitorContext } from "../context.js";
 import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
 
+vi.mock("../../../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
 describe("slack prepareSlackMessage inbound contract", () => {
   let fixtureRoot = "";
   let caseId = 0;
