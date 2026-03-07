@@ -130,16 +130,19 @@ describe("isSystemdServiceEnabled", () => {
     // direct `--user` scope and the machine-user fallback return "Failed to connect to bus".
     // The onboard flow should treat this as "service not yet installed" and continue.
     const { isSystemdServiceEnabled } = await import("./systemd.js");
+    // Use "Connection refused" rather than "No such file or directory" so the
+    // error does not match isSystemctlMissing() and falls through to the new
+    // bus-connection guard added for #38379.
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => {
         const err = new Error("Failed to connect to bus") as Error & { code?: number };
         err.code = 1;
-        cb(err, "", "Failed to connect to bus: No such file or directory");
+        cb(err, "", "Failed to connect to bus: Connection refused");
       })
       .mockImplementationOnce((_cmd, _args, _opts, cb) => {
         const err = new Error("Failed to connect to bus") as Error & { code?: number };
         err.code = 1;
-        cb(err, "", "Failed to connect to bus: No such file or directory");
+        cb(err, "", "Failed to connect to bus: Connection refused");
       });
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(false);
