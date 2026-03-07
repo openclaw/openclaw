@@ -192,7 +192,7 @@ describe("createFeishuClient HTTP timeout", () => {
     );
   });
 
-  it("uses env timeout override when provided", async () => {
+  it("uses env timeout override when provided and no direct timeout is set", async () => {
     process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "60000";
 
     createFeishuClient({
@@ -211,6 +211,29 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
       expect.objectContaining({ timeout: 60_000 }),
+    );
+  });
+
+  it("prefers direct timeout over env override", async () => {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "60000";
+
+    createFeishuClient({
+      appId: "app_10",
+      appSecret: "secret_10",
+      accountId: "timeout-direct-override",
+      httpTimeoutMs: 120_000,
+      config: { httpTimeoutMs: 45_000 },
+    });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 120_000 }),
     );
   });
 
