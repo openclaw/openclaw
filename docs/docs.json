@@ -104,6 +104,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/opencode-go",
+      "destination": "/providers/opencode-go"
+    },
+    {
       "source": "/qianfan",
       "destination": "/providers/qianfan"
     },
@@ -1112,6 +1116,7 @@
                   "providers/ollama",
                   "providers/openai",
                   "providers/opencode",
+                  "providers/opencode-go",
                   "providers/openrouter",
                   "providers/qianfan",
                   "providers/qwen",

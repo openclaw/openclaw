@@ -138,6 +138,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["opencode-zen"],
   },
   {
+    value: "opencode-go",
+    label: "OpenCode Go",
+    hint: "Subscription-based OpenCoding models",
+    choices: ["opencode-go"],
+  },
+  {
     value: "xiaomi",
     label: "Xiaomi",
     hint: "API key",
@@ -285,6 +291,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "opencode-zen",
     label: "OpenCode Zen (multi-model proxy)",
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
+  },
+  {
+    value: "opencode-go",
+    label: "OpenCode Go (subscription)",
+    hint: "Open coding models via opencode.ai/zen/go",
   },
   { value: "minimax-api", label: "MiniMax M2.5" },
   {

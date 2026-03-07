@@ -57,9 +57,14 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
+} from "./onboard-auth.config-opencode-go.js";
+export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
+  OPENCODE_GO_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setOpenaiApiKey,
   setAnthropicApiKey,
@@ -73,6 +78,7 @@ export {
   setMinimaxApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
+  setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,

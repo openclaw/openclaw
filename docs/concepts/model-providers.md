@@ -99,6 +99,19 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
+### OpenCode Go
+
+- Provider: `opencode-go`
+- Auth: `OPENCODE_API_KEY` (or `OPENCODE_GO_API_KEY`)
+- Example model: `opencode-go/kimi-k2.5`
+- CLI: `openclaw onboard --auth-choice opencode-go`
+
+```json5
+{
+  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.5" } } },
+}
+```
+
 ### Google Gemini (API key)
 
 - Provider: `google`

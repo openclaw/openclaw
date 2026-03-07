@@ -305,6 +305,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return { apiKey: envKey, source: "gcloud adc" };
   }
 
+  if (normalized === "opencode-go") {
+    return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_GO_API_KEY");
+  }
+
   if (normalized === "opencode") {
     return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
   }

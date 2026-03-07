@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { OPENCODE_GO_BASE_URL } from "../agents/opencode-go-models.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
@@ -465,6 +466,82 @@ describe("onboard (non-interactive): provider auth", () => {
               source: "env",
               provider: "default",
               id: "OPENCODE_ZEN_API_KEY",
+            });
+          }
+        },
+      );
+    });
+  });
+
+  it("stores OpenCode Go API key and writes provider config", async () => {
+    await withOnboardEnv("openclaw-onboard-opencode-go-flag-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "opencode-go",
+        opencodeGoApiKey: "opencode-go-test-key",
+      });
+
+      expect(cfg.auth?.profiles?.["opencode-go:default"]?.provider).toBe("opencode-go");
+      expect(cfg.auth?.profiles?.["opencode-go:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("opencode-go/kimi-k2.5");
+      expect(cfg.models?.providers?.["opencode-go"]).toMatchObject({
+        baseUrl: OPENCODE_GO_BASE_URL,
+        api: "openai-completions",
+      });
+      await expectApiKeyProfile({
+        profileId: "opencode-go:default",
+        provider: "opencode-go",
+        key: "opencode-go-test-key",
+      });
+    });
+  });
+
+  it("accepts OPENCODE_API_KEY from env for OpenCode Go", async () => {
+    await withOnboardEnv("openclaw-onboard-opencode-go-env-", async (env) => {
+      await withEnvAsync(
+        {
+          OPENCODE_API_KEY: "opencode-go-env-key",
+          OPENCODE_GO_API_KEY: undefined,
+        },
+        async () => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "opencode-go",
+          });
+
+          expect(cfg.auth?.profiles?.["opencode-go:default"]?.provider).toBe("opencode-go");
+          expect(cfg.agents?.defaults?.model?.primary).toBe("opencode-go/kimi-k2.5");
+          await expectApiKeyProfile({
+            profileId: "opencode-go:default",
+            provider: "opencode-go",
+            key: "opencode-go-env-key",
+          });
+        },
+      );
+    });
+  });
+
+  it("stores the detected env alias as keyRef for OpenCode Go ref mode", async () => {
+    await withOnboardEnv("openclaw-onboard-ref-opencode-go-alias-", async ({ runtime }) => {
+      await withEnvAsync(
+        {
+          OPENCODE_API_KEY: undefined,
+          OPENCODE_GO_API_KEY: "opencode-go-zen-env-key",
+        },
+        async () => {
+          await runNonInteractiveOnboardingWithDefaults(runtime, {
+            authChoice: "opencode-go",
+            secretInputMode: "ref",
+            skipSkills: true,
+          });
+
+          const store = ensureAuthProfileStore();
+          const profile = store.profiles["opencode-go:default"];
+          expect(profile?.type).toBe("api_key");
+          if (profile?.type === "api_key") {
+            expect(profile.key).toBeUndefined();
+            expect(profile.keyRef).toEqual({
+              source: "env",
+              provider: "default",
+              id: "OPENCODE_GO_API_KEY",
             });
           }
         },

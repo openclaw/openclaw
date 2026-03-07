@@ -27,6 +27,7 @@ describe("buildAuthChoiceOptions", () => {
       "minimax-api",
       "minimax-api-key-cn",
       "minimax-api-lightning",
+      "opencode-go",
       "moonshot-api-key",
       "moonshot-api-key-cn",
       "kimi-code-api-key",

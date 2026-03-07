@@ -39,6 +39,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
     - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
+    - **OpenCode Go**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_GO_API_KEY`, uses the same OpenCode account as Zen).
     - **API key**: stores the key for you.
     - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)

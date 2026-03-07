@@ -241,7 +241,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       replyToMode: "off", // off | first | all
       dmPolicy: "pairing",
       allowFrom: ["1234567890", "123456789012345678"],
-      dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
+      dm: {
+        enabled: true,
+        groupEnabled: false,
+        groupChannels: ["openclaw-dm"],
+      },
       guilds: {
         "123456789012345678": {
           slug: "friends-of-openclaw",
@@ -1038,7 +1042,10 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
         hardClearRatio: 0.5,
         minPrunableToolChars: 50000,
         softTrim: { maxChars: 4000, headChars: 1500, tailChars: 1500 },
-        hardClear: { enabled: true, placeholder: "[Old tool result content cleared]" },
+        hardClear: {
+          enabled: true,
+          placeholder: "[Old tool result content cleared]",
+        },
         tools: { deny: ["browser", "canvas"] },
       },
     },
@@ -1845,7 +1852,11 @@ Configures inbound media understanding (image/audio/video):
         },
         models: [
           { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
+          {
+            type: "cli",
+            command: "whisper",
+            args: ["--model", "base", "{{MediaPath}}"],
+          },
         ],
       },
       video: {
@@ -2173,7 +2184,9 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+      models: {
+        "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" },
+      },
     },
   },
   models: {
@@ -2756,7 +2769,11 @@ Notes:
 {
   auth: {
     profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:me@example.com": {
+        provider: "anthropic",
+        mode: "oauth",
+        email: "me@example.com",
+      },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
     },
     order: {

@@ -1320,6 +1320,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "opencode-go" as const, expectedProvider: "opencode-go" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
