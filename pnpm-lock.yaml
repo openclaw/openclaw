@@ -17,7 +17,7 @@ overrides:
 
 patchedDependencies:
   '@mariozechner/pi-ai':
-    hash: d87463a41836d6d27147f95f98dc7a1251290cb0c34c9e996d6ce2d882bd9701
+    hash: ee8e82b7551bd5ac8cf1e5cc2c902c17b6bc70e45031e9373d5835e5d8d2bdf7
     path: patches/@mariozechner__pi-ai.patch
 
 importers:
@@ -59,7 +59,7 @@ importers:
         version: 0.53.0(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
         specifier: 0.53.0
-        version: 0.53.0(patch_hash=d87463a41836d6d27147f95f98dc7a1251290cb0c34c9e996d6ce2d882bd9701)(ws@8.19.0)(zod@4.3.6)
+        version: 0.53.0(patch_hash=ee8e82b7551bd5ac8cf1e5cc2c902c17b6bc70e45031e9373d5835e5d8d2bdf7)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.53.0
         version: 0.53.0(ws@8.19.0)(zod@4.3.6)
@@ -7024,7 +7024,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.53.0(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.53.0(patch_hash=d87463a41836d6d27147f95f98dc7a1251290cb0c34c9e996d6ce2d882bd9701)(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.53.0(patch_hash=ee8e82b7551bd5ac8cf1e5cc2c902c17b6bc70e45031e9373d5835e5d8d2bdf7)(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -7034,7 +7034,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.53.0(patch_hash=d87463a41836d6d27147f95f98dc7a1251290cb0c34c9e996d6ce2d882bd9701)(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.53.0(patch_hash=ee8e82b7551bd5ac8cf1e5cc2c902c17b6bc70e45031e9373d5835e5d8d2bdf7)(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.992.0
@@ -7062,7 +7062,7 @@ snapshots:
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.53.0(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.53.0(patch_hash=d87463a41836d6d27147f95f98dc7a1251290cb0c34c9e996d6ce2d882bd9701)(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.53.0(patch_hash=ee8e82b7551bd5ac8cf1e5cc2c902c17b6bc70e45031e9373d5835e5d8d2bdf7)(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.53.0
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2

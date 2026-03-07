@@ -14,6 +14,24 @@
  */
 
 /**
+ * Maximum number of characters to buffer before aborting the stream.
+ * Prevents memory exhaustion when an upstream proxy sends data without
+ * newline delimiters (CWE-400).
+ */
+const MAX_BUFFER_CHARS = 1_000_000;
+
+/**
+ * Sanitize an SSE event name to prevent CRLF/field injection (CWE-93).
+ * Returns `null` if the value is empty after sanitization.
+ */
+export function sanitizeSseEventName(value: string): string | null {
+  // Strip CR, LF, and other ASCII control characters
+  // eslint-disable-next-line no-control-regex
+  const stripped = value.replace(/[\x00-\x1f\x7f]/g, "");
+  return stripped.length > 0 ? stripped : null;
+}
+
+/**
  * Mutable state object for tracking whether the previous line was an `event:`
  * line across chunk boundaries in a streaming SSE response.
  */
@@ -51,7 +69,10 @@ export function processChunk(chunk: string, state: SseInjectionState): string {
           try {
             const parsed = JSON.parse(jsonStr);
             if (parsed && typeof parsed.type === "string") {
-              result.push("event: " + parsed.type);
+              const safeType = sanitizeSseEventName(parsed.type);
+              if (safeType) {
+                result.push("event: " + safeType);
+              }
             }
           } catch {
             // Not valid JSON — leave as-is, no event injection
@@ -114,6 +135,17 @@ export function createSseEventInjectionFetch(): typeof globalThis.fetch {
         }
 
         buffer += decoder.decode(value, { stream: true });
+
+        // Guard against unbounded buffering when upstream sends no newlines
+        if (buffer.length > MAX_BUFFER_CHARS) {
+          try {
+            await reader.cancel();
+          } catch {
+            /* best-effort */
+          }
+          controller.error(new Error("SSE buffer limit exceeded"));
+          return;
+        }
 
         // Process complete lines only (keep incomplete last line in buffer)
         const lastNewline = buffer.lastIndexOf("\n");

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type SseInjectionState, processChunk } from "./sse-event-injection.js";
+import {
+  type SseInjectionState,
+  processChunk,
+  sanitizeSseEventName,
+} from "./sse-event-injection.js";
 
 /**
  * Tests for the SSE event field injection fix.
@@ -9,6 +13,23 @@ import { type SseInjectionState, processChunk } from "./sse-event-injection.js";
 function freshState(): SseInjectionState {
   return { prevWasEvent: false };
 }
+
+describe("sanitizeSseEventName", () => {
+  it("passes through normal event names", () => {
+    expect(sanitizeSseEventName("message_start")).toBe("message_start");
+    expect(sanitizeSseEventName("content_block_delta")).toBe("content_block_delta");
+  });
+
+  it("strips CR/LF and control characters", () => {
+    expect(sanitizeSseEventName("foo\r\nbar")).toBe("foobar");
+    expect(sanitizeSseEventName("foo\x00bar")).toBe("foobar");
+  });
+
+  it("returns null for empty or control-only strings", () => {
+    expect(sanitizeSseEventName("")).toBeNull();
+    expect(sanitizeSseEventName("\r\n")).toBeNull();
+  });
+});
 
 describe("SSE event injection (issue #37571)", () => {
   it("injects event: lines when missing from data-only SSE stream", () => {
@@ -134,6 +155,23 @@ describe("SSE event injection (issue #37571)", () => {
     const chunk2 = 'data: {"type":"content_block_start","index":0}\n\n';
     const output2 = processChunk(chunk2, state);
     expect(output2).toContain("event: content_block_start");
+  });
+
+  it("sanitizes event names with CRLF injection (CWE-93)", () => {
+    const input = 'data: {"type":"foo\\r\\nid:evil"}\n\n';
+
+    const output = processChunk(input, freshState());
+
+    // The injected event name should have control chars stripped
+    expect(output).toContain("event: fooid:evil");
+    expect(output).not.toContain("event: foo\r");
+    expect(output).not.toContain("event: foo\n");
+  });
+
+  it("drops event injection when type is only control characters", () => {
+    const input = 'data: {"type":"\\r\\n"}\n\n';
+    const output = processChunk(input, freshState());
+    expect(output).not.toContain("event:");
   });
 
   it("does not reset prevWasEvent on intermediate SSE fields (id:, retry:)", () => {

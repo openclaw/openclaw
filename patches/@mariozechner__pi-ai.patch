@@ -2,7 +2,7 @@ diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
 index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412dbf8e664 100644
 --- a/dist/providers/anthropic.js
 +++ b/dist/providers/anthropic.js
-@@ -376,11 +376,122 @@ export const streamSimpleAnthropic = (model, context, options) => {
+@@ -376,11 +376,134 @@ export const streamSimpleAnthropic = (model, context, options) => {
          thinkingBudgetTokens: adjusted.thinkingBudget,
      });
  };
@@ -22,6 +22,11 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
 + *
 + * @see https://github.com/openclaw/openclaw/issues/37571
 + */
++const MAX_BUFFER_CHARS = 1000000;
++function sanitizeSseEventName(value) {
++    const stripped = value.replace(/[\x00-\x1f\x7f]/g, "");
++    return stripped.length > 0 ? stripped : null;
++}
 +function createSseEventInjectionFetch() {
 +    return async function sseEventInjectionFetch(url, init) {
 +        const response = await globalThis.fetch(url, init);
@@ -48,6 +53,12 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
 +                    return;
 +                }
 +                buffer += decoder.decode(value, { stream: true });
++                // Guard against unbounded buffering (CWE-400)
++                if (buffer.length > MAX_BUFFER_CHARS) {
++                    try { await reader.cancel(); } catch {}
++                    controller.error(new Error("SSE buffer limit exceeded"));
++                    return;
++                }
 +                // Process complete lines only (keep incomplete last line in buffer)
 +                const lastNewline = buffer.lastIndexOf("\n");
 +                if (lastNewline === -1) return;
@@ -92,7 +103,8 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
 +                    try {
 +                        const parsed = JSON.parse(jsonStr);
 +                        if (parsed && typeof parsed.type === "string") {
-+                            result.push("event: " + parsed.type);
++                            const safeType = sanitizeSseEventName(parsed.type);
++                            if (safeType) result.push("event: " + safeType);
 +                        }
 +                    }
 +                    catch {
@@ -125,7 +137,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
      if (model.provider === "github-copilot") {
          const betaFeatures = [];
          if (interleavedThinking) {
-@@ -391,6 +502,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+@@ -391,6 +514,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
              authToken: apiKey,
              baseURL: model.baseUrl,
              dangerouslyAllowBrowser: true,
@@ -133,7 +145,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
              defaultHeaders: mergeHeaders({
                  accept: "application/json",
                  "anthropic-dangerous-direct-browser-access": "true",
-@@ -410,6 +522,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+@@ -410,6 +534,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
              authToken: apiKey,
              baseURL: model.baseUrl,
              dangerouslyAllowBrowser: true,
@@ -141,7 +153,7 @@ index 0bf2b894799bbc9ef5fda07bc44ea4301c9f395a..2834ebd9e309872792e14cc41a526412
              defaultHeaders: mergeHeaders({
                  accept: "application/json",
                  "anthropic-dangerous-direct-browser-access": "true",
-@@ -425,6 +538,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
+@@ -425,6 +550,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders, dynami
          apiKey,
          baseURL: model.baseUrl,
          dangerouslyAllowBrowser: true,
