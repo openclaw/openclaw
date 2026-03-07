@@ -413,7 +413,9 @@ function parseMergeForwardContent(params: {
     // Resolve @_user_N placeholders using item.mentions from Feishu API
     let resolved = formatted;
     if (item.mentions && item.mentions.length > 0) {
-      for (const m of item.mentions) {
+      // Sort by key length descending to avoid @_user_1 matching inside @_user_10
+      const sorted = [...item.mentions].sort((a, b) => (b.key?.length ?? 0) - (a.key?.length ?? 0));
+      for (const m of sorted) {
         if (m.key) {
           const display = m.name && m.id ? `${m.name}(${m.id})` : m.name || m.id || m.key;
           resolved = resolved.replaceAll(m.key, `@${display}`);
