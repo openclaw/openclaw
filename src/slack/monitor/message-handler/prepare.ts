@@ -49,7 +49,11 @@ import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
-import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
+import {
+  checkThreadSessionFreshness,
+  resolveSlackThreadContextData,
+  type ThreadSessionFreshnessResult,
+} from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -363,6 +367,11 @@ export async function prepareSlackMessage(params: {
     historyKey,
   } = routing;
 
+  // Resolve storePath early (needed for session freshness check before implicitMention)
+  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+    agentId: route.agentId,
+  });
+
   const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
@@ -380,12 +389,28 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
-  const implicitMention = Boolean(
+  // Check if the thread session is fresh enough to allow implicit mentions.
+  // This prevents the bot from auto-replying to stale thread conversations
+  // (e.g., after the configured session timeout) without an explicit @mention.
+  // The freshness lookup only runs on the branch where implicit thread mention
+  // is possible (!isDirectMessage && ctx.botUserId && message.thread_ts),
+  // avoiding avoidable event-loop blocking and latency for DMs and non-thread posts.
+  let sessionFreshness: ThreadSessionFreshnessResult | undefined = undefined;
+  const hasFreshThreadSession =
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
+    (sessionFreshness = checkThreadSessionFreshness({
+      storePath,
+      sessionKey,
+      ctx,
+    })).fresh;
+
+  const implicitMention = Boolean(
+    hasFreshThreadSession &&
     (message.parent_user_id === ctx.botUserId ||
-      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
+      (message.thread_ts &&
+        hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts))),
   );
 
   let resolvedSenderName = message.username?.trim() || undefined;
@@ -597,9 +622,7 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
+  // storePath was resolved earlier (before implicitMention calculation)
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
@@ -649,9 +672,9 @@ export async function prepareSlackMessage(params: {
   const {
     threadStarterBody,
     threadHistoryBody,
-    threadSessionPreviousTimestamp,
     threadLabel,
     threadStarterMedia,
+    isEffectivelyNewSession,
   } = await resolveSlackThreadContextData({
     ctx,
     account,
@@ -664,6 +687,9 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     envelopeOptions,
     effectiveDirectMedia,
+    // OPTIMIZATION: Pass the timestamp from the earlier freshness check
+    // to avoid a redundant session store read. This saves ~25-30ms per thread message.
+    threadSessionPreviousTimestamp: sessionFreshness?.timestamp,
   });
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
@@ -705,11 +731,10 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
-    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
+    // Only include thread starter body for NEW or STALE sessions (fresh sessions already have it in their transcript)
+    ThreadStarterBody: isEffectivelyNewSession ? threadStarterBody : undefined,
     ThreadHistoryBody: threadHistoryBody,
-    IsFirstThreadTurn:
-      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+    IsFirstThreadTurn: isThreadReply && threadTs && isEffectivelyNewSession ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
