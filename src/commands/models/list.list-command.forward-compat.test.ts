@@ -2,10 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
+  const sourceConfig = {
+    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+    models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } },
+  };
+  const resolvedConfig = {
+    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+    models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } },
+  };
   return {
     loadConfig: vi.fn().mockReturnValue({
       agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
       models: { providers: {} },
+    }),
+    sourceConfig,
+    resolvedConfig,
+    loadModelsConfigWithSource: vi.fn().mockResolvedValue({
+      sourceConfig,
+      resolvedConfig,
+      diagnostics: [],
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
     loadModelRegistry: vi
@@ -58,6 +73,10 @@ vi.mock("./list.registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./load-config.js", () => ({
+  loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
+}));
+
 vi.mock("./list.configured.js", () => ({
   resolveConfiguredEntries: mocks.resolveConfiguredEntries,
 }));
@@ -93,6 +112,16 @@ describe("modelsListCommand forward-compat", () => {
     expect(codex).toBeTruthy();
     expect(codex?.missing).toBe(false);
     expect(codex?.tags).not.toContain("missing");
+  });
+
+  it("passes source config to model registry loading for persistence safety", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ json: true }, runtime as never);
+
+    expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
+      sourceConfig: mocks.sourceConfig,
+    });
   });
 
   it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {

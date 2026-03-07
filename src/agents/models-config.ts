@@ -20,6 +20,7 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
+const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
 
 function resolvePreferredTokenLimit(explicitValue: number, implicitValue: number): number {
   // Keep catalog refresh behavior for stale low values while preserving
@@ -233,52 +234,73 @@ function resolveModelsConfigInput(config?: OpenClawConfig): OpenClawConfig {
   return config;
 }
 
+async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
+  const prior = MODELS_JSON_WRITE_LOCKS.get(targetPath) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = prior.then(() => gate);
+  MODELS_JSON_WRITE_LOCKS.set(targetPath, pending);
+  await prior;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (MODELS_JSON_WRITE_LOCKS.get(targetPath) === pending) {
+      MODELS_JSON_WRITE_LOCKS.delete(targetPath);
+    }
+  }
+}
+
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = resolveModelsConfigInput(config);
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
-
-  // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-  // available in process.env before implicit provider discovery.  Some
-  // callers (agent runner, tools) pass config objects that haven't gone
-  // through the full loadConfig() pipeline which applies these.
-  applyConfigEnvVars(cfg);
-
-  const providers = await resolveProvidersForModelsJson({ cfg, agentDir });
-
-  if (Object.keys(providers).length === 0) {
-    return { agentDir, wrote: false };
-  }
-
-  const mode = cfg.models?.mode ?? DEFAULT_MODE;
   const targetPath = path.join(agentDir, "models.json");
-  const secretRefManagedProviders = new Set<string>();
 
-  const normalizedProviders =
-    normalizeProviders({
-      providers,
-      agentDir,
-      secretDefaults: cfg.secrets?.defaults,
+  return await withModelsJsonWriteLock(targetPath, async () => {
+    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
+    // available in process.env before implicit provider discovery. Some
+    // callers (agent runner, tools) pass config objects that haven't gone
+    // through the full loadConfig() pipeline which applies these.
+    applyConfigEnvVars(cfg);
+
+    const providers = await resolveProvidersForModelsJson({ cfg, agentDir });
+
+    if (Object.keys(providers).length === 0) {
+      return { agentDir, wrote: false };
+    }
+
+    const mode = cfg.models?.mode ?? DEFAULT_MODE;
+    const secretRefManagedProviders = new Set<string>();
+
+    const normalizedProviders =
+      normalizeProviders({
+        providers,
+        agentDir,
+        secretDefaults: cfg.secrets?.defaults,
+        secretRefManagedProviders,
+      }) ?? providers;
+    const mergedProviders = await resolveProvidersForMode({
+      mode,
+      targetPath,
+      providers: normalizedProviders,
       secretRefManagedProviders,
-    }) ?? providers;
-  const mergedProviders = await resolveProvidersForMode({
-    mode,
-    targetPath,
-    providers: normalizedProviders,
-    secretRefManagedProviders,
-  });
-  const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
-  const existingRaw = await readRawFile(targetPath);
+    });
+    const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
+    const existingRaw = await readRawFile(targetPath);
 
-  if (existingRaw === next) {
+    if (existingRaw === next) {
+      await ensureModelsFileMode(targetPath);
+      return { agentDir, wrote: false };
+    }
+
+    await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(targetPath, next, { mode: 0o600 });
     await ensureModelsFileMode(targetPath);
-    return { agentDir, wrote: false };
-  }
-
-  await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(targetPath, next, { mode: 0o600 });
-  await ensureModelsFileMode(targetPath);
-  return { agentDir, wrote: true };
+    return { agentDir, wrote: true };
+  });
 }
