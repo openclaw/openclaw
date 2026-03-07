@@ -207,7 +207,7 @@ describe("buildProbeTargets reason codes", () => {
               anthropic: {
                 baseUrl: "https://api.anthropic.com/v1",
                 api: "anthropic-messages",
-                apiKey: "AKIAIOSFODNN7EXAMPLE",
+                apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
                 models: [],
               },
             },

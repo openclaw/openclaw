@@ -648,7 +648,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     targetTypeAliases: ["models.providers.*.headers.*"],
     configFile: "openclaw.json",
     pathPattern: "models.providers.*.headers.*",
-    secretShape: "secret_input",
+    secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,
     includeInConfigure: true,

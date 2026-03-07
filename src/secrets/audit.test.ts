@@ -15,6 +15,8 @@ type AuditFixture = {
   env: NodeJS.ProcessEnv;
 };
 
+const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
+
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -69,7 +71,7 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
     openai: {
       baseUrl: "https://api.openai.com/v1",
       api: "openai-completions",
-      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
       models: [{ id: "gpt-5", name: "gpt-5" }],
     },
   };
@@ -95,12 +97,16 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
       openai: {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-completions",
-        apiKey: "OPENAI_API_KEY",
+        apiKey: OPENAI_API_KEY_MARKER,
         models: [{ id: "gpt-5", name: "gpt-5" }],
       },
     },
   });
-  await fs.writeFile(fixture.envPath, "OPENAI_API_KEY=sk-openai-plaintext\n", "utf8");
+  await fs.writeFile(
+    fixture.envPath,
+    `${OPENAI_API_KEY_MARKER}=sk-openai-plaintext\n`, // pragma: allowlist secret
+    "utf8",
+  );
 }
 
 describe("secrets audit", () => {
@@ -276,7 +282,7 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "sk-models-plaintext",
+          apiKey: "sk-models-plaintext", // pragma: allowlist secret
           models: [{ id: "gpt-5", name: "gpt-5" }],
         },
       },
@@ -301,9 +307,9 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "OPENAI_API_KEY",
+          apiKey: OPENAI_API_KEY_MARKER,
           headers: {
-            Authorization: "Bearer sk-header-plaintext",
+            Authorization: "Bearer sk-header-plaintext", // pragma: allowlist secret
           },
           models: [{ id: "gpt-5", name: "gpt-5" }],
         },
@@ -328,7 +334,7 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "OPENAI_API_KEY",
+          apiKey: OPENAI_API_KEY_MARKER,
           headers: {
             "X-Proxy-Region": "us-west",
           },
@@ -355,7 +361,7 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "OPENAI_API_KEY",
+          apiKey: OPENAI_API_KEY_MARKER,
           models: [{ id: "gpt-5", name: "gpt-5" }],
         },
       },
@@ -379,7 +385,7 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "AKIAIOSFODNN7EXAMPLE",
+          apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
           models: [{ id: "gpt-5", name: "gpt-5" }],
         },
       },
@@ -403,10 +409,10 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "OPENAI_API_KEY",
+          apiKey: OPENAI_API_KEY_MARKER,
           headers: {
-            Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-            "x-managed-token": "secretref-managed",
+            Authorization: "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+            "x-managed-token": "secretref-managed", // pragma: allowlist secret
           },
           models: [{ id: "gpt-5", name: "gpt-5" }],
         },
@@ -440,9 +446,13 @@ describe("secrets audit", () => {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-completions",
-          apiKey: "OPENAI_API_KEY",
+          apiKey: OPENAI_API_KEY_MARKER,
           headers: {
-            Authorization: { source: "env", provider: "default", id: "OPENAI_HEADER_TOKEN" },
+            Authorization: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+            },
           },
           models: [{ id: "gpt-5", name: "gpt-5" }],
         },
@@ -479,7 +489,7 @@ describe("secrets audit", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             api: "openai-completions",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
             headers: {
               "X-Proxy-Region": "us-west",
             },

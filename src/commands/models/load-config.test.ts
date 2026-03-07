@@ -34,13 +34,17 @@ describe("models load-config", () => {
       models: {
         providers: {
           openai: {
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
           },
         },
       },
     };
-    const runtimeConfig = { models: { providers: { openai: { apiKey: "sk-runtime" } } } };
-    const resolvedConfig = { models: { providers: { openai: { apiKey: "sk-resolved" } } } };
+    const runtimeConfig = {
+      models: { providers: { openai: { apiKey: "sk-runtime" } } }, // pragma: allowlist secret
+    };
+    const resolvedConfig = {
+      models: { providers: { openai: { apiKey: "sk-resolved" } } }, // pragma: allowlist secret
+    };
     const targetIds = new Set(["models.providers.*.apiKey"]);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
@@ -74,8 +78,12 @@ describe("models load-config", () => {
 
   it("loadModelsConfig returns resolved config while preserving runtime snapshot behavior", async () => {
     const sourceConfig = { models: { providers: {} } };
-    const runtimeConfig = { models: { providers: { openai: { apiKey: "sk-runtime" } } } };
-    const resolvedConfig = { models: { providers: { openai: { apiKey: "sk-resolved" } } } };
+    const runtimeConfig = {
+      models: { providers: { openai: { apiKey: "sk-runtime" } } }, // pragma: allowlist secret
+    };
+    const resolvedConfig = {
+      models: { providers: { openai: { apiKey: "sk-resolved" } } }, // pragma: allowlist secret
+    };
     const targetIds = new Set(["models.providers.*.apiKey"]);
 
     mocks.loadConfig.mockReturnValue(runtimeConfig);

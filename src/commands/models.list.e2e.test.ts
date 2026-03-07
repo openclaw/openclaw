@@ -328,10 +328,10 @@ describe("models list/status", () => {
     modelRegistryState.models = [OPENAI_MODEL];
     modelRegistryState.available = [OPENAI_MODEL];
     const sourceConfig = {
-      models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } },
+      models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } }, // pragma: allowlist secret
     };
     const resolvedConfig = {
-      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } },
+      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
     };
 
     await loadModelRegistry(resolvedConfig as never, { sourceConfig: sourceConfig as never });
@@ -344,7 +344,7 @@ describe("models list/status", () => {
     modelRegistryState.models = [OPENAI_MODEL];
     modelRegistryState.available = [OPENAI_MODEL];
     const resolvedConfig = {
-      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } },
+      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
     };
 
     await loadModelRegistry(resolvedConfig as never);

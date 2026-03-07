@@ -4,8 +4,8 @@ import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
-export const NON_ENV_SECRETREF_MARKER = "secretref-managed";
-export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:";
+export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
+export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
 const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_BEARER_TOKEN_BEDROCK",

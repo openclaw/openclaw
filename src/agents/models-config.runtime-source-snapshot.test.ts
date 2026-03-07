@@ -24,7 +24,7 @@ describe("models-config runtime source snapshot", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
               api: "openai-completions" as const,
               models: [],
             },
@@ -36,7 +36,7 @@ describe("models-config runtime source snapshot", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
               api: "openai-completions" as const,
               models: [],
             },
@@ -51,7 +51,7 @@ describe("models-config runtime source snapshot", () => {
         const parsed = await readGeneratedModelsJson<{
           providers: Record<string, { apiKey?: string }>;
         }>();
-        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
@@ -78,7 +78,7 @@ describe("models-config runtime source snapshot", () => {
           providers: {
             moonshot: {
               baseUrl: "https://api.moonshot.ai/v1",
-              apiKey: "sk-runtime-moonshot",
+              apiKey: "sk-runtime-moonshot", // pragma: allowlist secret
               api: "openai-completions" as const,
               models: [],
             },
@@ -113,7 +113,7 @@ describe("models-config runtime source snapshot", () => {
                 Authorization: {
                   source: "env",
                   provider: "default",
-                  id: "OPENAI_HEADER_TOKEN",
+                  id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
                 },
                 "X-Tenant-Token": {
                   source: "file",
@@ -150,7 +150,7 @@ describe("models-config runtime source snapshot", () => {
           providers: Record<string, { headers?: Record<string, string> }>;
         }>();
         expect(parsed.providers.openai?.headers?.Authorization).toBe(
-          "secretref-env:OPENAI_HEADER_TOKEN",
+          "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
         );
         expect(parsed.providers.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
       } finally {

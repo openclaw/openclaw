@@ -287,7 +287,7 @@ describe("agentCommand", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
               models: [],
             },
           },
@@ -299,7 +299,7 @@ describe("agentCommand", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
               models: [],
             },
           },
@@ -311,7 +311,7 @@ describe("agentCommand", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-resolved-runtime",
+              apiKey: "sk-resolved-runtime", // pragma: allowlist secret
               models: [],
             },
           },

@@ -11,7 +11,7 @@ describe("model auth markers", () => {
 
   it("recognizes known env marker names but not arbitrary all-caps keys", () => {
     expect(isNonSecretApiKeyMarker("OPENAI_API_KEY")).toBe(true);
-    expect(isNonSecretApiKeyMarker("AKIAIOSFODNN7EXAMPLE")).toBe(false);
+    expect(isNonSecretApiKeyMarker("ALLCAPS_EXAMPLE")).toBe(false);
   });
 
   it("recognizes all built-in provider env marker names", () => {

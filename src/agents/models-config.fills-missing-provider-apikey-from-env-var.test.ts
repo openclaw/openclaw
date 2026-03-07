@@ -167,7 +167,7 @@ describe("models-config", () => {
         const parsed = await readGeneratedModelsJson<{
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
         }>();
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-VL-01");
       });
@@ -227,7 +227,7 @@ describe("models-config", () => {
         providers: {
           custom: {
             baseUrl: "https://agent.example/v1",
-            apiKey: "STALE_AGENT_KEY",
+            apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
             api: "openai-responses",
             models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
           },
@@ -239,7 +239,7 @@ describe("models-config", () => {
           providers: {
             custom: {
               ...createMergeConfigProvider(),
-              apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" }, // pragma: allowlist secret
             },
           },
         },
@@ -248,7 +248,7 @@ describe("models-config", () => {
       const parsed = await readGeneratedModelsJson<{
         providers: Record<string, { apiKey?: string; baseUrl?: string }>;
       }>();
-      expect(parsed.providers.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY");
+      expect(parsed.providers.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
       expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
     });
   });
@@ -266,7 +266,7 @@ describe("models-config", () => {
               "minimax:default": {
                 type: "api_key",
                 provider: "minimax",
-                keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+                keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" }, // pragma: allowlist secret
               },
             },
           },
@@ -279,7 +279,7 @@ describe("models-config", () => {
         providers: {
           minimax: {
             baseUrl: "https://api.minimax.io/anthropic",
-            apiKey: "STALE_AGENT_KEY",
+            apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
             api: "anthropic-messages",
             models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5", input: ["text"] }],
           },
@@ -296,7 +296,7 @@ describe("models-config", () => {
       const parsed = await readGeneratedModelsJson<{
         providers: Record<string, { apiKey?: string }>;
       }>();
-      expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+      expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
     });
   });
 
@@ -319,7 +319,7 @@ describe("models-config", () => {
           providers: {
             custom: {
               ...createMergeConfigProvider(),
-              apiKey: "AKIAIOSFODNN7EXAMPLE",
+              apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
             },
           },
         },
@@ -328,7 +328,7 @@ describe("models-config", () => {
       const parsed = await readGeneratedModelsJson<{
         providers: Record<string, { apiKey?: string }>;
       }>();
-      expect(parsed.providers.custom?.apiKey).toBe("AKIAIOSFODNN7EXAMPLE");
+      expect(parsed.providers.custom?.apiKey).toBe("ALLCAPS_SAMPLE");
     });
   });
 

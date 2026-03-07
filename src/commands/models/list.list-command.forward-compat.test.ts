@@ -4,11 +4,23 @@ const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
   const sourceConfig = {
     agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
-    models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } },
+    models: {
+      providers: {
+        openai: {
+          apiKey: "$OPENAI_API_KEY", // pragma: allowlist secret
+        },
+      },
+    },
   };
   const resolvedConfig = {
     agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
-    models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } },
+    models: {
+      providers: {
+        openai: {
+          apiKey: "sk-resolved-runtime-value", // pragma: allowlist secret
+        },
+      },
+    },
   };
   return {
     loadConfig: vi.fn().mockReturnValue({

@@ -122,7 +122,7 @@ describe("provider discovery auth marker guardrails", () => {
             "vllm:default": {
               type: "api_key",
               provider: "vllm",
-              key: "AKIAIOSFODNN7EXAMPLE",
+              key: "ALLCAPS_SAMPLE",
             },
           },
         },
@@ -135,6 +135,6 @@ describe("provider discovery auth marker guardrails", () => {
     await resolveImplicitProviders({ agentDir });
     const vllmCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":8000"));
     const request = vllmCall?.[1] as { headers?: Record<string, string> } | undefined;
-    expect(request?.headers?.Authorization).toBe("Bearer AKIAIOSFODNN7EXAMPLE");
+    expect(request?.headers?.Authorization).toBe("Bearer ALLCAPS_SAMPLE");
   });
 });

@@ -56,7 +56,7 @@ describe("resolveProviderAuthOverview", () => {
             openai: {
               baseUrl: "https://api.openai.com/v1",
               api: "openai-completions",
-              apiKey: "OPENAI_API_KEY",
+              apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
               models: [],
             },
           },

@@ -459,7 +459,7 @@ describe("resolveProviderAuths key normalization", () => {
               minimax: {
                 baseUrl: "https://api.minimaxi.com",
                 models: [modelDef],
-                apiKey: "AKIAIOSFODNN7EXAMPLE",
+                apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
               },
             },
           },
@@ -468,7 +468,7 @@ describe("resolveProviderAuths key normalization", () => {
         const auths = await resolveProviderAuths({
           providers: ["minimax"],
         });
-        expect(auths).toEqual([{ provider: "minimax", token: "AKIAIOSFODNN7EXAMPLE" }]);
+        expect(auths).toEqual([{ provider: "minimax", token: "ALLCAPS_SAMPLE" }]);
       },
       {
         MINIMAX_API_KEY: undefined,
