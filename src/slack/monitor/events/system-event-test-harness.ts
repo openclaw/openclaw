@@ -10,6 +10,9 @@ export type SlackSystemEventTestOverrides = {
   allowFrom?: string[];
   channelType?: "im" | "channel";
   channelUsers?: string[];
+  reactionTrigger?: "off" | "own" | "all" | "allowlist";
+  reactionAllowlist?: Array<string | number>;
+  botUserId?: string;
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
@@ -45,6 +48,15 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     }),
     resolveUserName: async () => ({ name: "alice" }),
     resolveSlackSystemEventSessionKey: () => "agent:main:main",
+    botUserId: overrides?.botUserId ?? "UBOT",
+    reactionAllowlist: overrides?.reactionAllowlist ?? [],
+    cfg: {
+      channels: {
+        slack: {
+          reactionTrigger: overrides?.reactionTrigger ?? "off",
+        },
+      },
+    },
   } as unknown as SlackMonitorContext;
 
   return {
