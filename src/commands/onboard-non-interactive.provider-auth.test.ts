@@ -261,6 +261,24 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("stores Groq API key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-groq-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "groq-api-key",
+        groqApiKey: "groq-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["groq:default"]?.provider).toBe("groq");
+      expect(cfg.auth?.profiles?.["groq:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("groq/llama-3.3-70b-versatile");
+      await expectApiKeyProfile({
+        profileId: "groq:default",
+        provider: "groq",
+        key: "groq-test-key",
+      });
+    });
+  });
+
   it("infers Mistral auth choice from --mistral-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-mistral-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -389,6 +407,14 @@ describe("onboard (non-interactive): provider auth", () => {
       optionKey: "xaiApiKey",
       flagName: "--xai-api-key",
       envVar: "XAI_API_KEY",
+    },
+    {
+      name: "groq",
+      prefix: "openclaw-onboard-ref-flag-groq-",
+      authChoice: "groq-api-key",
+      optionKey: "groqApiKey",
+      flagName: "--groq-api-key",
+      envVar: "GROQ_API_KEY",
     },
     {
       name: "volcengine",

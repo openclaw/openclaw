@@ -76,6 +76,7 @@ describe("applyAuthChoice", () => {
     "OPENCODE_API_KEY",
     "TOGETHER_API_KEY",
     "QIANFAN_API_KEY",
+    "GROQ_API_KEY",
     "SYNTHETIC_API_KEY",
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
@@ -470,6 +471,13 @@ describe("applyAuthChoice", () => {
       profileId: "mistral:default",
       provider: "mistral",
       modelPrefix: "mistral/",
+    },
+    {
+      authChoice: "groq-api-key",
+      tokenProvider: "groq",
+      profileId: "groq:default",
+      provider: "groq",
+      modelPrefix: "groq/",
     },
     {
       authChoice: "kimi-code-api-key",
@@ -1320,6 +1328,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "groq-api-key" as const, expectedProvider: "groq" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {

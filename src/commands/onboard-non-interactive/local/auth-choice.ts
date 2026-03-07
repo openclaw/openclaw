@@ -30,6 +30,7 @@ import {
   applyVercelAiGatewayConfig,
   applyLitellmConfig,
   applyMistralConfig,
+  applyGroqConfig,
   applyXaiConfig,
   applyXiaomiConfig,
   applyZaiConfig,
@@ -42,6 +43,7 @@ import {
   setKimiCodingApiKey,
   setLitellmApiKey,
   setMistralApiKey,
+  setGroqApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpenaiApiKey,
@@ -388,6 +390,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "groq-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "groq",
+      cfg: baseConfig,
+      flagValue: opts.groqApiKey,
+      flagName: "--groq-api-key",
+      envVar: "GROQ_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setGroqApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "groq:default",
+      provider: "groq",
+      mode: "api_key",
+    });
+    return applyGroqConfig(nextConfig);
   }
 
   if (authChoice === "mistral-api-key") {

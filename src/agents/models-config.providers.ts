@@ -166,6 +166,17 @@ const OPENROUTER_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const GROQ_DEFAULT_MODEL_ID = "llama-3.3-70b-versatile";
+const GROQ_DEFAULT_CONTEXT_WINDOW = 131072;
+const GROQ_DEFAULT_MAX_TOKENS = 8192;
+const GROQ_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
 const VLLM_DEFAULT_MAX_TOKENS = 8192;
@@ -841,6 +852,24 @@ async function buildVllmProvider(params?: {
   };
 }
 
+function buildGroqProvider(): ProviderConfig {
+  return {
+    baseUrl: GROQ_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: GROQ_DEFAULT_MODEL_ID,
+        name: "Llama 3.3 70B Versatile",
+        reasoning: false,
+        input: ["text"],
+        cost: GROQ_DEFAULT_COST,
+        contextWindow: GROQ_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GROQ_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -1120,6 +1149,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "openrouter", store: authStore });
   if (openrouterKey) {
     providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+  }
+
+  const groqKey =
+    resolveEnvApiKeyVarName("groq") ??
+    resolveApiKeyFromProfiles({ provider: "groq", store: authStore });
+  if (groqKey) {
+    providers.groq = { ...buildGroqProvider(), apiKey: groqKey };
   }
 
   const nvidiaKey =

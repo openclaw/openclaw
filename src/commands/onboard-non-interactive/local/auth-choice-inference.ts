@@ -28,6 +28,7 @@ type AuthChoiceFlagOptions = Pick<
   | "minimaxApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "groqApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
   | "volcengineApiKey"

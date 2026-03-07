@@ -21,6 +21,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "groqApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
   | "volcengineApiKey"
@@ -169,6 +170,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--xai-api-key",
     cliOption: "--xai-api-key <key>",
     description: "xAI API key",
+  },
+  {
+    optionKey: "groqApiKey",
+    authChoice: "groq-api-key",
+    cliFlag: "--groq-api-key",
+    cliOption: "--groq-api-key <key>",
+    description: "Groq API key",
   },
   {
     optionKey: "litellmApiKey",

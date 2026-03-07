@@ -37,6 +37,7 @@ describe("buildAuthChoiceOptions", () => {
       "chutes",
       "qwen-portal",
       "xai-api-key",
+      "groq-api-key",
       "mistral-api-key",
       "volcengine-api-key",
       "byteplus-api-key",

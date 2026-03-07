@@ -45,6 +45,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "xai-api-key"
+  | "groq-api-key"
   | "mistral-api-key"
   | "volcengine-api-key"
   | "byteplus-api-key"
@@ -76,6 +77,7 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
+  | "groq"
   | "volcengine"
   | "byteplus"
   | "custom";
@@ -132,6 +134,7 @@ export type OnboardOptions = {
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
+  groqApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
