@@ -60,6 +60,7 @@ vi.mock("../../agents/skills.js", () => ({
 }));
 
 vi.mock("../../agents/skills/refresh.js", () => ({
+  ensureSkillsSnapshotVersion: vi.fn().mockReturnValue(42),
   getSkillsSnapshotVersion: vi.fn().mockReturnValue(42),
 }));
 
