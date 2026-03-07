@@ -30,7 +30,7 @@ implementation. Operators may extend with custom patterns via config.
 - **Case-insensitive matching unless noted.** Injection attempts use varied
   casing. All string pattern matches are case-insensitive by default.
 - **Patterns operate on the serialized MCP result and parsed structure.**
-  Injection patterns (INJ-*) and credential patterns (CRED-*) match against
+  Injection patterns (INJ-_) and credential patterns (CRED-_) match against
   field values extracted from the result. STRUCT-003 additionally applies
   injection patterns against field names — a small but real attack surface.
   All other structural checks (STRUCT-001, STRUCT-002, STRUCT-004) operate

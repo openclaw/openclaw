@@ -216,7 +216,7 @@ function jsonObjectSchemaToToolOutputSchema(value: unknown): ToolOutputSchema | 
     const fieldSchema = isPlainObject(descriptor)
       ? (descriptor as Record<string, unknown>)
       : undefined;
-    const baseType = fieldSchema ? fieldTypeFromJsonSchema(fieldSchema) ?? "any" : "any";
+    const baseType = fieldSchema ? (fieldTypeFromJsonSchema(fieldSchema) ?? "any") : "any";
     fields[field] = requiredSet.has(field) ? baseType : asOptionalType(baseType);
   }
   return Object.keys(fields).length > 0 ? { fields } : undefined;

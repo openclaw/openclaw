@@ -10,14 +10,14 @@
 
 ## Changelog (v2 → v2.1)
 
-| Issue                                                                                                              | Resolution                                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `general` profile `auditVerbosityFloor` was `"standard"`; implementation has `"minimal"`                          | Corrected to `"minimal"`.                                                                                          |
-| `code-generation` schema strictness described as per-source with "strict on file path scope"; code is flat lenient | Updated to flat `"lenient"`. Per-source strictness for path scope is a future enhancement.                         |
-| `research` schema strictness described as "strict on source attribution"; code is flat lenient                    | Updated to flat `"lenient"`.                                                                                       |
-| Sub-agent prompt variants described as `.txt` files in `prompts/`; code uses inline TypeScript constants          | Added implementation note. Target file structure retained as design intent.                                        |
-| Custom profile format listed as "YAML or JSON"; code accepts JSON only                                            | Updated Custom Profiles section and Config Surface to note YAML is not currently supported.                        |
-| `context_profile_loaded` event field `profile` mismatched; implementation uses `contextProfile`                   | Updated event shape to use `contextProfile`.                                                                       |
+| Issue                                                                                                              | Resolution                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `general` profile `auditVerbosityFloor` was `"standard"`; implementation has `"minimal"`                           | Corrected to `"minimal"`.                                                                   |
+| `code-generation` schema strictness described as per-source with "strict on file path scope"; code is flat lenient | Updated to flat `"lenient"`. Per-source strictness for path scope is a future enhancement.  |
+| `research` schema strictness described as "strict on source attribution"; code is flat lenient                     | Updated to flat `"lenient"`.                                                                |
+| Sub-agent prompt variants described as `.txt` files in `prompts/`; code uses inline TypeScript constants           | Added implementation note. Target file structure retained as design intent.                 |
+| Custom profile format listed as "YAML or JSON"; code accepts JSON only                                             | Updated Custom Profiles section and Config Surface to note YAML is not currently supported. |
+| `context_profile_loaded` event field `profile` mismatched; implementation uses `contextProfile`                    | Updated event shape to use `contextProfile`.                                                |
 
 ## Changelog (v1 → v2)
 

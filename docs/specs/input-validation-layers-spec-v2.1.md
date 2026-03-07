@@ -8,11 +8,11 @@
 
 ## Changelog (v2.1 → v2.2)
 
-| Issue                                                                                                    | Resolution                                                                                   |
-| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `TRANSCRIPT_ALLOWED_FIELDS` listed 5 fields; implementation has 17                                      | Updated allowlist to match implementation (added expiresAt, from, to, channelId, etc.).      |
-| Frequency weight keys used stale names (`schema.extra-fields`, `schema.missing-required`)                | Corrected to `schema.extra-field`, `schema.missing-field` to match implementation.           |
-| `schema.no-discriminant` weight listed in spec; not present in implementation `DEFAULT_FREQUENCY_WEIGHTS`| Removed `schema.no-discriminant` entry from default weights table.                           |
+| Issue                                                                                                     | Resolution                                                                              |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `TRANSCRIPT_ALLOWED_FIELDS` listed 5 fields; implementation has 17                                        | Updated allowlist to match implementation (added expiresAt, from, to, channelId, etc.). |
+| Frequency weight keys used stale names (`schema.extra-fields`, `schema.missing-required`)                 | Corrected to `schema.extra-field`, `schema.missing-field` to match implementation.      |
+| `schema.no-discriminant` weight listed in spec; not present in implementation `DEFAULT_FREQUENCY_WEIGHTS` | Removed `schema.no-discriminant` entry from default weights table.                      |
 
 ## Changelog (v2 → v2.1)
 
@@ -188,23 +188,23 @@ Allowed fields:
 
 ```typescript
 const TRANSCRIPT_ALLOWED_FIELDS = [
-  "messageId",       // required, non-empty string
-  "timestamp",       // required, ISO 8601
-  "expiresAt",       // optional, ISO 8601
-  "transcript",      // required, non-empty string
-  "body",            // optional, string
-  "bodyForAgent",    // optional, string
-  "from",            // optional, string
-  "to",              // optional, string
-  "channelId",       // optional, string
-  "conversationId",  // optional, string
-  "senderId",        // optional, string
-  "senderName",      // optional, string
-  "senderUsername",  // optional, string
-  "provider",        // optional, string
-  "surface",         // optional, string
-  "mediaPath",       // optional, string
-  "mediaType",       // optional, string
+  "messageId", // required, non-empty string
+  "timestamp", // required, ISO 8601
+  "expiresAt", // optional, ISO 8601
+  "transcript", // required, non-empty string
+  "body", // optional, string
+  "bodyForAgent", // optional, string
+  "from", // optional, string
+  "to", // optional, string
+  "channelId", // optional, string
+  "conversationId", // optional, string
+  "senderId", // optional, string
+  "senderName", // optional, string
+  "senderUsername", // optional, string
+  "provider", // optional, string
+  "surface", // optional, string
+  "mediaPath", // optional, string
+  "mediaType", // optional, string
 ] as const;
 ```
 

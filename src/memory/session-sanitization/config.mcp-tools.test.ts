@@ -38,4 +38,3 @@ describe("MCP tool declaration matching", () => {
     expect(resolveToolServer(cfg, "repo.read")).toBe(UNKNOWN_MCP_SERVER);
   });
 });
-

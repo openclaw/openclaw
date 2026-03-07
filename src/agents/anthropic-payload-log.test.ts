@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -156,7 +156,7 @@ describe("createAnthropicPayloadLogger", () => {
       {},
     );
 
-    await waitForFileContains(logFile, "\"payloadDigest\"");
+    await waitForFileContains(logFile, '"payloadDigest"');
 
     const raw = await fs.readFile(logFile, "utf8");
     const line = raw

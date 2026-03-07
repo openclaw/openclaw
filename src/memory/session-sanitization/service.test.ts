@@ -324,27 +324,25 @@ describe("session sanitization service", () => {
       },
     });
 
-    const runner = vi.fn().mockImplementation(
-      async (params: { workspaceDir: string }) => {
-        const summaryIndexPath = path.join(params.workspaceDir, "summary-index.jsonl");
-        const summaryLines = (await fs.readFile(summaryIndexPath, "utf8"))
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => JSON.parse(line) as { messageId: string; source?: string });
-        expect(summaryLines.map((row) => row.messageId)).toEqual(["msg-transcript-context"]);
-        expect(summaryLines.every((row) => row.source === "transcript")).toBe(true);
+    const runner = vi.fn().mockImplementation(async (params: { workspaceDir: string }) => {
+      const summaryIndexPath = path.join(params.workspaceDir, "summary-index.jsonl");
+      const summaryLines = (await fs.readFile(summaryIndexPath, "utf8"))
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { messageId: string; source?: string });
+      expect(summaryLines.map((row) => row.messageId)).toEqual(["msg-transcript-context"]);
+      expect(summaryLines.every((row) => row.source === "transcript")).toBe(true);
 
-        return createRunnerResult({
-          mode: "write",
-          decisions: ["new decision"],
-          actionItems: [],
-          entities: [],
-          contextNote: "ok",
-          discard: false,
-        });
-      },
-    );
+      return createRunnerResult({
+        mode: "write",
+        decisions: ["new decision"],
+        actionItems: [],
+        entities: [],
+        contextNote: "ok",
+        discard: false,
+      });
+    });
 
     await writeTranscriptTurnToSessionMemory({
       cfg: createConfig(),
@@ -451,31 +449,29 @@ describe("session sanitization service", () => {
       });
     }
 
-    const runner = vi.fn().mockImplementation(
-      async (params: { workspaceDir: string }) => {
-        const summaryCandidatesPath = path.join(params.workspaceDir, "summary-candidates.jsonl");
-        const rawWindowPath = path.join(params.workspaceDir, "raw-window.jsonl");
-        const summaryLines = (await fs.readFile(summaryCandidatesPath, "utf8"))
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const rawLines = (await fs.readFile(rawWindowPath, "utf8"))
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean);
+    const runner = vi.fn().mockImplementation(async (params: { workspaceDir: string }) => {
+      const summaryCandidatesPath = path.join(params.workspaceDir, "summary-candidates.jsonl");
+      const rawWindowPath = path.join(params.workspaceDir, "raw-window.jsonl");
+      const summaryLines = (await fs.readFile(summaryCandidatesPath, "utf8"))
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const rawLines = (await fs.readFile(rawWindowPath, "utf8"))
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
 
-        expect(summaryLines).toHaveLength(100);
-        expect(rawLines).toHaveLength(100);
+      expect(summaryLines).toHaveLength(100);
+      expect(rawLines).toHaveLength(100);
 
-        return createRunnerResult({
-          mode: "recall",
-          result: "bounded recall",
-          source: "summary",
-          matchedSummaryIds: [],
-          usedRawMessageIds: [],
-        });
-      },
-    );
+      return createRunnerResult({
+        mode: "recall",
+        result: "bounded recall",
+        source: "summary",
+        matchedSummaryIds: [],
+        usedRawMessageIds: [],
+      });
+    });
 
     const result = await recallSessionMemory({
       cfg: createConfig(),

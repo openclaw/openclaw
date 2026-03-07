@@ -8,13 +8,13 @@
 
 ## Changelog (v2.1 → v2.2)
 
-| Issue                                                                                              | Resolution                                                                                                         |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `sessionId: null` for cross-session alerts not implemented; code always uses `entry.sessionId`     | Updated `AlertPayload` type and rule descriptions to reflect actual behavior.                                      |
-| `suppressedCount` described as incremented on dedup; code never tracks or sets it                  | Updated dedup section and payload type comment to reflect that `suppressedCount` is reserved but not populated.    |
-| Rate-limit meta-alerts (`_system.rateLimitActive`, `_system.rateLimitCleared`) not implemented     | Marked as not yet implemented. Rate-limited alerts are silently dropped with a warning log.                        |
-| Daily summary described as written to `daily/<YYYY-MM-DD>.json`; only in-memory counts exist      | Updated Daily Summary section to reflect in-memory-only behavior. File write is deferred.                         |
-| Webhook no-secret described as omitting `X-OpenClaw-Signature`; code sends `sha256=unsigned`       | Updated Webhook Signing and Config Reference to document actual behavior.                                          |
+| Issue                                                                                          | Resolution                                                                                                      |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `sessionId: null` for cross-session alerts not implemented; code always uses `entry.sessionId` | Updated `AlertPayload` type and rule descriptions to reflect actual behavior.                                   |
+| `suppressedCount` described as incremented on dedup; code never tracks or sets it              | Updated dedup section and payload type comment to reflect that `suppressedCount` is reserved but not populated. |
+| Rate-limit meta-alerts (`_system.rateLimitActive`, `_system.rateLimitCleared`) not implemented | Marked as not yet implemented. Rate-limited alerts are silently dropped with a warning log.                     |
+| Daily summary described as written to `daily/<YYYY-MM-DD>.json`; only in-memory counts exist   | Updated Daily Summary section to reflect in-memory-only behavior. File write is deferred.                       |
+| Webhook no-secret described as omitting `X-OpenClaw-Signature`; code sends `sha256=unsigned`   | Updated Webhook Signing and Config Reference to document actual behavior.                                       |
 
 ## Changelog (v2 → v2.1)
 

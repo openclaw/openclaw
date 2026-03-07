@@ -916,21 +916,23 @@ describe("log channel", () => {
       releasePruneWrite = resolve;
     });
     let delayedOnce = false;
-    vi.spyOn(fs, "writeFile").mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
-      const [filePath, data] = args;
-      if (
-        !delayedOnce &&
-        typeof filePath === "string" &&
-        filePath === logFile &&
-        typeof data === "string" &&
-        data.includes('"alertId":"keep-seed"')
-      ) {
-        delayedOnce = true;
-        releasePruneWrite?.();
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      return await originalWriteFile(...args);
-    });
+    vi.spyOn(fs, "writeFile").mockImplementation(
+      async (...args: Parameters<typeof fs.writeFile>) => {
+        const [filePath, data] = args;
+        if (
+          !delayedOnce &&
+          typeof filePath === "string" &&
+          filePath === logFile &&
+          typeof data === "string" &&
+          data.includes('"alertId":"keep-seed"')
+        ) {
+          delayedOnce = true;
+          releasePruneWrite?.();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return await originalWriteFile(...args);
+      },
+    );
 
     const appendA = appendAlertLogEntry(
       {

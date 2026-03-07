@@ -43,4 +43,3 @@ describe("sanitizePayloadForLogging", () => {
     expect((sanitized[0] as { token: string }).token).not.toBe(shared.token);
   });
 });
-

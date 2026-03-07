@@ -153,21 +153,23 @@ describe("session-sanitization storage", () => {
       releaseSweepWrite = resolve;
     });
     let delayedOnce = false;
-    vi.spyOn(fs, "writeFile").mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
-      const [filePath, data] = args;
-      if (
-        !delayedOnce &&
-        typeof filePath === "string" &&
-        filePath === auditFile &&
-        typeof data === "string" &&
-        data.includes('"messageId":"fresh-seed"')
-      ) {
-        delayedOnce = true;
-        releaseSweepWrite?.();
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      return await originalWriteFile(...args);
-    });
+    vi.spyOn(fs, "writeFile").mockImplementation(
+      async (...args: Parameters<typeof fs.writeFile>) => {
+        const [filePath, data] = args;
+        if (
+          !delayedOnce &&
+          typeof filePath === "string" &&
+          filePath === auditFile &&
+          typeof data === "string" &&
+          data.includes('"messageId":"fresh-seed"')
+        ) {
+          delayedOnce = true;
+          releaseSweepWrite?.();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return await originalWriteFile(...args);
+      },
+    );
 
     const sweep = sweepOldAuditEntries({
       agentId: AGENT_ID,
