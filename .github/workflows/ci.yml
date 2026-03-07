@@ -320,6 +320,8 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -334,14 +336,27 @@ jobs:
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            while IFS= read -r path; do
-              [ -n "$path" ] || continue
-              [ -f "$path" ] || continue
-              changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            [ -f "$path" ] || continue
+            changed_files+=("$path")
+          done < <(
+            gh api "repos/$GITHUB_REPO_NAME/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
+              --paginate \
+              --jq '.[].filename'
+          )
+
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+              while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                [ -f "$path" ] || continue
+                changed_files+=("$path")
+              done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+            fi
           fi
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
