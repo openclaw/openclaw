@@ -97,7 +97,7 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };
-  chatType: "direct" | "group" | "thread";
+  chatType: "direct" | "group" | "thread" | "channel";
   conversationId?: string;
 }) {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
@@ -1346,7 +1346,13 @@ async function dispatchDiscordCommandInteraction(params: {
       name: sender.name,
       tag: sender.tag,
     },
-    chatType: isDirectMessage ? "direct" : isThreadChannel ? "thread" : "channel",
+    chatType: isDirectMessage
+      ? "direct"
+      : isThreadChannel
+        ? "thread"
+        : interaction.guild
+          ? "channel"
+          : "group",
     conversationId: rawChannelId || undefined,
   });
   const guildInfo = resolveDiscordGuildEntry({
