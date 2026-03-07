@@ -2591,9 +2591,15 @@ export async function runEmbeddedAttempt(
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
         // --- before_response_emit hook ---
-        // Fires before the final assistant response is delivered.
-        // Must run after messagesSnapshot is captured but before error handling,
-        // so plugins can modify/redact/block the response.
+        // Fires after the prompt completes, before the response is finalized.
+        // Modifies the persisted session history and the delivered response text.
+        //
+        // LIMITATION: In streaming mode, text_delta chunks may already have been
+        // emitted to the client by this point. The hook cannot retract streamed
+        // chunks. It CAN modify/redact what gets persisted to session history
+        // (affecting future LLM context) and what gets delivered in non-streaming
+        // paths. For full real-time stream interception, use before_llm_call to
+        // block the call or after_llm_call to filter tool execution.
         if (hookRunner?.hasHooks("before_response_emit") && !promptError) {
           try {
             const { applyBeforeResponseEmitHook } = await import("./hook-response-emit.js");
