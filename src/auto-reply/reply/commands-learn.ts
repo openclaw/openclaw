@@ -108,6 +108,7 @@ export async function runLearnForSession(params: {
       prompt,
       extraSystemPrompt: LEARN_SYSTEM_PROMPT,
       trigger: "memory",
+      timeoutMs: 5 * 60 * 1000, // 5 minutes
       senderIsOwner: params.senderIsOwner,
       ownerNumbers: params.ownerNumbers,
     });
