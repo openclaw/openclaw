@@ -60,28 +60,56 @@ function validateEvalFunctionBody(fnBody: string): { ok: true } | { ok: false; e
   }
 
   // Dangerous patterns blocked for security
+  // Note: We check both dot notation and bracket notation to prevent bypasses
   const dangerousPatterns: RegExp[] = [
-    /\bdocument\.cookie\b/i,           // Cookie theft
-    /\blocalStorage\b/i,                // Persistent storage access
-    /\bsessionStorage\b/i,              // Session storage access
-    /\bindexedDB\b/i,                   // Database access
-    /\bfetch\s*\(/i,                    // Network exfiltration
-    /\bXMLHttpRequest\b/i,              // XHR exfiltration
-    /\bWebSocket\b/i,                   // WebSocket connection
-    /\beval\s*\(/i,                     // Nested eval
-    /\bnew\s+Function\s*\(/i,          // Dynamic code execution
-    /\bdocument\.write\b/i,             // DOM injection
-    /\bdocument\.writeln\b/i,           // DOM injection
-    /\binnerHTML\s*=/i,                 // HTML injection
-    /\bouterHTML\s*=/i,                 // HTML injection
-    /\bwindow\.location\s*=/i,          // Redirect attacks
-    /\blocation\.href\s*=/i,            // Redirect attacks
-    /\blocation\.replace\b/i,           // Redirect attacks
-    /\blocation\.assign\b/i,            // Redirect attacks
-    /\bwindow\.open\b/i,                // Popup attacks
-    /\balert\s*\(/i,                    // User disruption
-    /\bconfirm\s*\(/i,                  // User disruption
-    /\bprompt\s*\(/i,                   // User disruption
+    // Cookie theft (dot and bracket notation)
+    /\bdocument\.cookie\b/i,
+    /\bdocument\s*\[\s*['"]cookie['"]\s*\]/i,
+    
+    // Storage access (dot and bracket notation)
+    /\blocalStorage\b/i,
+    /\bwindow\s*\[\s*['"]localStorage['"]\s*\]/i,
+    /\bsessionStorage\b/i,
+    /\bwindow\s*\[\s*['"]sessionStorage['"]\s*\]/i,
+    /\bindexedDB\b/i,
+    /\bwindow\s*\[\s*['"]indexedDB['"]\s*\]/i,
+    
+    // Network exfiltration
+    /\bfetch\s*\(/i,
+    /\bwindow\s*\[\s*['"]fetch['"]\s*\]\s*\(/i,
+    /\bXMLHttpRequest\b/i,
+    /\bWebSocket\b/i,
+    
+    // Code execution
+    /\beval\s*\(/i,
+    /\bnew\s+Function\s*\(/i,
+    /\bwindow\s*\[\s*['"]eval['"]\s*\]/i,
+    
+    // DOM injection
+    /\bdocument\.write\b/i,
+    /\bdocument\.writeln\b/i,
+    /\binnerHTML\s*=/i,
+    /\bouterHTML\s*=/i,
+    /\['innerHTML'\]\s*=/i,
+    /\['outerHTML'\]\s*=/i,
+    /\["innerHTML"\]\s*=/i,
+    /\["outerHTML"\]\s*=/i,
+    
+    // Redirect attacks
+    /\bwindow\.location\b/i,
+    /\blocation\.href\b/i,
+    /\blocation\.replace\b/i,
+    /\blocation\.assign\b/i,
+    /\bwindow\s*\[\s*['"]location['"]\s*\]/i,
+    
+    // Popup attacks
+    /\bwindow\.open\b/i,
+    /\bwindow\s*\[\s*['"]open['"]\s*\]/i,
+    
+    // User disruption
+    /\balert\s*\(/i,
+    /\bconfirm\s*\(/i,
+    /\bprompt\s*\(/i,
   ];
 
   for (const pattern of dangerousPatterns) {
@@ -500,6 +528,11 @@ export async function waitForViaPlaywright(opts: {
   if (opts.fn) {
     const fn = String(opts.fn).trim();
     if (fn) {
+      // SECURITY: Validate function body before execution (same as evaluateViaPlaywright)
+      const validation = validateEvalFunctionBody(fn);
+      if (!validation.ok) {
+        throw new Error(`waitForFunction() validation failed: ${validation.error}`);
+      }
       await page.waitForFunction(fn, { timeout });
     }
   }
