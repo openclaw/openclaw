@@ -71,7 +71,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             BASE="${{ github.event.before }}"
           else
-            BASE="$PR_BASE_SHA"
+            BASE="${{ github.event.pull_request.base.sha }}"
           fi
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
