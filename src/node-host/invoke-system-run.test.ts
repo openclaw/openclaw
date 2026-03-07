@@ -847,6 +847,17 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("denies PowerShell encoded-command payloads in allowlist mode without explicit approval", async () => {
+    const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "allowlist",
+      ask: "on-miss",
+      command: ["pwsh", "-EncodedCommand", "ZQBjAGgAbwAgAHAAdwBuAGUAZAA="],
+    });
+    expect(runCommand).not.toHaveBeenCalled();
+    expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+  });
+
   it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
     if (process.platform === "win32") {
       return;
