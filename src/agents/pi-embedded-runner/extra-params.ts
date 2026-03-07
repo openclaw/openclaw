@@ -1024,9 +1024,9 @@ function createKilocodeWrapper(
         ...options?.headers,
         ...resolveKilocodeAppHeaders(),
       },
-      onPayload: (payload) => {
+      onPayload: (payload, model) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        onPayload?.(payload);
+        onPayload?.(payload, model);
       },
     });
   };
