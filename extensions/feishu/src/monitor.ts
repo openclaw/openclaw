@@ -104,16 +104,29 @@ export function shouldSkipDispatchForMentionPolicy(params: {
   const currentMentioned = currentBotOpenId ? mentionedOpenIds.includes(currentBotOpenId) : false;
   const mainBotOpenId = botOpenIdMap.get(PRIMARY_FEISHU_ACCOUNT_ID)?.trim();
   const mainMentioned = Boolean(mainBotOpenId && mentionedOpenIds.includes(mainBotOpenId));
-  const siblingBotOpenIds = new Set(
-    [...botOpenIdMap.entries()]
-      .filter(([id, openId]) => id !== accountId && Boolean(openId?.trim()))
-      .map(([, openId]) => openId.trim()),
-  );
-  const siblingMentioned = mentionedOpenIds.some((openId) => siblingBotOpenIds.has(openId));
+  const mentionedBotAccountIds = [...botOpenIdMap.entries()]
+    .filter(([, openId]) => Boolean(openId?.trim()))
+    .filter(([, openId]) => mentionedOpenIds.includes(openId.trim()))
+    .map(([id]) => id);
+  const specialistMentionCount = mentionedBotAccountIds.filter(
+    (id) => id !== PRIMARY_FEISHU_ACCOUNT_ID,
+  ).length;
   if (accountId === PRIMARY_FEISHU_ACCOUNT_ID) {
-    return !currentMentioned && siblingMentioned;
+    if (currentMentioned) {
+      return false;
+    }
+    if (specialistMentionCount > 1) {
+      return false;
+    }
+    return specialistMentionCount === 1;
   }
-  return currentMentioned && mainMentioned;
+  if (!currentMentioned) {
+    return false;
+  }
+  if (mainMentioned) {
+    return true;
+  }
+  return specialistMentionCount > 1;
 }
 
 export function setFeishuBotOpenIdForTesting(accountId: string, openId: string): void {

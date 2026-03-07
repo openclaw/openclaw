@@ -18,7 +18,8 @@ Rules:
 
 1. If a group message mentions only a specialist bot, `main` skips dispatch.
 2. If a group message mentions both `main` and the currently addressed specialist bot, the specialist bot skips dispatch.
-3. Plain `@main` or normal group messages continue to route to `main`.
+3. If a group message mentions multiple specialist bots without `main`, `main` keeps dispatch and all mentioned specialist bots skip direct dispatch.
+4. Plain `@main` or normal group messages continue to route to `main`.
 
 ## Implementation
 

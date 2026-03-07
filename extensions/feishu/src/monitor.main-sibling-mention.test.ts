@@ -143,4 +143,42 @@ describe("shouldSkipDispatchForMentionPolicy", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps main dispatch when multiple specialist bots are mentioned without main", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
+
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "main",
+        currentBotOpenId: "ou_main",
+        event: makeGroupEvent({
+          mentions: [
+            { openId: "ou_flink", name: "flink-sre", key: "@_user_1" },
+            { openId: "ou_starrocks", name: "starrocks-sre", key: "@_user_2" },
+          ],
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("skips specialist dispatch when multiple specialist bots are mentioned without main", () => {
+    setFeishuBotOpenIdForTesting("main", "ou_main");
+    setFeishuBotOpenIdForTesting("flink-sre", "ou_flink");
+    setFeishuBotOpenIdForTesting("starrocks-sre", "ou_starrocks");
+
+    expect(
+      shouldSkipDispatchForMentionPolicy({
+        accountId: "flink-sre",
+        currentBotOpenId: "ou_flink",
+        event: makeGroupEvent({
+          mentions: [
+            { openId: "ou_flink", name: "flink-sre", key: "@_user_1" },
+            { openId: "ou_starrocks", name: "starrocks-sre", key: "@_user_2" },
+          ],
+        }),
+      }),
+    ).toBe(true);
+  });
 });
