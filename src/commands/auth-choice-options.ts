@@ -72,7 +72,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xai-api-key"],
   },
   {
-    alue: "groq",
+    value: "groq",
     label: "Groq",
     hint: "API key",
     choices: ["groq-api-key"],
