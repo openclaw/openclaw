@@ -34,6 +34,44 @@ function createPrompter(params: { selectValue?: string; textValue?: string }): {
   return { prompter, notes };
 }
 
+function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConfig {
+  return {
+    tools: {
+      web: {
+        search: {
+          provider: "perplexity",
+          ...(enabled === undefined ? {} : { enabled }),
+          perplexity: { apiKey },
+        },
+      },
+    },
+  };
+}
+
+async function runBlankPerplexityKeyEntry(
+  apiKey: string,
+  enabled?: boolean,
+): Promise<OpenClawConfig> {
+  const cfg = createPerplexityConfig(apiKey, enabled);
+  const { prompter } = createPrompter({
+    selectValue: "perplexity",
+    textValue: "",
+  });
+  return setupSearch(cfg, runtime, prompter);
+}
+
+async function runQuickstartPerplexitySetup(
+  apiKey: string,
+  enabled?: boolean,
+): Promise<{ result: OpenClawConfig; prompter: WizardPrompter }> {
+  const cfg = createPerplexityConfig(apiKey, enabled);
+  const { prompter } = createPrompter({ selectValue: "perplexity" });
+  const result = await setupSearch(cfg, runtime, prompter, {
+    quickstartDefaults: true,
+  });
+  return { result, prompter };
+}
+
 describe("setupSearch", () => {
   it("returns config unchanged when user skips", async () => {
     const cfg: OpenClawConfig = {};
@@ -103,74 +141,49 @@ describe("setupSearch", () => {
   });
 
   it("shows missing-key note when no key is provided and no env var", async () => {
-    const cfg: OpenClawConfig = {};
-    const { prompter, notes } = createPrompter({
-      selectValue: "brave",
-      textValue: "",
-    });
-    const result = await setupSearch(cfg, runtime, prompter);
-    expect(result.tools?.web?.search?.provider).toBe("brave");
-    expect(result.tools?.web?.search?.enabled).toBeUndefined();
-    const missingNote = notes.find((n) => n.message.includes("No API key stored"));
-    expect(missingNote).toBeDefined();
+    const original = process.env.BRAVE_API_KEY;
+    delete process.env.BRAVE_API_KEY;
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter, notes } = createPrompter({
+        selectValue: "brave",
+        textValue: "",
+      });
+      const result = await setupSearch(cfg, runtime, prompter);
+      expect(result.tools?.web?.search?.provider).toBe("brave");
+      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      expect(missingNote).toBeDefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.BRAVE_API_KEY;
+      } else {
+        process.env.BRAVE_API_KEY = original;
+      }
+    }
   });
 
   it("keeps existing key when user leaves input blank", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        web: {
-          search: {
-            provider: "perplexity",
-            perplexity: { apiKey: "existing-key" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-    const { prompter } = createPrompter({
-      selectValue: "perplexity",
-      textValue: "",
-    });
-    const result = await setupSearch(cfg, runtime, prompter);
+    const result = await runBlankPerplexityKeyEntry(
+      "existing-key", // pragma: allowlist secret
+    );
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
   it("advanced preserves enabled:false when keeping existing key", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        web: {
-          search: {
-            provider: "perplexity",
-            enabled: false,
-            perplexity: { apiKey: "existing-key" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-    const { prompter } = createPrompter({
-      selectValue: "perplexity",
-      textValue: "",
-    });
-    const result = await setupSearch(cfg, runtime, prompter);
+    const result = await runBlankPerplexityKeyEntry(
+      "existing-key", // pragma: allowlist secret
+      false,
+    );
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
 
   it("quickstart skips key prompt when config key exists", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        web: {
-          search: {
-            provider: "perplexity",
-            perplexity: { apiKey: "stored-pplx-key" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-    const { prompter } = createPrompter({ selectValue: "perplexity" });
-    const result = await setupSearch(cfg, runtime, prompter, {
-      quickstartDefaults: true,
-    });
+    const { result, prompter } = await runQuickstartPerplexitySetup(
+      "stored-pplx-key", // pragma: allowlist secret
+    );
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("stored-pplx-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
@@ -178,21 +191,10 @@ describe("setupSearch", () => {
   });
 
   it("quickstart preserves enabled:false when search was intentionally disabled", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        web: {
-          search: {
-            provider: "perplexity",
-            enabled: false,
-            perplexity: { apiKey: "stored-pplx-key" }, // pragma: allowlist secret
-          },
-        },
-      },
-    };
-    const { prompter } = createPrompter({ selectValue: "perplexity" });
-    const result = await setupSearch(cfg, runtime, prompter, {
-      quickstartDefaults: true,
-    });
+    const { result, prompter } = await runQuickstartPerplexitySetup(
+      "stored-pplx-key", // pragma: allowlist secret
+      false,
+    );
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("stored-pplx-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
@@ -200,14 +202,24 @@ describe("setupSearch", () => {
   });
 
   it("quickstart falls through to key prompt when no key and no env var", async () => {
-    const cfg: OpenClawConfig = {};
-    const { prompter } = createPrompter({ selectValue: "grok", textValue: "" });
-    const result = await setupSearch(cfg, runtime, prompter, {
-      quickstartDefaults: true,
-    });
-    expect(prompter.text).toHaveBeenCalled();
-    expect(result.tools?.web?.search?.provider).toBe("grok");
-    expect(result.tools?.web?.search?.enabled).toBeUndefined();
+    const original = process.env.XAI_API_KEY;
+    delete process.env.XAI_API_KEY;
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter } = createPrompter({ selectValue: "grok", textValue: "" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        quickstartDefaults: true,
+      });
+      expect(prompter.text).toHaveBeenCalled();
+      expect(result.tools?.web?.search?.provider).toBe("grok");
+      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = original;
+      }
+    }
   });
 
   it("quickstart skips key prompt when env var is available", async () => {
