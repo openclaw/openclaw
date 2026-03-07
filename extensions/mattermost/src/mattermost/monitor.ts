@@ -1637,30 +1637,35 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // to avoid whitespace/markdown reconstruction issues at chunk boundaries.
     let streamMessageId: string | null = null;
     let pendingPatchText = "";
-    let patchTimer: ReturnType<typeof setTimeout> | null = null;
-    const STREAM_PATCH_THROTTLE_MS = 200;
+    let lastSentText = "";
+    let patchInterval: ReturnType<typeof setInterval> | null = null;
+    let patchSending = false; // prevents concurrent network calls
+    const STREAM_PATCH_INTERVAL_MS = 200;
 
-    const resolvedBaseUrl = normalizeMattermostBaseUrl(account.baseUrl);
-    const resolvedBotToken = account.botToken?.trim();
-    // Respect explicit blockStreaming=false opt-out. When disabled, skip all
-    // streaming state and fall back to normal final-only delivery.
+    // Use the already-resolved baseUrl/botToken from the outer scope
+    // (opts.baseUrl ?? account.baseUrl). account.baseUrl is often empty when
+    // baseUrl is configured at the top level of the mattermost channel config.
     const streamingEnabled = account.blockStreaming !== false;
     const blockStreamingClient =
-      streamingEnabled && resolvedBaseUrl && resolvedBotToken
-        ? createMattermostClient({ baseUrl: resolvedBaseUrl, botToken: resolvedBotToken })
+      streamingEnabled && baseUrl && botToken
+        ? createMattermostClient({ baseUrl, botToken })
         : null;
 
-    // Flush any pending throttled patch immediately (e.g. before final delivery).
+    // Stop the patch interval.
+    const stopPatchInterval = () => {
+      if (patchInterval) {
+        clearInterval(patchInterval);
+        patchInterval = null;
+      }
+    };
+
+    // Flush: stop interval and send latest pending text if not yet sent.
     const flushPendingPatch = async () => {
-      if (!patchTimer) {
-        return;
-      }
-      clearTimeout(patchTimer);
-      patchTimer = null;
+      stopPatchInterval();
+      if (!blockStreamingClient) return;
       const text = pendingPatchText;
-      if (!text || !blockStreamingClient) {
-        return;
-      }
+      if (!text || text === lastSentText) return;
+      lastSentText = text;
       if (!streamMessageId) {
         try {
           const result = await sendMessageMattermost(to, text, {
@@ -1685,52 +1690,47 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       }
     };
 
-    // Schedule a throttled patch. Leading-edge: first call fires after THROTTLE_MS;
-    // subsequent calls within the window update pendingPatchText only (latest wins).
-    // patchTimer is cleared only AFTER the async network call completes so that
-    // flushPendingPatch() (called before final delivery) reliably detects any
-    // in-flight patch and waits for it to settle.
+    // Schedule progressive patches via setInterval.
+    // Each tick sends/edits only when new text is available (lastSentText guard).
+    // patchSending prevents concurrent network calls within the same message.
     const schedulePatch = (fullText: string) => {
-      if (!blockStreamingClient) {
-        return;
-      }
+      if (!blockStreamingClient) return;
       pendingPatchText = fullText;
-      if (patchTimer) {
-        // Timer already running — just update pendingPatchText (latest text wins).
-        return;
-      }
-      patchTimer = setTimeout(() => {
+      if (patchInterval) return; // interval already running, tick will pick up new text
+      patchInterval = setInterval(() => {
+        const text = pendingPatchText;
+        if (!text || text === lastSentText || patchSending) return;
+        lastSentText = text;
+        patchSending = true;
         void (async () => {
-          const text = pendingPatchText;
-          if (!text) {
-            patchTimer = null;
-            return;
-          }
-          if (!streamMessageId) {
-            try {
-              const result = await sendMessageMattermost(to, text, {
-                accountId: account.accountId,
-                replyToId: threadRootId,
-              });
-              streamMessageId = result.messageId;
-              runtime.log?.(`stream-patch started ${streamMessageId}`);
-            } catch (err) {
-              logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+          try {
+            if (!streamMessageId) {
+              try {
+                const result = await sendMessageMattermost(to, text, {
+                  accountId: account.accountId,
+                  replyToId: threadRootId,
+                });
+                streamMessageId = result.messageId;
+                runtime.log?.(`stream-patch started ${streamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+              }
+            } else {
+              try {
+                await patchMattermostPost(blockStreamingClient, {
+                  postId: streamMessageId,
+                  message: text,
+                });
+                runtime.log?.(`stream-patch edited ${streamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
+              }
             }
-          } else {
-            try {
-              await patchMattermostPost(blockStreamingClient, {
-                postId: streamMessageId,
-                message: text,
-              });
-              runtime.log?.(`stream-patch edited ${streamMessageId}`);
-            } catch (err) {
-              logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
-            }
+          } finally {
+            patchSending = false;
           }
-          patchTimer = null;
         })();
-      }, STREAM_PATCH_THROTTLE_MS);
+      }, STREAM_PATCH_INTERVAL_MS);
     };
 
     const { dispatcher, replyOptions, markDispatchIdle } =
@@ -1780,7 +1780,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
 
           if (isFinal) {
+            stopPatchInterval();
             streamMessageId = null;
+            pendingPatchText = "";
+            lastSentText = "";
+            patchSending = false;
           }
 
           if (mediaUrls.length === 0) {
