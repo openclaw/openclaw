@@ -76,6 +76,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
+- Continuity: pending review queue, approved continuity library, source previews, and approve/reject/remove actions (`continuity.*`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
@@ -99,6 +100,20 @@ Cron jobs panel notes:
 - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
 - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
 - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
+
+## Continuity tab
+
+The Continuity tab manages the opt-in `continuity` context-engine plugin.
+
+Default behavior:
+
+- main direct chat items can auto-promote
+- paired direct chat items go to review
+- groups and channels stay off by default
+- recall stays limited to direct chats unless you widen the continuity scope
+
+Approved items are written into `memory/continuity/*.md`, while pending items
+stay in agent-local state until you approve them.
 
 ## Chat behavior
 

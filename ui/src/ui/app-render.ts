@@ -20,6 +20,12 @@ import {
   removeConfigFormValue,
 } from "./controllers/config.ts";
 import {
+  loadContinuity,
+  loadContinuityExplain,
+  patchContinuity,
+  updateContinuityFilters,
+} from "./controllers/continuity.ts";
+import {
   loadCronRuns,
   loadMoreCronJobs,
   loadMoreCronRuns,
@@ -71,6 +77,7 @@ import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderConfig } from "./views/config.ts";
+import { renderContinuity } from "./views/continuity.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
@@ -434,6 +441,30 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSessionAndRefresh(state, key),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "continuity"
+            ? renderContinuity({
+                loading: state.continuityLoading,
+                error: state.continuityError,
+                status: state.continuityStatus,
+                records: state.continuityRecords,
+                agentId: state.continuityAgentId,
+                stateFilter: state.continuityStateFilter,
+                kindFilter: state.continuityKindFilter,
+                sourceFilter: state.continuitySourceFilter,
+                limit: state.continuityLimit,
+                busyId: state.continuityBusyId,
+                explainById: state.continuityExplainById,
+                onFilterChange: (patch) => updateContinuityFilters(state, patch),
+                onRefresh: () => loadContinuity(state),
+                onApprove: (id) => patchContinuity(state, id, "approve"),
+                onReject: (id) => patchContinuity(state, id, "reject"),
+                onRemove: (id) => patchContinuity(state, id, "remove"),
+                onExplain: (id) => loadContinuityExplain(state, id),
               })
             : nothing
         }

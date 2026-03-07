@@ -1019,6 +1019,7 @@ export async function runEmbeddedPiAgent(
               );
               const compactResult = await contextEngine.compact({
                 sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
                 sessionFile: params.sessionFile,
                 tokenBudget: ctxInfo.tokens,
                 force: true,
