@@ -168,9 +168,12 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
     ].join("\n"),
     "Slack socket mode tokens",
   );
-  // Print the manifest outside the note box so it can be copied as-is.
-  process.stdout.write("\nManifest JSON (copy and paste into Slack API → From manifest):\n\n");
-  process.stdout.write(buildSlackManifest(botName) + "\n\n");
+  // Output the manifest as a separate note so both CLI (clack) and
+  // gateway/web wizard transports can display it to the user.
+  await prompter.note(
+    buildSlackManifest(botName),
+    "Manifest JSON — copy and paste into Slack API → From manifest",
+  );
 }
 
 function setSlackChannelAllowlist(
