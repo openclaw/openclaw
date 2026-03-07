@@ -13,6 +13,7 @@ describe("config view", () => {
     applying: false,
     updating: false,
     connected: true,
+    manualRestart: false,
     schema: {
       type: "object",
       properties: {},
@@ -132,6 +133,28 @@ describe("config view", () => {
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
     expect(applyButton?.disabled).toBe(false);
+  });
+
+  it("hides apply and shows restart guidance in manual restart mode", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        manualRestart: true,
+        formMode: "raw",
+        raw: '{\n  gateway: { mode: "local" }\n}\n',
+        originalRaw: "{\n}\n",
+      }),
+      container,
+    );
+
+    const { saveButton, applyButton } = findActionButtons(container);
+    expect(saveButton).not.toBeUndefined();
+    expect(saveButton?.disabled).toBe(false);
+    expect(applyButton).toBeUndefined();
+    expect(container.textContent).toContain(
+      "Changes are saved immediately. Restart OpenClaw in Hanggent to apply them.",
+    );
   });
 
   it("switches mode via the sidebar toggle", () => {

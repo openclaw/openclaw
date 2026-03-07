@@ -14,6 +14,7 @@ export type ConfigProps = {
   applying: boolean;
   updating: boolean;
   connected: boolean;
+  manualRestart: boolean;
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
@@ -456,6 +457,7 @@ export function renderConfig(props: ConfigProps) {
     hasChanges &&
     (props.formMode === "raw" ? true : canSaveForm);
   const canApply =
+    !props.manualRestart &&
     props.connected &&
     !props.applying &&
     !props.updating &&
@@ -647,13 +649,19 @@ export function renderConfig(props: ConfigProps) {
             >
               ${props.saving ? "Saving…" : "Save"}
             </button>
-            <button
-              class="btn btn--sm"
-              ?disabled=${!canApply}
-              @click=${props.onApply}
-            >
-              ${props.applying ? "Applying…" : "Apply"}
-            </button>
+            ${
+              props.manualRestart
+                ? nothing
+                : html`
+                    <button
+                      class="btn btn--sm"
+                      ?disabled=${!canApply}
+                      @click=${props.onApply}
+                    >
+                      ${props.applying ? "Applying…" : "Apply"}
+                    </button>
+                  `
+            }
             <button
               class="btn btn--sm"
               ?disabled=${!canUpdate}
@@ -663,6 +671,15 @@ export function renderConfig(props: ConfigProps) {
             </button>
           </div>
         </div>
+        ${
+          props.manualRestart
+            ? html`
+                <div class="config-status muted">
+                  Changes are saved immediately. Restart OpenClaw in Hanggent to apply them.
+                </div>
+              `
+            : nothing
+        }
 
         <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
         ${

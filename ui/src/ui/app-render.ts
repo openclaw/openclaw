@@ -96,6 +96,19 @@ const CRON_TIMEZONE_SUGGESTIONS = [
   "Asia/Tokyo",
 ];
 
+function resolveManualRestartMode(): boolean {
+  if (typeof window === "undefined" || !window.location.search) {
+    return false;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("manualRestart");
+  if (!raw) {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
 }
@@ -139,6 +152,7 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  const manualRestart = resolveManualRestartMode();
   const openClawVersion =
     (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
     state.updateAvailable?.currentVersion ||
@@ -1091,6 +1105,7 @@ export function renderApp(state: AppViewState) {
                 applying: state.configApplying,
                 updating: state.updateRunning,
                 connected: state.connected,
+                manualRestart,
                 schema: state.configSchema,
                 schemaLoading: state.configSchemaLoading,
                 uiHints: state.configUiHints,
