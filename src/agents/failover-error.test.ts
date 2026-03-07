@@ -32,6 +32,8 @@ const BEDROCK_THROTTLING_EXCEPTION_MESSAGE =
   "ThrottlingException: Your request was denied due to exceeding the account quotas for Amazon Bedrock.";
 const BEDROCK_SERVICE_UNAVAILABLE_MESSAGE =
   "ServiceUnavailable: The service is temporarily unable to handle the request.";
+// AWS Bedrock daily token limit error (#38822):
+const BEDROCK_TOKEN_LIMIT_MESSAGE = "Too many tokens per day";
 // Groq error codes examples: https://console.groq.com/docs/errors
 const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
@@ -111,6 +113,12 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
     expect(
       resolveFailoverReasonFromError({
+        status: 429,
+        message: BEDROCK_TOKEN_LIMIT_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
         status: 503,
         message: BEDROCK_SERVICE_UNAVAILABLE_MESSAGE,
       }),
@@ -162,6 +170,14 @@ describe("failover-error", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "LLM error: monthly limit reached",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("treats bedrock daily token limit as rate_limit (#38822)", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: BEDROCK_TOKEN_LIMIT_MESSAGE,
       }),
     ).toBe("rate_limit");
   });
