@@ -20,7 +20,8 @@ const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
 );
 
 function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
-  return normalizeProviderId(provider ?? "") === "openrouter";
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === "openrouter" || normalized === "kilocode";
 }
 
 export function resolveProfileUnusableUntil(

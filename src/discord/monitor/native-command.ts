@@ -20,6 +20,7 @@ import {
 } from "../../acp/persistent-bindings.route.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -91,6 +92,46 @@ import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
+
+function resolveDiscordNativeCommandAllowlistAccess(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  sender: { id: string; name?: string; tag?: string };
+  chatType: "direct" | "group" | "thread" | "channel";
+  conversationId?: string;
+}) {
+  const commandsAllowFrom = params.cfg.commands?.allowFrom;
+  if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
+    return { configured: false, allowed: false } as const;
+  }
+  const configured =
+    Array.isArray(commandsAllowFrom.discord) || Array.isArray(commandsAllowFrom["*"]);
+  if (!configured) {
+    return { configured: false, allowed: false } as const;
+  }
+
+  const from =
+    params.chatType === "direct"
+      ? `discord:${params.sender.id}`
+      : `discord:${params.chatType}:${params.conversationId ?? "unknown"}`;
+  const auth = resolveCommandAuthorization({
+    ctx: {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      AccountId: params.accountId ?? undefined,
+      ChatType: params.chatType,
+      From: from,
+      SenderId: params.sender.id,
+      SenderUsername: params.sender.name,
+      SenderTag: params.sender.tag,
+    },
+    cfg: params.cfg,
+    // We only want explicit commands.allowFrom authorization here.
+    commandAuthorized: false,
+  });
+  return { configured: true, allowed: auth.isAuthorizedSender } as const;
+}
 
 function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
@@ -476,13 +517,13 @@ async function replyWithDiscordModelPickerProviders(params: {
   threadBindings: ThreadBindingManager;
   preferFollowUp: boolean;
 }) {
-  const data = await loadDiscordModelPickerData(params.cfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction: params.interaction,
     cfg: params.cfg,
     accountId: params.accountId,
     threadBindings: params.threadBindings,
   });
+  const data = await loadDiscordModelPickerData(params.cfg, route.agentId);
   const currentModel = resolveDiscordModelPickerCurrentModel({
     cfg: params.cfg,
     route,
@@ -637,13 +678,13 @@ async function handleDiscordModelPickerInteraction(
     return;
   }
 
-  const pickerData = await loadDiscordModelPickerData(ctx.cfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction,
     cfg: ctx.cfg,
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
+  const pickerData = await loadDiscordModelPickerData(ctx.cfg, route.agentId);
   const currentModelRef = resolveDiscordModelPickerCurrentModel({
     cfg: ctx.cfg,
     route,
@@ -895,6 +936,11 @@ async function handleDiscordModelPickerInteraction(
       );
       return;
     }
+
+    // The session store write happens asynchronously after the command dispatch
+    // completes. Give it a short window to flush before reading back the persisted
+    // value, otherwise the check races the write and reports a false mismatch.
+    await new Promise((resolve) => setTimeout(resolve, 250));
 
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,
@@ -1297,6 +1343,23 @@ async function dispatchDiscordCommandInteraction(params: {
     },
     allowNameMatching,
   });
+  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    accountId,
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    chatType: isDirectMessage
+      ? "direct"
+      : isThreadChannel
+        ? "thread"
+        : interaction.guild
+          ? "channel"
+          : "group",
+    conversationId: rawChannelId || undefined,
+  });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
     guildEntries: discordConfig?.guilds,
@@ -1418,10 +1481,20 @@ async function dispatchDiscordCommandInteraction(params: {
     });
     const authorizers = useAccessGroups
       ? [
+          {
+            configured: commandsAllowFromAccess.configured,
+            allowed: commandsAllowFromAccess.allowed,
+          },
           { configured: ownerAllowList != null, allowed: ownerOk },
           { configured: hasAccessRestrictions, allowed: memberAllowed },
         ]
-      : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
+      : [
+          {
+            configured: commandsAllowFromAccess.configured,
+            allowed: commandsAllowFromAccess.allowed,
+          },
+          { configured: hasAccessRestrictions, allowed: memberAllowed },
+        ];
     commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
       useAccessGroups,
       authorizers,

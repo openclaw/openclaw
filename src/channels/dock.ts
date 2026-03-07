@@ -26,6 +26,8 @@ import {
   resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveLineGroupRequireMention,
+  resolveLineGroupToolPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   resolveTelegramGroupRequireMention,
@@ -545,6 +547,18 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildIMessageThreadToolContext({ context, hasRepliedRef }),
+    },
+  },
+  line: {
+    id: "line",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+    },
+    outbound: { textChunkLimit: 5000 },
+    groups: {
+      resolveRequireMention: resolveLineGroupRequireMention,
+      resolveToolPolicy: resolveLineGroupToolPolicy,
     },
   },
 };

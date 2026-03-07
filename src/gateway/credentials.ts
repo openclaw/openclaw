@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { containsEnvVarReference } from "../config/env-substitution.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 
 export type ExplicitGatewayAuth = {
@@ -56,6 +57,21 @@ export function trimToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`).
+ * This prevents literal placeholder strings like `${OPENCLAW_GATEWAY_TOKEN}` from being
+ * accepted as valid credentials when the referenced env var is missing.
+ * Note: legitimate credential values containing literal `${UPPER_CASE}` patterns will
+ * also be rejected, but this is an extremely unlikely edge case.
+ */
+export function trimCredentialToUndefined(value: unknown): string | undefined {
+  const trimmed = trimToUndefined(value);
+  if (trimmed && containsEnvVarReference(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function firstDefined(values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     if (value) {
@@ -69,9 +85,9 @@ function throwUnresolvedGatewaySecretInput(path: string): never {
   throw new GatewaySecretRefUnavailableError(path);
 }
 
-function readGatewayTokenEnv(
-  env: NodeJS.ProcessEnv,
-  includeLegacyEnv: boolean,
+export function readGatewayTokenEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
 ): string | undefined {
   const primary = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   if (primary) {
@@ -83,9 +99,9 @@ function readGatewayTokenEnv(
   return trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
 }
 
-function readGatewayPasswordEnv(
-  env: NodeJS.ProcessEnv,
-  includeLegacyEnv: boolean,
+export function readGatewayPasswordEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
 ): string | undefined {
   const primary = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
   if (primary) {
@@ -95,6 +111,20 @@ function readGatewayPasswordEnv(
     return undefined;
   }
   return trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
+}
+
+export function hasGatewayTokenEnvCandidate(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
+): boolean {
+  return Boolean(readGatewayTokenEnv(env, includeLegacyEnv));
+}
+
+export function hasGatewayPasswordEnvCandidate(
+  env: NodeJS.ProcessEnv = process.env,
+  includeLegacyEnv = true,
+): boolean {
+  return Boolean(readGatewayPasswordEnv(env, includeLegacyEnv));
 }
 
 export function resolveGatewayCredentialsFromValues(params: {
@@ -109,8 +139,8 @@ export function resolveGatewayCredentialsFromValues(params: {
   const includeLegacyEnv = params.includeLegacyEnv ?? true;
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
-  const configToken = trimToUndefined(params.configToken);
-  const configPassword = trimToUndefined(params.configPassword);
+  const configToken = trimCredentialToUndefined(params.configToken);
+  const configPassword = trimCredentialToUndefined(params.configPassword);
   const tokenPrecedence = params.tokenPrecedence ?? "env-first";
   const passwordPrecedence = params.passwordPrecedence ?? "env-first";
 

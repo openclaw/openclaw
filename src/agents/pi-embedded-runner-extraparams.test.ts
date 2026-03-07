@@ -321,7 +321,7 @@ describe("applyExtraParamsToAgent", () => {
   it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { reasoning_effort: "medium" };
       options?.onPayload?.(payload);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
@@ -1072,7 +1072,7 @@ describe("applyExtraParamsToAgent", () => {
 
     // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
     void agent.streamFn?.(model, context, {
-      apiKey: "sk-ant-api03-test",
+      apiKey: "sk-ant-api03-test", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
     });
 
@@ -1130,7 +1130,7 @@ describe("applyExtraParamsToAgent", () => {
 
     // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
     void agent.streamFn?.(model, context, {
-      apiKey: "sk-ant-oat01-test-oauth-token",
+      apiKey: "sk-ant-oat01-test-oauth-token", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
     });
 
@@ -1151,7 +1151,7 @@ describe("applyExtraParamsToAgent", () => {
       cfg,
       modelId: "claude-sonnet-4-5",
       options: {
-        apiKey: "sk-ant-api03-test",
+        apiKey: "sk-ant-api03-test", // pragma: allowlist secret
         headers: { "anthropic-beta": "prompt-caching-2024-07-31" },
       },
     });

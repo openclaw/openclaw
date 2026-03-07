@@ -236,10 +236,10 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("allows control ui password-only auth on localhost when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
-    testState.gatewayAuth = { mode: "password", password: "secret" };
+    testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, { origin: originForPort(port) });
-      await connectControlUiWithoutDeviceAndExpectOk({ ws, password: "secret" });
+      await connectControlUiWithoutDeviceAndExpectOk({ ws, password: "secret" }); // pragma: allowlist secret
       ws.close();
     });
   });

@@ -123,7 +123,7 @@ function createClientWithIdentity(
 ) {
   const identity: DeviceIdentity = {
     deviceId,
-    privateKeyPem: "private-key",
+    privateKeyPem: "private-key", // pragma: allowlist secret
     publicKeyPem: "public-key",
   };
   return new GatewayClient({
@@ -329,7 +329,7 @@ describe("GatewayClient close handling", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {
       deviceId: "dev-5",
-      privateKeyPem: "private-key",
+      privateKeyPem: "private-key", // pragma: allowlist secret
       publicKeyPem: "public-key",
     };
     const client = new GatewayClient({

@@ -15,6 +15,20 @@ function okResponse(body = "ok"): Response {
 
 describe("fetchWithSsrFGuard hardening", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+  const CROSS_ORIGIN_REDIRECT_STRIPPED_HEADERS = [
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "cookie2",
+    "x-api-key",
+    "private-token",
+    "x-trace",
+  ] as const;
+  const CROSS_ORIGIN_REDIRECT_PRESERVED_HEADERS = [
+    ["accept", "application/json"],
+    ["content-type", "application/json"],
+    ["user-agent", "OpenClaw-Test/1.0"],
+  ] as const;
 
   const createPublicLookup = (): LookupFn =>
     vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
@@ -154,17 +168,23 @@ describe("fetchWithSsrFGuard hardening", () => {
           "Proxy-Authorization": "Basic c2VjcmV0",
           Cookie: "session=abc",
           Cookie2: "legacy=1",
+          "X-Api-Key": "custom-secret",
+          "Private-Token": "private-secret",
           "X-Trace": "1",
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": "OpenClaw-Test/1.0",
         },
       },
     });
 
     const headers = getSecondRequestHeaders(fetchImpl);
-    expect(headers.get("authorization")).toBeNull();
-    expect(headers.get("proxy-authorization")).toBeNull();
-    expect(headers.get("cookie")).toBeNull();
-    expect(headers.get("cookie2")).toBeNull();
-    expect(headers.get("x-trace")).toBe("1");
+    for (const header of CROSS_ORIGIN_REDIRECT_STRIPPED_HEADERS) {
+      expect(headers.get(header)).toBeNull();
+    }
+    for (const [header, value] of CROSS_ORIGIN_REDIRECT_PRESERVED_HEADERS) {
+      expect(headers.get(header)).toBe(value);
+    }
     await result.release();
   });
 

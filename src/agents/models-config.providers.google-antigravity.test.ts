@@ -24,7 +24,7 @@ function buildProvider(modelIds: string[]): ProviderConfig {
   return {
     baseUrl: "https://example.invalid/v1",
     api: "openai-completions",
-    apiKey: "EXAMPLE_KEY",
+    apiKey: "EXAMPLE_KEY", // pragma: allowlist secret
     models: modelIds.map((id) => buildModel(id)),
   };
 }

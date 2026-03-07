@@ -56,6 +56,13 @@ describe("secrets runtime snapshot", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_PROVIDER_AUTH_HEADER",
+              },
+            },
             models: [],
           },
         },
@@ -123,6 +130,7 @@ describe("secrets runtime snapshot", () => {
       config,
       env: {
         OPENAI_API_KEY: "sk-env-openai", // pragma: allowlist secret
+        OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header", // pragma: allowlist secret
         GITHUB_TOKEN: "ghp-env-token", // pragma: allowlist secret
         REVIEW_SKILL_API_KEY: "sk-skill-ref", // pragma: allowlist secret
         MEMORY_REMOTE_API_KEY: "mem-ref-key", // pragma: allowlist secret
@@ -162,6 +170,9 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
+    expect(snapshot.config.models?.providers?.openai?.headers?.Authorization).toBe(
+      "Bearer sk-env-header",
+    );
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
     expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
     expect(snapshot.config.talk?.apiKey).toBe("talk-ref-key");

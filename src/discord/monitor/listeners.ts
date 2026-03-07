@@ -13,7 +13,6 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -199,44 +198,27 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
-  private readonly channelQueue = new KeyedAsyncQueue();
-  private readonly listenerTimeoutMs: number;
-
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-    options?: { timeoutMs?: number },
+    _options?: { timeoutMs?: number },
   ) {
     super();
-    this.listenerTimeoutMs = normalizeDiscordListenerTimeoutMs(options?.timeoutMs);
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
-    const channelId = data.channel_id;
-    const context = {
-      channelId,
-      messageId: (data as { message?: { id?: string } }).message?.id,
-      guildId: (data as { guild_id?: string }).guild_id,
-    } satisfies Record<string, unknown>;
-    // Serialize messages within the same channel to preserve ordering,
-    // but allow different channels to proceed in parallel so that
-    // channel-bound agents are not blocked by each other.
-    void this.channelQueue.enqueue(channelId, () =>
-      runDiscordListenerWithSlowLog({
-        logger: this.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        timeoutMs: this.listenerTimeoutMs,
-        context,
-        run: (abortSignal) => this.handler(data, client, { abortSignal }),
-        onError: (err) => {
-          const logger = this.logger ?? discordEventQueueLog;
-          logger.error(danger(`discord handler failed: ${String(err)}`));
-        },
-      }),
-    );
+    // Fire-and-forget: hand off to the handler without blocking the
+    // Carbon listener.  Per-session ordering and run timeouts are owned
+    // by the inbound worker queue, so the listener no longer serializes
+    // or applies its own timeout.
+    void Promise.resolve()
+      .then(() => this.handler(data, client))
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord handler failed: ${String(err)}`));
+      });
   }
 }
 

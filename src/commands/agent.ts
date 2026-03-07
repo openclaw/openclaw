@@ -57,7 +57,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import {
   mergeSessionEntry,
   parseSessionThreadInfo,
@@ -427,11 +431,23 @@ async function agentCommandInternal(
   }
 
   const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
   const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
     commandName: "agent",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
@@ -1038,6 +1054,9 @@ export async function agentCommand(
   return await agentCommandInternal(
     {
       ...opts,
+      // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+      // Ingress callers must opt into owner semantics explicitly via
+      // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
       senderIsOwner: opts.senderIsOwner ?? true,
     },
     runtime,
@@ -1051,6 +1070,8 @@ export async function agentCommandFromIngress(
   deps: CliDeps = createDefaultDeps(),
 ) {
   if (typeof opts.senderIsOwner !== "boolean") {
+    // HTTP/WS ingress must declare the trust level explicitly at the boundary.
+    // This keeps network-facing callers from silently picking up the local trusted default.
     throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
   }
   return await agentCommandInternal(

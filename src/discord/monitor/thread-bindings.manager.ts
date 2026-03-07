@@ -1,4 +1,5 @@
 import { Routes } from "discord-api-types/v10";
+import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
 import { logVerbose } from "../../globals.js";
 import {
   registerSessionBindingAdapter,
@@ -155,22 +156,6 @@ function toSessionBindingRecord(
       }),
     },
   };
-}
-
-function resolveThreadIdFromBindingId(params: {
-  accountId: string;
-  bindingId?: string;
-}): string | undefined {
-  const bindingId = params.bindingId?.trim();
-  if (!bindingId) {
-    return undefined;
-  }
-  const prefix = `${params.accountId}:`;
-  if (!bindingId.startsWith(prefix)) {
-    return undefined;
-  }
-  const threadId = bindingId.slice(prefix.length).trim();
-  return threadId || undefined;
 }
 
 export function createThreadBindingManager(
@@ -617,7 +602,10 @@ export function createThreadBindingManager(
       return binding ? toSessionBindingRecord(binding, { idleTimeoutMs, maxAgeMs }) : null;
     },
     touch: (bindingId, at) => {
-      const threadId = resolveThreadIdFromBindingId({ accountId, bindingId });
+      const threadId = resolveThreadBindingConversationIdFromBindingId({
+        accountId,
+        bindingId,
+      });
       if (!threadId) {
         return;
       }
@@ -631,7 +619,7 @@ export function createThreadBindingManager(
         });
         return removed.map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs }));
       }
-      const threadId = resolveThreadIdFromBindingId({
+      const threadId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
         bindingId: input.bindingId,
       });
