@@ -530,6 +530,29 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   };
 }
 
+/** Deep-merge messageMeta: concatenate array values (e.g. displayStripPatterns), shallow-merge the rest. */
+function mergeMessageMeta(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  const merged: Record<string, unknown> = { ...a };
+  for (const [key, val] of Object.entries(b)) {
+    const existing = merged[key];
+    if (Array.isArray(existing) && Array.isArray(val)) {
+      merged[key] = [...existing, ...val];
+    } else {
+      merged[key] = val;
+    }
+  }
+  return merged;
+}
+
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -583,7 +606,7 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
-    messageMeta: { ...promptBuildResult?.messageMeta, ...legacyResult?.messageMeta },
+    messageMeta: mergeMessageMeta(promptBuildResult?.messageMeta, legacyResult?.messageMeta),
   };
 }
 
@@ -1085,13 +1108,14 @@ export async function runEmbeddedAttempt(
       // Mutable ref for injecting plugin message metadata into the *next* user message
       // that gets persisted to the session transcript. This is set by the
       // before_prompt_build hook result and consumed by the appendMessage wrapper below.
+      // Metadata is stored under `message.pluginMeta` to avoid collisions with core fields.
       let pendingMessageMeta: Record<string, unknown> | undefined;
       {
         const innerAppend = sessionManager.appendMessage.bind(sessionManager);
         sessionManager.appendMessage = ((msg: unknown) => {
           const message = msg as Record<string, unknown>;
           if (pendingMessageMeta && message.role === "user") {
-            Object.assign(message, pendingMessageMeta);
+            message.pluginMeta = pendingMessageMeta;
             pendingMessageMeta = undefined;
           }
           return innerAppend(msg as Parameters<typeof innerAppend>[0]);

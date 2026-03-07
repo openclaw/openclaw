@@ -14,9 +14,11 @@ const thinkingCache = new WeakMap<object, string | null>();
  * Strip plugin-injected content from user messages using the generic
  * `displayStripPatterns` convention. Any plugin can declare patterns
  * via the `messageMeta.displayStripPatterns` hook result field.
+ * At runtime these are stored under `message.pluginMeta.displayStripPatterns`.
  */
 function stripDisplayPatterns(text: string, message: Record<string, unknown>): string {
-  const patterns = message.displayStripPatterns as DisplayStripPattern[] | undefined;
+  const meta = message.pluginMeta as Record<string, unknown> | undefined;
+  const patterns = meta?.displayStripPatterns as DisplayStripPattern[] | undefined;
   if (!Array.isArray(patterns) || patterns.length === 0) {
     return text;
   }

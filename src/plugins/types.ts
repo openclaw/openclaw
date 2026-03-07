@@ -425,9 +425,12 @@ export type PluginHookBeforePromptBuildResult = {
   prependContext?: string;
   /**
    * Generic key-value bag for plugins to attach metadata to the persisted user message.
-   * The core hook system transparently merges and injects these onto the message object
-   * so plugins don't need special-cased fields. Keys are plugin-defined (e.g. convention:
-   * `"<pluginName>Context"`). The UI reads specific keys it knows about.
+   * The core hook system transparently merges and injects these under `message.pluginMeta`
+   * so plugins don't need special-cased fields and cannot collide with core message fields
+   * like `role` or `content`.
+   *
+   * Array values (e.g. `displayStripPatterns`) are automatically **concatenated** across
+   * multiple plugins rather than overwritten, so multi-plugin scenarios work correctly.
    *
    * Reserved standard key:
    * - `displayStripPatterns`: `Array<{ regex: string; flags?: string }>` — regex patterns

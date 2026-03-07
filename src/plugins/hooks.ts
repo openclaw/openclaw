@@ -136,6 +136,29 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     providerOverride: acc?.providerOverride ?? next.providerOverride,
   });
 
+  /** Deep-merge messageMeta: concatenate array values (e.g. displayStripPatterns), shallow-merge the rest. */
+  const mergeMessageMeta = (
+    a: Record<string, unknown> | undefined,
+    b: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined => {
+    if (!a) {
+      return b;
+    }
+    if (!b) {
+      return a;
+    }
+    const merged: Record<string, unknown> = { ...a };
+    for (const [key, val] of Object.entries(b)) {
+      const existing = merged[key];
+      if (Array.isArray(existing) && Array.isArray(val)) {
+        merged[key] = [...existing, ...val];
+      } else {
+        merged[key] = val;
+      }
+    }
+    return merged;
+  };
+
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
@@ -145,7 +168,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       left: acc?.prependContext,
       right: next.prependContext,
     }),
-    messageMeta: { ...acc?.messageMeta, ...next.messageMeta },
+    messageMeta: mergeMessageMeta(acc?.messageMeta, next.messageMeta),
     prependSystemContext: concatOptionalTextSegments({
       left: acc?.prependSystemContext,
       right: next.prependSystemContext,
