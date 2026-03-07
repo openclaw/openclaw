@@ -82,10 +82,12 @@ export async function handleMatrixAction(
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const accountId = readStringParam(params, "accountId");
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          accountId: accountId ?? undefined,
         });
         return jsonResult({ ok: true, result });
       }

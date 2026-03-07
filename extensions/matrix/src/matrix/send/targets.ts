@@ -18,8 +18,13 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
 }
 
 // Size-capped to prevent unbounded growth (#4948)
+// Cache key includes the sender (bot) userId to prevent cross-account collisions
+// when multiple Matrix accounts are active (e.g. different agents with their own accounts).
 const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
 const directRoomCache = new Map<string, string>();
+function directRoomCacheKey(senderUserId: string, targetUserId: string): string {
+  return `${senderUserId}\0${targetUserId}`;
+}
 function setDirectRoomCached(key: string, value: string): void {
   directRoomCache.set(key, value);
   if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
@@ -63,7 +68,11 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
 
-  const cached = directRoomCache.get(trimmed);
+  // Scope cache by sender (bot) userId to prevent cross-account collisions.
+  const senderUserId = await client.getUserId();
+  const cacheKey = directRoomCacheKey(senderUserId, trimmed);
+
+  const cached = directRoomCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -76,7 +85,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     >;
     const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
     if (list && list.length > 0) {
-      setDirectRoomCached(trimmed, list[0]);
+      setDirectRoomCached(cacheKey, list[0]);
       return list[0];
     }
   } catch {
@@ -100,7 +109,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       }
       // Prefer classic 1:1 rooms, but allow larger rooms if requested.
       if (members.length === 2) {
-        setDirectRoomCached(trimmed, roomId);
+        setDirectRoomCached(cacheKey, roomId);
         await persistDirectRoom(client, trimmed, roomId);
         return roomId;
       }
@@ -113,12 +122,26 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   }
 
   if (fallbackRoom) {
-    setDirectRoomCached(trimmed, fallbackRoom);
+    setDirectRoomCached(cacheKey, fallbackRoom);
     await persistDirectRoom(client, trimmed, fallbackRoom);
     return fallbackRoom;
   }
 
-  throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
+  // 3) No existing DM room found — create one.
+  try {
+    const roomId = await client.createRoom({
+      invite: [trimmed],
+      is_direct: true,
+      preset: "trusted_private_chat",
+    });
+    setDirectRoomCached(cacheKey, roomId);
+    await persistDirectRoom(client, trimmed, roomId);
+    return roomId;
+  } catch (createErr) {
+    throw new Error(
+      `No direct room found for ${trimmed} and failed to create one: ${createErr instanceof Error ? createErr.message : String(createErr)}`,
+    );
+  }
 }
 
 export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
