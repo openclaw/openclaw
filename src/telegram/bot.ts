@@ -54,6 +54,7 @@ export type TelegramBotOptions = {
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
   config?: OpenClawConfig;
+  setStatus?: (next: Record<string, unknown>) => void;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
@@ -190,6 +191,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
   });
+
+  // Track inbound events for health monitoring (feature parity with Discord/Slack).
+  // Placed before sequentialize so timestamps update even for queued updates.
+  if (opts.setStatus) {
+    const setStatus = opts.setStatus;
+    bot.use(async (ctx, next) => {
+      try {
+        const at = Date.now();
+        setStatus({ lastEventAt: at, lastInboundAt: at });
+      } catch {
+        // Status tracking must never interrupt message processing.
+      }
+      return next();
+    });
+  }
 
   bot.use(sequentialize(getTelegramSequentialKey));
 
