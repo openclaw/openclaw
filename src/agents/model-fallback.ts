@@ -3,6 +3,8 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -27,6 +29,8 @@ import {
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+
+const log = createSubsystemLogger("model-fallback");
 
 type ModelCandidate = {
   provider: string;
@@ -527,6 +531,13 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
+      const notFoundAttempt =
+        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+      if (notFoundAttempt) {
+        log.warn(
+          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+        );
+      }
       return attemptRun.success;
     }
     const err = attemptRun.error;
