@@ -117,3 +117,4 @@ export {
   buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
+export { normalizeStringEntries } from "../shared/string-normalization.js";
