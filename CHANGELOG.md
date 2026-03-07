@@ -306,6 +306,7 @@ Docs: https://docs.openclaw.ai
 - Nodes/system.run allow-always persistence: honor shell comment semantics during allowlist analysis so `#`-tailed payloads that never execute are not persisted as trusted follow-up commands. Thanks @tdjackey for reporting.
 - Signal/inbound attachment fan-in: forward all successfully fetched inbound attachments through `MediaPaths`/`MediaUrls`/`MediaTypes` (instead of only the first), and improve multi-attachment placeholder summaries in mention-gated pending history. (#39212) Thanks @joeykrug.
 - Nodes/system.run dispatch-wrapper boundary: keep shell-wrapper approval classification active at the depth boundary so `env` wrapper stacks cannot reach `/bin/sh -c` execution without the expected approval gate. Thanks @tdjackey for reporting.
+- Docker/token persistence on reconfigure: reuse the existing `.env` gateway token during `docker-setup.sh` reruns and align compose token env defaults, so Docker installs stop silently rotating tokens and breaking existing dashboard sessions. Landed from contributor PR #33097 by @chengzhichao-xydt. Thanks @chengzhichao-xydt.
 
 ## 2026.3.2
 
