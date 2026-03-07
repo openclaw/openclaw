@@ -36,6 +36,43 @@ describe("resolveGroupSessionKey", () => {
     });
   });
 
+  it("prefers ThreadParentId over other Discord routing targets", () => {
+    const ctx = {
+      Provider: "discord",
+      ChatType: "channel",
+      From: "discord:657229412030480397",
+      ThreadParentId: "discord:channel:1476858065914695741",
+      NativeChannelId: "1476858065914695742",
+      OriginatingTo: "channel:1476858065914695743",
+      To: "discord:channel:1476858065914695744",
+    } as MsgContext;
+
+    expect(resolveGroupSessionKey(ctx)).toEqual({
+      key: "discord:channel:1476858065914695741",
+      channel: "discord",
+      id: "1476858065914695741",
+      chatType: "channel",
+    });
+  });
+
+  it("prefers NativeChannelId when ThreadParentId is absent", () => {
+    const ctx = {
+      Provider: "discord",
+      ChatType: "channel",
+      From: "discord:657229412030480397",
+      NativeChannelId: "1476858065914695742",
+      OriginatingTo: "channel:1476858065914695743",
+      To: "discord:channel:1476858065914695744",
+    } as MsgContext;
+
+    expect(resolveGroupSessionKey(ctx)).toEqual({
+      key: "discord:channel:1476858065914695742",
+      channel: "discord",
+      id: "1476858065914695742",
+      chatType: "channel",
+    });
+  });
+
   it("keeps legacy behavior when no Discord channel hint is available", () => {
     const ctx = {
       Provider: "discord",
