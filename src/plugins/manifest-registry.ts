@@ -229,12 +229,32 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Different directories but same plugin id – prefer higher-precedence
+      // origin (lower rank number) and silently replace, avoiding duplicates.
+      if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        diagnostics.push({
+          level: "info",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id resolved: preferring ${candidate.origin} over ${existing.candidate.origin} (${existing.candidate.source})`,
+        });
+      } else {
+        diagnostics.push({
+          level: "info",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id resolved: keeping ${existing.candidate.origin} over ${candidate.origin} (${candidate.source})`,
+        });
+      }
+      continue;
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

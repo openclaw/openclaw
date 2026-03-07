@@ -43,7 +43,8 @@ function loadRegistry(candidates: PluginCandidate[]) {
 function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
   return registry.diagnostics.filter(
     (diagnostic) =>
-      diagnostic.level === "warn" && diagnostic.message?.includes("duplicate plugin id"),
+      (diagnostic.level === "warn" || diagnostic.level === "info") &&
+      diagnostic.message?.includes("duplicate plugin id"),
   ).length;
 }
 
@@ -150,7 +151,11 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    // Should deduplicate: only one record, preferring the higher-precedence origin (global > bundled)
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0].origin).toBe("global");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
