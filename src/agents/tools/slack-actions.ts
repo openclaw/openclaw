@@ -28,6 +28,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
+  ToolInputError,
 } from "./common.js";
 
 const messagingActions = new Set([
@@ -111,7 +112,7 @@ export async function handleSlackAction(
     const explicit = readStringParam(params, "channelId");
     const raw = explicit || context?.currentChannelId;
     if (!raw) {
-      throw new Error(
+      throw new ToolInputError(
         "channelId is required (provide it explicitly or ensure the message context includes a channel)",
       );
     }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { ToolInputError } from "./common.js";
 import { handleSlackAction } from "./slack-actions.js";
 
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -640,6 +641,13 @@ describe("handleSlackAction", () => {
     const payload = result.details as { ok: boolean; emojis: { emoji: Record<string, string> } };
     expect(payload.ok).toBe(true);
     expect(Object.keys(payload.emojis.emoji)).toHaveLength(3);
+  });
+
+  it("throws ToolInputError when both explicit channelId and context channelId are absent", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction({ action: "react", emoji: "thumbsup", messageId: "ts-1" }, cfg, undefined),
+    ).rejects.toThrow(ToolInputError);
   });
 
   it("applies limit to emoji-list results", async () => {
