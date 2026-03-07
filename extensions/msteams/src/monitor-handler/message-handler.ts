@@ -2,6 +2,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
   logInboundDrop,
@@ -11,11 +12,12 @@ import {
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
   resolveMentionGating,
+  resolveInboundSessionEnvelopeContext,
   formatAllowlistMatchMeta,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -451,12 +453,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
-    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+      cfg,
       agentId: route.agentId,
-    });
-    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-      storePath,
       sessionKey: route.sessionKey,
     });
     const body = core.channel.reply.formatAgentEnvelope({
@@ -559,18 +558,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+      const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
+        cfg,
+        ctxPayload,
         dispatcher,
         onSettled: () => {
           markDispatchIdle();
         },
-        run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ctxPayload,
-            cfg,
-            dispatcher,
-            replyOptions,
-          }),
+        replyOptions,
       });
 
       log.info("dispatch complete", { queuedFinal, counts });

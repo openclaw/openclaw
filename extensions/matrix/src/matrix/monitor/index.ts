@@ -1,13 +1,13 @@
 import {
-  createLoggerBackedRuntime,
   GROUP_POLICY_BLOCKED_LABEL,
   mergeAllowlist,
+  resolveRuntimeEnv,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, MatrixConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
@@ -241,11 +241,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   }
 
   const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
-  const runtime: RuntimeEnv =
-    opts.runtime ??
-    createLoggerBackedRuntime({
-      logger,
-    });
+  const runtime: RuntimeEnv = resolveRuntimeEnv({
+    runtime: opts.runtime,
+    logger,
+  });
   const logVerboseMessage = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
       return;
