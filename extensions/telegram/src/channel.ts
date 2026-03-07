@@ -382,6 +382,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       lastStartAt: null,
       lastStopAt: null,
       lastError: null,
+      lastEventAt: null,
     },
     collectStatusIssues: collectTelegramStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
@@ -456,6 +457,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         probe,
         audit,
         allowUnmentionedGroups,
+        lastEventAt: runtime?.lastEventAt ?? null,
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
       };
