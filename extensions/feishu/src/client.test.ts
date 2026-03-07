@@ -101,6 +101,24 @@ describe("createFeishuClient HTTP timeout", () => {
     clearClientCache();
   });
 
+  const getLastClientHttpInstance = () => {
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1]?.[0] as
+      | { httpInstance?: { get: (...args: unknown[]) => Promise<unknown> } }
+      | undefined;
+    return lastCall?.httpInstance;
+  };
+
+  const expectGetCallTimeout = async (timeout: number) => {
+    const httpInstance = getLastClientHttpInstance();
+    expect(httpInstance).toBeDefined();
+    await httpInstance?.get("https://example.com/api");
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout }),
+    );
+  };
+
   it("passes a custom httpInstance with default timeout to Lark.Client", () => {
     createFeishuClient({ appId: "app_1", appSecret: "secret_1", accountId: "timeout-test" }); // pragma: allowlist secret
 
@@ -156,18 +174,7 @@ describe("createFeishuClient HTTP timeout", () => {
       config: { httpTimeoutMs: 45_000 },
     });
 
-    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    const lastCall = calls[calls.length - 1][0] as {
-      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
-    };
-    const httpInstance = lastCall.httpInstance;
-
-    await httpInstance.get("https://example.com/api");
-
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: 45_000 }),
-    );
+    await expectGetCallTimeout(45_000);
   });
 
   it("falls back to default timeout when configured timeout is invalid", async () => {
@@ -178,18 +185,7 @@ describe("createFeishuClient HTTP timeout", () => {
       config: { httpTimeoutMs: -1 },
     });
 
-    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    const lastCall = calls[calls.length - 1][0] as {
-      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
-    };
-    const httpInstance = lastCall.httpInstance;
-
-    await httpInstance.get("https://example.com/api");
-
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS }),
-    );
+    await expectGetCallTimeout(FEISHU_HTTP_TIMEOUT_MS);
   });
 
   it("uses env timeout override when provided and no direct timeout is set", async () => {
@@ -202,16 +198,7 @@ describe("createFeishuClient HTTP timeout", () => {
       config: { httpTimeoutMs: 45_000 },
     });
 
-    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    const lastCall = calls[calls.length - 1][0] as {
-      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
-    };
-    await lastCall.httpInstance.get("https://example.com/api");
-
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: 60_000 }),
-    );
+    await expectGetCallTimeout(60_000);
   });
 
   it("prefers direct timeout over env override", async () => {
@@ -225,16 +212,7 @@ describe("createFeishuClient HTTP timeout", () => {
       config: { httpTimeoutMs: 45_000 },
     });
 
-    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    const lastCall = calls[calls.length - 1][0] as {
-      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
-    };
-    await lastCall.httpInstance.get("https://example.com/api");
-
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: 120_000 }),
-    );
+    await expectGetCallTimeout(120_000);
   });
 
   it("clamps env timeout override to max bound", async () => {
@@ -246,16 +224,7 @@ describe("createFeishuClient HTTP timeout", () => {
       accountId: "timeout-env-clamp",
     });
 
-    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    const lastCall = calls[calls.length - 1][0] as {
-      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
-    };
-    await lastCall.httpInstance.get("https://example.com/api");
-
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MAX_MS }),
-    );
+    await expectGetCallTimeout(FEISHU_HTTP_TIMEOUT_MAX_MS);
   });
 
   it("recreates cached client when configured timeout changes", async () => {

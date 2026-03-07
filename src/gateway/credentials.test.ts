@@ -333,25 +333,29 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     ).toThrow("gateway.remote.token");
   });
 
+  function createRemoteConfigWithMissingLocalTokenRef() {
+    return {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+        },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+  }
+
   it("ignores unresolved local token ref in remote-only mode when local auth mode is token", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example",
-          },
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      cfg: createRemoteConfigWithMissingLocalTokenRef(),
       env: {} as NodeJS.ProcessEnv,
       includeLegacyEnv: false,
       remoteTokenFallback: "remote-only",
@@ -366,23 +370,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
   it("throws for unresolved local token ref in remote mode when local fallback is enabled", () => {
     expect(() =>
       resolveGatewayCredentialsFromConfig({
-        cfg: {
-          gateway: {
-            mode: "remote",
-            remote: {
-              url: "wss://gateway.example",
-            },
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
-            },
-          },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        cfg: createRemoteConfigWithMissingLocalTokenRef(),
         env: {} as NodeJS.ProcessEnv,
         includeLegacyEnv: false,
         remoteTokenFallback: "remote-env-local",
