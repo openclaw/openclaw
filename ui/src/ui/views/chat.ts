@@ -68,6 +68,8 @@ export type ChatProps = {
   // Voice input and audio output
   voiceInputEnabled?: boolean;
   audioOutputEnabled?: boolean;
+  // null = not yet checked (show as enabled); false = no mic or permission denied
+  microphoneAvailable?: boolean | null;
   // Scroll control
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
@@ -465,8 +467,8 @@ export function renderChat(props: ChatProps) {
           <div class="chat-compose__actions">
             <button
               class="btn btn--icon ${props.voiceInputEnabled ? "active" : ""}"
-              title="${props.voiceInputEnabled ? "Voice input enabled" : "Enable voice input"}"
-              ?disabled=${!props.connected}
+              title="${props.microphoneAvailable === false ? "Microphone not available" : props.voiceInputEnabled ? "Voice input enabled" : "Enable voice input"}"
+              ?disabled=${!props.connected || props.microphoneAvailable === false}
               @click=${props.onToggleVoiceInput}
             >
               ${props.voiceInputEnabled ? icons.microphone : icons.microphoneOff}

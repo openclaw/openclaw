@@ -145,6 +145,8 @@ export class OpenClawApp extends LitElement {
 
   toggleVoiceInput() {
     if (!this.voiceInputEnabled) {
+      // stop any ongoing TTS so it doesn't bleed into the microphone
+      void import("./services/voice.ts").then((m) => m.stopTTS());
       // start recording
       this.voiceInputEnabled = true;
       this._lastVoiceSuffix = "";
@@ -200,7 +202,7 @@ export class OpenClawApp extends LitElement {
       // Prime speechSynthesis on the user gesture so later automated TTS isn't blocked
       void import("./services/voice.ts").then((m) => m.primeSpeechSynthesis());
     } else {
-      // Stop any in-progress TTS immediately when audio output is turned off
+      // Stop any in-progress playback immediately when the user turns audio off
       void import("./services/voice.ts").then((m) => m.stopTTS());
     }
   }
@@ -265,6 +267,8 @@ export class OpenClawApp extends LitElement {
   // voice/audio toggles (ephemeral, not persisted)
   @state() voiceInputEnabled = false;
   @state() audioOutputEnabled = false;
+  // null = not yet checked; true/false = result of capability check on page load
+  @state() microphoneAvailable: boolean | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
@@ -320,6 +324,7 @@ export class OpenClawApp extends LitElement {
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  @state() agentFileWordWrap = false;
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() agentIdentityById: Record<string, AgentIdentityResult> = {};
@@ -495,6 +500,11 @@ export class OpenClawApp extends LitElement {
 
   protected firstUpdated() {
     handleFirstUpdated(this as unknown as Parameters<typeof handleFirstUpdated>[0]);
+    void import("./services/voice.ts").then((m) =>
+      m.checkMicrophoneAvailable().then((available) => {
+        this.microphoneAvailable = available;
+      }),
+    );
   }
 
   disconnectedCallback() {
