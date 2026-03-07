@@ -184,4 +184,24 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("backfills auth profile provider from profile id when omitted", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {},
+      },
+      auth: {
+        profiles: {
+          "qwen-portal:default": {
+            mode: "oauth",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.auth?.profiles?.["qwen-portal:default"]?.provider).toBe("qwen-portal");
+    }
+  });
 });

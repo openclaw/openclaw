@@ -1,5 +1,7 @@
 import path from "node:path";
+import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
@@ -21,7 +23,6 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
-import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
@@ -222,6 +223,62 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function inferProviderFromAuthProfileId(profileId: string): string | undefined {
+  const firstSeparator = profileId.indexOf(":");
+  if (firstSeparator <= 0) {
+    return undefined;
+  }
+  const provider = profileId.slice(0, firstSeparator).trim();
+  if (!provider) {
+    return undefined;
+  }
+  return normalizeProviderId(provider);
+}
+
+function backfillAuthProfileProviders(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.auth) || !isRecord(raw.auth.profiles)) {
+    return raw;
+  }
+
+  let changed = false;
+  const nextProfiles: Record<string, unknown> = {};
+
+  for (const [profileId, profileValue] of Object.entries(raw.auth.profiles)) {
+    if (!isRecord(profileValue)) {
+      nextProfiles[profileId] = profileValue;
+      continue;
+    }
+
+    const currentProvider =
+      typeof profileValue.provider === "string" ? profileValue.provider.trim() : "";
+    if (currentProvider) {
+      nextProfiles[profileId] = profileValue;
+      continue;
+    }
+
+    const inferredProvider = inferProviderFromAuthProfileId(profileId);
+    if (!inferredProvider) {
+      nextProfiles[profileId] = profileValue;
+      continue;
+    }
+
+    changed = true;
+    nextProfiles[profileId] = { ...profileValue, provider: inferredProvider };
+  }
+
+  if (!changed) {
+    return raw;
+  }
+
+  return {
+    ...raw,
+    auth: {
+      ...raw.auth,
+      profiles: nextProfiles,
+    },
+  };
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -229,7 +286,8 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const normalizedRaw = backfillAuthProfileProviders(raw);
+  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -239,7 +297,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     return {
       ok: false,
