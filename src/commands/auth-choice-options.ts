@@ -48,6 +48,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["vllm"],
   },
   {
+    value: "sglang-diffusion",
+    label: "SGLang-Diffusion",
+    hint: "Local image generation (FLUX, Qwen-Image, etc.)",
+    choices: ["sglang-diffusion"],
+  },
+  {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
@@ -227,6 +233,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "vllm",
     label: "vLLM (custom URL + model)",
     hint: "Local/self-hosted OpenAI-compatible server",
+  },
+  {
+    value: "sglang-diffusion",
+    label: "SGLang-Diffusion (image generation)",
+    hint: "Local diffusion server (FLUX, Qwen-Image, etc.)",
   },
   ...buildProviderAuthChoiceOptions(),
   {

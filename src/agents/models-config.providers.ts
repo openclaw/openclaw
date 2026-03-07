@@ -176,6 +176,14 @@ const VLLM_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const SGLANG_DIFFUSION_BASE_URL = "http://127.0.0.1:30000/v1";
+
+type SglangDiffusionModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -380,6 +388,41 @@ async function discoverVllmModels(
       });
   } catch (error) {
     log.warn(`Failed to discover vLLM models: ${String(error)}`);
+    return [];
+  }
+}
+
+export async function discoverSglangDiffusionModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<string[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = apiKey?.trim();
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn(`Failed to discover SGLang-Diffusion models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as SglangDiffusionModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      log.warn("No SGLang-Diffusion models found on local instance");
+      return [];
+    }
+
+    return models.map((m) => (typeof m.id === "string" ? m.id.trim() : "")).filter(Boolean);
+  } catch (error) {
+    log.warn(`Failed to discover SGLang-Diffusion models: ${String(error)}`);
     return [];
   }
 }
@@ -1083,6 +1126,40 @@ export async function resolveImplicitProviders(params: {
       providers.vllm = {
         ...(await buildVllmProvider({ apiKey: discoveryApiKey || undefined })),
         apiKey: vllmKey,
+      };
+    }
+  }
+
+  // SGLang-Diffusion provider — image generation via OpenAI-compatible /v1/images endpoint.
+  // Discovery only stores model IDs; the image_gen tool handles actual generation calls.
+  if (!params.explicitProviders?.["sglang-diffusion"]) {
+    const sglangDiffEnvVar = resolveEnvApiKeyVarName("sglang-diffusion");
+    const sglangDiffProfileKey = resolveApiKeyFromProfiles({
+      provider: "sglang-diffusion",
+      store: authStore,
+    });
+    const sglangDiffKey = sglangDiffEnvVar ?? sglangDiffProfileKey;
+    if (sglangDiffKey) {
+      const discoveryApiKey = sglangDiffEnvVar
+        ? (process.env[sglangDiffEnvVar]?.trim() ?? "")
+        : (sglangDiffProfileKey ?? "");
+      const modelIds = await discoverSglangDiffusionModels(
+        SGLANG_DIFFUSION_BASE_URL,
+        discoveryApiKey || undefined,
+      );
+      providers["sglang-diffusion"] = {
+        baseUrl: SGLANG_DIFFUSION_BASE_URL,
+        api: "openai-completions",
+        apiKey: sglangDiffKey,
+        models: modelIds.map((id) => ({
+          id,
+          name: id,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 0,
+          maxTokens: 0,
+        })),
       };
     }
   }
