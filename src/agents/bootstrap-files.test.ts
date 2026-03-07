@@ -7,6 +7,7 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { clearAllBootstrapSnapshots } from "./bootstrap-cache.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -53,8 +54,15 @@ function registerMalformedBootstrapFileHook() {
 }
 
 describe("resolveBootstrapFilesForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
+
+  afterEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
 
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
@@ -81,11 +89,46 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
+
+  it("reloads bootstrap files after a daily-reset style sessionId rollover", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "first", "utf8");
+
+    const first = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+    });
+    expect(first.find((file) => file.name === "USER.md")?.content).toBe("first");
+
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "second", "utf8");
+
+    const sameSession = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+    });
+    expect(sameSession.find((file) => file.name === "USER.md")?.content).toBe("first");
+
+    const rolledSession = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:main",
+      sessionId: "sess-2",
+    });
+    expect(rolledSession.find((file) => file.name === "USER.md")?.content).toBe("second");
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
+
+  afterEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
 
   it("returns context files for hook-adjusted bootstrap files", async () => {
     registerExtraBootstrapFileHook();

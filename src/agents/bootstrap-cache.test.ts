@@ -65,6 +65,32 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(r2).toBe(files2);
     expect(mockLoad).toHaveBeenCalledTimes(2);
   });
+
+  it("uses session IDs as independent cache buckets for the same session key", async () => {
+    const files2 = [makeFile("AGENTS.md", "# Agent v2")];
+    mockLoad.mockResolvedValueOnce(files).mockResolvedValueOnce(files2);
+
+    const r1 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-1",
+    });
+    const r2 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-2",
+    });
+    const r3 = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-2",
+    });
+
+    expect(r1).toBe(files);
+    expect(r2).toBe(files2);
+    expect(r3).toBe(files2);
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("clearBootstrapSnapshot", () => {
