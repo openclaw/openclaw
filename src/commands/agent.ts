@@ -539,7 +539,9 @@ async function agentCommandInternal(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Internal callers (for example subagent spawns) may pin workspace inheritance.
+  const workspaceDirRaw =
+    opts.workspaceDir?.trim() ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
