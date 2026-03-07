@@ -317,11 +317,13 @@ export function renderAgentFiles(params: {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  agentFileWordWrap: boolean;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
+  onToggleWordWrap: () => void;
 }) {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
@@ -332,7 +334,7 @@ export function renderAgentFiles(params: {
   const isDirty = active ? draft !== baseContent : false;
 
   return html`
-    <section class="card">
+    <section class="card agent-files-card">
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Core Files</div>
@@ -390,6 +392,19 @@ export function renderAgentFiles(params: {
                             </div>
                             <div class="agent-file-actions">
                               <button
+                                class="btn btn--sm ${params.agentFileWordWrap ? "primary" : ""}"
+                                title="${params.agentFileWordWrap ? "Word wrap on" : "Word wrap off"}"
+                                @click=${() => params.onToggleWordWrap()}
+                              >
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0;">
+                                  <line x1="3" y1="6" x2="21" y2="6"/>
+                                  <path d="M3 12h15a3 3 0 0 1 0 6h-4"/>
+                                  <polyline points="14 15 11 18 14 21"/>
+                                  <line x1="3" y1="18" x2="7" y2="18"/>
+                                </svg>
+                                Wrap
+                              </button>
+                              <button
                                 class="btn btn--sm"
                                 ?disabled=${!isDirty}
                                 @click=${() => params.onFileReset(activeEntry.name)}
@@ -417,6 +432,7 @@ export function renderAgentFiles(params: {
                           <label class="field" style="margin-top: 12px;">
                             <span>Content</span>
                             <textarea
+                              class="${params.agentFileWordWrap ? "agent-file-textarea--wrap" : ""}"
                               .value=${draft}
                               @input=${(e: Event) =>
                                 params.onFileDraftChange(
