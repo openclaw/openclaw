@@ -1,7 +1,14 @@
+import fs from "node:fs";
 import { defineConfig } from "tsdown";
+
+const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string };
 
 const env = {
   NODE_ENV: "production",
+};
+
+const define = {
+  __OPENCLAW_VERSION__: JSON.stringify(packageJson.version),
 };
 
 const pluginSdkEntrypoints = [
@@ -51,31 +58,30 @@ const pluginSdkEntrypoints = [
   "keyed-async-queue",
 ] as const;
 
+const shared = {
+  env,
+  define,
+  fixedExtension: false,
+  platform: "node",
+} as const;
+
 export default defineConfig([
   {
     entry: "src/index.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
   {
     entry: "src/entry.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
   {
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     entry: "src/cli/daemon-cli.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
   {
     entry: "src/infra/warning-filter.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
   {
     // Keep sync lazy-runtime channel modules as concrete dist files.
@@ -91,27 +97,19 @@ export default defineConfig([
       "line/send": "src/line/send.ts",
       "line/template-messages": "src/line/template-messages.ts",
     },
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
   ...pluginSdkEntrypoints.map((entry) => ({
     entry: `src/plugin-sdk/${entry}.ts`,
     outDir: "dist/plugin-sdk",
-    env,
-    fixedExtension: false,
-    platform: "node" as const,
+    ...shared,
   })),
   {
     entry: "src/extensionAPI.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
   {
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
-    env,
-    fixedExtension: false,
-    platform: "node",
+    ...shared,
   },
 ]);
