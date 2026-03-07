@@ -156,10 +156,10 @@ describe("gateway credential precedence parity", () => {
         OPENCLAW_SERVICE_KIND: "gateway",
       } as NodeJS.ProcessEnv,
       expected: {
-        call: { token: "config-token", password: "env-password" },
-        probe: { token: "config-token", password: "env-password" },
-        status: { token: "config-token", password: "env-password" },
-        auth: { token: "config-token", password: "config-password" },
+        call: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
+        probe: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
+        status: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
+        auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
       },
     },
   ];

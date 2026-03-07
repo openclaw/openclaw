@@ -728,6 +728,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("keeps approved shell script execution working when the script is unchanged", async () => {
+    if (process.platform === "win32") {
+      // Windows runners don't have /bin/sh; this is a POSIX shell approval scenario.
+      return;
+    }
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-stable-"));
     const script = path.join(tmp, "run.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");

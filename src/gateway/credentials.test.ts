@@ -135,8 +135,8 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       } as NodeJS.ProcessEnv,
     });
     expect(resolved).toEqual({
-      token: "config-token",
-      password: "env-password",
+      token: "config-token", // pragma: allowlist secret
+      password: "env-password", // pragma: allowlist secret
     });
   });
 
