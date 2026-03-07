@@ -53,6 +53,8 @@ export async function checkInboundAccessControl(params: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
   remoteJid: string;
+  /** Original message body for pairing notifications (optional). */
+  messageBody?: string;
 }): Promise<InboundAccessControlResult> {
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({
@@ -191,6 +193,39 @@ export async function checkInboundAccessControl(params: {
             });
           } catch (err) {
             logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+          }
+
+          // Notify owner if configured
+          const pairingConfig = account.pairing ?? cfg.channels?.whatsapp?.pairing;
+          if (pairingConfig?.notifyOwner && pairingConfig.ownerChat) {
+            const senderName = (params.pushName ?? "").trim() || "Unknown";
+            const includeMessage = pairingConfig.includeMessage !== false;
+            const MAX_PREVIEW_LENGTH = 500;
+            const rawBody = params.messageBody ?? "";
+            const sanitizedBody = rawBody
+              .replace(/[*_`~]/g, "")
+              .slice(0, MAX_PREVIEW_LENGTH)
+              .concat(rawBody.length > MAX_PREVIEW_LENGTH ? "…" : "");
+            const messagePreview =
+              includeMessage && sanitizedBody ? `\n\n📝 Message:\n"${sanitizedBody}"` : "";
+            const notificationText = [
+              `📩 *New pairing request*`,
+              ``,
+              `From: ${senderName} (${candidate})`,
+              `Code: \`${code}\``,
+              messagePreview,
+              ``,
+              `To approve: \`openclaw pairing approve whatsapp ${code}\``,
+            ].join("\n");
+
+            try {
+              await params.sock.sendMessage(pairingConfig.ownerChat, {
+                text: notificationText,
+              });
+              logVerbose(`Pairing notification sent to owner ${pairingConfig.ownerChat}`);
+            } catch (err) {
+              logVerbose(`Failed to notify owner of pairing request: ${String(err)}`);
+            }
           }
         }
       }
