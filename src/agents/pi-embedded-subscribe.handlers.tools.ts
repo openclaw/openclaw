@@ -142,7 +142,6 @@ export async function handleToolExecutionStart(
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
-  const runId = ctx.params.runId;
 
   // Capture start time once for consistent timestamps across state and hook tracking.
   const startTime = Date.now();
@@ -413,13 +412,12 @@ export async function handleToolExecutionEnd(
       }
     }
 
-    // Track committed reminders only when cron.add completed successfully (live events only).
-    if (
-      !wasUnsubscribedAtStart &&
-      !isToolError &&
-      toolName === "cron" &&
-      isCronAddAction(startData?.args)
-    ) {
+    // Track committed reminders for successful cron.add, including late post-timeout completions.
+    // Consistent with messaging state: user-visible scheduling state should be committed
+    // unconditionally so a cron.add that completes just after timeout isn't misreported as
+    // unscheduled. Note: events processed after the attempt result is captured (in the
+    // flushPendingToolResultsAfterIdle finally block) won't be reflected regardless.
+    if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
       ctx.state.successfulCronAdds += 1;
     }
 
