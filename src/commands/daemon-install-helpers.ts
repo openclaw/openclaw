@@ -23,7 +23,6 @@ export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
   runtime: GatewayDaemonRuntime;
-  token?: string;
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
@@ -52,7 +51,6 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
-    token: params.token,
     launchdLabel:
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
