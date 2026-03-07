@@ -1,4 +1,4 @@
-import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
+import { resolveIdentityName, resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import { touchEngagement } from "../../../auto-reply/contextual-activation.js";
@@ -264,6 +264,7 @@ export async function processMessage(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
+  const deliveredAnswerTexts: string[] = [];
   const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
@@ -419,6 +420,9 @@ export async function processMessage(params: {
           tableMode,
         });
         didSendReply = true;
+        if (payload.text) {
+          deliveredAnswerTexts.push(payload.text);
+        }
         const shouldLog = payload.text ? true : undefined;
         params.rememberSentText(payload.text, {
           combinedBody,
@@ -455,9 +459,28 @@ export async function processMessage(params: {
     },
   });
 
+  const recordBotResponseInHistory = () => {
+    if (params.msg.chatType !== "group") {
+      return;
+    }
+    const responseText = deliveredAnswerTexts.join("\n").trim();
+    if (!responseText) {
+      return;
+    }
+    const botName = resolveIdentityName(params.cfg, params.route.agentId) ?? "Bot";
+    const history = params.groupHistories.get(params.groupHistoryKey) ?? [];
+    history.push({
+      sender: `${botName} (self)`,
+      body: responseText,
+      timestamp: Date.now(),
+    });
+    params.groupHistories.set(params.groupHistoryKey, history);
+  };
+
   if (!queuedFinal) {
     if (shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
+      recordBotResponseInHistory();
     }
     logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
     return false;
@@ -465,6 +488,7 @@ export async function processMessage(params: {
 
   if (shouldClearGroupHistory) {
     params.groupHistories.set(params.groupHistoryKey, []);
+    recordBotResponseInHistory();
   }
 
   if (didSendReply) {

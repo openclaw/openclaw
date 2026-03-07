@@ -8,7 +8,10 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { touchEngagement } from "../auto-reply/contextual-activation.js";
-import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
+import {
+  clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
@@ -420,10 +423,33 @@ export const dispatchTelegramMessage = async ({
       ? ctxPayload.ReplyToBody.trim() || undefined
       : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
+  // Collect delivered answer text so we can record the bot's response in history
+  // after clearing. This lets the decision model see what the bot said.
+  const deliveredAnswerTexts: string[] = [];
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
     }
+  };
+  const recordBotResponseInHistory = () => {
+    if (!isGroup || !historyKey || historyLimit <= 0) {
+      return;
+    }
+    const responseText = deliveredAnswerTexts.join("\n").trim();
+    if (!responseText) {
+      return;
+    }
+    const botName = bot.botInfo?.first_name ?? bot.botInfo?.username ?? "Bot";
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: groupHistories,
+      historyKey,
+      limit: historyLimit,
+      entry: {
+        sender: `${botName} (self)`,
+        body: responseText,
+        timestamp: Date.now(),
+      },
+    });
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
@@ -545,6 +571,10 @@ export const dispatchTelegramMessage = async ({
           };
 
           for (const segment of segments) {
+            // Capture final answer text for bot-response-in-history recording
+            if (segment.lane === "answer" && info.kind === "final" && segment.text) {
+              deliveredAnswerTexts.push(segment.text);
+            }
             if (
               segment.lane === "answer" &&
               info.kind === "final" &&
@@ -597,6 +627,10 @@ export const dispatchTelegramMessage = async ({
             await answerLane.stream?.stop();
             await reasoningLane.stream?.stop();
             reasoningStepState.resetForNextStep();
+          }
+          // Capture non-segmented final text (e.g. plain text without reasoning markers)
+          if (info.kind === "final" && typeof payload.text === "string" && payload.text.trim()) {
+            deliveredAnswerTexts.push(payload.text);
           }
           const canSendAsIs =
             hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
@@ -764,6 +798,7 @@ export const dispatchTelegramMessage = async ({
 
   if (!hasFinalResponse) {
     clearGroupHistory();
+    recordBotResponseInHistory();
     return;
   }
 
@@ -791,6 +826,7 @@ export const dispatchTelegramMessage = async ({
     });
   }
   clearGroupHistory();
+  recordBotResponseInHistory();
   if (isGroup && historyKey) {
     touchEngagement(historyKey);
   }
