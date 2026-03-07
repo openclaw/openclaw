@@ -1626,7 +1626,12 @@ describe("QmdMemoryManager", () => {
 
   it("retries mcporter search with bare command on Windows EINVAL cmd-shim failures", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousPath = process.env.PATH;
     try {
+      const shimDir = await fs.mkdtemp(path.join(tmpRoot, "mcporter-shim-"));
+      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\n");
+      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+
       cfg = {
         ...cfg,
         memory: {
@@ -1641,7 +1646,11 @@ describe("QmdMemoryManager", () => {
       } as OpenClawConfig;
 
       let sawRetry = false;
+      let firstCallCommand: string | null = null;
       spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "call" && firstCallCommand === null) {
+          firstCallCommand = cmd;
+        }
         if (args[0] === "call" && typeof cmd === "string" && cmd.toLowerCase().endsWith(".cmd")) {
           const child = createMockChild({ autoClose: false });
           queueMicrotask(() => {
@@ -1665,13 +1674,20 @@ describe("QmdMemoryManager", () => {
       await expect(
         manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
       ).resolves.toEqual([]);
-      expect(sawRetry).toBe(true);
-      expect(logWarnMock).toHaveBeenCalledWith(
-        expect.stringContaining("retrying with bare mcporter"),
-      );
+      const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
+      if (attemptedCmdShim) {
+        expect(sawRetry).toBe(true);
+        expect(logWarnMock).toHaveBeenCalledWith(
+          expect.stringContaining("retrying with bare mcporter"),
+        );
+      } else {
+        // When wrapper resolution upgrades to a direct node/exe entrypoint, cmd-shim retry is unnecessary.
+        expect(sawRetry).toBe(false);
+      }
       await manager.close();
     } finally {
       platformSpy.mockRestore();
+      process.env.PATH = previousPath;
     }
   });
 

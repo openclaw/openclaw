@@ -237,37 +237,37 @@ describe("resolveControlUiClientVersion", () => {
     expect(
       resolveControlUiClientVersion({
         gatewayUrl: "ws://localhost:8787",
-        serverVersion: "2026.3.3",
+        serverVersion: "2026.3.7",
         pageUrl: "http://localhost:8787/openclaw/",
       }),
-    ).toBe("2026.3.3");
+    ).toBe("2026.3.7");
   });
 
   it("returns serverVersion for same-origin relative targets", () => {
     expect(
       resolveControlUiClientVersion({
         gatewayUrl: "/ws",
-        serverVersion: "2026.3.3",
+        serverVersion: "2026.3.7",
         pageUrl: "https://control.example.com/openclaw/",
       }),
-    ).toBe("2026.3.3");
+    ).toBe("2026.3.7");
   });
 
   it("returns serverVersion for same-origin http targets", () => {
     expect(
       resolveControlUiClientVersion({
         gatewayUrl: "https://control.example.com/ws",
-        serverVersion: "2026.3.3",
+        serverVersion: "2026.3.7",
         pageUrl: "https://control.example.com/openclaw/",
       }),
-    ).toBe("2026.3.3");
+    ).toBe("2026.3.7");
   });
 
   it("omits serverVersion for cross-origin targets", () => {
     expect(
       resolveControlUiClientVersion({
         gatewayUrl: "wss://gateway.example.com",
-        serverVersion: "2026.3.3",
+        serverVersion: "2026.3.7",
         pageUrl: "https://control.example.com/openclaw/",
       }),
     ).toBeUndefined();

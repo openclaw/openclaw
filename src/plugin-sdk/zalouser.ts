@@ -57,7 +57,14 @@ export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { buildChannelSendResult } from "./channel-send-result.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
-export { resolveOutboundMediaUrls, sendMediaWithLeadingCaption } from "./reply-payload.js";
+export {
+  isNumericTargetId,
+  resolveOutboundMediaUrls,
+  sendMediaWithLeadingCaption,
+  sendPayloadWithChunkedTextAndMedia,
+} from "./reply-payload.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";

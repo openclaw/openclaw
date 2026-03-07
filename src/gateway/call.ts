@@ -9,8 +9,7 @@ import {
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -312,23 +311,16 @@ async function resolveGatewaySecretInputString(params: {
   path: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const defaults = params.config.secrets?.defaults;
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults,
-  });
-  if (!ref) {
-    return trimToUndefined(params.value);
-  }
-  const resolved = await resolveSecretRefValues([ref], {
+  const value = await resolveSecretInputString({
     config: params.config,
+    value: params.value,
     env: params.env,
+    normalize: trimToUndefined,
   });
-  const resolvedValue = trimToUndefined(resolved.get(secretRefKey(ref)));
-  if (!resolvedValue) {
+  if (!value) {
     throw new Error(`${params.path} resolved to an empty or non-string value.`);
   }
-  return resolvedValue;
+  return value;
 }
 
 async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): Promise<{
@@ -358,7 +350,7 @@ async function resolveGatewayCredentialsWithEnv(
       explicitAuth: context.explicitAuth,
       urlOverride: context.urlOverride,
       urlOverrideSource: context.urlOverrideSource,
-      remotePasswordPrecedence: "env-first",
+      remotePasswordPrecedence: "env-first", // pragma: allowlist secret
     });
   }
 
@@ -487,7 +479,7 @@ async function resolveGatewayCredentialsWithEnv(
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
-    remotePasswordPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
 }
 
