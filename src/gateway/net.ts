@@ -398,20 +398,28 @@ function parseHostForAddressChecks(
 }
 
 /**
- * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
+ * Security check for transport URLs (CWE-319: Cleartext Transmission of Sensitive Information).
+ *
+ * Validates that a URL is secure for transmitting sensitive data (credentials and chat data).
+ * Supports both WebSocket (ws://, wss://) and HTTP (http://, https://) protocols.
  *
  * Returns true if the URL is secure for transmitting data:
- * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - wss:// and https:// (TLS) are always secure
+ * - ws:// and http:// are secure only for loopback addresses by default
+ * - optional break-glass: private plaintext URLs can be enabled for trusted networks
  *
- * All other ws:// URLs are considered insecure because both credentials
+ * All other plaintext URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
+ *
+ * @param url - The URL to validate (ws://, wss://, http://, or https://)
+ * @param opts - Options for validation
+ * @param opts.allowPrivatePlaintext - If true, allow plaintext (ws://, http://) to private network addresses
+ * @returns true if the URL is secure, false otherwise
  */
-export function isSecureWebSocketUrl(
+export function isSecureTransportUrl(
   url: string,
   opts?: {
-    allowPrivateWs?: boolean;
+    allowPrivatePlaintext?: boolean;
   },
 ): boolean {
   let parsed: URL;
@@ -421,20 +429,22 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  if (parsed.protocol === "wss:") {
+  // TLS protocols (wss:// and https://) are always secure
+  if (parsed.protocol === "wss:" || parsed.protocol === "https:") {
     return true;
   }
 
-  if (parsed.protocol !== "ws:") {
+  // Plaintext protocols (ws:// and http://) require loopback or opt-in
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "http:") {
     return false;
   }
 
-  // Default policy stays strict: loopback-only plaintext ws://.
+  // Default policy stays strict: loopback-only plaintext ws:// and http://.
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
   // Optional break-glass for trusted private-network overlays.
-  if (opts?.allowPrivateWs) {
+  if (opts?.allowPrivatePlaintext) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
     }
@@ -447,4 +457,19 @@ export function isSecureWebSocketUrl(
     return net.isIP(hostForIpCheck) === 0;
   }
   return false;
+}
+
+/**
+ * @deprecated Use isSecureTransportUrl instead. This function is kept for backward compatibility
+ * but now accepts HTTP URLs in addition to WebSocket URLs.
+ */
+export function isSecureWebSocketUrl(
+  url: string,
+  opts?: {
+    allowPrivateWs?: boolean;
+  },
+): boolean {
+  return isSecureTransportUrl(url, {
+    allowPrivatePlaintext: opts?.allowPrivateWs,
+  });
 }

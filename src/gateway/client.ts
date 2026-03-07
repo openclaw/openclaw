@@ -23,7 +23,7 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isSecureTransportUrl } from "./net.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -115,11 +115,11 @@ export class GatewayClient {
       return;
     }
 
-    const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-    // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
+    const allowPrivatePlaintext = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
+    // Security check: block ALL plaintext (ws://, http://) to non-loopback addresses (CWE-319, CVSS 9.8)
     // This protects both credentials AND chat/conversation data from MITM attacks.
     // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
-    if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
+    if (!isSecureTransportUrl(url, { allowPrivatePlaintext })) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
       try {
@@ -132,7 +132,7 @@ export class GatewayClient {
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
           "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
-          (allowPrivateWs
+          (allowPrivatePlaintext
             ? ""
             : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1. ") +
           "Run `openclaw doctor --fix` for guidance.",

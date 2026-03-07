@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { isSecureWebSocketUrl } from "../gateway/net.js";
+import { isSecureTransportUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -42,8 +42,8 @@ function validateGatewayWebSocketUrl(value: string): string | undefined {
     return "URL must start with ws:// or wss://";
   }
   if (
-    !isSecureWebSocketUrl(trimmed, {
-      allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
+    !isSecureTransportUrl(trimmed, {
+      allowPrivatePlaintext: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
     })
   ) {
     return (

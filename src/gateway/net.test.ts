@@ -405,8 +405,8 @@ describe("isPrivateOrLoopbackHost", () => {
   });
 });
 
-describe("isSecureWebSocketUrl", () => {
-  it("defaults to loopback-only ws:// and rejects private/public remote ws://", () => {
+describe("isSecureTransportUrl", () => {
+  it("defaults to loopback-only plaintext and rejects private/public remote plaintext", () => {
     const cases = [
       // wss:// always accepted
       { input: "wss://127.0.0.1:18789", expected: true },
@@ -436,19 +436,29 @@ describe("isSecureWebSocketUrl", () => {
       { input: "ws://1.1.1.1:18789", expected: false },
       { input: "ws://8.8.8.8:18789", expected: false },
       { input: "ws://203.0.113.10:18789", expected: false },
+      // https:// always accepted (TLS)
+      { input: "https://127.0.0.1:18789", expected: true },
+      { input: "https://localhost:18789", expected: true },
+      { input: "https://remote.example.com:18789", expected: true },
+      // http:// loopback accepted (same security properties as ws:// loopback)
+      { input: "http://127.0.0.1:18789", expected: true },
+      { input: "http://localhost:18789", expected: true },
+      { input: "http://[::1]:18789", expected: true },
+      // http:// private/public remote addresses rejected by default
+      { input: "http://10.0.0.5:18789", expected: false },
+      { input: "http://192.168.1.100:18789", expected: false },
+      { input: "http://remote.example.com:18789", expected: false },
       // invalid URLs
       { input: "not-a-url", expected: false },
       { input: "", expected: false },
-      { input: "http://127.0.0.1:18789", expected: false },
-      { input: "https://127.0.0.1:18789", expected: false },
     ] as const;
 
     for (const testCase of cases) {
-      expect(isSecureWebSocketUrl(testCase.input), testCase.input).toBe(testCase.expected);
+      expect(isSecureTransportUrl(testCase.input), testCase.input).toBe(testCase.expected);
     }
   });
 
-  it("allows private ws:// only when opt-in is enabled", () => {
+  it("allows private plaintext only when opt-in is enabled", () => {
     const allowedWhenOptedIn = [
       "ws://10.0.0.5:18789",
       "ws://172.16.0.1:18789",
@@ -461,19 +471,19 @@ describe("isSecureWebSocketUrl", () => {
     ];
 
     for (const input of allowedWhenOptedIn) {
-      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(true);
+      expect(isSecureTransportUrl(input, { allowPrivatePlaintext: true }), input).toBe(true);
     }
   });
 
-  it("still rejects ws:// public IP literals when opt-in is enabled", () => {
+  it("still rejects plaintext public IP literals when opt-in is enabled", () => {
     const publicIpWsUrls = ["ws://1.1.1.1:18789", "ws://8.8.8.8:18789", "ws://203.0.113.10:18789"];
 
     for (const input of publicIpWsUrls) {
-      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
+      expect(isSecureTransportUrl(input, { allowPrivatePlaintext: true }), input).toBe(false);
     }
   });
 
-  it("still rejects non-unicast IPv6 ws:// even when opt-in is enabled", () => {
+  it("still rejects non-unicast IPv6 plaintext even when opt-in is enabled", () => {
     const disallowedWhenOptedIn = [
       "ws://[::]:18789",
       "ws://[0:0::0]:18789",
@@ -481,7 +491,7 @@ describe("isSecureWebSocketUrl", () => {
     ];
 
     for (const input of disallowedWhenOptedIn) {
-      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
+      expect(isSecureTransportUrl(input, { allowPrivatePlaintext: true }), input).toBe(false);
     }
   });
 });
