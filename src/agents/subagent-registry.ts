@@ -256,7 +256,7 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
     // Evict oldest entries (LRU-style) to make room
     const entriesToEvict = Math.min(
       pendingLifecycleErrorByRunId.size - MAX_PENDING_LIFECYCLE_ERRORS + 1,
-      pendingLifecycleErrorByRunId.size
+      pendingLifecycleErrorByRunId.size,
     );
     const entriesArray = Array.from(pendingLifecycleErrorByRunId.entries());
     // Sort by endedAt (oldest first) and evict oldest
