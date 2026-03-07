@@ -253,8 +253,8 @@ export function renderMattermostModelSummaryView(params: {
       formatCurrentModelLine(params.currentModel),
       "",
       "Tap below to browse models, or use:",
-      "/model <provider/model> to switch",
-      "/model status for details",
+      "/oc_model <provider/model> to switch",
+      "/oc_model status for details",
     ].join("\n"),
     buttons: [
       [
