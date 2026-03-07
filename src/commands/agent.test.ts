@@ -437,6 +437,19 @@ describe("agentCommand", () => {
     });
   });
 
+  it("passes resolved agentDir to CLI runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(modelSelectionModule.isCliProvider).mockReturnValue(true);
+
+      await agentCommand({ message: "run with cli provider", to: "+1222" }, runtime);
+
+      const callArgs = runCliAgentSpy.mock.calls.at(-1)?.[0];
+      expect(callArgs?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
+    });
+  });
+
   it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
     await withCrossAgentResumeFixture(async ({ sessionKey }) => {
       const callArgs = getLastEmbeddedCall();

@@ -9,6 +9,10 @@ import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
+const resolveInputGuardModelConfigMock = vi.fn();
+const resolveOutputGuardModelConfigMock = vi.fn();
+const applyGuardToPayloadsMock = vi.fn();
+const applyGuardToInputMock = vi.fn();
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -26,6 +30,14 @@ vi.mock("../infra/system-events.js", () => ({
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+}));
+
+vi.mock("./guard-model.js", () => ({
+  resolveInputGuardModelConfig: (...args: unknown[]) => resolveInputGuardModelConfigMock(...args),
+  resolveOutputGuardModelConfig: (...args: unknown[]) => resolveOutputGuardModelConfigMock(...args),
+  resolveGuardModelConfig: (...args: unknown[]) => resolveOutputGuardModelConfigMock(...args),
+  applyGuardToPayloads: (...args: unknown[]) => applyGuardToPayloadsMock(...args),
+  applyGuardToInput: (...args: unknown[]) => applyGuardToInputMock(...args),
 }));
 
 type MockRunExit = {
@@ -61,6 +73,14 @@ describe("runCliAgent with process supervisor", () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    resolveInputGuardModelConfigMock.mockReset();
+    resolveOutputGuardModelConfigMock.mockReset();
+    applyGuardToPayloadsMock.mockReset();
+    applyGuardToInputMock.mockReset();
+    resolveInputGuardModelConfigMock.mockReturnValue(null);
+    resolveOutputGuardModelConfigMock.mockReturnValue(null);
+    applyGuardToInputMock.mockResolvedValue({ blocked: false });
+    applyGuardToPayloadsMock.mockImplementation(async (payloads: unknown) => payloads);
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -293,6 +313,59 @@ describe("runCliAgent with process supervisor", () => {
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as { cwd?: string };
     expect(input.cwd).toBe(path.resolve(fallbackWorkspace));
+  });
+
+  it("applies guard screening to CLI payloads when guard model is configured", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 25,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const cfg = {
+      agents: {
+        defaults: {
+          guardModel: "openai/gpt-4o-mini",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const guardConfig = {
+      provider: "openai",
+      modelId: "gpt-4o-mini",
+      action: "block" as const,
+      onError: "allow" as const,
+    };
+    resolveOutputGuardModelConfigMock.mockReturnValue(guardConfig);
+    applyGuardToPayloadsMock.mockResolvedValueOnce([
+      { text: "⚠️ This response was blocked by the content safety guard.", isError: true },
+    ]);
+
+    const result = await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: cfg,
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-guard",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(resolveOutputGuardModelConfigMock).toHaveBeenCalledWith(cfg);
+    expect(applyGuardToPayloadsMock).toHaveBeenCalledWith([{ text: "ok" }], guardConfig, {
+      cfg,
+      agentDir: "/tmp/agent",
+    });
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("blocked by the content safety guard");
   });
 });
 

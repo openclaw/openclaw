@@ -9,6 +9,9 @@ type JsonSchema = {
   required?: string[];
   items?: JsonSchema;
   enum?: string[];
+  const?: unknown;
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
   patternProperties?: Record<string, JsonSchema>;
 };
 
@@ -81,6 +84,26 @@ function safeName(name: string) {
 // filled later once schemas are loaded
 const schemaNameByObject = new Map<object, string>();
 
+function allVariantsBaseType(variants: JsonSchema[]): string | null {
+  const types = new Set(variants.map((v) => v.type));
+  if (types.size === 1) {
+    const t = types.values().next().value;
+    if (t === "string") {
+      return "String";
+    }
+    if (t === "integer") {
+      return "Int";
+    }
+    if (t === "number") {
+      return "Double";
+    }
+    if (t === "boolean") {
+      return "Bool";
+    }
+  }
+  return null;
+}
+
 function swiftType(schema: JsonSchema, required: boolean): string {
   const t = schema.type;
   const isOptional = !required;
@@ -100,6 +123,11 @@ function swiftType(schema: JsonSchema, required: boolean): string {
     base = `[${swiftType(schema.items ?? { type: "Any" }, true)}]`;
   } else if (schema.enum) {
     base = "String";
+  } else if (schema.anyOf || schema.oneOf) {
+    // If all variants have the same scalar type (e.g. string literals), emit that type.
+    const variants = schema.anyOf ?? schema.oneOf ?? [];
+    const unified = allVariantsBaseType(variants);
+    base = unified ?? "AnyCodable";
   } else if (schema.patternProperties) {
     base = "[String: AnyCodable]";
   } else if (t === "object") {

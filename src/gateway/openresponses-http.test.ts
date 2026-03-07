@@ -576,6 +576,45 @@ describe("OpenResponses HTTP API (e2e)", () => {
         const parsed = JSON.parse(event.data) as { type?: string };
         expect(event.event).toBe(parsed.type);
       }
+
+      try {
+        await writeGatewayConfig({
+          agents: {
+            defaults: {
+              guardModel: "openai/gpt-4o-mini",
+            },
+          },
+        });
+
+        agentCommand.mockClear();
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["unsafe ", "delta"],
+            text: "guarded final",
+          })) as never);
+
+        const guardedRes = await postResponses(port, {
+          stream: true,
+          model: "openclaw",
+          input: "hi",
+        });
+        expect(guardedRes.status).toBe(200);
+
+        const guardedText = await guardedRes.text();
+        const guardedEvents = parseSseEvents(guardedText);
+        const guardedDeltas = guardedEvents
+          .filter((event) => event.event === "response.output_text.delta")
+          .map((event) => {
+            const parsed = JSON.parse(event.data) as { delta?: string };
+            return parsed.delta ?? "";
+          })
+          .join("");
+        expect(guardedDeltas).toBe("guarded final");
+      } finally {
+        await writeGatewayConfig({});
+      }
     } finally {
       // shared server
     }

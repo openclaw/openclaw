@@ -21,6 +21,24 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
+    guardModel: AgentModelSchema.optional(),
+    guardModelAction: z
+      .union([z.literal("block"), z.literal("redact"), z.literal("warn")])
+      .optional(),
+    guardModelOnError: z.union([z.literal("allow"), z.literal("block")]).optional(),
+    guardModelMaxInputChars: z.number().int().positive().optional(),
+    inputGuardModel: AgentModelSchema.optional(),
+    inputGuardModelAction: z
+      .union([z.literal("block"), z.literal("redact"), z.literal("warn")])
+      .optional(),
+    inputGuardModelOnError: z.union([z.literal("allow"), z.literal("block")]).optional(),
+    inputGuardModelMaxInputChars: z.number().int().positive().optional(),
+    outputGuardModel: AgentModelSchema.optional(),
+    outputGuardModelAction: z
+      .union([z.literal("block"), z.literal("redact"), z.literal("warn")])
+      .optional(),
+    outputGuardModelOnError: z.union([z.literal("allow"), z.literal("block")]).optional(),
+    outputGuardModelMaxInputChars: z.number().int().positive().optional(),
     models: z
       .record(
         z.string(),

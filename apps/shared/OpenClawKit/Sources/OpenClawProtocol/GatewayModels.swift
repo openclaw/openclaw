@@ -302,7 +302,7 @@ public struct Snapshot: Codable, Sendable {
     public let configpath: String?
     public let statedir: String?
     public let sessiondefaults: [String: AnyCodable]?
-    public let authmode: AnyCodable?
+    public let authmode: String?
     public let updateavailable: [String: AnyCodable]?
 
     public init(
@@ -313,7 +313,7 @@ public struct Snapshot: Codable, Sendable {
         configpath: String?,
         statedir: String?,
         sessiondefaults: [String: AnyCodable]?,
-        authmode: AnyCodable?,
+        authmode: String?,
         updateavailable: [String: AnyCodable]?)
     {
         self.presence = presence
@@ -689,11 +689,11 @@ public struct AgentWaitParams: Codable, Sendable {
 }
 
 public struct WakeParams: Codable, Sendable {
-    public let mode: AnyCodable
+    public let mode: String
     public let text: String
 
     public init(
-        mode: AnyCodable,
+        mode: String,
         text: String)
     {
         self.mode = mode
@@ -1284,11 +1284,11 @@ public struct SessionsPatchParams: Codable, Sendable {
 
 public struct SessionsResetParams: Codable, Sendable {
     public let key: String
-    public let reason: AnyCodable?
+    public let reason: String?
 
     public init(
         key: String,
-        reason: AnyCodable?)
+        reason: String?)
     {
         self.key = key
         self.reason = reason
@@ -1344,7 +1344,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let key: String?
     public let startdate: String?
     public let enddate: String?
-    public let mode: AnyCodable?
+    public let mode: String?
     public let utcoffset: String?
     public let limit: Int?
     public let includecontextweight: Bool?
@@ -1353,7 +1353,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         key: String?,
         startdate: String?,
         enddate: String?,
-        mode: AnyCodable?,
+        mode: String?,
         utcoffset: String?,
         limit: Int?,
         includecontextweight: Bool?)
@@ -1531,11 +1531,11 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
 }
 
 public struct WizardStartParams: Codable, Sendable {
-    public let mode: AnyCodable?
+    public let mode: String?
     public let workspace: String?
 
     public init(
-        mode: AnyCodable?,
+        mode: String?,
         workspace: String?)
     {
         self.mode = mode
@@ -1596,25 +1596,25 @@ public struct WizardStatusParams: Codable, Sendable {
 
 public struct WizardStep: Codable, Sendable {
     public let id: String
-    public let type: AnyCodable
+    public let type: String
     public let title: String?
     public let message: String?
     public let options: [[String: AnyCodable]]?
     public let initialvalue: AnyCodable?
     public let placeholder: String?
     public let sensitive: Bool?
-    public let executor: AnyCodable?
+    public let executor: String?
 
     public init(
         id: String,
-        type: AnyCodable,
+        type: String,
         title: String?,
         message: String?,
         options: [[String: AnyCodable]]?,
         initialvalue: AnyCodable?,
         placeholder: String?,
         sensitive: Bool?,
-        executor: AnyCodable?)
+        executor: String?)
     {
         self.id = id
         self.type = type
@@ -1643,13 +1643,13 @@ public struct WizardStep: Codable, Sendable {
 public struct WizardNextResult: Codable, Sendable {
     public let done: Bool
     public let step: [String: AnyCodable]?
-    public let status: AnyCodable?
+    public let status: String?
     public let error: String?
 
     public init(
         done: Bool,
         step: [String: AnyCodable]?,
-        status: AnyCodable?,
+        status: String?,
         error: String?)
     {
         self.done = done
@@ -1670,14 +1670,14 @@ public struct WizardStartResult: Codable, Sendable {
     public let sessionid: String
     public let done: Bool
     public let step: [String: AnyCodable]?
-    public let status: AnyCodable?
+    public let status: String?
     public let error: String?
 
     public init(
         sessionid: String,
         done: Bool,
         step: [String: AnyCodable]?,
-        status: AnyCodable?,
+        status: String?,
         error: String?)
     {
         self.sessionid = sessionid
@@ -1697,11 +1697,11 @@ public struct WizardStartResult: Codable, Sendable {
 }
 
 public struct WizardStatusResult: Codable, Sendable {
-    public let status: AnyCodable
+    public let status: String
     public let error: String?
 
     public init(
-        status: AnyCodable,
+        status: String,
         error: String?)
     {
         self.status = status
@@ -2211,13 +2211,13 @@ public struct AgentsListParams: Codable, Sendable {}
 public struct AgentsListResult: Codable, Sendable {
     public let defaultid: String
     public let mainkey: String
-    public let scope: AnyCodable
+    public let scope: String
     public let agents: [AgentSummary]
 
     public init(
         defaultid: String,
         mainkey: String,
-        scope: AnyCodable,
+        scope: String,
         agents: [AgentSummary])
     {
         self.defaultid = defaultid
@@ -2313,11 +2313,11 @@ public struct ToolsCatalogParams: Codable, Sendable {
 }
 
 public struct ToolCatalogProfile: Codable, Sendable {
-    public let id: AnyCodable
+    public let id: String
     public let label: String
 
     public init(
-        id: AnyCodable,
+        id: String,
         label: String)
     {
         self.id = id
@@ -2334,19 +2334,19 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let id: String
     public let label: String
     public let description: String
-    public let source: AnyCodable
+    public let source: String
     public let pluginid: String?
     public let optional: Bool?
-    public let defaultprofiles: [AnyCodable]
+    public let defaultprofiles: [String]
 
     public init(
         id: String,
         label: String,
         description: String,
-        source: AnyCodable,
+        source: String,
         pluginid: String?,
         optional: Bool?,
-        defaultprofiles: [AnyCodable])
+        defaultprofiles: [String])
     {
         self.id = id
         self.label = label
@@ -2371,14 +2371,14 @@ public struct ToolCatalogEntry: Codable, Sendable {
 public struct ToolCatalogGroup: Codable, Sendable {
     public let id: String
     public let label: String
-    public let source: AnyCodable
+    public let source: String
     public let pluginid: String?
     public let tools: [ToolCatalogEntry]
 
     public init(
         id: String,
         label: String,
-        source: AnyCodable,
+        source: String,
         pluginid: String?,
         tools: [ToolCatalogEntry])
     {
@@ -2495,8 +2495,8 @@ public struct CronJob: Codable, Sendable {
     public let createdatms: Int
     public let updatedatms: Int
     public let schedule: AnyCodable
-    public let sessiontarget: AnyCodable
-    public let wakemode: AnyCodable
+    public let sessiontarget: String
+    public let wakemode: String
     public let payload: AnyCodable
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
@@ -2513,8 +2513,8 @@ public struct CronJob: Codable, Sendable {
         createdatms: Int,
         updatedatms: Int,
         schedule: AnyCodable,
-        sessiontarget: AnyCodable,
-        wakemode: AnyCodable,
+        sessiontarget: String,
+        wakemode: String,
         payload: AnyCodable,
         delivery: AnyCodable?,
         failurealert: AnyCodable?,
@@ -2563,18 +2563,18 @@ public struct CronListParams: Codable, Sendable {
     public let limit: Int?
     public let offset: Int?
     public let query: String?
-    public let enabled: AnyCodable?
-    public let sortby: AnyCodable?
-    public let sortdir: AnyCodable?
+    public let enabled: String?
+    public let sortby: String?
+    public let sortdir: String?
 
     public init(
         includedisabled: Bool?,
         limit: Int?,
         offset: Int?,
         query: String?,
-        enabled: AnyCodable?,
-        sortby: AnyCodable?,
-        sortdir: AnyCodable?)
+        enabled: String?,
+        sortby: String?,
+        sortdir: String?)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -2606,8 +2606,8 @@ public struct CronAddParams: Codable, Sendable {
     public let enabled: Bool?
     public let deleteafterrun: Bool?
     public let schedule: AnyCodable
-    public let sessiontarget: AnyCodable
-    public let wakemode: AnyCodable
+    public let sessiontarget: String
+    public let wakemode: String
     public let payload: AnyCodable
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
@@ -2620,8 +2620,8 @@ public struct CronAddParams: Codable, Sendable {
         enabled: Bool?,
         deleteafterrun: Bool?,
         schedule: AnyCodable,
-        sessiontarget: AnyCodable,
-        wakemode: AnyCodable,
+        sessiontarget: String,
+        wakemode: String,
         payload: AnyCodable,
         delivery: AnyCodable?,
         failurealert: AnyCodable?)
@@ -2657,30 +2657,30 @@ public struct CronAddParams: Codable, Sendable {
 }
 
 public struct CronRunsParams: Codable, Sendable {
-    public let scope: AnyCodable?
+    public let scope: String?
     public let id: String?
     public let jobid: String?
     public let limit: Int?
     public let offset: Int?
-    public let statuses: [AnyCodable]?
-    public let status: AnyCodable?
-    public let deliverystatuses: [AnyCodable]?
-    public let deliverystatus: AnyCodable?
+    public let statuses: [String]?
+    public let status: String?
+    public let deliverystatuses: [String]?
+    public let deliverystatus: String?
     public let query: String?
-    public let sortdir: AnyCodable?
+    public let sortdir: String?
 
     public init(
-        scope: AnyCodable?,
+        scope: String?,
         id: String?,
         jobid: String?,
         limit: Int?,
         offset: Int?,
-        statuses: [AnyCodable]?,
-        status: AnyCodable?,
-        deliverystatuses: [AnyCodable]?,
-        deliverystatus: AnyCodable?,
+        statuses: [String]?,
+        status: String?,
+        deliverystatuses: [String]?,
+        deliverystatus: String?,
         query: String?,
-        sortdir: AnyCodable?)
+        sortdir: String?)
     {
         self.scope = scope
         self.id = id
@@ -2714,11 +2714,11 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let ts: Int
     public let jobid: String
     public let action: String
-    public let status: AnyCodable?
+    public let status: String?
     public let error: String?
     public let summary: String?
     public let delivered: Bool?
-    public let deliverystatus: AnyCodable?
+    public let deliverystatus: String?
     public let deliveryerror: String?
     public let sessionid: String?
     public let sessionkey: String?
@@ -2734,11 +2734,11 @@ public struct CronRunLogEntry: Codable, Sendable {
         ts: Int,
         jobid: String,
         action: String,
-        status: AnyCodable?,
+        status: String?,
         error: String?,
         summary: String?,
         delivered: Bool?,
-        deliverystatus: AnyCodable?,
+        deliverystatus: String?,
         deliveryerror: String?,
         sessionid: String?,
         sessionkey: String?,
@@ -3314,7 +3314,7 @@ public struct ChatEvent: Codable, Sendable {
     public let runid: String
     public let sessionkey: String
     public let seq: Int
-    public let state: AnyCodable
+    public let state: String
     public let message: AnyCodable?
     public let errormessage: String?
     public let usage: AnyCodable?
@@ -3324,7 +3324,7 @@ public struct ChatEvent: Codable, Sendable {
         runid: String,
         sessionkey: String,
         seq: Int,
-        state: AnyCodable,
+        state: String,
         message: AnyCodable?,
         errormessage: String?,
         usage: AnyCodable?,

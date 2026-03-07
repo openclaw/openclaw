@@ -45,6 +45,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     reasoningMode,
     includeReasoning: reasoningMode === "on",
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
+    shouldEmitAssistantAgentEvents: !params.suppressAssistantAgentEvents,
     streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     blockBuffer: "",

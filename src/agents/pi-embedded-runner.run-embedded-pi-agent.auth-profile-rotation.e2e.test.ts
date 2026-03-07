@@ -104,13 +104,18 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   ...overrides,
 });
 
-const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
+const makeConfig = (opts?: {
+  fallbacks?: string[];
+  apiKey?: string;
+  guardModel?: string;
+}): OpenClawConfig =>
   ({
     agents: {
       defaults: {
         model: {
           fallbacks: opts?.fallbacks ?? [],
         },
+        ...(opts?.guardModel ? { guardModel: opts.guardModel } : {}),
       },
     },
     models: {
@@ -875,6 +880,52 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("suppresses live streaming callbacks when guard model is enabled", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockSingleSuccessfulAttempt();
+
+      const onPartialReply = vi.fn();
+      const onReasoningStream = vi.fn();
+      const onBlockReply = vi.fn();
+      const onBlockReplyFlush = vi.fn();
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:guard-streaming-off",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig({ guardModel: "openai/mock-1" }),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:guard-streaming-off",
+        onPartialReply,
+        onReasoningStream,
+        onBlockReply,
+        onBlockReplyFlush,
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as {
+        onPartialReply?: unknown;
+        onReasoningStream?: unknown;
+        onBlockReply?: unknown;
+        onBlockReplyFlush?: unknown;
+        suppressAssistantAgentEvents?: unknown;
+      };
+      expect(firstCall.onPartialReply).toBeUndefined();
+      expect(firstCall.onReasoningStream).toBeUndefined();
+      expect(firstCall.onBlockReply).toBeUndefined();
+      expect(firstCall.onBlockReplyFlush).toBeUndefined();
+      expect(firstCall.suppressAssistantAgentEvents).toBe(true);
     });
   });
 
