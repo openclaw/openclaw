@@ -1,0 +1,77 @@
+# Test Architect workflow: test-design
+name: testarch-test-design
+# prettier-ignore
+description: 'Create system-level or epic-level test plans. Use when the user says "lets design test plan" or "I want to create test strategy"'
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/tea/config.yaml"
+output_folder: "{config_source}:output_folder"
+test_artifacts: "{config_source}:test_artifacts"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+document_output_language: "{config_source}:document_output_language"
+date: system-generated
+
+# Workflow components
+installed_path: "{project-root}/_bmad/tea/workflows/testarch/test-design"
+instructions: "{installed_path}/instructions.md"
+validation: "{installed_path}/checklist.md"
+# Note: Template selection is mode-based (see instructions.md Step 1.5):
+#   - System-level: test-design-architecture-template.md + test-design-qa-template.md
+#   - Epic-level: test-design-template.md (unchanged)
+template: "{installed_path}/test-design-template.md"
+
+# Variables and inputs
+variables:
+  design_level: "full" # full, targeted, minimal - scope of design effort
+  mode: "auto-detect" # auto-detect (default), system-level, epic-level
+  test_stack_type: "auto" # auto, frontend, backend, fullstack - from config or auto-detected
+
+# Output configuration
+# Note: Actual output file determined dynamically based on mode detection
+# Declared outputs for new workflow format
+outputs:
+  # System-Level Mode (Phase 3) - TWO documents
+  - id: test-design-architecture
+    description: "System-level test architecture: Architectural concerns, testability gaps, NFR requirements for Architecture/Dev teams"
+    path: "{test_artifacts}/test-design-architecture.md"
+    mode: system-level
+    audience: architecture
+
+  - id: test-design-qa
+    description: "System-level test design: Test execution recipe, coverage plan, pre-implementation setup for QA team"
+    path: "{test_artifacts}/test-design-qa.md"
+    mode: system-level
+    audience: qa
+
+  - id: test-design-handoff
+    description: "TEA → BMAD handoff document: Bridges test design outputs with epic/story decomposition"
+    path: "{test_artifacts}/test-design/{project_name}-handoff.md"
+    mode: system-level
+    audience: bmad-integration
+
+  # Epic-Level Mode (Phase 4) - ONE document (unchanged)
+  - id: epic-level
+    description: "Epic-level test plan (Phase 4)"
+    path: "{test_artifacts}/test-design-epic-{epic_num}.md"
+    mode: epic-level
+# Note: No default_output_file - mode detection determines which outputs to write
+
+# Required tools
+required_tools:
+  - read_file # Read PRD, epics, stories, architecture docs
+  - write_file # Create test design document
+  - list_files # Find related documentation
+  - search_repo # Search for existing tests and patterns
+
+tags:
+  - qa
+  - planning
+  - test-architect
+  - risk-assessment
+  - coverage
+
+execution_hints:
+  interactive: false # Minimize prompts
+  autonomous: true # Proceed without user input unless blocked
+  iterative: true

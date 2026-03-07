@@ -1,0 +1,19 @@
+propose,type,tool_name,description,url,requires_install
+always,workflow,party-mode,"Enables collaborative idea generation by managing turn-taking, summarizing contributions, and synthesizing ideas from multiple AI personas in structured conversation sessions.",{project-root}/_bmad/core/workflows/party-mode/workflow.md,no
+always,workflow,advanced-elicitation,"Employs diverse elicitation strategies such as Socratic questioning, role-playing, and counterfactual analysis to critically evaluate and enhance LLM outputs.",{project-root}/_bmad/core/workflows/advanced-elicitation/workflow.xml,no
+always,task,brainstorming,"Facilitates idea generation by prompting users with targeted questions and synthesizing concepts into actionable insights.",{project-root}/_bmad/core/tasks/brainstorming.xml,no
+always,llm-tool-feature,web-browsing,"Provides LLM with capabilities to perform real-time web searches and incorporate current information.",,no
+always,llm-tool-feature,file-io,"Enables LLM to manage file operations such as creating, reading, updating, and deleting files.",,no
+always,llm-tool-feature,sub-agents,"Allows LLM to create and manage specialized sub-agents for parallel processing and modular task delegation.",,no
+always,llm-tool-feature,sub-processes,"Enables LLM to initiate and manage subprocesses for parallel processing of complex tasks.",,no
+always,tool-memory,sidecar-file,"Creates a persistent history file for session-to-session state management, enabling continuity through workflow initialization with previous context.",,no
+example,tool-memory,vector-database,"Stores and retrieves semantic information through embeddings for intelligent memory access based on meaning rather than exact matches.",https://github.com/modelcontextprotocol/servers/tree/main/src/rag-agent,yes
+example,mcp,context-7,"A curated knowledge base of API documentation and third-party tool references for integration and development tasks.",https://github.com/modelcontextprotocol/servers/tree/main/src/context-7,yes
+example,mcp,playwright,"Provides capabilities for web browser automation including navigation, form submission, and data extraction.",https://github.com/modelcontextprotocol/servers/tree/main/src/playwright,yes
+example,workflow,security-auditor,"Analyzes workflows and code for security vulnerabilities, compliance issues, and best practices violations.",,no
+example,task,code-review,"Performs systematic code analysis identifying bugs, performance issues, style violations, and architectural problems.",,no
+example,mcp,git-integration,"Enables direct Git repository operations including commits, branches, merges, and history analysis.",https://github.com/modelcontextprotocol/servers/tree/main/src/git,yes
+example,mcp,database-connector,"Provides direct database connectivity for querying, updating, and managing data across multiple database types.",https://github.com/modelcontextprotocol/servers/tree/main/src/postgres,yes
+example,task,api-testing,"Automated API endpoint testing with request/response validation and authentication handling for REST and GraphQL.",,no
+example,workflow,deployment-manager,"Orchestrates application deployment across multiple environments with rollback capabilities and health checks.",,no
+example,task,data-validator,"Validates data quality, schema compliance, and business rules through comprehensive data profiling.",,no

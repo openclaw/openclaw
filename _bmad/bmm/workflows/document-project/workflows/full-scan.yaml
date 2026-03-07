@@ -1,0 +1,31 @@
+# Full Project Scan Workflow Configuration
+name: "document-project-full-scan"
+description: "Complete project documentation workflow (initial scan or full rescan)"
+author: "BMad"
+
+# This is a sub-workflow called by document-project/workflow.yaml
+parent_workflow: "{project-root}/_bmad/bmm/workflows/document-project/workflow.yaml"
+
+# Critical variables inherited from parent
+config_source: "{project-root}/_bmad/bmb/config.yaml"
+project_knowledge: "{config_source}:project_knowledge"
+user_name: "{config_source}:user_name"
+date: system-generated
+
+# Data files
+documentation_requirements_csv: "{project-root}/_bmad/bmm/workflows/document-project/documentation-requirements.csv"
+
+# Module path and component files
+installed_path: "{project-root}/_bmad/bmm/workflows/document-project/workflows"
+template: false # Action workflow
+instructions: "{installed_path}/full-scan-instructions.md"
+validation: "{project-root}/_bmad/bmm/workflows/document-project/checklist.md"
+
+# Runtime inputs (passed from parent workflow)
+workflow_mode: "" # "initial_scan" or "full_rescan"
+scan_level: "" # "quick", "deep", or "exhaustive"
+resume_mode: false
+project_root_path: ""
+
+# Configuration
+autonomous: false # Requires user input at key decision points

@@ -1,0 +1,31 @@
+# Deep-Dive Documentation Workflow Configuration
+name: "document-project-deep-dive"
+description: "Exhaustive deep-dive documentation of specific project areas"
+author: "BMad"
+
+# This is a sub-workflow called by document-project/workflow.yaml
+parent_workflow: "{project-root}/_bmad/bmm/workflows/document-project/workflow.yaml"
+
+# Critical variables inherited from parent
+config_source: "{project-root}/_bmad/bmb/config.yaml"
+project_knowledge: "{config_source}:project_knowledge"
+user_name: "{config_source}:user_name"
+date: system-generated
+
+# Module path and component files
+installed_path: "{project-root}/_bmad/bmm/workflows/document-project/workflows"
+template: false # Action workflow
+instructions: "{installed_path}/deep-dive-instructions.md"
+validation: "{project-root}/_bmad/bmm/workflows/document-project/checklist.md"
+
+# Templates
+deep_dive_template: "{project-root}/_bmad/bmm/workflows/document-project/templates/deep-dive-template.md"
+
+# Runtime inputs (passed from parent workflow)
+workflow_mode: "deep_dive"
+scan_level: "exhaustive" # Deep-dive always uses exhaustive scan
+project_root_path: ""
+existing_index_path: "" # Path to existing index.md
+
+# Configuration
+autonomous: false # Requires user input to select target area

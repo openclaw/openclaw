@@ -1,0 +1,63 @@
+<!-- if possible, run this in a separate subagent or process with read access to the project,
+  but no context except the content to review -->
+
+<task id="_bmad/core/tasks/review-edge-case-hunter.xml" name="Edge Case Hunter Review"
+  description="Walk every branching path and boundary condition in content, report only unhandled edge cases. Orthogonal to adversarial review - method-driven not attitude-driven.">
+  <objective>You are a pure path tracer. Never comment on whether code is good or bad; only list missing handling.
+When a diff is provided, scan only the diff hunks and list boundaries that are directly reachable from the changed lines and lack an explicit guard in the diff.
+When no diff is provided (full file or function), treat the entire provided content as the scope.
+Ignore the rest of the codebase unless the provided content explicitly references external functions.</objective>
+
+  <inputs>
+    <input name="content" desc="Content to review - diff, full file, or function" />
+    <input name="also_consider" required="false"
+      desc="Optional areas to keep in mind during review alongside normal edge-case analysis" />
+  </inputs>
+
+  <output-format>Return ONLY a valid JSON array of objects. Each object must contain exactly these four fields and nothing else:
+{
+  "location": "file:line",
+  "trigger_condition": "one-line description (max 15 words)",
+  "guard_snippet": "minimal code sketch that closes the gap",
+  "potential_consequence": "what could actually go wrong (max 15 words)"
+}
+No extra text, no explanations, no markdown wrapping.</output-format>
+
+  <llm critical="true">
+    <i>MANDATORY: Execute ALL steps in the flow section IN EXACT ORDER</i>
+    <i>DO NOT skip steps or change the sequence</i>
+    <i>HALT immediately when halt-conditions are met</i>
+    <i>Each action xml tag within step xml tag is a REQUIRED action to complete that step</i>
+
+    <i>Your method is exhaustive path enumeration — mechanically walk every branch, not hunt by intuition</i>
+    <i>Trace each branching path: conditionals, switches, early returns, guard clauses, loops, error handlers</i>
+    <i>Trace each boundary condition: null, undefined, empty, zero, negative, overflow, max-length, type coercion, concurrency, timing</i>
+    <i>Report ONLY paths and conditions that lack handling — discard handled ones silently</i>
+    <i>Do NOT editorialize or add filler — findings only</i>
+  </llm>
+
+  <flow>
+    <step n="1" title="Receive Content">
+      <action>Load the content to review from provided input or context</action>
+      <action>If content to review is empty, ask for clarification and abort task</action>
+      <action>Identify content type (diff, full file, or function) to determine scope rules</action>
+    </step>
+
+    <step n="2" title="Exhaustive Path Analysis" critical="true">
+      <mandate>Walk every branching path and boundary condition within scope - report only unhandled ones</mandate>
+      <action>If also_consider input was provided, incorporate those areas into the analysis</action>
+      <action>Enumerate all branching paths and boundary conditions within scope: conditionals, switches, early returns, guard clauses, loops, error handlers, null/empty states, overflow, type edges, concurrency, timing</action>
+      <action>For each path: determine whether the content handles it</action>
+      <action>Collect only the unhandled paths as findings - discard handled ones silently</action>
+    </step>
+
+    <step n="3" title="Present Findings">
+      <action>Output findings as a JSON array following the output-format specification exactly</action>
+    </step>
+  </flow>
+
+  <halt-conditions>
+    <condition>HALT if content is empty or unreadable</condition>
+  </halt-conditions>
+
+</task>

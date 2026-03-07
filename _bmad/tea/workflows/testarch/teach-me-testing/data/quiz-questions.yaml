@@ -1,0 +1,206 @@
+# Quiz Questions Bank
+# Organized by session with questions, answers, and explanations
+
+session-01-quickstart:
+  passing_score: 70
+  questions:
+    - id: q1-purpose
+      question: "What is the primary purpose of TEA?"
+      options:
+        A: "Replace all testing tools with a single framework"
+        B: "Make testing expertise accessible through structured workflows and knowledge"
+        C: "Automate 100% of test writing"
+        D: "Only works for Playwright tests"
+      correct: B
+      explanation: "TEA makes testing expertise accessible and scalable through workflows and knowledge fragments. It's not about replacing tools or automating everything."
+
+    - id: q2-risk-matrix
+      question: "What does the P0-P3 risk matrix help with?"
+      options:
+        A: "Prioritizing test coverage based on criticality"
+        B: "Grading test code quality"
+        C: "Measuring test execution speed"
+        D: "Tracking bug severity"
+      correct: A
+      explanation: "P0-P3 helps prioritize what to test based on risk (Probability × Impact). P0 = critical features like login, P3 = nice-to-have like tooltips."
+
+    - id: q3-engagement
+      question: "Which TEA engagement model is best for quick value in 30 minutes?"
+      options:
+        A: "TEA Enterprise"
+        B: "TEA Lite"
+        C: "TEA Integrated"
+        D: "TEA Brownfield"
+      correct: B
+      explanation: "TEA Lite is the 30-minute quick start approach. Enterprise and Integrated are more comprehensive."
+
+session-02-concepts:
+  passing_score: 70
+  questions:
+    - id: q1-p0-priority
+      question: "In the P0-P3 matrix, what priority level should login/authentication have?"
+      options:
+        A: "P3 - Low priority"
+        B: "P2 - Medium priority"
+        C: "P1 - High priority"
+        D: "P0 - Critical priority"
+      correct: D
+      explanation: "Login/authentication is P0 - critical. Business fails if broken. High usage, high impact, business-critical."
+
+    - id: q2-hard-waits
+      question: "What is the problem with using sleep(5000) instead of waitFor conditions?"
+      options:
+        A: "It makes tests slower"
+        B: "It's a hard wait that doesn't react to state changes (violates DoD)"
+        C: "It uses too much memory"
+        D: "It's not supported in modern frameworks"
+      correct: B
+      explanation: "Hard waits don't react to state changes - they guess timing. Use waitFor to react to conditions. This violates TEA Definition of Done."
+
+    - id: q3-self-cleaning
+      question: "What does 'self-cleaning tests' mean in TEA Definition of Done?"
+      options:
+        A: "Tests automatically fix their own bugs"
+        B: "Tests delete/deactivate entities they create during testing"
+        C: "Tests run faster by cleaning up code"
+        D: "Tests remove old test files"
+      correct: B
+      explanation: "Self-cleaning means tests delete/deactivate entities they created. No manual cleanup required."
+
+session-03-architecture:
+  passing_score: 70
+  questions:
+    - id: q1-fixtures
+      question: "What is the main benefit of fixture composition?"
+      options:
+        A: "Faster test execution"
+        B: "DRY - define once, reuse everywhere"
+        C: "Better error messages"
+        D: "Automatic screenshot capture"
+      correct: B
+      explanation: "Fixture composition allows you to define setup once and reuse everywhere. DRY principle for test setup."
+
+    - id: q2-network-first
+      question: "Why is 'network-first' better than mocking after the action?"
+      options:
+        A: "It's faster"
+        B: "It prevents race conditions"
+        C: "It uses less memory"
+        D: "It's easier to write"
+      correct: B
+      explanation: "Setting up network interception BEFORE the action prevents race conditions. The mock is ready when the action triggers."
+
+    - id: q3-step-file
+      question: "What pattern does this teaching workflow use?"
+      options:
+        A: "Page Object Model"
+        B: "Behavior Driven Development"
+        C: "Step-File Architecture"
+        D: "Test Pyramid"
+      correct: C
+      explanation: "This workflow uses step-file architecture: micro-file design, just-in-time loading, sequential enforcement."
+
+session-04-test-design:
+  passing_score: 70
+  questions:
+    - id: q1-test-design-purpose
+      question: "What does the Test Design workflow help you do?"
+      options:
+        A: "Write tests faster"
+        B: "Plan tests BEFORE writing them"
+        C: "Run tests in parallel"
+        D: "Debug test failures"
+      correct: B
+      explanation: "Test Design workflow helps you plan tests before writing them. Design before code, like architecture before implementation."
+
+    - id: q2-risk-calculation
+      question: "How do you calculate risk?"
+      options:
+        A: "Probability + Impact"
+        B: "Probability × Impact"
+        C: "Probability - Impact"
+        D: "Probability / Impact"
+      correct: B
+      explanation: "Risk = Probability × Impact. Multiply the likelihood of failure by the impact of failure."
+
+    - id: q3-p0-coverage
+      question: "For P0 features, which test levels should you use?"
+      options:
+        A: "Only E2E tests"
+        B: "Only unit tests"
+        C: "Unit + Integration + E2E (comprehensive)"
+        D: "Manual testing only"
+      correct: C
+      explanation: "P0 features need comprehensive coverage: Unit + Integration + E2E. High confidence for critical features."
+
+session-05-atdd-automate:
+  passing_score: 70
+  questions:
+    - id: q1-red-phase
+      question: "What is the 'red' phase in TDD?"
+      options:
+        A: "Tests fail (code doesn't exist yet)"
+        B: "Tests pass"
+        C: "Code is refactored"
+        D: "Tests are deleted"
+      correct: A
+      explanation: "Red phase: Tests fail because the code doesn't exist yet. Write tests first, then implement."
+
+    - id: q2-atdd-vs-automate
+      question: "What's the difference between ATDD and Automate workflows?"
+      options:
+        A: "ATDD generates E2E, Automate generates API tests"
+        B: "ATDD writes tests first (red phase), Automate tests existing code"
+        C: "ATDD is faster than Automate"
+        D: "They're the same workflow"
+      correct: B
+      explanation: "ATDD writes failing tests first (red phase), then you implement. Automate generates tests for existing code (coverage expansion)."
+
+    - id: q3-api-testing
+      question: "Why use pure API tests without a browser?"
+      options:
+        A: "They look prettier"
+        B: "They're easier to debug"
+        C: "They're faster and test business logic directly"
+        D: "They're required by TEA"
+      correct: C
+      explanation: "Pure API tests are faster (no browser overhead) and test business logic directly without UI complexity."
+
+session-06-quality-trace:
+  passing_score: 70
+  questions:
+    - id: q1-five-dimensions
+      question: "What are the 5 dimensions in Test Review workflow?"
+      options:
+        A: "Speed, cost, coverage, bugs, time"
+        B: "Determinism, Isolation, Assertions, Structure, Performance"
+        C: "Unit, integration, E2E, manual, exploratory"
+        D: "P0, P1, P2, P3, P4"
+      correct: B
+      explanation: "Test Review evaluates 5 dimensions: Determinism (no flakiness), Isolation (parallel-safe), Assertions (correct checks), Structure (readable/maintainable organization), Performance (speed)."
+
+    - id: q2-release-gate
+      question: "When should the Trace workflow gate decision be RED (block release)?"
+      options:
+        A: "Any test failures exist"
+        B: "P0 gaps exist (critical requirements not tested)"
+        C: "Code coverage is below 80%"
+        D: "Tests are slow"
+      correct: B
+      explanation: "RED gate when P0 gaps exist - critical requirements not tested. Don't ship if critical features lack test coverage."
+
+    - id: q3-metrics
+      question: "Which metric matters most for quality?"
+      options:
+        A: "Total line coverage %"
+        B: "Number of tests written"
+        C: "P0/P1 coverage %"
+        D: "Test file count"
+      correct: C
+      explanation: "P0/P1 coverage matters most - it measures coverage of critical/high-priority features. Total line coverage is a vanity metric."
+
+session-07-advanced:
+  # No quiz - exploratory session
+  # Score: 100 (completion based, not quiz based)
+  passing_score: 100
+  questions: []

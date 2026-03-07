@@ -1,0 +1,46 @@
+# Test Architect workflow: atdd
+name: testarch-atdd
+# prettier-ignore
+description: 'Generate failing acceptance tests using TDD cycle. Use when the user says "lets write acceptance tests" or "I want to do ATDD"'
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/tea/config.yaml"
+output_folder: "{config_source}:output_folder"
+test_artifacts: "{config_source}:test_artifacts"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+document_output_language: "{config_source}:document_output_language"
+date: system-generated
+
+# Workflow components
+installed_path: "{project-root}/_bmad/tea/workflows/testarch/atdd"
+instructions: "{installed_path}/instructions.md"
+validation: "{installed_path}/checklist.md"
+template: "{installed_path}/atdd-checklist-template.md"
+
+# Variables and inputs
+variables:
+  test_dir: "{project-root}/tests" # Root test directory
+
+# Output configuration
+default_output_file: "{test_artifacts}/atdd-checklist-{story_id}.md"
+
+# Required tools
+required_tools:
+  - read_file # Read story markdown, framework config
+  - write_file # Create test files, checklist, factory stubs
+  - create_directory # Create test directories
+  - list_files # Find existing fixtures and helpers
+  - search_repo # Search for similar test patterns
+
+tags:
+  - qa
+  - atdd
+  - test-architect
+  - tdd
+  - red-green-refactor
+
+execution_hints:
+  interactive: false # Minimize prompts
+  autonomous: true # Proceed without user input unless blocked
+  iterative: true

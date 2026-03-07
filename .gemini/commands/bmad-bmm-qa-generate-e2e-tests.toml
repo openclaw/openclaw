@@ -1,0 +1,16 @@
+description = 'Generate end to end automated tests for existing features. Use when the user says "create qa automated tests for [feature]"'
+prompt = """
+Execute the BMAD 'qa-generate-e2e-tests' workflow.
+
+CRITICAL: This is a structured YAML workflow. Follow these steps precisely:
+
+1. LOAD the workflow definition from {project-root}/_bmad/bmm/workflows/qa-generate-e2e-tests/workflow.yaml
+2. PARSE the YAML structure to understand:
+   - Workflow phases and steps
+   - Required inputs and outputs
+   - Dependencies between steps
+3. EXECUTE each step in order
+4. VALIDATE outputs before proceeding to next step
+
+WORKFLOW FILE: {project-root}/_bmad/bmm/workflows/qa-generate-e2e-tests/workflow.yaml
+"""

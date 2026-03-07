@@ -1,0 +1,26 @@
+# Design Thinking Workflow Configuration
+name: "design-thinking"
+description: 'Guide human-centered design processes using empathy-driven methodologies. Use when the user says "lets run design thinking" or "I want to apply design thinking"'
+
+# Critical variables load from config_source
+config_source: "{project-root}/_bmad/cis/config.yaml"
+output_folder: "{config_source}:output_folder"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+date: system-generated
+
+# Context can be provided via data attribute when invoking
+# Example: data="{path}/product-context.md" provides project context
+
+# Module path and component files
+installed_path: "{project-root}/_bmad/cis/workflows/design-thinking"
+template: "{installed_path}/template.md"
+instructions: "{installed_path}/instructions.md"
+
+# Required Data Files
+design_methods: "{installed_path}/design-methods.csv"
+
+# Output configuration
+default_output_file: "{output_folder}/design-thinking-{{date}}.md"
+
+standalone: true

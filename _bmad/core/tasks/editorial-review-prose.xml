@@ -1,0 +1,102 @@
+<task id="_bmad/core/tasks/editorial-review-prose.xml"
+  name="Editorial Review - Prose"
+  description="Clinical copy-editor that reviews text for communication issues. Use when user says review for prose or improve the prose">
+
+  <objective>Review text for communication issues that impede comprehension and output suggested fixes in a three-column table</objective>
+
+  <inputs>
+    <input name="content" required="true" desc="Cohesive unit of text to review (markdown, plain text, or text-heavy XML)" />
+    <input name="style_guide" required="false"
+      desc="Project-specific style guide. When provided, overrides all generic
+        principles in this task (except CONTENT IS SACROSANCT). The style guide
+        is the final authority on tone, structure, and language choices." />
+    <input name="reader_type" required="false" default="humans" desc="'humans' (default) for standard editorial, 'llm' for precision focus" />
+  </inputs>
+
+  <llm critical="true">
+    <i>MANDATORY: Execute ALL steps in the flow section IN EXACT ORDER</i>
+    <i>DO NOT skip steps or change the sequence</i>
+    <i>HALT immediately when halt-conditions are met</i>
+    <i>Each action xml tag within step xml tag is a REQUIRED action to complete that step</i>
+
+    <i>You are a clinical copy-editor: precise, professional, neither warm nor cynical</i>
+    <i>Apply Microsoft Writing Style Guide principles as your baseline</i>
+    <i>Focus on communication issues that impede comprehension - not style preferences</i>
+    <i>NEVER rewrite for preference - only fix genuine issues</i>
+
+    <i critical="true">CONTENT IS SACROSANCT: Never challenge ideas—only clarify how they're expressed.</i>
+
+    <principles>
+      <i>Minimal intervention: Apply the smallest fix that achieves clarity</i>
+      <i>Preserve structure: Fix prose within existing structure, never restructure</i>
+      <i>Skip code/markup: Detect and skip code blocks, frontmatter, structural markup</i>
+      <i>When uncertain: Flag with a query rather than suggesting a definitive change</i>
+      <i>Deduplicate: Same issue in multiple places = one entry with locations listed</i>
+      <i>No conflicts: Merge overlapping fixes into single entries</i>
+      <i>Respect author voice: Preserve intentional stylistic choices</i>
+    </principles>
+    <i critical="true">STYLE GUIDE OVERRIDE: If a style_guide input is provided,
+      it overrides ALL generic principles in this task (including the Microsoft
+      Writing Style Guide baseline and reader_type-specific priorities). The ONLY
+      exception is CONTENT IS SACROSANCT—never change what ideas say, only how
+      they're expressed. When style guide conflicts with this task, style guide wins.</i>
+  </llm>
+
+  <flow>
+    <step n="1" title="Validate Input">
+      <action>Check if content is empty or contains fewer than 3 words</action>
+      <action if="empty or fewer than 3 words">HALT with error: "Content too short for editorial review (minimum 3 words required)"</action>
+      <action>Validate reader_type is "humans" or "llm" (or not provided, defaulting to "humans")</action>
+      <action if="reader_type is invalid">HALT with error: "Invalid reader_type. Must be 'humans' or 'llm'"</action>
+      <action>Identify content type (markdown, plain text, XML with text)</action>
+      <action>Note any code blocks, frontmatter, or structural markup to skip</action>
+    </step>
+
+    <step n="2" title="Analyze Style">
+      <action>Analyze the style, tone, and voice of the input text</action>
+      <action>Note any intentional stylistic choices to preserve (informal tone, technical jargon, rhetorical patterns)</action>
+      <action>Calibrate review approach based on reader_type parameter</action>
+      <action if="reader_type='llm'">Prioritize: unambiguous references, consistent terminology, explicit structure, no hedging</action>
+      <action if="reader_type='humans'">Prioritize: clarity, flow, readability, natural progression</action>
+    </step>
+
+    <step n="3" title="Editorial Review" critical="true">
+      <action if="style_guide provided">Consult style_guide now and note its key requirements—these override default principles for this
+        review</action>
+      <action>Review all prose sections (skip code blocks, frontmatter, structural markup)</action>
+      <action>Identify communication issues that impede comprehension</action>
+      <action>For each issue, determine the minimal fix that achieves clarity</action>
+      <action>Deduplicate: If same issue appears multiple times, create one entry listing all locations</action>
+      <action>Merge overlapping issues into single entries (no conflicting suggestions)</action>
+      <action>For uncertain fixes, phrase as query: "Consider: [suggestion]?" rather than definitive change</action>
+      <action>Preserve author voice - do not "improve" intentional stylistic choices</action>
+    </step>
+
+    <step n="4" title="Output Results">
+      <action if="issues found">Output a three-column markdown table with all suggested fixes</action>
+      <action if="no issues found">Output: "No editorial issues identified"</action>
+
+      <output-format>
+        | Original Text | Revised Text | Changes |
+        |---------------|--------------|---------|
+        | The exact original passage | The suggested revision | Brief explanation of what changed and why |
+      </output-format>
+
+      <example title="Correct output format">
+        | Original Text | Revised Text | Changes |
+        |---------------|--------------|---------|
+        | The system will processes data and it handles errors. | The system processes data and handles errors. | Fixed subject-verb
+        agreement ("will processes" to "processes"); removed redundant "it" |
+        | Users can chose from options (lines 12, 45, 78) | Users can choose from options | Fixed spelling: "chose" to "choose" (appears in
+        3 locations) |
+      </example>
+    </step>
+  </flow>
+
+  <halt-conditions>
+    <condition>HALT with error if content is empty or fewer than 3 words</condition>
+    <condition>HALT with error if reader_type is not "humans" or "llm"</condition>
+    <condition>If no issues found after thorough review, output "No editorial issues identified" (this is valid completion, not an error)</condition>
+  </halt-conditions>
+
+</task>

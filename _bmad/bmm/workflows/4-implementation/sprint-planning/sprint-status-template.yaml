@@ -1,0 +1,55 @@
+# Sprint Status Template
+# This is an EXAMPLE showing the expected format
+# The actual file will be generated with all epics/stories from your epic files
+
+# generated: {date}
+# project: {project_name}
+# project_key: {project_key}
+# tracking_system: {tracking_system}
+# story_location: {story_location}
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Mark epic as 'in-progress' when starting work on its first story
+# - SM typically creates next story ONLY after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then Dev runs code-review (fresh context, ideally different LLM)
+
+# EXAMPLE STRUCTURE (your actual epics/stories will replace these):
+
+generated: 05-06-2-2025 21:30
+project: My Awesome Project
+project_key: NOKEY
+tracking_system: file-system
+story_location: "{story_location}"
+
+development_status:
+  epic-1: backlog
+  1-1-user-authentication: done
+  1-2-account-management: ready-for-dev
+  1-3-plant-data-model: backlog
+  1-4-add-plant-manual: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-personality-system: backlog
+  2-2-chat-interface: backlog
+  2-3-llm-integration: backlog
+  epic-2-retrospective: optional

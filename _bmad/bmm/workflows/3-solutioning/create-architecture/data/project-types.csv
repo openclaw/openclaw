@@ -1,0 +1,7 @@
+project_type,detection_signals,description,typical_starters
+web_app,"website,web application,browser,frontend,UI,interface",Web-based applications running in browsers,Next.js, Vite, Remix
+mobile_app,"mobile,iOS,Android,app,smartphone,tablet",Native mobile applications,React Native, Expo, Flutter
+api_backend,"API,REST,GraphQL,backend,service,microservice",Backend services and APIs,NestJS, Express, Fastify
+full_stack,"full-stack,complete,web+mobile,frontend+backend",Applications with both frontend and backend,T3 App, RedwoodJS, Blitz
+cli_tool,"CLI,command line,terminal,console,tool",Command-line interface tools,oclif, Commander, Caporal
+desktop_app,"desktop,Electron,Tauri,native app,macOS,Windows",Desktop applications,Electron, Tauri, Flutter Desktop
