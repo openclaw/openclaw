@@ -5,11 +5,10 @@ import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   canonicalizeMainSessionAlias,
-  loadSessionStore,
   resolveMainSessionKey,
-  resolveStorePath,
-  updateSessionStore,
-} from "../../config/sessions.js";
+} from "../../config/sessions/main-session.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,

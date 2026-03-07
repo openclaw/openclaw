@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { canonicalizeMainSessionAlias, resolveMainSessionKey } from "../../config/sessions.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import {
   normalizeAgentId,
