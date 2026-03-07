@@ -1,6 +1,7 @@
 import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { GroupPolicy } from "../config/types.base.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -114,7 +115,10 @@ export function resolveDmGroupAccessDecision(params: {
   reason: string;
 } {
   const dmPolicy = params.dmPolicy ?? "pairing";
-  const groupPolicy = params.groupPolicy ?? "allowlist";
+  const groupPolicy: GroupPolicy =
+    params.groupPolicy === "open" || params.groupPolicy === "disabled"
+      ? params.groupPolicy
+      : "allowlist";
   const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
   const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
 
