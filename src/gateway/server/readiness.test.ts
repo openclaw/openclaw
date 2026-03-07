@@ -167,6 +167,28 @@ describe("createReadinessChecker", () => {
     vi.useRealTimers();
   });
 
+  it("keeps telegram long-polling channels ready without stale-socket classification", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 31 * 60_000;
+    const manager = createManager(
+      snapshotWith({
+        telegram: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastStartAt: startedAt,
+          lastEventAt: null,
+        },
+      }),
+    );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
+    vi.useRealTimers();
+  });
+
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
