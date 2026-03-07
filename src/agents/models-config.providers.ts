@@ -35,6 +35,11 @@ import {
   DOUBAO_CODING_MODEL_CATALOG,
 } from "./doubao-models.js";
 import {
+  buildFalOpenrouterModelDefinition,
+  FAL_OPENROUTER_BASE_URL,
+  FAL_OPENROUTER_MODEL_CATALOG,
+} from "./fal-openrouter-models.js";
+import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -965,6 +970,14 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+function buildFalOpenrouterProvider(): ProviderConfig {
+  return {
+    baseUrl: FAL_OPENROUTER_BASE_URL,
+    api: "openai-completions",
+    models: FAL_OPENROUTER_MODEL_CATALOG.map(buildFalOpenrouterModelDefinition),
+  };
+}
+
 function buildOpenrouterProvider(): ProviderConfig {
   return {
     baseUrl: OPENROUTER_BASE_URL,
@@ -1287,6 +1300,14 @@ export async function resolveImplicitProviders(params: {
   const openrouterKey = resolveProviderApiKey("openrouter").apiKey;
   if (openrouterKey) {
     providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+  }
+
+  const falOpenrouterKey = resolveProviderApiKey("fal-openrouter").apiKey;
+  if (falOpenrouterKey) {
+    providers["fal-openrouter"] = {
+      ...buildFalOpenrouterProvider(),
+      apiKey: falOpenrouterKey,
+    };
   }
 
   const nvidiaKey = resolveProviderApiKey("nvidia").apiKey;

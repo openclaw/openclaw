@@ -3,6 +3,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^OPENAI_API_KEY$/i,
   /^GEMINI_API_KEY$/i,
   /^OPENROUTER_API_KEY$/i,
+  /^FAL_API_KEY$/i,
   /^MINIMAX_API_KEY$/i,
   /^ELEVENLABS_API_KEY$/i,
   /^SYNTHETIC_API_KEY$/i,
