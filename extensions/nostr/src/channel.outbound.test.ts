@@ -45,25 +45,31 @@ describe("nostr outbound cfg threading", () => {
     };
     mocks.startNostrBus.mockResolvedValueOnce(bus as any);
 
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+    const ac = new AbortController();
+
+    // startAccount blocks until the abort signal fires, so don't await it.
+    const startPromise = nostrPlugin.gateway!.startAccount!(
       createStartAccountContext({
         account: {
           accountId: "default",
           enabled: true,
           configured: true,
-          privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          publicKey: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+          privateKey: "dead".repeat(16), // pragma: allowlist secret
+          publicKey: "face".repeat(16),
           relays: ["wss://relay.example.com"],
           config: {},
         },
-        abortSignal: new AbortController().signal,
+        abortSignal: ac.signal,
       }),
-    )) as { stop: () => void };
+    );
+
+    // Let startAccount set up the bus before testing outbound.
+    await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalled());
 
     const cfg = {
       channels: {
         nostr: {
-          privateKey: "resolved-nostr-private-key",
+          nsec: "resolved-nostr-test-placeholder",
         },
       },
     };
@@ -83,6 +89,7 @@ describe("nostr outbound cfg threading", () => {
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "converted:|a|b|");
 
-    cleanup.stop();
+    ac.abort();
+    await startPromise;
   });
 });
