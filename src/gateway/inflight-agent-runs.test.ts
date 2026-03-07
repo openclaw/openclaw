@@ -106,6 +106,47 @@ describe("inflight agent runs persistence", () => {
     expect((await listInflightAgentRuns(env)).map((r) => r.runId)).toEqual([runId]);
   });
 
+  it("preserves records while an immediate restart is scheduled but not yet emitted", async () => {
+    vi.useFakeTimers();
+    const dir = await makeTempStateDir("openclaw-inflight-agent-immediate-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const runId = "run-immediate-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "do work",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+    scheduleGatewaySigusr1Restart({ delayMs: 0 });
+
+    await removeInflightAgentRun(runId, env);
+    expect((await listInflightAgentRuns(env)).map((r) => r.runId)).toEqual([runId]);
+  });
+
+  it("does not preserve completed runs during a delayed restart window", async () => {
+    const dir = await makeTempStateDir("openclaw-inflight-agent-delayed-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const runId = "run-delayed-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "do work",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+    scheduleGatewaySigusr1Restart({ delayMs: 1000 });
+
+    await removeInflightAgentRun(runId, env);
+    expect(await listInflightAgentRuns(env)).toEqual([]);
+  });
+
   it("does not clean up on lifecycle end while a restart is deferred", async () => {
     vi.useFakeTimers();
     const dir = await makeTempStateDir("openclaw-inflight-agent-end-deferred-");
@@ -129,5 +170,27 @@ describe("inflight agent runs persistence", () => {
     await Promise.resolve();
 
     expect((await listInflightAgentRuns(env)).map((r) => r.runId)).toEqual([runId]);
+  });
+
+  it("cleans up on lifecycle end before a delayed restart is emitted", async () => {
+    const dir = await makeTempStateDir("openclaw-inflight-agent-end-delayed-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    ensureInflightAgentRunLifecycleCleanerStarted(env);
+    const runId = "run-end-delayed-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "do work",
+      sessionId: "sess-1",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+    scheduleGatewaySigusr1Restart({ delayMs: 1000 });
+
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    await vi.waitFor(async () => {
+      expect(await listInflightAgentRuns(env)).toEqual([]);
+    });
   });
 });

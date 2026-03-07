@@ -112,7 +112,9 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
 }
 
 export function shouldPreserveInflightAgentRunsForPendingRestart(): boolean {
-  return pendingRestartTimer !== null || restartDeferralActive || hasUnconsumedRestartSignal();
+  const hasImminentScheduledRestart =
+    pendingRestartTimer !== null && pendingRestartDueAt > 0 && pendingRestartDueAt <= Date.now();
+  return hasImminentScheduledRestart || restartDeferralActive || hasUnconsumedRestartSignal();
 }
 
 /**

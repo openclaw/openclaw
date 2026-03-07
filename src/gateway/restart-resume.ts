@@ -14,6 +14,22 @@ const DEFAULT_RESUME_PROMPT =
   "Continue where you left off. The OpenClaw gateway restarted while you were running.";
 const MAX_RESUME_ATTEMPTS = 10;
 
+function isRestartEligibleSentinel(sentinel: RestartSentinel | null | undefined): boolean {
+  const payload = sentinel?.payload;
+  if (!payload || payload.status !== "ok") {
+    return false;
+  }
+  switch (payload.kind) {
+    case "restart":
+    case "config-apply":
+    case "config-patch":
+    case "update":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -43,7 +59,7 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   }
 
   const sentinel = params.sentinel ?? (await readRestartSentinel(env).catch(() => null));
-  if (!sentinel || !sentinel.payload) {
+  if (!isRestartEligibleSentinel(sentinel)) {
     // Best-effort: if the gateway started without a valid restart sentinel,
     // clear any leftover inflight records (e.g. after a hard crash) so they do
     // not get resumed on a future unrelated restart.
