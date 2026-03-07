@@ -158,10 +158,9 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Because the schedule was NOT advanced, nextDueMs is still in the
-    // past → scheduleNext fires again immediately and the second attempt
-    // succeeds.  A small tick is enough to drain the microtask queue.
-    await vi.advanceTimersByTimeAsync(100);
+    // The wake layer retries after DEFAULT_RETRY_MS (1 s).  No scheduleNext()
+    // is called inside runOnce, so we must wait for the full cooldown.
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
