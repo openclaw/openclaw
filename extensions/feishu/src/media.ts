@@ -537,10 +537,13 @@ function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?
   }
 
   if (
-    ext === ".opus" ||
-    ext === ".ogg" ||
+    [".opus", ".ogg", ".mp3", ".wav", ".m4a", ".aac"].includes(ext) ||
     contentType === "audio/ogg" ||
-    contentType === "audio/opus"
+    contentType === "audio/opus" ||
+    contentType === "audio/mpeg" ||
+    contentType === "audio/wav" ||
+    contentType === "audio/aac" ||
+    contentType === "audio/mp4"
   ) {
     return { fileType: "opus", msgType: "audio" };
   }
