@@ -78,6 +78,12 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Optional JSONL file path for logging raw inbound messages.
+   * When set, ALL incoming messages (including those that fail access control) are logged to this file.
+   * This is an observe-only hook for debugging and analytics.
+   */
+  rawInboundFeedPath?: string;
 };
 
 type WhatsAppConfigCore = {
