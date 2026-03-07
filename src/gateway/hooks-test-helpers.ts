@@ -4,7 +4,9 @@ import type { HooksConfigResolved } from "./hooks.js";
 export function createHooksConfig(): HooksConfigResolved {
   return {
     basePath: "/hooks",
+    auth: "bearer",
     token: "hook-secret",
+    signatureProviders: [],
     maxBodyBytes: 1024,
     mappings: [],
     agentPolicy: {
