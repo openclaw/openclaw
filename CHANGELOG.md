@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Tools/Diffs guidance: restore a short system-prompt hint for enabled diffs while keeping the detailed instructions in the companion skill, so diffs usage guidance stays out of user-prompt space. (#36904) thanks @gumadeiras.
 - Tools/Diffs guidance loading: move diffs usage guidance from unconditional prompt-hook injection to the plugin companion skill path, reducing unrelated-turn prompt noise while keeping diffs tool behavior unchanged. (#32630) thanks @sircrumpet.
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.
+- Config/Compaction safeguard tuning: expose `agents.defaults.compaction.recentTurnsPreserve` and quality-guard retry knobs through the validated config surface and embedded-runner wiring, with regression coverage for real config loading and schema metadata. (#25557) thanks @rodrigouroz.
 
 ### Breaking
 
@@ -232,6 +233,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Windows restart supervision: relaunch task-managed gateways through Scheduled Task with quoted helper-script command paths, distinguish restart-capable supervisors per platform, and stop orphaned Windows gateway children during self-restart. (#38825) Thanks @obviyus.
 - Telegram/native topic command routing: resolve forum-topic native commands through the same conversation route as inbound messages so topic `agentId` overrides and bound topic sessions target the active session instead of the default topic-parent session. (#38871) Thanks @obviyus.
 - Markdown/assistant image hardening: flatten remote markdown images to plain text across the Control UI, exported HTML, and shared Swift chat while keeping inline `data:image/...` markdown renderable, so model output no longer triggers automatic remote image fetches. (#38895) Thanks @obviyus.
+- Config/compaction safeguard settings: regression-test `agents.defaults.compaction.recentTurnsPreserve` through `loadConfig()` and cover the new help metadata entry so the exposed preserve knob stays wired through schema validation and config UX. (#25557) thanks @rodrigouroz.
 
 ## 2026.3.2
 
