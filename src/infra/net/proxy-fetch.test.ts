@@ -71,6 +71,33 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(resolveProxyFetchFromEnv()).toBeUndefined();
   });
 
+  it("returns undefined for explicit no_proxy host matches", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "172.31.0.14,example.internal");
+
+    expect(
+      resolveProxyFetchFromEnv("http://172.31.0.14:9001/v1/audio/transcriptions"),
+    ).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for private-network targets", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+
+    expect(resolveProxyFetchFromEnv("http://192.168.3.20:8080/health")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for CIDR no_proxy matches", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "172.16.0.0/12");
+
+    expect(resolveProxyFetchFromEnv("http://172.31.0.14:9001/v1/models")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     // Stub empty vars first — on Windows, process.env is case-insensitive so
     // HTTPS_PROXY and https_proxy share the same slot. Value must be set LAST.
