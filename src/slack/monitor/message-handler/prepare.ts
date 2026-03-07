@@ -799,5 +799,6 @@ export async function prepareSlackMessage(params: {
     ackReactionMessageTs,
     ackReactionValue,
     ackReactionPromise,
+    requireMention: Boolean(shouldRequireMention),
   };
 }
