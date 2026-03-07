@@ -1,9 +1,20 @@
 export function parseTelegramReplyToMessageId(replyToId?: string | null): number | undefined {
-  if (!replyToId) {
+  if (replyToId == null) {
     return undefined;
   }
-  const parsed = Number.parseInt(replyToId, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const trimmed = replyToId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return parsePositiveIntegerId(trimmed);
+}
+
+function parsePositiveIntegerId(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function parseIntegerId(value: string): number | undefined {
