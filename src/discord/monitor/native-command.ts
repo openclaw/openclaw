@@ -1589,6 +1589,8 @@ async function dispatchDiscordCommandInteraction(params: {
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
     allowNameMatching,
   });
+  // Use the resolved route's session key so get-reply receives correct agent (channel/thread binding).
+  const routeSessionKey = effectiveRoute.sessionKey;
   const ctxPayload = finalizeInboundContext({
     Body: prompt,
     BodyForAgent: prompt,
@@ -1601,8 +1603,8 @@ async function dispatchDiscordCommandInteraction(params: {
         ? `discord:group:${channelId}`
         : `discord:channel:${channelId}`,
     To: `slash:${user.id}`,
-    SessionKey: boundSessionKey ?? `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
-    CommandTargetSessionKey: boundSessionKey ?? effectiveRoute.sessionKey,
+    SessionKey: routeSessionKey || `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
+    CommandTargetSessionKey: routeSessionKey,
     AccountId: effectiveRoute.accountId,
     ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
     ConversationLabel: conversationLabel,
