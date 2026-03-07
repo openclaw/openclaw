@@ -2,7 +2,7 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
-interface LancedbPluginMemoryContext {
+interface PluginMemoryContext {
   prependTag: string;
   stripRegex: string;
 }
@@ -10,7 +10,32 @@ interface LancedbPluginMemoryContext {
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
-function processMessageText(text: string, role: string, memoryContext?: LancedbPluginMemoryContext): string {
+/**
+ * Strip plugin-injected memory context from user messages.
+ * Checks for any field starting with "lancedbPlugin" for extensibility.
+ */
+function stripPluginMemoryContext(text: string, message: Record<string, unknown>): string {
+  let result = text;
+
+  // Check all fields starting with "lancedbPlugin" for memory context
+  for (const key of Object.keys(message)) {
+    if (key.startsWith("lancedbPlugin") && key.endsWith("MemoryContext")) {
+      const ctx = message[key] as PluginMemoryContext | undefined;
+      if (ctx?.stripRegex) {
+        try {
+          const regex = new RegExp(ctx.stripRegex, "i");
+          result = result.replace(regex, "").trim();
+        } catch (e) {
+          // Invalid regex, skip
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+function processMessageText(text: string, role: string, message: Record<string, unknown>): string {
   if (role.toLowerCase() === "assistant") {
     return stripThinkingTags(text);
   }
@@ -23,15 +48,8 @@ function processMessageText(text: string, role: string, memoryContext?: LancedbP
   // Strip inbound metadata (channel info, etc.)
   let result = stripInboundMetadata(stripEnvelope(text));
 
-  // If memory-lancedb plugin injected context, apply the stripRegex
-  if (memoryContext?.stripRegex) {
-    try {
-      const regex = new RegExp(memoryContext.stripRegex, "i");
-      result = result.replace(regex, "").trim();
-    } catch (e) {
-      // Invalid regex, skip
-    }
-  }
+  // Strip any plugin-injected memory context
+  result = stripPluginMemoryContext(result, message);
 
   return result;
 }
@@ -43,8 +61,7 @@ export function extractText(message: unknown): string | null {
   if (!raw) {
     return null;
   }
-  const memoryContext = m.lancedbPluginMemoryContext as LancedbPluginMemoryContext | undefined;
-  return processMessageText(raw, role, memoryContext);
+  return processMessageText(raw, role, m);
 }
 
 export function extractTextCached(message: unknown): string | null {
