@@ -16,12 +16,12 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 const log = createSubsystemLogger("agent-scope");
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
+export { resolveAgentIdFromSessionKey };
+
 function stripNullBytes(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\0/g, "");
 }
-
-export { resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 

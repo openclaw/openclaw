@@ -5,7 +5,6 @@
  * like command processing, session lifecycle, etc.
  */
 
-import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,6 +14,12 @@ import type {
   InternalHookPolicyConfig,
 } from "../config/types.hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
@@ -300,7 +305,7 @@ export function resolveEffectiveInternalHookPolicy(params: {
     return undefined;
   }
   const defaultsPolicy = cfg.agents?.defaults?.hooks;
-  const agentPolicy = params.agentId ? resolveAgentConfig(cfg, params.agentId)?.hooks : undefined;
+  const agentPolicy = params.agentId ? resolveAgentHookPolicy(cfg, params.agentId) : undefined;
 
   const enabled = pickLastDefined(
     cfg.hooks?.internal?.enabled,
@@ -523,12 +528,60 @@ function getConfigFromEvent(event: InternalHookEvent): OpenClawConfig | undefine
 function getAgentIdForEvent(event: InternalHookEvent, config?: OpenClawConfig): string | undefined {
   const context = event.context as { agentId?: string } | undefined;
   if (typeof context?.agentId === "string" && context.agentId.trim()) {
-    return context.agentId;
+    return normalizeAgentId(context.agentId);
   }
   if (!config || !event.sessionKey?.trim()) {
     return undefined;
   }
-  return resolveSessionAgentId({ config, sessionKey: event.sessionKey });
+  return resolveSessionAgentIdFromConfig(config, event.sessionKey);
+}
+
+function resolveSessionAgentIdFromConfig(config: OpenClawConfig, sessionKey: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const resolved = resolveAgentIdFromSessionKey(sessionKey);
+  if (resolved !== DEFAULT_AGENT_ID) {
+    return resolved;
+  }
+  return resolveDefaultAgentIdFromConfig(config);
+}
+
+function resolveDefaultAgentIdFromConfig(config: OpenClawConfig): string {
+  const list = config.agents?.list;
+  if (!Array.isArray(list) || list.length === 0) {
+    return DEFAULT_AGENT_ID;
+  }
+  const entries = list.filter((entry): entry is NonNullable<(typeof list)[number]> =>
+    Boolean(entry && typeof entry === "object"),
+  );
+  if (entries.length === 0) {
+    return DEFAULT_AGENT_ID;
+  }
+  const defaults = entries.filter((entry) => entry.default);
+  const chosen = (defaults[0] ?? entries[0])?.id;
+  return normalizeAgentId(typeof chosen === "string" ? chosen : DEFAULT_AGENT_ID);
+}
+
+function resolveAgentHookPolicy(
+  config: OpenClawConfig,
+  agentId: string,
+): InternalHookPolicyConfig | undefined {
+  const target = normalizeAgentId(agentId);
+  const list = config.agents?.list;
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if (normalizeAgentId(entry.id) === target) {
+      return entry.hooks;
+    }
+  }
+  return undefined;
 }
 
 function pickLastDefined<T>(...values: Array<T | undefined>): T | undefined {
