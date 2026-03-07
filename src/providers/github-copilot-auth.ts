@@ -1,5 +1,4 @@
 import { intro, note, outro, spinner } from "@clack/prompts";
-
 import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";

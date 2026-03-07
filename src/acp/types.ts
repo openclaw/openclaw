@@ -1,5 +1,4 @@
 import type { SessionId } from "@agentclientprotocol/sdk";
-
 import { VERSION } from "../version.js";
 
 export type AcpSession = {
@@ -7,6 +6,7 @@ export type AcpSession = {
   sessionKey: string;
   cwd: string;
   createdAt: number;
+  lastTouchedAt: number;
   abortController: AbortController | null;
   activeRunId: string | null;
 };
@@ -20,6 +20,10 @@ export type AcpServerOptions = {
   requireExistingSession?: boolean;
   resetSession?: boolean;
   prefixCwd?: boolean;
+  sessionCreateRateLimit?: {
+    maxRequests?: number;
+    windowMs?: number;
+  };
   verbose?: boolean;
 };
 

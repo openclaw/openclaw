@@ -42,23 +42,29 @@ export type MattermostFileInfo = {
 
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const withoutTrailing = trimmed.replace(/\/+$/, "");
   return withoutTrailing.replace(/\/api\/v4$/i, "");
 }
 
 function buildMattermostApiUrl(baseUrl: string, path: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
-  if (!normalized) throw new Error("Mattermost baseUrl is required");
+  if (!normalized) {
+    throw new Error("Mattermost baseUrl is required");
+  }
   const suffix = path.startsWith("/") ? path : `/${path}`;
   return `${normalized}/api/v4${suffix}`;
 }
 
-async function readMattermostError(res: Response): Promise<string> {
+export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const data = (await res.json()) as { message?: string } | undefined;
-    if (data?.message) return data.message;
+    if (data?.message) {
+      return data.message;
+    }
     return JSON.stringify(data);
   }
   return await res.text();
@@ -70,7 +76,9 @@ export function createMattermostClient(params: {
   fetchImpl?: typeof fetch;
 }): MattermostClient {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
-  if (!baseUrl) throw new Error("Mattermost baseUrl is required");
+  if (!baseUrl) {
+    throw new Error("Mattermost baseUrl is required");
+  }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
   const fetchImpl = params.fetchImpl ?? fetch;
@@ -89,7 +97,17 @@ export function createMattermostClient(params: {
         `Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
       );
     }
-    return (await res.json()) as T;
+
+    if (res.status === 204) {
+      return undefined as T;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return (await res.json()) as T;
+    }
+
+    return (await res.text()) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request };
@@ -120,6 +138,16 @@ export async function fetchMattermostChannel(
   return await client.request<MattermostChannel>(`/channels/${channelId}`);
 }
 
+export async function fetchMattermostChannelByName(
+  client: MattermostClient,
+  teamId: string,
+  channelName: string,
+): Promise<MattermostChannel> {
+  return await client.request<MattermostChannel>(
+    `/teams/${teamId}/channels/name/${encodeURIComponent(channelName)}`,
+  );
+}
+
 export async function sendMattermostTyping(
   client: MattermostClient,
   params: { channelId: string; parentId?: string },
@@ -128,7 +156,9 @@ export async function sendMattermostTyping(
     channel_id: params.channelId,
   };
   const parentId = params.parentId?.trim();
-  if (parentId) payload.parent_id = parentId;
+  if (parentId) {
+    payload.parent_id = parentId;
+  }
   await client.request<Record<string, unknown>>("/users/me/typing", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -152,18 +182,58 @@ export async function createMattermostPost(
     message: string;
     rootId?: string;
     fileIds?: string[];
+    props?: Record<string, unknown>;
   },
 ): Promise<MattermostPost> {
-  const payload: Record<string, string> = {
+  const payload: Record<string, unknown> = {
     channel_id: params.channelId,
     message: params.message,
   };
-  if (params.rootId) payload.root_id = params.rootId;
+  if (params.rootId) {
+    payload.root_id = params.rootId;
+  }
   if (params.fileIds?.length) {
-    (payload as Record<string, unknown>).file_ids = params.fileIds;
+    payload.file_ids = params.fileIds;
+  }
+  if (params.props) {
+    payload.props = params.props;
   }
   return await client.request<MattermostPost>("/posts", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export type MattermostTeam = {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+};
+
+export async function fetchMattermostUserTeams(
+  client: MattermostClient,
+  userId: string,
+): Promise<MattermostTeam[]> {
+  return await client.request<MattermostTeam[]>(`/users/${userId}/teams`);
+}
+
+export async function updateMattermostPost(
+  client: MattermostClient,
+  postId: string,
+  params: {
+    message?: string;
+    props?: Record<string, unknown>;
+  },
+): Promise<MattermostPost> {
+  const payload: Record<string, unknown> = { id: postId };
+  if (params.message !== undefined) {
+    payload.message = params.message;
+  }
+  if (params.props !== undefined) {
+    payload.props = params.props;
+  }
+  return await client.request<MattermostPost>(`/posts/${postId}`, {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }

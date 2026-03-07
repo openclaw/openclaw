@@ -1,8 +1,10 @@
-import type { OpenClawConfig } from "../config/types.js";
-import type { SkillCommandSpec } from "../agents/skills.js";
-import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import type { SkillCommandSpec } from "../agents/skills.js";
+import { isCommandFlagEnabled } from "../config/commands.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { escapeRegExp } from "../utils.js";
+import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -68,10 +70,6 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
   return map;
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatCommandDefinition[] {
   if (!skillCommands || skillCommands.length === 0) {
     return [];
@@ -99,13 +97,13 @@ export function listChatCommands(params?: {
 
 export function isCommandEnabled(cfg: OpenClawConfig, commandKey: string): boolean {
   if (commandKey === "config") {
-    return cfg.commands?.config === true;
+    return isCommandFlagEnabled(cfg, "config");
   }
   if (commandKey === "debug") {
-    return cfg.commands?.debug === true;
+    return isCommandFlagEnabled(cfg, "debug");
   }
   if (commandKey === "bash") {
-    return cfg.commands?.bash === true;
+    return isCommandFlagEnabled(cfg, "bash");
   }
   return true;
 }
@@ -125,6 +123,11 @@ const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   discord: {
     tts: "voice",
   },
+  slack: {
+    // Slack reserves /status — registering it returns "invalid name"
+    // and invalidates the entire slash_commands manifest array.
+    status: "agentstatus",
+  },
 };
 
 function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
@@ -140,32 +143,39 @@ function resolveNativeName(command: ChatCommandDefinition, provider?: string): s
   return command.nativeName;
 }
 
+function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
+  return {
+    name: resolveNativeName(command, provider) ?? command.key,
+    description: command.description,
+    acceptsArgs: Boolean(command.acceptsArgs),
+    args: command.args,
+  };
+}
+
+function listNativeSpecsFromCommands(
+  commands: ChatCommandDefinition[],
+  provider?: string,
+): NativeCommandSpec[] {
+  return commands
+    .filter((command) => command.scope !== "text" && command.nativeName)
+    .map((command) => toNativeCommandSpec(command, provider));
+}
+
 export function listNativeCommandSpecs(params?: {
   skillCommands?: SkillCommandSpec[];
   provider?: string;
 }): NativeCommandSpec[] {
-  return listChatCommands({ skillCommands: params?.skillCommands })
-    .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => ({
-      name: resolveNativeName(command, params?.provider) ?? command.key,
-      description: command.description,
-      acceptsArgs: Boolean(command.acceptsArgs),
-      args: command.args,
-    }));
+  return listNativeSpecsFromCommands(
+    listChatCommands({ skillCommands: params?.skillCommands }),
+    params?.provider,
+  );
 }
 
 export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
   params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
 ): NativeCommandSpec[] {
-  return listChatCommandsForConfig(cfg, params)
-    .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => ({
-      name: resolveNativeName(command, params?.provider) ?? command.key,
-      description: command.description,
-      acceptsArgs: Boolean(command.acceptsArgs),
-      args: command.args,
-    }));
+  return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
 }
 
 export function findCommandByNativeName(

@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/memory-core";
 
 const memoryCorePlugin = {
   id: "memory-core",
@@ -18,7 +18,9 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
-        if (!memorySearchTool || !memoryGetTool) return null;
+        if (!memorySearchTool || !memoryGetTool) {
+          return null;
+        }
         return [memorySearchTool, memoryGetTool];
       },
       { names: ["memory_search", "memory_get"] },

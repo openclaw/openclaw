@@ -2,6 +2,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "send",
   "broadcast",
   "poll",
+  "poll-vote",
   "react",
   "reactions",
   "read",
@@ -42,12 +43,15 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "category-create",
   "category-edit",
   "category-delete",
+  "topic-create",
   "voice-status",
   "event-list",
   "event-create",
   "timeout",
   "kick",
   "ban",
+  "set-presence",
+  "download-file",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

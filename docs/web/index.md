@@ -3,6 +3,7 @@ summary: "Gateway web surfaces: Control UI, bind modes, and security"
 read_when:
   - You want to access the Gateway over Tailscale
   - You want the browser Control UI and config editing
+title: "Web"
 ---
 
 # Web (Gateway)
@@ -98,10 +99,16 @@ Open:
 - Non-loopback binds still **require** a shared token/password (`gateway.auth` or env).
 - The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
-- With Serve, Tailscale identity headers can satisfy auth when
-  `gateway.auth.allowTailscale` is `true` (no token/password required). Set
+- For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). Without it, gateway startup is refused by default.
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
+  Host-header origin fallback mode, but is a dangerous security downgrade.
+- With Serve, Tailscale identity headers can satisfy Control UI/WebSocket auth
+  when `gateway.auth.allowTailscale` is `true` (no token/password required).
+  HTTP API endpoints still require token/password. Set
   `gateway.auth.allowTailscale: false` to require explicit credentials. See
-  [Tailscale](/gateway/tailscale) and [Security](/gateway/security).
+  [Tailscale](/gateway/tailscale) and [Security](/gateway/security). This
+  tokenless flow assumes the gateway host is trusted.
 - `gateway.tailscale.mode: "funnel"` requires `gateway.auth.mode: "password"` (shared password).
 
 ## Building the UI

@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
+import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { ensureBinary } from "./binaries.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
@@ -150,6 +150,11 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
 let cachedTailscaleBinary: string | null = null;
 
 export async function getTailscaleBinary(): Promise<string> {
+  const forcedBinary = process.env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  if (forcedBinary) {
+    cachedTailscaleBinary = forcedBinary;
+    return forcedBinary;
+  }
   if (cachedTailscaleBinary) {
     return cachedTailscaleBinary;
   }

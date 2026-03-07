@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
 import {
@@ -12,24 +13,24 @@ import {
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
+import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { note } from "../terminal/note.js";
 import { sleep } from "../utils.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import { healthCommand } from "./health.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatHealthCheckFailure } from "./health-format.js";
+import { healthCommand } from "./health.js";
 
 async function maybeRepairLaunchAgentBootstrap(params: {
   env: Record<string, string | undefined>;
@@ -171,11 +172,29 @@ export async function maybeRepairGatewayDaemon(params: {
           },
           DEFAULT_GATEWAY_DAEMON_RUNTIME,
         );
+        const tokenResolution = await resolveGatewayInstallToken({
+          config: params.cfg,
+          env: process.env,
+        });
+        for (const warning of tokenResolution.warnings) {
+          note(warning, "Gateway");
+        }
+        if (tokenResolution.unavailableReason) {
+          note(
+            [
+              "Gateway service install aborted.",
+              tokenResolution.unavailableReason,
+              "Fix gateway auth config/token input and rerun doctor.",
+            ].join("\n"),
+            "Gateway",
+          );
+          return;
+        }
         const port = resolveGatewayPort(params.cfg, process.env);
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port,
-          token: params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+          token: tokenResolution.token,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
           config: params.cfg,

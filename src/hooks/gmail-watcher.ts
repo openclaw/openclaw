@@ -10,13 +10,13 @@ import { hasBinary } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   type GmailHookRuntimeConfig,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
-import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 
 const log = createSubsystemLogger("gmail-watcher");
 

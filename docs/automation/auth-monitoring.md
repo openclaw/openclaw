@@ -3,6 +3,7 @@ summary: "Monitor OAuth expiry for model providers"
 read_when:
   - Setting up auth expiry monitoring or alerts
   - Automating Claude Code / Codex OAuth refresh checks
+title: "Auth Monitoring"
 ---
 
 # Auth monitoring

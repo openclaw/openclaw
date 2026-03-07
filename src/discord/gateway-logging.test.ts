@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../globals.js", () => ({
@@ -11,6 +10,8 @@ import { attachDiscordGatewayLogging } from "./gateway-logging.js";
 
 const makeRuntime = () => ({
   log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
 });
 
 describe("attachDiscordGatewayLogging", () => {

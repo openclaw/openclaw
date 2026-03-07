@@ -2,15 +2,15 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/googlechat";
 import {
   createActionGate,
+  extractToolSend,
   jsonResult,
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "openclaw/plugin-sdk";
-
+} from "openclaw/plugin-sdk/googlechat";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,
@@ -39,7 +39,9 @@ function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cf
         boolean | undefined
       >,
     );
-    if (gate("reactions")) return true;
+    if (gate("reactions")) {
+      return true;
+    }
   }
   return false;
 }
@@ -50,27 +52,24 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg as OpenClawConfig);
-    if (accounts.length === 0) return [];
+    const accounts = listEnabledAccounts(cfg);
+    if (accounts.length === 0) {
+      return [];
+    }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
-    if (isReactionsEnabled(accounts, cfg as OpenClawConfig)) {
+    if (isReactionsEnabled(accounts, cfg)) {
       actions.add("react");
       actions.add("reactions");
     }
     return Array.from(actions);
   },
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") return null;
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) return null;
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
+    return extractToolSend(args, "sendMessage");
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     const account = resolveGoogleChatAccount({
-      cfg: cfg as OpenClawConfig,
+      cfg: cfg,
       accountId,
     });
     if (account.credentialSource === "none") {
@@ -90,11 +89,11 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       if (mediaUrl) {
         const core = getGoogleChatRuntime();
         const maxBytes = (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-        const loaded = await core.channel.media.fetchRemoteMedia(mediaUrl, { maxBytes });
+        const loaded = await core.channel.media.fetchRemoteMedia({ url: mediaUrl, maxBytes });
         const upload = await uploadGoogleChatAttachment({
           account,
           space,
-          filename: loaded.filename ?? "attachment",
+          filename: loaded.fileName ?? "attachment",
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });
@@ -107,7 +106,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
             ? [
                 {
                   attachmentUploadToken: upload.attachmentUploadToken,
-                  contentName: loaded.filename,
+                  contentName: loaded.fileName,
                 },
               ]
             : undefined,
@@ -134,12 +133,18 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         const appUsers = resolveAppUserNames(account);
         const toRemove = reactions.filter((reaction) => {
           const userName = reaction.user?.name?.trim();
-          if (appUsers.size > 0 && !appUsers.has(userName ?? "")) return false;
-          if (emoji) return reaction.emoji?.unicode === emoji;
+          if (appUsers.size > 0 && !appUsers.has(userName ?? "")) {
+            return false;
+          }
+          if (emoji) {
+            return reaction.emoji?.unicode === emoji;
+          }
           return true;
         });
         for (const reaction of toRemove) {
-          if (!reaction.name) continue;
+          if (!reaction.name) {
+            continue;
+          }
           await deleteGoogleChatReaction({ account, reactionName: reaction.name });
         }
         return jsonResult({ ok: true, removed: toRemove.length });

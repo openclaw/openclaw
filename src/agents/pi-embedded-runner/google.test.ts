@@ -1,37 +1,64 @@
-import { describe, expect, it } from "vitest";
-
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { describe, expect, it } from "vitest";
 import { sanitizeToolsForGoogle } from "./google.js";
 
 describe("sanitizeToolsForGoogle", () => {
-  it("strips unsupported schema keywords for Google providers", () => {
-    const tool = {
+  const createTool = (parameters: Record<string, unknown>) =>
+    ({
       name: "test",
       description: "test",
-      parameters: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          foo: {
-            type: "string",
-            format: "uuid",
-          },
+      parameters,
+      execute: async () => ({ ok: true, content: [] }),
+    }) as unknown as AgentTool;
+
+  const expectFormatRemoved = (
+    sanitized: AgentTool,
+    key: "additionalProperties" | "patternProperties",
+  ) => {
+    const params = sanitized.parameters as {
+      additionalProperties?: unknown;
+      patternProperties?: unknown;
+      properties?: Record<string, { format?: unknown }>;
+    };
+    expect(params[key]).toBeUndefined();
+    expect(params.properties?.foo?.format).toBeUndefined();
+  };
+
+  it("strips unsupported schema keywords for Google providers", () => {
+    const tool = createTool({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
         },
       },
-      execute: async () => ({ ok: true, content: [] }),
-    } as unknown as AgentTool;
-
+    });
     const [sanitized] = sanitizeToolsForGoogle({
       tools: [tool],
       provider: "google-gemini-cli",
     });
+    expectFormatRemoved(sanitized, "additionalProperties");
+  });
 
-    const params = sanitized.parameters as {
-      additionalProperties?: unknown;
-      properties?: Record<string, { format?: unknown }>;
-    };
+  it("returns original tools for non-google providers", () => {
+    const tool = createTool({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
+        },
+      },
+    });
+    const sanitized = sanitizeToolsForGoogle({
+      tools: [tool],
+      provider: "openai",
+    });
 
-    expect(params.additionalProperties).toBeUndefined();
-    expect(params.properties?.foo?.format).toBeUndefined();
+    expect(sanitized).toEqual([tool]);
+    expect(sanitized[0]).toBe(tool);
   });
 });

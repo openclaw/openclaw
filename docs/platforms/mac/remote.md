@@ -2,6 +2,7 @@
 summary: "macOS app flow for controlling a remote OpenClaw gateway over SSH"
 read_when:
   - Setting up or debugging remote mac control
+title: "Remote Control"
 ---
 
 # Remote OpenClaw (macOS ⇄ remote host)
@@ -55,6 +56,7 @@ Remote mode supports two transports:
 ## Security notes
 
 - Prefer loopback binds on the remote host and connect via SSH or Tailscale.
+- SSH tunneling uses strict host-key checking; trust the host key first so it exists in `~/.ssh/known_hosts`.
 - If you bind the Gateway to a non-loopback interface, require token/password auth.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).
 

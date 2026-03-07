@@ -78,7 +78,9 @@ export function parseFileConsentInvoke(activity: {
   name?: string;
   value?: unknown;
 }): FileConsentResponse | null {
-  if (activity.name !== "fileConsent/invoke") return null;
+  if (activity.name !== "fileConsent/invoke") {
+    return null;
+  }
 
   const value = activity.value as {
     type?: string;
@@ -87,7 +89,9 @@ export function parseFileConsentInvoke(activity: {
     context?: Record<string, unknown>;
   };
 
-  if (value?.type !== "fileUpload") return null;
+  if (value?.type !== "fileUpload") {
+    return null;
+  }
 
   return {
     action: value.action === "accept" ? "accept" : "decline",

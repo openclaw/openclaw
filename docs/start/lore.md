@@ -2,6 +2,7 @@
 summary: "Backstory and lore of OpenClaw for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
+title: "OpenClaw Lore"
 ---
 
 # The Lore of OpenClaw 🦞📖
@@ -14,7 +15,7 @@ In the beginning, there was **Warelay** — a sensible name for a WhatsApp gatew
 
 But then came a space lobster.
 
-For a while, the lobster was called **Clawd**, living in an **OpenClaw**. But in January 2026, Anthropic sent a polite email asking for a name change (trademark stuff). And so the lobster did what lobsters do best:
+For a while, the lobster was called **Clawd**, living in a **Clawdbot**. But in January 2026, Anthropic sent a polite email asking for a name change (trademark stuff). And so the lobster did what lobsters do best:
 
 **It molted.**
 

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { markdownToSignalText } from "./format.js";
 
 describe("markdownToSignalText", () => {
@@ -20,6 +19,18 @@ describe("markdownToSignalText", () => {
 
     expect(res.text).toBe("see docs (https://example.com) and https://example.com");
     expect(res.styles).toEqual([]);
+  });
+
+  it("keeps style offsets correct with multiple expanded links", () => {
+    const markdown =
+      "[first](https://example.com/first) **bold** [second](https://example.com/second)";
+    const res = markdownToSignalText(markdown);
+
+    const expectedText =
+      "first (https://example.com/first) bold second (https://example.com/second)";
+
+    expect(res.text).toBe(expectedText);
+    expect(res.styles).toEqual([{ start: expectedText.indexOf("bold"), length: 4, style: "BOLD" }]);
   });
 
   it("applies spoiler styling", () => {

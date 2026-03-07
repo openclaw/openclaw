@@ -2,9 +2,14 @@
 summary: "Hubs that link to every OpenClaw doc"
 read_when:
   - You want a complete map of the documentation
+title: "Docs Hubs"
 ---
 
 # Docs hubs
+
+<Note>
+If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
+</Note>
 
 Use these hubs to discover every page, including deep dives and reference docs that don’t appear in the left nav.
 
@@ -12,11 +17,13 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Index](/)
 - [Getting Started](/start/getting-started)
+- [Quick start](/start/quickstart)
 - [Onboarding](/start/onboarding)
 - [Wizard](/start/wizard)
 - [Setup](/start/setup)
 - [Dashboard (local Gateway)](http://127.0.0.1:18789/)
 - [Help](/help)
+- [Docs directory](/start/docs-directory)
 - [Configuration](/gateway/configuration)
 - [Configuration examples](/gateway/configuration-examples)
 - [OpenClaw assistant](/start/openclaw)
@@ -33,6 +40,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Core concepts
 
 - [Architecture](/concepts/architecture)
+- [Features](/concepts/features)
 - [Network hub](/network)
 - [Agent runtime](/concepts/agent)
 - [Agent workspace](/concepts/agent-workspace)
@@ -42,7 +50,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Multi-agent routing](/concepts/multi-agent)
 - [Compaction](/concepts/compaction)
 - [Sessions](/concepts/session)
-- [Sessions (alias)](/concepts/sessions)
 - [Session pruning](/concepts/session-pruning)
 - [Session tools](/concepts/session-tool)
 - [Queue](/concepts/queue)
@@ -53,9 +60,9 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Presence](/concepts/presence)
 - [Discovery + transports](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)
-- [Channel routing](/concepts/channel-routing)
-- [Groups](/concepts/groups)
-- [Group messages](/concepts/group-messages)
+- [Channel routing](/channels/channel-routing)
+- [Groups](/channels/groups)
+- [Group messages](/channels/group-messages)
 - [Model failover](/concepts/model-failover)
 - [OAuth](/concepts/oauth)
 
@@ -65,12 +72,12 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Model providers hub](/providers/models)
 - [WhatsApp](/channels/whatsapp)
 - [Telegram](/channels/telegram)
-- [Telegram (grammY notes)](/channels/grammy)
 - [Slack](/channels/slack)
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost) (plugin)
 - [Signal](/channels/signal)
-- [iMessage](/channels/imessage)
+- [BlueBubbles (iMessage)](/channels/bluebubbles)
+- [iMessage (legacy)](/channels/imessage)
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
 - [Webhooks](/automation/webhook)
@@ -79,6 +86,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Gateway + operations
 
 - [Gateway runbook](/gateway)
+- [Network model](/gateway/network-model)
 - [Gateway pairing](/gateway/pairing)
 - [Gateway lock](/gateway/gateway-lock)
 - [Background process](/gateway/background-process)
@@ -101,6 +109,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [OpenProse](/prose)
 - [CLI reference](/cli)
 - [Exec tool](/tools/exec)
+- [PDF tool](/tools/pdf)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat)
@@ -108,7 +117,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
 - [Agent send CLI](/tools/agent-send)
-- [Terminal UI](/tui)
+- [Terminal UI](/web/tui)
 - [Browser control](/tools/browser)
 - [Browser (Linux troubleshooting)](/tools/browser-linux-troubleshooting)
 - [Polls](/automation/poll)
@@ -171,10 +180,12 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Experiments (exploratory)
 
 - [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Cron hardening notes](/experiments/plans/cron-add-hardening)
-- [Group policy hardening notes](/experiments/plans/group-policy-hardening)
 - [Research: memory](/experiments/research/memory)
 - [Model config exploration](/experiments/proposals/model-config)
+
+## Project
+
+- [Credits](/reference/credits)
 
 ## Testing + release
 

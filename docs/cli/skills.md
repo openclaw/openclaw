@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw skills` (list/info/check) and skill eligib
 read_when:
   - You want to see which skills are available and ready to run
   - You want to debug missing binaries/env/config for skills
+title: "skills"
 ---
 
 # `openclaw skills`

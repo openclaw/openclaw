@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";

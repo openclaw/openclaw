@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";

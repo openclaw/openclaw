@@ -1,3 +1,13 @@
+export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+import type {
+  GatewayAgentRow as SharedGatewayAgentRow,
+  SessionsListResultBase,
+  SessionsPatchResultBase,
+} from "../../../src/shared/session-types.js";
+export type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -281,19 +291,6 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
-export type ConfigUiHint = {
-  label?: string;
-  help?: string;
-  group?: string;
-  order?: number;
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  itemTemplate?: unknown;
-};
-
-export type ConfigUiHints = Record<string, ConfigUiHint>;
-
 export type ConfigSchemaResponse = {
   schema: unknown;
   uiHints: ConfigUiHints;
@@ -309,6 +306,8 @@ export type PresenceEntry = {
   platform?: string | null;
   deviceFamily?: string | null;
   modelIdentifier?: string | null;
+  roles?: string[] | null;
+  scopes?: string[] | null;
   mode?: string | null;
   lastInputSeconds?: number | null;
   reason?: string | null;
@@ -321,23 +320,77 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-  identity?: {
-    name?: string;
-    theme?: string;
-    emoji?: string;
-    avatar?: string;
-    avatarUrl?: string;
-  };
-};
+export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type AgentsListResult = {
   defaultId: string;
   mainKey: string;
   scope: string;
   agents: GatewayAgentRow[];
+};
+
+export type ToolCatalogProfile = {
+  id: "minimal" | "coding" | "messaging" | "full";
+  label: string;
+};
+
+export type ToolCatalogEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+};
+
+export type ToolCatalogGroup = {
+  id: string;
+  label: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  tools: ToolCatalogEntry[];
+};
+
+export type ToolsCatalogResult = {
+  agentId: string;
+  profiles: ToolCatalogProfile[];
+  groups: ToolCatalogGroup[];
+};
+
+export type AgentIdentityResult = {
+  agentId: string;
+  name: string;
+  avatar: string;
+  emoji?: string;
+};
+
+export type AgentFileEntry = {
+  name: string;
+  path: string;
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type AgentsFilesListResult = {
+  agentId: string;
+  workspace: string;
+  files: AgentFileEntry[];
+};
+
+export type AgentsFilesGetResult = {
+  agentId: string;
+  workspace: string;
+  file: AgentFileEntry;
+};
+
+export type AgentsFilesSetResult = {
+  ok: true;
+  agentId: string;
+  workspace: string;
+  file: AgentFileEntry;
 };
 
 export type GatewaySessionRow = {
@@ -365,32 +418,31 @@ export type GatewaySessionRow = {
   contextTokens?: number;
 };
 
-export type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
+export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: {
-    sessionId: string;
-    updatedAt?: number;
-    thinkingLevel?: string;
-    verboseLevel?: string;
-    reasoningLevel?: string;
-    elevatedLevel?: string;
-  };
-};
+export type SessionsPatchResult = SessionsPatchResultBase<{
+  sessionId: string;
+  updatedAt?: number;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+}>;
+
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./usage-types.ts";
 
 export type CronSchedule =
-  | { kind: "at"; atMs: number }
+  | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
 
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
@@ -400,24 +452,35 @@ export type CronPayload =
   | {
       kind: "agentTurn";
       message: string;
+      model?: string;
       thinking?: string;
       timeoutSeconds?: number;
-      deliver?: boolean;
-      provider?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams";
-      to?: string;
-      bestEffortDeliver?: boolean;
+      lightContext?: boolean;
     };
 
-export type CronIsolation = {
-  postToMainPrefix?: string;
+export type CronDelivery = {
+  mode: "none" | "announce" | "webhook";
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  bestEffort?: boolean;
+  failureDestination?: CronFailureDestination;
+};
+
+export type CronFailureDestination = {
+  channel?: string;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+};
+
+export type CronFailureAlert = {
+  after?: number;
+  channel?: string;
+  to?: string;
+  cooldownMs?: number;
+  mode?: "announce" | "webhook";
+  accountId?: string;
 };
 
 export type CronJobState = {
@@ -427,22 +490,17 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  lastFailureAlertAtMs?: number;
 };
 
-export type CronJob = {
-  id: string;
-  agentId?: string;
-  name: string;
-  description?: string;
-  enabled: boolean;
-  deleteAfterRun?: boolean;
-  createdAtMs: number;
-  updatedAtMs: number;
-  schedule: CronSchedule;
-  sessionTarget: CronSessionTarget;
-  wakeMode: CronWakeMode;
-  payload: CronPayload;
-  isolation?: CronIsolation;
+export type CronJob = CronJobBase<
+  CronSchedule,
+  CronSessionTarget,
+  CronWakeMode,
+  CronPayload,
+  CronDelivery,
+  CronFailureAlert | false
+> & {
   state?: CronJobState;
 };
 
@@ -452,18 +510,60 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
+export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
+export type CronSortDir = "asc" | "desc";
+export type CronRunsStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunsStatusValue = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronRunScope = "job" | "all";
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
-  status: "ok" | "error" | "skipped";
+  jobName?: string;
+  status?: CronRunsStatusValue;
   durationMs?: number;
   error?: string;
   summary?: string;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  delivered?: boolean;
+  runAtMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+export type CronJobsListResult = {
+  jobs?: CronJob[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+};
+
+export type CronRunsResult = {
+  entries?: CronRunLogEntry[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
 };
 
 export type SkillsStatusConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 
@@ -481,6 +581,7 @@ export type SkillStatusEntry = {
   filePath: string;
   baseDir: string;
   skillKey: string;
+  bundled?: boolean;
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;

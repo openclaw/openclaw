@@ -1,6 +1,6 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { createSeenTracker } from "./seen-tracker.js";
+import { describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
+import { createSeenTracker } from "./seen-tracker.js";
 
 // ============================================================================
 // Seen Tracker Integration Tests

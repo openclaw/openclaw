@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw devices` (device pairing + token rotation/
 read_when:
   - You are approving device pairing requests
   - You need to rotate or revoke device tokens
+title: "devices"
 ---
 
 # `openclaw devices`
@@ -20,12 +21,34 @@ openclaw devices list
 openclaw devices list --json
 ```
 
-### `openclaw devices approve <requestId>`
+### `openclaw devices remove <deviceId>`
 
-Approve a pending device pairing request.
+Remove one paired device entry.
 
 ```
+openclaw devices remove <deviceId>
+openclaw devices remove <deviceId> --json
+```
+
+### `openclaw devices clear --yes [--pending]`
+
+Clear paired devices in bulk.
+
+```
+openclaw devices clear --yes
+openclaw devices clear --yes --pending
+openclaw devices clear --yes --pending --json
+```
+
+### `openclaw devices approve [requestId] [--latest]`
+
+Approve a pending device pairing request. If `requestId` is omitted, OpenClaw
+automatically approves the most recent pending request.
+
+```
+openclaw devices approve
 openclaw devices approve <requestId>
+openclaw devices approve --latest
 ```
 
 ### `openclaw devices reject <requestId>`
@@ -60,7 +83,12 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC timeout.
 - `--json`: JSON output (recommended for scripting).
 
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+
 ## Notes
 
 - Token rotation returns a new token (sensitive). Treat it like a secret.
 - These commands require `operator.pairing` (or `operator.admin`) scope.
+- `devices clear` is intentionally gated by `--yes`.
+- If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.

@@ -1,23 +1,26 @@
+import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
+  DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
   type OpenClawConfig,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+} from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import { registerMSTeamsHandlers } from "./monitor-handler.js";
+import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 
 export type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
@@ -32,6 +35,33 @@ export type MonitorMSTeamsResult = {
   shutdown: () => Promise<void>;
 };
 
+const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
+const MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS = 30_000;
+const MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS = 30_000;
+const MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS = 15_000;
+
+export type ApplyMSTeamsWebhookTimeoutsOpts = {
+  inactivityTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  headersTimeoutMs?: number;
+};
+
+export function applyMSTeamsWebhookTimeouts(
+  httpServer: Server,
+  opts?: ApplyMSTeamsWebhookTimeoutsOpts,
+): void {
+  const inactivityTimeoutMs = opts?.inactivityTimeoutMs ?? MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS;
+  const requestTimeoutMs = opts?.requestTimeoutMs ?? MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS;
+  const headersTimeoutMs = Math.min(
+    opts?.headersTimeoutMs ?? MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS,
+    requestTimeoutMs,
+  );
+
+  httpServer.setTimeout(inactivityTimeoutMs);
+  httpServer.requestTimeout = requestTimeoutMs;
+  httpServer.headersTimeout = headersTimeoutMs;
+}
+
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
@@ -40,7 +70,7 @@ export async function monitorMSTeamsProvider(
   let cfg = opts.cfg;
   let msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
-    log.debug("msteams provider disabled");
+    log.debug?.("msteams provider disabled");
     return { app: null, shutdown: async () => {} };
   }
 
@@ -70,7 +100,9 @@ export async function monitorMSTeamsProvider(
       .trim();
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
-    if (entries.length === 0) return { additions: [], unresolved: [] };
+    if (entries.length === 0) {
+      return { additions: [], unresolved: [] };
+    }
     const resolved = await resolveMSTeamsUserAllowlist({ cfg, entries });
     const additions: string[] = [];
     const unresolved: string[] = [];
@@ -111,7 +143,9 @@ export async function monitorMSTeamsProvider(
     if (teamsConfig && Object.keys(teamsConfig).length > 0) {
       const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
       for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
-        if (teamKey === "*") continue;
+        if (teamKey === "*") {
+          continue;
+        }
         const channels = teamCfg?.channels ?? {};
         const channelKeys = Object.keys(channels).filter((key) => key !== "*");
         if (channelKeys.length === 0) {
@@ -134,11 +168,13 @@ export async function monitorMSTeamsProvider(
         });
         const mapping: string[] = [];
         const unresolved: string[] = [];
-        const nextTeams = { ...(teamsConfig ?? {}) };
+        const nextTeams = { ...teamsConfig };
 
         resolved.forEach((entry, idx) => {
           const source = entries[idx];
-          if (!source) return;
+          if (!source) {
+            return;
+          }
           const sourceTeam = teamsConfig?.[source.teamKey] ?? {};
           if (!entry.resolved || !entry.teamId) {
             unresolved.push(entry.input);
@@ -151,8 +187,8 @@ export async function monitorMSTeamsProvider(
           );
           const existing = nextTeams[entry.teamId] ?? {};
           const mergedChannels = {
-            ...(sourceTeam.channels ?? {}),
-            ...(existing.channels ?? {}),
+            ...sourceTeam.channels,
+            ...existing.channels,
           };
           const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
           nextTeams[entry.teamId] = mergedTeam;
@@ -165,7 +201,7 @@ export async function monitorMSTeamsProvider(
                   ...mergedChannels,
                   [entry.channelId]: {
                     ...sourceChannel,
-                    ...(mergedChannels?.[entry.channelId] ?? {}),
+                    ...mergedChannels?.[entry.channelId],
                   },
                 },
               };
@@ -218,7 +254,7 @@ export async function monitorMSTeamsProvider(
   const tokenProvider = new MsalTokenProvider(authConfig);
   const adapter = createMSTeamsAdapter(authConfig, sdk);
 
-  const handler = registerMSTeamsHandlers(new ActivityHandler(), {
+  const handler = registerMSTeamsHandlers(new ActivityHandler() as MSTeamsActivityHandler, {
     cfg,
     runtime,
     appId,
@@ -233,15 +269,21 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
-  expressApp.use(express.json());
+  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
+  });
   expressApp.use(authorizeJWT(authConfig));
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
-    type HandlerContext = Parameters<(typeof handler)["run"]>[0];
     void adapter
-      .process(req, res, (context: unknown) => handler.run(context as HandlerContext))
+      .process(req, res, (context: unknown) => handler.run!(context))
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });
@@ -253,15 +295,28 @@ export async function monitorMSTeamsProvider(
     expressApp.post("/api/messages", messageHandler);
   }
 
-  log.debug("listening on paths", {
+  log.debug?.("listening on paths", {
     primary: configuredPath,
     fallback: "/api/messages",
   });
 
-  // Start listening and capture the HTTP server handle
-  const httpServer = expressApp.listen(port, () => {
-    log.info(`msteams provider started on port ${port}`);
+  // Start listening and fail fast if bind/listen fails.
+  const httpServer = expressApp.listen(port);
+  await new Promise<void>((resolve, reject) => {
+    const onListening = () => {
+      httpServer.off("error", onError);
+      log.info(`msteams provider started on port ${port}`);
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      httpServer.off("listening", onListening);
+      log.error("msteams server error", { error: String(err) });
+      reject(err);
+    };
+    httpServer.once("listening", onListening);
+    httpServer.once("error", onError);
   });
+  applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: String(err) });
@@ -272,19 +327,19 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: String(err) });
         }
         resolve();
       });
     });
   };
 
-  // Handle abort signal
-  if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
-    });
-  }
+  // Keep this task alive until close so gateway runtime does not treat startup as exit.
+  await keepHttpServerTaskAlive({
+    server: httpServer,
+    abortSignal: opts.abortSignal,
+    onAbort: shutdown,
+  });
 
   return { app: expressApp, shutdown };
 }

@@ -3,6 +3,7 @@ summary: "Gmail Pub/Sub push wired into OpenClaw webhooks via gogcli"
 read_when:
   - Wiring Gmail inbox triggers to OpenClaw
   - Setting up Pub/Sub push for agent wake
+title: "Gmail PubSub"
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -87,7 +88,7 @@ Notes:
   To disable (dangerous), set `hooks.gmail.allowUnsafeExternalContent: true`.
 
 To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
-under `hooks.transformsDir` (see [Webhooks](/automation/webhook)).
+under `~/.openclaw/hooks/transforms` (see [Webhooks](/automation/webhook)).
 
 ## Wizard (recommended)
 

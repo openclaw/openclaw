@@ -19,10 +19,10 @@ export type TwitchAccessControlResult = {
  * Priority order:
  * 1. If `requireMention` is true, message must mention the bot
  * 2. If `allowFrom` is set, sender must be in the allowlist (by user ID)
- * 3. If `allowedRoles` is set, sender must have at least one of the specified roles
+ * 3. If `allowedRoles` is set (and `allowFrom` is not), sender must have at least one role
  *
- * Note: You can combine `allowFrom` with `allowedRoles`. If a user is in `allowFrom`,
- * they bypass role checks. This is useful for allowing specific users regardless of role.
+ * Note: `allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+ * Use `allowedRoles` as an alternative when you don't want to maintain an allowlist.
  *
  * Available roles:
  * - "moderator": Moderators
@@ -66,6 +66,11 @@ export function checkTwitchAccessControl(params: {
         matchSource: "allowlist",
       };
     }
+
+    return {
+      allowed: false,
+      reason: "sender is not in allowFrom allowlist",
+    };
   }
 
   if (account.allowedRoles && account.allowedRoles.length > 0) {
@@ -114,16 +119,24 @@ function checkSenderRoles(params: { message: TwitchChatMessage; allowedRoles: st
   for (const role of allowedRoles) {
     switch (role) {
       case "moderator":
-        if (isMod) return true;
+        if (isMod) {
+          return true;
+        }
         break;
       case "owner":
-        if (isOwner) return true;
+        if (isOwner) {
+          return true;
+        }
         break;
       case "vip":
-        if (isVip) return true;
+        if (isVip) {
+          return true;
+        }
         break;
       case "subscriber":
-        if (isSub) return true;
+        if (isSub) {
+          return true;
+        }
         break;
     }
   }
@@ -142,7 +155,6 @@ export function extractMentions(message: string): string[] {
   const mentions: string[] = [];
   let match: RegExpExecArray | null;
 
-  // biome-ignore lint/suspicious/noAssignInExpressions: Standard regex iteration pattern
   while ((match = mentionRegex.exec(message)) !== null) {
     const username = match[1];
     if (username) {

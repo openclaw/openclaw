@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { probeIMessage } from "./probe.js";
 
 const detectBinaryMock = vi.hoisted(() => vi.fn());
@@ -19,15 +18,15 @@ vi.mock("./client.js", () => ({
 }));
 
 beforeEach(() => {
-  detectBinaryMock.mockReset().mockResolvedValue(true);
-  runCommandWithTimeoutMock.mockReset().mockResolvedValue({
+  detectBinaryMock.mockClear().mockResolvedValue(true);
+  runCommandWithTimeoutMock.mockClear().mockResolvedValue({
     stdout: "",
     stderr: 'unknown command "rpc" for "imsg"',
     code: 1,
     signal: null,
     killed: false,
   });
-  createIMessageRpcClientMock.mockReset();
+  createIMessageRpcClientMock.mockClear();
 });
 
 describe("probeIMessage", () => {

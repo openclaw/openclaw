@@ -1,8 +1,23 @@
-import { vi } from "vitest";
+import { Mock, vi } from "vitest";
 
 type SlackHandler = (args: unknown) => Promise<void>;
+type SlackProviderMonitor = (params: {
+  botToken: string;
+  appToken: string;
+  abortSignal: AbortSignal;
+}) => Promise<unknown>;
 
-const slackTestState = vi.hoisted(() => ({
+type SlackTestState = {
+  config: Record<string, unknown>;
+  sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  replyMock: Mock<(...args: unknown[]) => unknown>;
+  updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
+  reactMock: Mock<(...args: unknown[]) => unknown>;
+  readAllowFromStoreMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  upsertPairingRequestMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+};
+
+const slackTestState: SlackTestState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
   sendMock: vi.fn(),
   replyMock: vi.fn(),
@@ -12,7 +27,27 @@ const slackTestState = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(),
 }));
 
-export const getSlackTestState = () => slackTestState;
+export const getSlackTestState = (): SlackTestState => slackTestState;
+
+type SlackClient = {
+  auth: { test: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>> };
+  conversations: {
+    info: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+    replies: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+    history: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+  };
+  users: {
+    info: Mock<(...args: unknown[]) => Promise<{ user: { profile: { display_name: string } } }>>;
+  };
+  assistant: {
+    threads: {
+      setStatus: Mock<(...args: unknown[]) => Promise<{ ok: boolean }>>;
+    };
+  };
+  reactions: {
+    add: (...args: unknown[]) => unknown;
+  };
+};
 
 export const getSlackHandlers = () =>
   (
@@ -21,8 +56,7 @@ export const getSlackHandlers = () =>
     }
   ).__slackHandlers;
 
-export const getSlackClient = () =>
-  (globalThis as { __slackClient?: Record<string, unknown> }).__slackClient;
+export const getSlackClient = () => (globalThis as { __slackClient?: SlackClient }).__slackClient;
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -33,6 +67,57 @@ export async function waitForSlackEvent(name: string) {
     }
     await flush();
   }
+}
+
+export function startSlackMonitor(
+  monitorSlackProvider: SlackProviderMonitor,
+  opts?: { botToken?: string; appToken?: string },
+) {
+  const controller = new AbortController();
+  const run = monitorSlackProvider({
+    botToken: opts?.botToken ?? "bot-token",
+    appToken: opts?.appToken ?? "app-token",
+    abortSignal: controller.signal,
+  });
+  return { controller, run };
+}
+
+export async function getSlackHandlerOrThrow(name: string) {
+  await waitForSlackEvent(name);
+  const handler = getSlackHandlers()?.get(name);
+  if (!handler) {
+    throw new Error(`Slack ${name} handler not registered`);
+  }
+  return handler;
+}
+
+export async function stopSlackMonitor(params: {
+  controller: AbortController;
+  run: Promise<unknown>;
+}) {
+  await flush();
+  params.controller.abort();
+  await params.run;
+}
+
+export async function runSlackEventOnce(
+  monitorSlackProvider: SlackProviderMonitor,
+  name: string,
+  args: unknown,
+  opts?: { botToken?: string; appToken?: string },
+) {
+  const { controller, run } = startSlackMonitor(monitorSlackProvider, opts);
+  const handler = await getSlackHandlerOrThrow(name);
+  await handler(args);
+  await stopSlackMonitor({ controller, run });
+}
+
+export async function runSlackMessageOnce(
+  monitorSlackProvider: SlackProviderMonitor,
+  args: unknown,
+  opts?: { botToken?: string; appToken?: string },
+) {
+  await runSlackEventOnce(monitorSlackProvider, "message", args, opts);
 }
 
 export const defaultSlackTestConfig = () => ({
@@ -113,6 +198,7 @@ vi.mock("@slack/bolt", () => {
         channel: { name: "dm", is_im: true },
       }),
       replies: vi.fn().mockResolvedValue({ messages: [] }),
+      history: vi.fn().mockResolvedValue({ messages: [] }),
     },
     users: {
       info: vi.fn().mockResolvedValue({

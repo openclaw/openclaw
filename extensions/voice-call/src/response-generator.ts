@@ -4,10 +4,8 @@
  */
 
 import crypto from "node:crypto";
-
-import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
-
 import type { VoiceCallConfig } from "./config.js";
+import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
@@ -148,7 +146,7 @@ export async function generateVoiceResponse(
 
     const text = texts.join(" ") || null;
 
-    if (!text && result.meta.aborted) {
+    if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
     }
 

@@ -1,5 +1,4 @@
 import type { EventEmitter } from "node:events";
-
 import { logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 

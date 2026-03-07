@@ -4,11 +4,45 @@ import Testing
 
 @Suite
 struct CronModelsTests {
+    private func makeCronJob(
+        name: String,
+        payloadText: String,
+        state: CronJobState = CronJobState()) -> CronJob
+    {
+        CronJob(
+            id: "x",
+            agentId: nil,
+            name: name,
+            description: nil,
+            enabled: true,
+            deleteAfterRun: nil,
+            createdAtMs: 0,
+            updatedAtMs: 0,
+            schedule: .at(at: "2026-02-03T18:00:00Z"),
+            sessionTarget: .main,
+            wakeMode: .now,
+            payload: .systemEvent(text: payloadText),
+            delivery: nil,
+            state: state)
+    }
+
     @Test func scheduleAtEncodesAndDecodes() throws {
-        let schedule = CronSchedule.at(atMs: 123)
+        let schedule = CronSchedule.at(at: "2026-02-03T18:00:00Z")
         let data = try JSONEncoder().encode(schedule)
         let decoded = try JSONDecoder().decode(CronSchedule.self, from: data)
         #expect(decoded == schedule)
+    }
+
+    @Test func scheduleAtDecodesLegacyAtMs() throws {
+        let json = """
+        {"kind":"at","atMs":1700000000000}
+        """
+        let decoded = try JSONDecoder().decode(CronSchedule.self, from: Data(json.utf8))
+        if case let .at(at) = decoded {
+            #expect(at.hasPrefix("2023-"))
+        } else {
+            #expect(Bool(false))
+        }
     }
 
     @Test func scheduleEveryEncodesAndDecodesWithAnchor() throws {
@@ -49,11 +83,11 @@ struct CronModelsTests {
             deleteAfterRun: true,
             createdAtMs: 0,
             updatedAtMs: 0,
-            schedule: .at(atMs: 1_700_000_000_000),
+            schedule: .at(at: "2026-02-03T18:00:00Z"),
             sessionTarget: .main,
             wakeMode: .now,
             payload: .systemEvent(text: "ping"),
-            isolation: nil,
+            delivery: nil,
             state: CronJobState())
         let data = try JSONEncoder().encode(job)
         let decoded = try JSONDecoder().decode(CronJob.self, from: data)
@@ -62,7 +96,7 @@ struct CronModelsTests {
 
     @Test func scheduleDecodeRejectsUnknownKind() {
         let json = """
-        {"kind":"wat","atMs":1}
+        {"kind":"wat","at":"2026-02-03T18:00:00Z"}
         """
         #expect(throws: DecodingError.self) {
             _ = try JSONDecoder().decode(CronSchedule.self, from: Data(json.utf8))
@@ -79,21 +113,7 @@ struct CronModelsTests {
     }
 
     @Test func displayNameTrimsWhitespaceAndFallsBack() {
-        let base = CronJob(
-            id: "x",
-            agentId: nil,
-            name: "  hello  ",
-            description: nil,
-            enabled: true,
-            deleteAfterRun: nil,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: .at(atMs: 0),
-            sessionTarget: .main,
-            wakeMode: .now,
-            payload: .systemEvent(text: "hi"),
-            isolation: nil,
-            state: CronJobState())
+        let base = makeCronJob(name: "  hello  ", payloadText: "hi")
         #expect(base.displayName == "hello")
 
         var unnamed = base
@@ -102,20 +122,9 @@ struct CronModelsTests {
     }
 
     @Test func nextRunDateAndLastRunDateDeriveFromState() {
-        let job = CronJob(
-            id: "x",
-            agentId: nil,
+        let job = makeCronJob(
             name: "t",
-            description: nil,
-            enabled: true,
-            deleteAfterRun: nil,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: .at(atMs: 0),
-            sessionTarget: .main,
-            wakeMode: .now,
-            payload: .systemEvent(text: "hi"),
-            isolation: nil,
+            payloadText: "hi",
             state: CronJobState(
                 nextRunAtMs: 1_700_000_000_000,
                 runningAtMs: nil,

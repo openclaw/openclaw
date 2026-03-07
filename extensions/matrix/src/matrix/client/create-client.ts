@@ -1,13 +1,10 @@
 import fs from "node:fs";
-
-import {
-  LogService,
+import type {
+  IStorageProvider,
+  ICryptoStorageProvider,
   MatrixClient,
-  SimpleFsStorageProvider,
-  RustSdkCryptoStorageProvider,
 } from "@vector-im/matrix-bot-sdk";
-import type { IStorageProvider, ICryptoStorageProvider } from "@vector-im/matrix-bot-sdk";
-
+import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,
@@ -16,7 +13,10 @@ import {
 } from "./storage.js";
 
 function sanitizeUserIdList(input: unknown, label: string): string[] {
-  if (input == null) return [];
+  const LogService = loadMatrixSdk().LogService;
+  if (input == null) {
+    return [];
+  }
   if (!Array.isArray(input)) {
     LogService.warn(
       "MatrixClientLite",
@@ -44,6 +44,8 @@ export async function createMatrixClient(params: {
   localTimeoutMs?: number;
   accountId?: string | null;
 }): Promise<MatrixClient> {
+  const { MatrixClient, SimpleFsStorageProvider, RustSdkCryptoStorageProvider, LogService } =
+    loadMatrixSdk();
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
 

@@ -1,6 +1,6 @@
-import { EventType, type MatrixActionClientOpts } from "./types.js";
-import { resolveActionClient } from "./client.js";
 import { resolveMatrixRoomId } from "../send.js";
+import { resolveActionClient } from "./client.js";
+import { EventType, type MatrixActionClientOpts } from "./types.js";
 
 export async function getMatrixMemberInfo(
   userId: string,
@@ -25,7 +25,9 @@ export async function getMatrixMemberInfo(
       roomId: roomId ?? null,
     };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -76,6 +78,8 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
       memberCount,
     };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }

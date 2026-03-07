@@ -10,7 +10,7 @@ Search your complete conversation history stored in session JSONL files. Use thi
 
 ## Trigger
 
-Use this skill when the user asks about prior chats, parent conversations, or historical context that isn’t in memory files.
+Use this skill when the user asks about prior chats, parent conversations, or historical context that isn't in memory files.
 
 ## Location
 

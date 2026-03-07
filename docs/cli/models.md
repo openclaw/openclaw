@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw models` (status/list/set/scan, aliases, fa
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
+title: "models"
 ---
 
 # `openclaw models`
@@ -76,3 +77,4 @@ Notes:
 
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
+- Anthropic policy note: setup-token support is technical compatibility. Anthropic has blocked some subscription usage outside Claude Code in the past, so verify current terms before using it broadly.

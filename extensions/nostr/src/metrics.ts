@@ -50,6 +50,24 @@ export type MetricName =
   | DecryptMetricName
   | MemoryMetricName;
 
+type RelayMetrics = {
+  connects: number;
+  disconnects: number;
+  reconnects: number;
+  errors: number;
+  messagesReceived: {
+    event: number;
+    eose: number;
+    closed: number;
+    notice: number;
+    ok: number;
+    auth: number;
+  };
+  circuitBreakerState: "closed" | "open" | "half_open";
+  circuitBreakerOpens: number;
+  circuitBreakerCloses: number;
+};
+
 // ============================================================================
 // Metric Event
 // ============================================================================
@@ -93,26 +111,7 @@ export interface MetricsSnapshot {
   };
 
   /** Relay stats by URL */
-  relays: Record<
-    string,
-    {
-      connects: number;
-      disconnects: number;
-      reconnects: number;
-      errors: number;
-      messagesReceived: {
-        event: number;
-        eose: number;
-        closed: number;
-        notice: number;
-        ok: number;
-        auth: number;
-      };
-      circuitBreakerState: "closed" | "open" | "half_open";
-      circuitBreakerOpens: number;
-      circuitBreakerCloses: number;
-    }
-  >;
+  relays: Record<string, RelayMetrics>;
 
   /** Rate limiting stats */
   rateLimiting: {
@@ -174,26 +173,7 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
   };
 
   // Per-relay stats
-  const relays = new Map<
-    string,
-    {
-      connects: number;
-      disconnects: number;
-      reconnects: number;
-      errors: number;
-      messagesReceived: {
-        event: number;
-        eose: number;
-        closed: number;
-        notice: number;
-        ok: number;
-        auth: number;
-      };
-      circuitBreakerState: "closed" | "open" | "half_open";
-      circuitBreakerOpens: number;
-      circuitBreakerCloses: number;
-    }
-  >();
+  const relays = new Map<string, RelayMetrics>();
 
   // Rate limiting stats
   const rateLimiting = {
@@ -300,34 +280,54 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
 
       // Relay metrics
       case "relay.connect":
-        if (relayUrl) getOrCreateRelay(relayUrl).connects += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).connects += value;
+        }
         break;
       case "relay.disconnect":
-        if (relayUrl) getOrCreateRelay(relayUrl).disconnects += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).disconnects += value;
+        }
         break;
       case "relay.reconnect":
-        if (relayUrl) getOrCreateRelay(relayUrl).reconnects += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).reconnects += value;
+        }
         break;
       case "relay.error":
-        if (relayUrl) getOrCreateRelay(relayUrl).errors += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).errors += value;
+        }
         break;
       case "relay.message.event":
-        if (relayUrl) getOrCreateRelay(relayUrl).messagesReceived.event += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).messagesReceived.event += value;
+        }
         break;
       case "relay.message.eose":
-        if (relayUrl) getOrCreateRelay(relayUrl).messagesReceived.eose += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).messagesReceived.eose += value;
+        }
         break;
       case "relay.message.closed":
-        if (relayUrl) getOrCreateRelay(relayUrl).messagesReceived.closed += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).messagesReceived.closed += value;
+        }
         break;
       case "relay.message.notice":
-        if (relayUrl) getOrCreateRelay(relayUrl).messagesReceived.notice += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).messagesReceived.notice += value;
+        }
         break;
       case "relay.message.ok":
-        if (relayUrl) getOrCreateRelay(relayUrl).messagesReceived.ok += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).messagesReceived.ok += value;
+        }
         break;
       case "relay.message.auth":
-        if (relayUrl) getOrCreateRelay(relayUrl).messagesReceived.auth += value;
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).messagesReceived.auth += value;
+        }
         break;
       case "relay.circuit_breaker.open":
         if (relayUrl) {

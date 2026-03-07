@@ -10,7 +10,9 @@ struct RuntimeVersion: Comparable, CustomStringConvertible {
     let minor: Int
     let patch: Int
 
-    var description: String { "\(self.major).\(self.minor).\(self.patch)" }
+    var description: String {
+        "\(self.major).\(self.minor).\(self.patch)"
+    }
 
     static func < (lhs: RuntimeVersion, rhs: RuntimeVersion) -> Bool {
         if lhs.major != rhs.major { return lhs.major < rhs.major }
@@ -163,5 +165,7 @@ enum RuntimeLocator {
 }
 
 extension RuntimeKind {
-    fileprivate var binaryName: String { "node" }
+    fileprivate var binaryName: String {
+        "node"
+    }
 }

@@ -11,7 +11,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("tui", {
     description: "Show TUI stats",
     handler: async (_args, ctx) => {
-      if (!ctx.hasUI) return;
+      if (!ctx.hasUI) {
+        return;
+      }
       let redraws = 0;
       await ctx.ui.custom<void>((tui, _theme, _keybindings, done) => {
         redraws = tui.fullRedraws;

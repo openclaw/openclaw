@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -85,10 +85,11 @@ async function main() {
     agents: {
       defaults: {
         model: {
-          primary: "anthropic/claude-opus-4-5",
+          primary: "anthropic/claude-opus-4-6",
           fallbacks: ["zai/glm-4.7"],
         },
         models: {
+          "anthropic/claude-opus-4-6": {},
           "anthropic/claude-opus-4-5": {},
           "zai/glm-4.7": {},
         },

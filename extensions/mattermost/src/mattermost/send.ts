@@ -1,22 +1,28 @@
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
   createMattermostDirectChannel,
   createMattermostPost,
+  fetchMattermostChannelByName,
   fetchMattermostMe,
   fetchMattermostUserByUsername,
+  fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
   type MattermostUser,
 } from "./client.js";
 
 export type MattermostSendOpts = {
+  cfg?: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   replyToId?: string;
+  props?: Record<string, unknown>;
 };
 
 export type MattermostSendResult = {
@@ -26,10 +32,12 @@ export type MattermostSendResult = {
 
 type MattermostTarget =
   | { kind: "channel"; id: string }
+  | { kind: "channel-name"; name: string }
   | { kind: "user"; id?: string; username?: string };
 
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
+const channelByNameCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
 
@@ -47,23 +55,46 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-function parseMattermostTarget(raw: string): MattermostTarget {
+/** Mattermost IDs are 26-character lowercase alphanumeric strings. */
+function isMattermostId(value: string): boolean {
+  return /^[a-z0-9]{26}$/.test(value);
+}
+
+export function parseMattermostTarget(raw: string): MattermostTarget {
   const trimmed = raw.trim();
-  if (!trimmed) throw new Error("Recipient is required for Mattermost sends");
+  if (!trimmed) {
+    throw new Error("Recipient is required for Mattermost sends");
+  }
   const lower = trimmed.toLowerCase();
   if (lower.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
-    if (!id) throw new Error("Channel id is required for Mattermost sends");
+    if (!id) {
+      throw new Error("Channel id is required for Mattermost sends");
+    }
+    if (id.startsWith("#")) {
+      const name = id.slice(1).trim();
+      if (!name) {
+        throw new Error("Channel name is required for Mattermost sends");
+      }
+      return { kind: "channel-name", name };
+    }
+    if (!isMattermostId(id)) {
+      return { kind: "channel-name", name: id };
+    }
     return { kind: "channel", id };
   }
   if (lower.startsWith("user:")) {
     const id = trimmed.slice("user:".length).trim();
-    if (!id) throw new Error("User id is required for Mattermost sends");
+    if (!id) {
+      throw new Error("User id is required for Mattermost sends");
+    }
     return { kind: "user", id };
   }
   if (lower.startsWith("mattermost:")) {
     const id = trimmed.slice("mattermost:".length).trim();
-    if (!id) throw new Error("User id is required for Mattermost sends");
+    if (!id) {
+      throw new Error("User id is required for Mattermost sends");
+    }
     return { kind: "user", id };
   }
   if (trimmed.startsWith("@")) {
@@ -73,13 +104,25 @@ function parseMattermostTarget(raw: string): MattermostTarget {
     }
     return { kind: "user", username };
   }
+  if (trimmed.startsWith("#")) {
+    const name = trimmed.slice(1).trim();
+    if (!name) {
+      throw new Error("Channel name is required for Mattermost sends");
+    }
+    return { kind: "channel-name", name };
+  }
+  if (!isMattermostId(trimmed)) {
+    return { kind: "channel-name", name: trimmed };
+  }
   return { kind: "channel", id: trimmed };
 }
 
 async function resolveBotUser(baseUrl: string, token: string): Promise<MattermostUser> {
   const key = cacheKey(baseUrl, token);
   const cached = botUserCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const client = createMattermostClient({ baseUrl, botToken: token });
   const user = await fetchMattermostMe(client);
   botUserCache.set(key, user);
@@ -94,11 +137,41 @@ async function resolveUserIdByUsername(params: {
   const { baseUrl, token, username } = params;
   const key = `${cacheKey(baseUrl, token)}::${username.toLowerCase()}`;
   const cached = userByNameCache.get(key);
-  if (cached?.id) return cached.id;
+  if (cached?.id) {
+    return cached.id;
+  }
   const client = createMattermostClient({ baseUrl, botToken: token });
   const user = await fetchMattermostUserByUsername(client, username);
   userByNameCache.set(key, user);
   return user.id;
+}
+
+async function resolveChannelIdByName(params: {
+  baseUrl: string;
+  token: string;
+  name: string;
+}): Promise<string> {
+  const { baseUrl, token, name } = params;
+  const key = `${cacheKey(baseUrl, token)}::channel::${name.toLowerCase()}`;
+  const cached = channelByNameCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const client = createMattermostClient({ baseUrl, botToken: token });
+  const me = await fetchMattermostMe(client);
+  const teams = await fetchMattermostUserTeams(client, me.id);
+  for (const team of teams) {
+    try {
+      const channel = await fetchMattermostChannelByName(client, team.id, name);
+      if (channel?.id) {
+        channelByNameCache.set(key, channel.id);
+        return channel.id;
+      }
+    } catch {
+      // Channel not found in this team, try next
+    }
+  }
+  throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);
 }
 
 async function resolveTargetChannelId(params: {
@@ -106,7 +179,16 @@ async function resolveTargetChannelId(params: {
   baseUrl: string;
   token: string;
 }): Promise<string> {
-  if (params.target.kind === "channel") return params.target.id;
+  if (params.target.kind === "channel") {
+    return params.target.id;
+  }
+  if (params.target.kind === "channel-name") {
+    return await resolveChannelIdByName({
+      baseUrl: params.baseUrl,
+      token: params.token,
+      name: params.target.name,
+    });
+  }
   const userId = params.target.id
     ? params.target.id
     : await resolveUserIdByUsername({
@@ -123,14 +205,20 @@ async function resolveTargetChannelId(params: {
   return channel.id;
 }
 
-export async function sendMessageMattermost(
+type MattermostSendContext = {
+  cfg: OpenClawConfig;
+  accountId: string;
+  token: string;
+  baseUrl: string;
+  channelId: string;
+};
+
+async function resolveMattermostSendContext(
   to: string,
-  text: string,
   opts: MattermostSendOpts = {},
-): Promise<MattermostSendResult> {
+): Promise<MattermostSendContext> {
   const core = getCore();
-  const logger = core.logging.getChildLogger({ module: "mattermost" });
-  const cfg = core.config.loadConfig();
+  const cfg = opts.cfg ?? core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -155,6 +243,34 @@ export async function sendMessageMattermost(
     token,
   });
 
+  return {
+    cfg,
+    accountId: account.accountId,
+    token,
+    baseUrl,
+    channelId,
+  };
+}
+
+export async function resolveMattermostSendChannelId(
+  to: string,
+  opts: MattermostSendOpts = {},
+): Promise<string> {
+  return (await resolveMattermostSendContext(to, opts)).channelId;
+}
+
+export async function sendMessageMattermost(
+  to: string,
+  text: string,
+  opts: MattermostSendOpts = {},
+): Promise<MattermostSendResult> {
+  const core = getCore();
+  const logger = core.logging.getChildLogger({ module: "mattermost" });
+  const { cfg, accountId, token, baseUrl, channelId } = await resolveMattermostSendContext(
+    to,
+    opts,
+  );
+
   const client = createMattermostClient({ baseUrl, botToken: token });
   let message = text?.trim() ?? "";
   let fileIds: string[] | undefined;
@@ -162,7 +278,9 @@ export async function sendMessageMattermost(
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
     try {
-      const media = await core.media.loadWebMedia(mediaUrl);
+      const media = await loadOutboundMediaFromUrl(mediaUrl, {
+        mediaLocalRoots: opts.mediaLocalRoots,
+      });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
         buffer: media.buffer,
@@ -185,7 +303,7 @@ export async function sendMessageMattermost(
     const tableMode = core.channel.text.resolveMarkdownTableMode({
       cfg,
       channel: "mattermost",
-      accountId: account.accountId,
+      accountId,
     });
     message = core.channel.text.convertMarkdownTables(message, tableMode);
   }
@@ -202,11 +320,12 @@ export async function sendMessageMattermost(
     message,
     rootId: opts.replyToId,
     fileIds,
+    props: opts.props,
   });
 
   core.channel.activity.record({
     channel: "mattermost",
-    accountId: account.accountId,
+    accountId,
     direction: "outbound",
   });
 

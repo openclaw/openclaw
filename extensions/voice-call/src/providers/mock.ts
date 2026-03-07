@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
-
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
   NormalizedEvent,
   PlayTtsInput,
+  WebhookParseOptions,
   ProviderWebhookParseResult,
   StartListeningInput,
   StopListeningInput,
@@ -29,7 +31,10 @@ export class MockProvider implements VoiceCallProvider {
     return { ok: true };
   }
 
-  parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    _options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const events: NormalizedEvent[] = [];
@@ -37,11 +42,15 @@ export class MockProvider implements VoiceCallProvider {
       if (Array.isArray(payload.events)) {
         for (const evt of payload.events) {
           const normalized = this.normalizeEvent(evt);
-          if (normalized) events.push(normalized);
+          if (normalized) {
+            events.push(normalized);
+          }
         }
       } else if (payload.event) {
         const normalized = this.normalizeEvent(payload.event);
-        if (normalized) events.push(normalized);
+        if (normalized) {
+          events.push(normalized);
+        }
       }
 
       return { events, statusCode: 200 };
@@ -51,7 +60,9 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   private normalizeEvent(evt: Partial<NormalizedEvent>): NormalizedEvent | null {
-    if (!evt.type || !evt.callId) return null;
+    if (!evt.type || !evt.callId) {
+      return null;
+    }
 
     const base = {
       id: evt.id || crypto.randomUUID(),
@@ -156,5 +167,13 @@ export class MockProvider implements VoiceCallProvider {
 
   async stopListening(_input: StopListeningInput): Promise<void> {
     // No-op for mock
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const id = input.providerCallId.toLowerCase();
+    if (id.includes("stale") || id.includes("ended") || id.includes("completed")) {
+      return { status: "completed", isTerminal: true };
+    }
+    return { status: "in-progress", isTerminal: false };
   }
 }

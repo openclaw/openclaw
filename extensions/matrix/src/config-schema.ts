@@ -1,5 +1,6 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/matrix";
 import { z } from "zod";
+import { buildSecretInputSchema } from "./secret-input.js";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
 
@@ -37,11 +38,13 @@ const matrixRoomSchema = z
 export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  defaultAccount: z.string().optional(),
+  accounts: z.record(z.string(), z.unknown()).optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   userId: z.string().optional(),
   accessToken: z.string().optional(),
-  password: z.string().optional(),
+  password: buildSecretInputSchema().optional(),
   deviceName: z.string().optional(),
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
@@ -51,6 +54,7 @@ export const MatrixConfigSchema = z.object({
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
+  responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: z.array(allowFromEntry).optional(),

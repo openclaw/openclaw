@@ -2,6 +2,7 @@
 summary: "TypeBox schemas as the single source of truth for the gateway protocol"
 read_when:
   - Updating protocol schemas or codegen
+title: "TypeBox"
 ---
 
 # TypeBox as protocol source of truth
@@ -273,13 +274,15 @@ Unknown frame types are preserved as raw payloads for forward compatibility.
 - The top-level `GatewayFrame` uses a **discriminator** on `type`.
 - Methods with side effects usually require an `idempotencyKey` in params
   (example: `send`, `poll`, `agent`, `chat.send`).
+- `agent` accepts optional `internalEvents` for runtime-generated orchestration context
+  (for example subagent/cron task completion handoff); treat this as internal API surface.
 
 ## Live schema JSON
 
 Generated JSON Schema is in the repo at `dist/protocol.schema.json`. The
 published raw file is typically available at:
 
-- https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json
+- [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 
 ## When you change schemas
 

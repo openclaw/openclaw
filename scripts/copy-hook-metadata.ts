@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Copy HOOK.md files from src/hooks/bundled to dist/hooks/bundled
+ * Copy HOOK.md files from src/hooks/bundled to dist/bundled
  */
 
 import fs from "node:fs";
@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
 const srcBundled = path.join(projectRoot, "src", "hooks", "bundled");
-const distBundled = path.join(projectRoot, "dist", "hooks", "bundled");
+const distBundled = path.join(projectRoot, "dist", "bundled");
 
 function copyHookMetadata() {
   if (!fs.existsSync(srcBundled)) {

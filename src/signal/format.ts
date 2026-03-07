@@ -1,10 +1,10 @@
+import type { MarkdownTableMode } from "../config/types.base.js";
 import {
   chunkMarkdownIR,
   markdownToIR,
   type MarkdownIR,
   type MarkdownStyle,
 } from "../markdown/ir.js";
-import type { MarkdownTableMode } from "../config/types.base.js";
 
 type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
 
@@ -33,6 +33,17 @@ type Insertion = {
   pos: number;
   length: number;
 };
+
+function normalizeUrlForComparison(url: string): string {
+  let normalized = url.toLowerCase();
+  // Strip protocol
+  normalized = normalized.replace(/^https?:\/\//, "");
+  // Strip www. prefix
+  normalized = normalized.replace(/^www\./, "");
+  // Strip trailing slashes
+  normalized = normalized.replace(/\/+$/, "");
+  return normalized;
+}
 
 function mapStyle(style: MarkdownStyle): SignalTextStyle | null {
   switch (style) {
@@ -100,15 +111,17 @@ function applyInsertionsToStyles(
   }
   const sortedInsertions = [...insertions].toSorted((a, b) => a.pos - b.pos);
   let updated = spans;
+  let cumulativeShift = 0;
 
   for (const insertion of sortedInsertions) {
+    const insertionPos = insertion.pos + cumulativeShift;
     const next: SignalStyleSpan[] = [];
     for (const span of updated) {
-      if (span.end <= insertion.pos) {
+      if (span.end <= insertionPos) {
         next.push(span);
         continue;
       }
-      if (span.start >= insertion.pos) {
+      if (span.start >= insertionPos) {
         next.push({
           start: span.start + insertion.length,
           end: span.end + insertion.length,
@@ -116,15 +129,15 @@ function applyInsertionsToStyles(
         });
         continue;
       }
-      if (span.start < insertion.pos && span.end > insertion.pos) {
-        if (insertion.pos > span.start) {
+      if (span.start < insertionPos && span.end > insertionPos) {
+        if (insertionPos > span.start) {
           next.push({
             start: span.start,
-            end: insertion.pos,
+            end: insertionPos,
             style: span.style,
           });
         }
-        const shiftedStart = insertion.pos + insertion.length;
+        const shiftedStart = insertionPos + insertion.length;
         const shiftedEnd = span.end + insertion.length;
         if (shiftedEnd > shiftedStart) {
           next.push({
@@ -136,6 +149,7 @@ function applyInsertionsToStyles(
       }
     }
     updated = next;
+    cumulativeShift += insertion.length;
   }
 
   return updated;
@@ -161,16 +175,26 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
     const href = link.href.trim();
     const label = text.slice(link.start, link.end);
     const trimmedLabel = label.trim();
-    const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
 
     if (href) {
       if (!trimmedLabel) {
         out += href;
         insertions.push({ pos: link.end, length: href.length });
-      } else if (trimmedLabel !== href && trimmedLabel !== comparableHref) {
-        const addition = ` (${href})`;
-        out += addition;
-        insertions.push({ pos: link.end, length: addition.length });
+      } else {
+        // Check if label is similar enough to URL that showing both would be redundant
+        const normalizedLabel = normalizeUrlForComparison(trimmedLabel);
+        let comparableHref = href;
+        if (href.startsWith("mailto:")) {
+          comparableHref = href.slice("mailto:".length);
+        }
+        const normalizedHref = normalizeUrlForComparison(comparableHref);
+
+        // Only show URL if label is meaningfully different from it
+        if (normalizedLabel !== normalizedHref) {
+          const addition = ` (${href})`;
+          out += addition;
+          insertions.push({ pos: link.end, length: addition.length });
+        }
       }
     }
 
@@ -214,11 +238,134 @@ export function markdownToSignalText(
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,
-    headingStyle: "none",
-    blockquotePrefix: "",
+    headingStyle: "bold",
+    blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
   return renderSignalText(ir);
+}
+
+function sliceSignalStyles(
+  styles: SignalTextStyleRange[],
+  start: number,
+  end: number,
+): SignalTextStyleRange[] {
+  const sliced: SignalTextStyleRange[] = [];
+  for (const style of styles) {
+    const styleEnd = style.start + style.length;
+    const sliceStart = Math.max(style.start, start);
+    const sliceEnd = Math.min(styleEnd, end);
+    if (sliceEnd > sliceStart) {
+      sliced.push({
+        start: sliceStart - start,
+        length: sliceEnd - sliceStart,
+        style: style.style,
+      });
+    }
+  }
+  return sliced;
+}
+
+/**
+ * Split Signal formatted text into chunks under the limit while preserving styles.
+ *
+ * This implementation deterministically tracks cursor position without using indexOf,
+ * which is fragile when chunks are trimmed or when duplicate substrings exist.
+ * Styles spanning chunk boundaries are split into separate ranges for each chunk.
+ */
+function splitSignalFormattedText(
+  formatted: SignalFormattedText,
+  limit: number,
+): SignalFormattedText[] {
+  const { text, styles } = formatted;
+
+  if (text.length <= limit) {
+    return [formatted];
+  }
+
+  const results: SignalFormattedText[] = [];
+  let remaining = text;
+  let offset = 0; // Track position in original text for style slicing
+
+  while (remaining.length > 0) {
+    if (remaining.length <= limit) {
+      // Last chunk - take everything remaining
+      const trimmed = remaining.trimEnd();
+      if (trimmed.length > 0) {
+        results.push({
+          text: trimmed,
+          styles: mergeStyles(sliceSignalStyles(styles, offset, offset + trimmed.length)),
+        });
+      }
+      break;
+    }
+
+    // Find a good break point within the limit
+    const window = remaining.slice(0, limit);
+    let breakIdx = findBreakIndex(window);
+
+    // If no good break point found, hard break at limit
+    if (breakIdx <= 0) {
+      breakIdx = limit;
+    }
+
+    // Extract chunk and trim trailing whitespace
+    const rawChunk = remaining.slice(0, breakIdx);
+    const chunk = rawChunk.trimEnd();
+
+    if (chunk.length > 0) {
+      results.push({
+        text: chunk,
+        styles: mergeStyles(sliceSignalStyles(styles, offset, offset + chunk.length)),
+      });
+    }
+
+    // Advance past the chunk and any whitespace separator
+    const brokeOnWhitespace = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
+    const nextStart = Math.min(remaining.length, breakIdx + (brokeOnWhitespace ? 1 : 0));
+
+    // Chunks are sent as separate messages, so we intentionally drop boundary whitespace.
+    // Keep `offset` in sync with the dropped characters so style slicing stays correct.
+    remaining = remaining.slice(nextStart).trimStart();
+    offset = text.length - remaining.length;
+  }
+
+  return results;
+}
+
+/**
+ * Find the best break index within a text window.
+ * Prefers newlines over whitespace, avoids breaking inside parentheses.
+ */
+function findBreakIndex(window: string): number {
+  let lastNewline = -1;
+  let lastWhitespace = -1;
+  let parenDepth = 0;
+
+  for (let i = 0; i < window.length; i++) {
+    const char = window[i];
+
+    if (char === "(") {
+      parenDepth++;
+      continue;
+    }
+    if (char === ")" && parenDepth > 0) {
+      parenDepth--;
+      continue;
+    }
+
+    // Only consider break points outside parentheses
+    if (parenDepth === 0) {
+      if (char === "\n") {
+        lastNewline = i;
+      } else if (/\s/.test(char)) {
+        lastWhitespace = i;
+      }
+    }
+  }
+
+  // Prefer newline break, fall back to whitespace
+  return lastNewline > 0 ? lastNewline : lastWhitespace;
 }
 
 export function markdownToSignalTextChunks(
@@ -229,10 +376,22 @@ export function markdownToSignalTextChunks(
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,
-    headingStyle: "none",
-    blockquotePrefix: "",
+    headingStyle: "bold",
+    blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
-  return chunks.map((chunk) => renderSignalText(chunk));
+  const results: SignalFormattedText[] = [];
+
+  for (const chunk of chunks) {
+    const rendered = renderSignalText(chunk);
+    // If link expansion caused the chunk to exceed the limit, re-chunk it
+    if (rendered.text.length > limit) {
+      results.push(...splitSignalFormattedText(rendered, limit));
+    } else {
+      results.push(rendered);
+    }
+  }
+
+  return results;
 }

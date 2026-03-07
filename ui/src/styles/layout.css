@@ -62,7 +62,10 @@
 
 .shell--chat-focus .content {
   padding-top: 0;
-  gap: 0;
+}
+
+.shell--chat-focus .content > * + * {
+  margin-top: 0;
 }
 
 /* ===========================================
@@ -418,12 +421,14 @@
 .content {
   grid-area: content;
   padding: 12px 16px 32px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
+  display: block;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.content > * + * {
+  margin-top: 24px;
 }
 
 :root[data-theme="light"] .content {
@@ -431,8 +436,15 @@
 }
 
 .content--chat {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
   overflow: hidden;
   padding-bottom: 0;
+}
+
+.content--chat > * + * {
+  margin-top: 0;
 }
 
 /* Content header */

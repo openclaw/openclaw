@@ -1,8 +1,7 @@
-import { createSlackWebClient } from "./client.js";
-
-import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
+import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { createSlackWebClient } from "./client.js";
 
 type SlackUser = {
   id?: string;
@@ -37,8 +36,7 @@ type SlackListChannelsResponse = {
 
 function resolveReadToken(params: DirectoryConfigParams): string | undefined {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const userToken = account.config.userToken?.trim() || undefined;
-  return userToken ?? account.botToken?.trim();
+  return account.userToken ?? account.botToken?.trim();
 }
 
 function normalizeQuery(value?: string | null): string {

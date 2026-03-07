@@ -40,7 +40,7 @@ The canvas host server binds based on `gateway.bind` setting:
 **Key insight:** The `canvasHostHostForBridge` is derived from `bridgeHost`. When bound to Tailscale, nodes receive URLs like:
 
 ```
-http://<tailscale-hostname>:18793/__moltbot__/canvas/<file>.html
+http://<tailscale-hostname>:18793/__openclaw__/canvas/<file>.html
 ```
 
 This is why localhost URLs don't work - the node receives the Tailscale hostname from the bridge!
@@ -111,8 +111,8 @@ cat ~/.openclaw/openclaw.json | jq '.gateway.bind'
 
 Then construct the URL:
 
-- **loopback**: `http://127.0.0.1:18793/__moltbot__/canvas/<file>.html`
-- **lan/tailnet/auto**: `http://<hostname>:18793/__moltbot__/canvas/<file>.html`
+- **loopback**: `http://127.0.0.1:18793/__openclaw__/canvas/<file>.html`
+- **lan/tailnet/auto**: `http://<hostname>:18793/__openclaw__/canvas/<file>.html`
 
 Find your Tailscale hostname:
 
@@ -137,7 +137,7 @@ canvas action:present node:<node-id> target:<full-url>
 **Example:**
 
 ```
-canvas action:present node:mac-63599bc4-b54d-4392-9048-b97abd58343a target:http://peters-mac-studio-1.sheep-coho.ts.net:18793/__moltbot__/canvas/snake.html
+canvas action:present node:mac-63599bc4-b54d-4392-9048-b97abd58343a target:http://peters-mac-studio-1.sheep-coho.ts.net:18793/__openclaw__/canvas/snake.html
 ```
 
 ### 5. Navigate, snapshot, or hide
@@ -158,7 +158,7 @@ canvas action:hide node:<node-id>
 
 1. Check server bind: `cat ~/.openclaw/openclaw.json | jq '.gateway.bind'`
 2. Check what port canvas is on: `lsof -i :18793`
-3. Test URL directly: `curl http://<hostname>:18793/__moltbot__/canvas/<file>.html`
+3. Test URL directly: `curl http://<hostname>:18793/__openclaw__/canvas/<file>.html`
 
 **Solution:** Use the full hostname matching your bind mode, not localhost.
 
@@ -180,14 +180,14 @@ If live reload isn't working:
 
 ## URL Path Structure
 
-The canvas host serves from `/__moltbot__/canvas/` prefix:
+The canvas host serves from `/__openclaw__/canvas/` prefix:
 
 ```
-http://<host>:18793/__moltbot__/canvas/index.html  → ~/clawd/canvas/index.html
-http://<host>:18793/__moltbot__/canvas/games/snake.html → ~/clawd/canvas/games/snake.html
+http://<host>:18793/__openclaw__/canvas/index.html  → ~/clawd/canvas/index.html
+http://<host>:18793/__openclaw__/canvas/games/snake.html → ~/clawd/canvas/games/snake.html
 ```
 
-The `/__moltbot__/canvas/` prefix is defined by `CANVAS_HOST_PATH` constant.
+The `/__openclaw__/canvas/` prefix is defined by `CANVAS_HOST_PATH` constant.
 
 ## Tips
 

@@ -4,6 +4,7 @@ read_when:
   - Packaging OpenClaw.app
   - Debugging the macOS gateway launchd service
   - Installing the gateway CLI for macOS
+title: "Gateway on macOS"
 ---
 
 # Gateway on macOS (external launchd)
@@ -27,12 +28,12 @@ The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun no
 
 Label:
 
-- `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.openclaw.*` may remain)
+- `ai.openclaw.gateway` (or `ai.openclaw.<profile>`; legacy `com.openclaw.*` may remain)
 
 Plist location (per‑user):
 
-- `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
+- `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
+  (or `~/Library/LaunchAgents/ai.openclaw.<profile>.plist`)
 
 Manager:
 

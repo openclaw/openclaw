@@ -1,4 +1,8 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  generatePkceVerifierChallenge,
+  toFormUrlEncoded,
+} from "openclaw/plugin-sdk/minimax-portal-auth";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -49,15 +53,8 @@ type TokenResult =
   | TokenPending
   | { status: "error"; message: string };
 
-function toFormUrlEncoded(data: Record<string, string>): string {
-  return Object.entries(data)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
-}
-
 function generatePkce(): { verifier: string; challenge: string; state: string } {
-  const verifier = randomBytes(32).toString("base64url");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = randomBytes(16).toString("base64url");
   return { verifier, challenge, state };
 }
@@ -198,7 +195,7 @@ export async function loginMiniMaxPortalOAuth(params: {
   const noteLines = [
     `Open ${verificationUrl} to approve access.`,
     `If prompted, enter the code ${oauth.user_code}.`,
-    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires in: ${oauth.expired_in}ms`,
+    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${oauth.expired_in} unix timestamp`,
   ];
   await params.note(noteLines.join("\n"), "MiniMax OAuth");
 

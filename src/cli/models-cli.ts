@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import {
   githubCopilotLoginCommand,
   modelsAliasesAddCommand,

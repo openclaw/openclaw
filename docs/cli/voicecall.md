@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw voicecall` (voice-call plugin command surf
 read_when:
   - You use the voice-call plugin and want the CLI entry points
   - You want quick examples for `voicecall call|continue|status|tail|expose`
+title: "voicecall"
 ---
 
 # `openclaw voicecall`
@@ -27,7 +28,7 @@ openclaw voicecall end --call-id <id>
 ```bash
 openclaw voicecall expose --mode serve
 openclaw voicecall expose --mode funnel
-openclaw voicecall unexpose
+openclaw voicecall expose --mode off
 ```
 
 Security note: only expose the webhook endpoint to networks you trust. Prefer Tailscale Serve over Funnel when possible.

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { validateConfigObject } from "./config.js";
 
 describe("Slack HTTP mode config", () => {
@@ -9,6 +8,18 @@ describe("Slack HTTP mode config", () => {
         slack: {
           mode: "http",
           signingSecret: "secret",
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts HTTP mode when signing secret is configured as SecretRef", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          mode: "http",
+          signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
         },
       },
     });
@@ -37,6 +48,26 @@ describe("Slack HTTP mode config", () => {
           accounts: {
             ops: {
               mode: "http",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts account HTTP mode when account signing secret is set as SecretRef", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          accounts: {
+            ops: {
+              mode: "http",
+              signingSecret: {
+                source: "env",
+                provider: "default",
+                id: "SLACK_OPS_SIGNING_SECRET",
+              },
             },
           },
         },
