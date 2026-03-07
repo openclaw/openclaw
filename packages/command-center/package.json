@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/command-center",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw Command Center — local web UI for operational dashboard",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "vite --port 5174",
+    "preview": "vite preview --port 5174"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^6.3.0"
+  }
+}
