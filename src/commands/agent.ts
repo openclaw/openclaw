@@ -74,6 +74,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -643,6 +644,30 @@ async function agentCommandInternal(
 
     if (acpResolution?.kind === "ready" && sessionKey) {
       const startedAt = Date.now();
+      if (sessionStore) {
+        const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
+        const fallbackSessionFile = !sessionEntry?.sessionFile
+          ? resolveSessionTranscriptPath(
+              sessionId,
+              sessionAgentId,
+              opts.threadId ?? threadIdFromSessionKey,
+            )
+          : undefined;
+        const resolvedSessionFile = await resolveAndPersistSessionFile({
+          sessionId,
+          sessionKey,
+          sessionStore,
+          storePath,
+          sessionEntry,
+          agentId: sessionAgentId,
+          sessionsDir: resolveSessionFilePathOptions({
+            agentId: sessionAgentId,
+            storePath,
+          }).sessionsDir,
+          fallbackSessionFile,
+        });
+        sessionEntry = resolvedSessionFile.sessionEntry;
+      }
       registerAgentRunContext(runId, {
         sessionKey,
       });
@@ -732,8 +757,17 @@ async function agentCommandInternal(
         },
       });
 
+      const finalVisibleText = visibleTextAccumulator.finalize();
+      if (finalVisibleText && sessionKey) {
+        await appendAssistantMessageToSessionTranscript({
+          agentId: sessionAgentId,
+          sessionKey,
+          text: finalVisibleText,
+          storePath,
+        });
+      }
       const normalizedFinalPayload = normalizeReplyPayload({
-        text: visibleTextAccumulator.finalize(),
+        text: finalVisibleText,
       });
       const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
