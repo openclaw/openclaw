@@ -263,4 +263,46 @@ describe("promptGatewayConfig", () => {
       }
     }
   });
+
+  it("preserves gateway.remote so wizard writes do not clear gateway.remote.token", async () => {
+    const { result } = await runGatewayPrompt({
+      baseConfig: {
+        gateway: {
+          remote: { url: "wss://remote.example/ws", token: "existing-remote-token" },
+        },
+      },
+      selectQueue: ["loopback", "token", "off", "plaintext"],
+      textQueue: ["18789", "new-auth-token"],
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    expect(result.config.gateway?.remote).toBeDefined();
+    expect(result.config.gateway?.remote?.url).toBe("wss://remote.example/ws");
+    // In local mode with plaintext token, remote.token is synced to the new auth token.
+    expect(result.config.gateway?.remote?.token).toBe("new-auth-token");
+  });
+
+  it("preserves gateway.remote as-is when auth uses SecretRef (no plaintext token)", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    try {
+      const { result } = await runGatewayPrompt({
+        baseConfig: {
+          gateway: {
+            remote: { url: "wss://other.example/ws", token: "manual-remote-token" },
+          },
+        },
+        selectQueue: ["loopback", "token", "off", "ref"],
+        textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
+        authConfigFactory: ({ mode, token }) => ({ mode, token }),
+      });
+      expect(result.config.gateway?.remote?.url).toBe("wss://other.example/ws");
+      expect(result.config.gateway?.remote?.token).toBe("manual-remote-token");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
+  });
 });

@@ -1070,6 +1070,16 @@ message(action="send", channel="discord", target="channel:123", path="/path/to/a
 
   </Accordion>
 
+  <Accordion title="Bot online but receives zero messages (MESSAGE_CONTENT_LIMITED)">
+    If logs show "Message Content Intent is limited" and the bot never receives any message events:
+
+    - **Intent**: In [Discord Developer Portal](https://discord.com/developers/applications) → your app → **Bot** → **Privileged Gateway Intents**, ensure **Message Content Intent** is enabled (toggle on). Save if you change it.
+    - **Server count**: Bots in fewer than 100 servers can use the intent without verification. If your bot is in 100+ servers, you must request approval from Discord for the Message Content privileged intent.
+    - **Restart**: After changing intents, fully restart the OpenClaw gateway (e.g. quit and reopen the Mac app, or restart the process that runs `openclaw gateway run`).
+    - **Probe**: Run `openclaw channels status --probe` and confirm the Discord account shows as connected and intents are reported. If the bot still receives no events, the connection may be using a different app or token; double-check the token in config matches the app that has the intent enabled.
+
+  </Accordion>
+
   <Accordion title="Guild messages blocked unexpectedly">
 
     - verify `groupPolicy`

@@ -325,6 +325,27 @@ export async function promptGatewayConfig(
     trustedProxy: trustedProxyConfig,
   });
 
+  // Preserve gateway.remote so wizard/config writes do not clear gateway.remote.token
+  // (used for local CLI calls and remote fallback). Merge patch would otherwise drop
+  // remote when the returned gateway object omitted it.
+  let remoteForGateway = next.gateway?.remote;
+  if (remoteForGateway === undefined || remoteForGateway === null) {
+    remoteForGateway = undefined;
+  } else {
+    // In local mode, keep remote.token in sync with auth token so CLI/channels can connect
+    // without manually setting gateway.remote.token.
+    const tokenForRemote =
+      typeof gatewayTokenForCalls === "string" && gatewayTokenForCalls.trim().length > 0
+        ? gatewayTokenForCalls.trim()
+        : undefined;
+    if (tokenForRemote !== undefined) {
+      remoteForGateway = {
+        ...remoteForGateway,
+        token: tokenForRemote,
+      };
+    }
+  }
+
   next = {
     ...next,
     gateway: {
@@ -340,6 +361,7 @@ export async function promptGatewayConfig(
         mode: tailscaleMode,
         resetOnExit: tailscaleResetOnExit,
       },
+      ...(remoteForGateway && { remote: remoteForGateway }),
     },
   };
 
