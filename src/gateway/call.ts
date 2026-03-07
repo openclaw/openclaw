@@ -23,6 +23,10 @@ import {
   readGatewayTokenEnv,
   resolveGatewayCredentialsFromConfig,
   trimToUndefined,
+  type GatewayCredentialMode,
+  type GatewayCredentialPrecedence,
+  type GatewayRemoteCredentialFallback,
+  type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
@@ -238,6 +242,14 @@ type ResolvedGatewayCallContext = {
   urlOverrideSource?: "cli" | "env";
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
+  modeOverride?: GatewayCredentialMode;
+  includeLegacyEnv?: boolean;
+  localTokenPrecedence?: GatewayCredentialPrecedence;
+  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
+  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
+  remoteTokenFallback?: GatewayRemoteCredentialFallback;
+  remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
 function resolveGatewayCallTimeout(timeoutValue: unknown): {
@@ -303,6 +315,12 @@ async function resolveGatewaySecretInputString(params: {
     value: params.value,
     env: params.env,
     normalize: trimToUndefined,
+    onResolveRefError: (error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
+        cause: error,
+      });
+    },
   });
   if (!value) {
     throw new Error(`${params.path} resolved to an empty or non-string value.`);
@@ -337,7 +355,14 @@ async function resolveGatewayCredentialsWithEnv(
       explicitAuth: context.explicitAuth,
       urlOverride: context.urlOverride,
       urlOverrideSource: context.urlOverrideSource,
-      remotePasswordPrecedence: "env-first", // pragma: allowlist secret
+      modeOverride: context.modeOverride,
+      includeLegacyEnv: context.includeLegacyEnv,
+      localTokenPrecedence: context.localTokenPrecedence,
+      localPasswordPrecedence: context.localPasswordPrecedence,
+      remoteTokenPrecedence: context.remoteTokenPrecedence,
+      remotePasswordPrecedence: context.remotePasswordPrecedence ?? "env-first", // pragma: allowlist secret
+      remoteTokenFallback: context.remoteTokenFallback,
+      remotePasswordFallback: context.remotePasswordFallback,
     });
   }
 
@@ -466,7 +491,14 @@ async function resolveGatewayCredentialsWithEnv(
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
-    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
+    modeOverride: context.modeOverride,
+    includeLegacyEnv: context.includeLegacyEnv,
+    localTokenPrecedence: context.localTokenPrecedence,
+    localPasswordPrecedence: context.localPasswordPrecedence,
+    remoteTokenPrecedence: context.remoteTokenPrecedence,
+    remotePasswordPrecedence: context.remotePasswordPrecedence ?? "env-first", // pragma: allowlist secret
+    remoteTokenFallback: context.remoteTokenFallback,
+    remotePasswordFallback: context.remotePasswordFallback,
   });
 }
 
@@ -475,21 +507,45 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
   env?: NodeJS.ProcessEnv;
+  modeOverride?: GatewayCredentialMode;
+  includeLegacyEnv?: boolean;
+  localTokenPrecedence?: GatewayCredentialPrecedence;
+  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
+  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
+  remoteTokenFallback?: GatewayRemoteCredentialFallback;
+  remotePasswordFallback?: GatewayRemoteCredentialFallback;
 }): Promise<{ token?: string; password?: string }> {
+  const modeOverride = params.modeOverride;
+  const isRemoteMode = modeOverride
+    ? modeOverride === "remote"
+    : params.config.gateway?.mode === "remote";
+  const remoteFromConfig =
+    params.config.gateway?.mode === "remote"
+      ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
+      : undefined;
+  const remoteFromOverride =
+    modeOverride === "remote"
+      ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
+      : undefined;
   const context: ResolvedGatewayCallContext = {
     config: params.config,
     configPath: resolveConfigPath(process.env, resolveStateDir(process.env)),
-    isRemoteMode: params.config.gateway?.mode === "remote",
-    remote:
-      params.config.gateway?.mode === "remote"
-        ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
-        : undefined,
+    isRemoteMode,
+    remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),
-    remoteUrl:
-      params.config.gateway?.mode === "remote"
-        ? trimToUndefined((params.config.gateway?.remote as GatewayRemoteSettings | undefined)?.url)
-        : undefined,
+    remoteUrl: isRemoteMode
+      ? trimToUndefined((params.config.gateway?.remote as GatewayRemoteSettings | undefined)?.url)
+      : undefined,
     explicitAuth: resolveExplicitGatewayAuth(params.explicitAuth),
+    modeOverride,
+    includeLegacyEnv: params.includeLegacyEnv,
+    localTokenPrecedence: params.localTokenPrecedence,
+    localPasswordPrecedence: params.localPasswordPrecedence,
+    remoteTokenPrecedence: params.remoteTokenPrecedence,
+    remotePasswordPrecedence: params.remotePasswordPrecedence,
+    remoteTokenFallback: params.remoteTokenFallback,
+    remotePasswordFallback: params.remotePasswordFallback,
   };
   return resolveGatewayCredentialsWithEnv(context, params.env ?? process.env);
 }

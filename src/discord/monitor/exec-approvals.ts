@@ -15,7 +15,7 @@ import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
-import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
+import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import type {
   ExecApprovalDecision,
@@ -405,14 +405,15 @@ export class DiscordExecApprovalHandler {
       config: this.opts.cfg,
       url: this.opts.gatewayUrl,
     });
-    const gatewayCredentials = resolveGatewayCredentialsFromConfig({
-      cfg: this.opts.cfg,
+    const auth = await resolveGatewayConnectionAuth({
+      config: this.opts.cfg,
+      env: process.env,
     });
 
     this.gatewayClient = new GatewayClient({
       url: gatewayUrl,
-      token: gatewayCredentials.token,
-      password: gatewayCredentials.password,
+      token: auth.token,
+      password: auth.password,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,

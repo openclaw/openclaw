@@ -1,7 +1,7 @@
 import { resolveBrowserConfig } from "../browser/config.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { GatewayClient } from "../gateway/client.js";
+import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -12,7 +12,6 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -110,73 +109,19 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
-async function resolveNodeHostSecretInputString(params: {
-  config: OpenClawConfig;
-  value: unknown;
-  path: string;
-  env: NodeJS.ProcessEnv;
-}): Promise<string | undefined> {
-  const resolvedValue = await resolveSecretInputString({
-    config: params.config,
-    value: params.value,
-    env: params.env,
-    onResolveRefError: (error) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
-        cause: error,
-      });
-    },
-  });
-  if (!resolvedValue) {
-    throw new Error(`${params.path} resolved to an empty or non-string value.`);
-  }
-  return resolvedValue;
-}
-
 export async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ token?: string; password?: string }> {
-  const env = params.env ?? process.env;
-  const isRemoteMode = params.config.gateway?.mode === "remote";
-  const authMode = params.config.gateway?.auth?.mode;
-  const tokenPath = isRemoteMode ? "gateway.remote.token" : "gateway.auth.token";
-  const passwordPath = isRemoteMode ? "gateway.remote.password" : "gateway.auth.password";
-  const configuredToken = isRemoteMode
-    ? params.config.gateway?.remote?.token
-    : params.config.gateway?.auth?.token;
-  const configuredPassword = isRemoteMode
-    ? params.config.gateway?.remote?.password
-    : params.config.gateway?.auth?.password;
-
-  const token =
-    normalizeSecretInputString(env.OPENCLAW_GATEWAY_TOKEN) ??
-    (await resolveNodeHostSecretInputString({
-      config: params.config,
-      value: configuredToken,
-      path: tokenPath,
-      env,
-    }));
-  const tokenCanWin = Boolean(token);
-  const localPasswordCanWin =
-    authMode === "password" ||
-    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
-  const shouldResolveConfiguredPassword =
-    !normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD) &&
-    !tokenCanWin &&
-    (isRemoteMode || localPasswordCanWin);
-  const password =
-    normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD) ??
-    (shouldResolveConfiguredPassword
-      ? await resolveNodeHostSecretInputString({
-          config: params.config,
-          value: configuredPassword,
-          path: passwordPath,
-          env,
-        })
-      : normalizeSecretInputString(configuredPassword));
-
-  return { token, password };
+  return await resolveGatewayConnectionAuth({
+    config: params.config,
+    env: params.env,
+    includeLegacyEnv: false,
+    localTokenPrecedence: "env-first",
+    localPasswordPrecedence: "env-first",
+    remoteTokenPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first",
+  });
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
