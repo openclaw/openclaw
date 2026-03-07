@@ -253,3 +253,76 @@ export function installUnhandledRejectionHandler(): void {
     process.exit(1);
   });
 }
+
+/**
+ * Patterns for uncaught exceptions that are recoverable (should not crash the process).
+ * These are typically transient network/TLS errors from libraries like undici
+ * that throw synchronously from internal callbacks.
+ */
+const RECOVERABLE_UNCAUGHT_PATTERNS: Array<{
+  errorType: string;
+  messagePattern: RegExp;
+}> = [
+  // undici TLS session reuse race condition: socket GC'd before setSession() is called.
+  // See: https://github.com/nodejs/undici/issues (TLS connection storm scenarios)
+  {
+    errorType: "TypeError",
+    messagePattern: /Cannot read properties of null \(reading 'setSession'\)/,
+  },
+  // Similar TLS race conditions with null socket handle
+  {
+    errorType: "TypeError",
+    messagePattern: /Cannot read properties of null \(reading 'getPeerCertificate'\)/,
+  },
+  {
+    errorType: "TypeError",
+    messagePattern: /Cannot read properties of null \(reading 'getSession'\)/,
+  },
+];
+
+/**
+ * Check if an uncaught exception is recoverable (should be logged but not crash the process).
+ * This covers synchronous throws from library internals (e.g., undici TLS race conditions)
+ * that cannot be caught via unhandledRejection handlers.
+ */
+export function isRecoverableUncaughtException(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const name = readErrorName(error);
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  const stack = "stack" in error && typeof error.stack === "string" ? error.stack : "";
+
+  for (const pattern of RECOVERABLE_UNCAUGHT_PATTERNS) {
+    if (name === pattern.errorType && pattern.messagePattern.test(message)) {
+      // Gate to undici-origin errors: only suppress if the stack trace
+      // references undici internals, to avoid swallowing unrelated TypeErrors
+      // from app/plugin code. (#35257)
+      if (!stack.includes("undici")) {
+        continue;
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Install an uncaughtException handler that recovers from transient errors
+ * (e.g. undici TLS race conditions) instead of crashing the process.
+ */
+export function installUncaughtExceptionHandler(): void {
+  process.on("uncaughtException", (error) => {
+    if (isRecoverableUncaughtException(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    process.exit(1);
+  });
+}
