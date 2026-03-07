@@ -771,9 +771,17 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasCompletionDirectTarget =
       !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
 
+    // Hoist alwaysRouteViaParent before the guard so we can enter the completion
+    // block even when completionDirectOrigin lacks a to field. When the flag is
+    // true, we want to route through the parent regardless — not deliver directly —
+    // so hasCompletionDirectTarget being false is irrelevant to that intent.
+    const alwaysRouteViaParent =
+      cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true &&
+      params.announceType !== "cron job";
+
     if (
       params.expectsCompletionMessage &&
-      hasCompletionDirectTarget &&
+      (hasCompletionDirectTarget || alwaysRouteViaParent) &&
       params.completionMessage?.trim()
     ) {
       const forceBoundSessionDirectDelivery =
@@ -810,9 +818,6 @@ async function sendSubagentAnnounceDirectly(params: {
         // Cron job completions are excluded from completionRouteViaParent:
         // they must stay on the direct-send path so delivery state is truthful
         // (the agent path returns success even without outbound payload).
-        const alwaysRouteViaParent =
-          cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true &&
-          params.announceType !== "cron job";
         if (pendingDescendantRuns > 0 || alwaysRouteViaParent) {
           shouldSendCompletionDirectly = false;
         }
@@ -863,9 +868,13 @@ async function sendSubagentAnnounceDirectly(params: {
     // because non-completion announces set completionDirectOrigin to the raw
     // requester origin rather than the hook result, which would bypass
     // session-derived routing (e.g. webchat hints or partial origins).
+    // If completionDirectOrigin lacks a deliverable target (no to field),
+    // fall back to directOrigin to prevent silent delivery loss — the parent
+    // agent call would have deliver:false otherwise and the result would be dropped.
     const routeViaParent = cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
+    const completionDirectOriginIsDeliverable = Boolean(completionChannel) && Boolean(completionTo);
     const effectiveOrigin =
-      routeViaParent && params.expectsCompletionMessage && completionDirectOrigin
+      routeViaParent && params.expectsCompletionMessage && completionDirectOrigin && completionDirectOriginIsDeliverable
         ? completionDirectOrigin
         : normalizeDeliveryContext(params.directOrigin);
     const directChannelRaw =
