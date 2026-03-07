@@ -569,10 +569,8 @@ const memoryPlugin = {
               results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
             lancedbPluginMemoryContext: {
-              lancedb: {
-                prependTag: MEMORY_TAG_NAME,
-                stripRegex: MEMORY_TAG_REGEX,
-              },
+              prependTag: MEMORY_TAG_NAME,
+              stripRegex: MEMORY_TAG_REGEX,
             },
           };
         } catch (err) {

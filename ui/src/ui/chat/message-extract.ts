@@ -7,39 +7,27 @@ interface PluginMemoryContext {
   stripRegex: string;
 }
 
-interface LancedbPluginMemoryContext {
-  lancedb?: PluginMemoryContext;
-  core?: PluginMemoryContext;
-  qmd?: PluginMemoryContext;
-  [key: string]: PluginMemoryContext | undefined;
-}
-
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 /**
  * Strip plugin-injected memory context from user messages.
- * Checks for any field starting with "lancedbPlugin" for extensibility.
- * Each plugin (lancedb, core, qmd, etc.) provides its own stripRegex.
+ * Checks for any field ending with "PluginMemoryContext" (e.g., lancedbPluginMemoryContext).
+ * Each plugin provides its own stripRegex to remove its injected context.
  */
 function stripPluginMemoryContext(text: string, message: Record<string, unknown>): string {
   let result = text;
 
-  // Check all fields starting with "lancedbPlugin" for memory context
+  // Check all fields ending with "PluginMemoryContext" for stripping logic
   for (const key of Object.keys(message)) {
-    if (key.startsWith("lancedbPlugin") && key.endsWith("MemoryContext")) {
-      const pluginContexts = message[key] as LancedbPluginMemoryContext | undefined;
-      if (pluginContexts) {
-        // Iterate through each plugin's context (lancedb, core, qmd, etc.)
-        for (const ctx of Object.values(pluginContexts)) {
-          if (ctx?.stripRegex) {
-            try {
-              const regex = new RegExp(ctx.stripRegex, "i");
-              result = result.replace(regex, "").trim();
-            } catch (e) {
-              // Invalid regex, skip
-            }
-          }
+    if (key.endsWith("PluginMemoryContext")) {
+      const ctx = message[key] as PluginMemoryContext | undefined;
+      if (ctx?.stripRegex) {
+        try {
+          const regex = new RegExp(ctx.stripRegex, "i");
+          result = result.replace(regex, "").trim();
+        } catch (e) {
+          // Invalid regex, skip
         }
       }
     }
