@@ -128,6 +128,14 @@ export type ControlUiRootResolveOptions = {
   execPath?: string;
 };
 
+function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return path.resolve(left) === path.resolve(right);
+  }
+}
+
 function addCandidate(candidates: Set<string>, value: string | null) {
   if (!value) {
     return;
@@ -199,6 +207,24 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     }
   }
   return null;
+}
+
+export function isPackageProvenControlUiRootSync(
+  root: string,
+  opts: ControlUiRootResolveOptions = {},
+): boolean {
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const cwd = opts.cwd ?? process.cwd();
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1,
+    moduleUrl: opts.moduleUrl,
+    cwd,
+  });
+  if (!packageRoot) {
+    return false;
+  }
+  const packageDistRoot = path.join(packageRoot, "dist", "control-ui");
+  return pathsMatchByRealpathOrResolve(root, packageDistRoot);
 }
 
 export type EnsureControlUiAssetsResult = {
