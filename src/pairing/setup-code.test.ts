@@ -72,7 +72,7 @@ describe("pairing setup code", () => {
       },
       {
         env: {
-          GW_PASSWORD: "resolved-password",
+          GW_PASSWORD: "resolved-password", // pragma: allowlist secret
         },
       },
     );
@@ -104,7 +104,7 @@ describe("pairing setup code", () => {
       },
       {
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
+          OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
         },
       },
     );
@@ -221,7 +221,7 @@ describe("pairing setup code", () => {
       },
       {
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
+          OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
         },
       },
     );
@@ -275,7 +275,7 @@ describe("pairing setup code", () => {
         {
           env: {
             GW_TOKEN: "resolved-token",
-            GW_PASSWORD: "resolved-password",
+            GW_PASSWORD: "resolved-password", // pragma: allowlist secret
           },
         },
       ),
@@ -302,7 +302,7 @@ describe("pairing setup code", () => {
         },
         {
           env: {
-            GW_PASSWORD: "resolved-password",
+            GW_PASSWORD: "resolved-password", // pragma: allowlist secret
           },
         },
       ),
