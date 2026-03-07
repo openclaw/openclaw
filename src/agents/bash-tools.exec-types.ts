@@ -1,6 +1,18 @@
+import type { OpenClawConfig } from "../config/types.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+
+export type RubberBandDefaults = {
+  enabled?: boolean;
+  mode?: "block" | "alert" | "log" | "off" | "shadow";
+  thresholds?: {
+    alert?: number;
+    block?: number;
+  };
+  allowedDestinations?: string[];
+  notifyChannel?: boolean;
+};
 
 export type ExecToolDefaults = {
   host?: ExecHost;
@@ -27,6 +39,8 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  rubberband?: RubberBandDefaults;
+  cfg?: OpenClawConfig;
 };
 
 export type ExecElevatedDefaults = {
