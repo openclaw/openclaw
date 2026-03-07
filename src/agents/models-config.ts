@@ -158,11 +158,13 @@ function mergeWithExistingProviderSecrets(params: {
       mergedProviders[key] = newEntry;
       continue;
     }
+    // Fix: Only preserve existing secrets if new entry doesn't provide them.
+    // This allows users to update apiKey/baseUrl via Onboard UI.
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    if (typeof existing.apiKey === "string" && existing.apiKey && !newEntry.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (typeof existing.baseUrl === "string" && existing.baseUrl && !newEntry.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
