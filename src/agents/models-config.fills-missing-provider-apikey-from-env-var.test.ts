@@ -413,6 +413,7 @@ describe("models-config", () => {
           models: {
             providers: {
               openai: {
+                baseUrl: "https://api.openai.com/v1",
                 apiKey: "sk-plaintext-should-not-appear", // already resolved by loadConfig
                 api: "openai-completions",
                 models: [
