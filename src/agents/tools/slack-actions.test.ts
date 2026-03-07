@@ -123,6 +123,33 @@ describe("handleSlackAction", () => {
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
 
+  it("falls back to context.currentChannelId when channelId param is omitted", async () => {
+    await handleSlackAction(
+      {
+        action: "react",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      slackConfig(),
+      { currentChannelId: "C99", hasRepliedRef: { value: false } },
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C99", "123.456", "✅");
+  });
+
+  it("prefers explicit channelId over context.currentChannelId", async () => {
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C1",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      slackConfig(),
+      { currentChannelId: "C99", hasRepliedRef: { value: false } },
+    );
+    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleSlackAction(
       {

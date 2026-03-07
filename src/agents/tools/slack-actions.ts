@@ -107,12 +107,16 @@ export async function handleSlackAction(
   cfg: OpenClawConfig,
   context?: SlackActionContext,
 ): Promise<AgentToolResult<unknown>> {
-  const resolveChannelId = () =>
-    resolveSlackChannelId(
-      readStringParam(params, "channelId", {
-        required: true,
-      }),
-    );
+  const resolveChannelId = () => {
+    const explicit = readStringParam(params, "channelId");
+    const raw = explicit || context?.currentChannelId;
+    if (!raw) {
+      throw new Error(
+        "channelId is required (provide it explicitly or ensure the message context includes a channel)",
+      );
+    }
+    return resolveSlackChannelId(raw);
+  };
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
   const account = resolveSlackAccount({ cfg, accountId });
