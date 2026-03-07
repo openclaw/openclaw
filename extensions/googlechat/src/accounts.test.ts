@@ -53,4 +53,28 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.config.audience).toBe("1234567890");
     expect(resolved.config.webhookPath).toBe("/googlechat-april");
   });
+
+  it("does not inherit disabled state from accounts.default for named accounts", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            default: {
+              enabled: false,
+              audienceType: "app-url",
+              audience: "https://example.com/googlechat",
+            },
+            andy: {
+              serviceAccountFile: "/tmp/andy-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.config.enabled).toBeUndefined();
+    expect(resolved.config.audienceType).toBe("app-url");
+  });
 });
