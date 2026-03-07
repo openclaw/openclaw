@@ -51,3 +51,52 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   }
   return touched ? out : messages;
 }
+
+/**
+ * Convert unsigned `type: "thinking"` blocks into plain text blocks.
+ *
+ * Some providers require signatures for reasoning/thinking blocks on replay.
+ * When a signature is missing but textual thinking content exists, downgrade
+ * to `type: "text"` to preserve content while avoiding provider rejection.
+ *
+ * Returns the original array reference when nothing was changed.
+ */
+export function downgradeUnsignedThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!isAssistantMessageWithContent(msg)) {
+      out.push(msg);
+      continue;
+    }
+
+    let changed = false;
+    const nextContent: AssistantContentBlock[] = [];
+    for (const block of msg.content) {
+      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+        const thinking = (block as { thinking?: unknown }).thinking;
+        const thinkingSignature = (block as { thinkingSignature?: unknown }).thinkingSignature;
+        const hasThinking = typeof thinking === "string" && thinking.length > 0;
+        const hasSignature =
+          thinkingSignature != null &&
+          (typeof thinkingSignature !== "string" || thinkingSignature.length > 0);
+        if (hasThinking && !hasSignature) {
+          touched = true;
+          changed = true;
+          nextContent.push({ type: "text", text: thinking } as AssistantContentBlock);
+          continue;
+        }
+      }
+      nextContent.push(block);
+    }
+
+    if (!changed) {
+      out.push(msg);
+      continue;
+    }
+
+    out.push({ ...msg, content: nextContent });
+  }
+
+  return touched ? out : messages;
+}
