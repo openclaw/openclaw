@@ -142,7 +142,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let sessionContent: string | null = null;
     const hasCustomContent = typeof context.sessionSaveContent === "string";
 
-    if (sessionFile && !hasCustomContent) {
+    // Short-circuit transcript loading and LLM slug generation when
+    // blockSessionSave is already set — no point loading sensitive content
+    // or sending it to a model provider when saving is explicitly blocked.
+    const blockPreSet = context.blockSessionSave === true;
+
+    if (sessionFile && !hasCustomContent && !blockPreSet) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
