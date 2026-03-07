@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { ensureConfiguredAcpRouteReady } from "../acp/persistent-bindings.route.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -38,7 +39,6 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -52,10 +52,8 @@ import {
   buildGroupLabel,
   buildSenderLabel,
   buildSenderName,
-  resolveTelegramDirectPeerId,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
-  buildTelegramParentPeer,
   buildTypingThreadParams,
   resolveTelegramMediaPlaceholder,
   expandTextLinks,
@@ -66,6 +64,7 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
@@ -194,24 +193,24 @@ export const buildTelegramMessageContext = async ({
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
-  const peerId = isGroup
-    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
-    : resolveTelegramDirectPeerId({ chatId, senderId });
-  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const route = resolveAgentRoute({
-    cfg: loadConfig(),
-    channel: "telegram",
+  const freshCfg = loadConfig();
+  let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
+    cfg: freshCfg,
     accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
-    parentPeer,
+    chatId,
+    isGroup,
+    resolvedThreadId,
+    replyThreadId,
+    senderId,
+    topicAgentId: topicConfig?.agentId,
   });
+  const requiresExplicitAccountBinding = (
+    candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
+  ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
   // Fail closed for named Telegram accounts when route resolution falls back to
   // default-agent routing. This prevents cross-account DM/session contamination.
-  if (route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default") {
+  if (requiresExplicitAccountBinding(route)) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -220,14 +219,6 @@ export const buildTelegramMessageContext = async ({
     });
     return null;
   }
-  const baseSessionKey = route.sessionKey;
-  // DMs: use thread suffix for session isolation (works regardless of dmScope)
-  const threadKeys =
-    dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-      : null;
-  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
@@ -270,21 +261,6 @@ export const buildTelegramMessageContext = async ({
     );
     return null;
   }
-
-  // Compute requireMention early for preflight transcription gating
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
-    baseRequireMention,
-  );
 
   const requireTopic = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
@@ -335,6 +311,54 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
+  const ensureConfiguredBindingReady = async (): Promise<boolean> => {
+    if (!configuredBinding) {
+      return true;
+    }
+    const ensured = await ensureConfiguredAcpRouteReady({
+      cfg: freshCfg,
+      configuredBinding,
+    });
+    if (ensured.ok) {
+      logVerbose(
+        `telegram: using configured ACP binding for ${configuredBinding.spec.conversationId} -> ${configuredBindingSessionKey}`,
+      );
+      return true;
+    }
+    logVerbose(
+      `telegram: configured ACP binding unavailable for ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+    );
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "configured ACP binding unavailable",
+      target: configuredBinding.spec.conversationId,
+    });
+    return false;
+  };
+
+  const baseSessionKey = route.sessionKey;
+  // DMs: use thread suffix for session isolation (works regardless of dmScope)
+  const threadKeys =
+    dmThreadId != null
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+      : null;
+  const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+  const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
+  // Compute requireMention after access checks and final route selection.
+  const activationOverride = resolveGroupActivation({
+    chatId,
+    messageThreadId: resolvedThreadId,
+    sessionKey: sessionKey,
+    agentId: route.agentId,
+  });
+  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const requireMention = firstDefined(
+    activationOverride,
+    topicConfig?.requireMention,
+    (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
+    baseRequireMention,
+  );
 
   recordChannelActivity({
     channel: "telegram",
@@ -515,6 +539,10 @@ export const buildTelegramMessageContext = async ({
       });
       return null;
     }
+  }
+
+  if (!(await ensureConfiguredBindingReady())) {
+    return null;
   }
 
   // ACK reactions

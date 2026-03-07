@@ -14,6 +14,10 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../../acp/persistent-bindings.route.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type {
@@ -472,13 +476,13 @@ async function replyWithDiscordModelPickerProviders(params: {
   threadBindings: ThreadBindingManager;
   preferFollowUp: boolean;
 }) {
-  const data = await loadDiscordModelPickerData(params.cfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction: params.interaction,
     cfg: params.cfg,
     accountId: params.accountId,
     threadBindings: params.threadBindings,
   });
+  const data = await loadDiscordModelPickerData(params.cfg, route.agentId);
   const currentModel = resolveDiscordModelPickerCurrentModel({
     cfg: params.cfg,
     route,
@@ -633,13 +637,13 @@ async function handleDiscordModelPickerInteraction(
     return;
   }
 
-  const pickerData = await loadDiscordModelPickerData(ctx.cfg);
   const route = await resolveDiscordModelPickerRoute({
     interaction,
     cfg: ctx.cfg,
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
+  const pickerData = await loadDiscordModelPickerData(ctx.cfg, route.agentId);
   const currentModelRef = resolveDiscordModelPickerCurrentModel({
     cfg: ctx.cfg,
     route,
@@ -1542,15 +1546,42 @@ async function dispatchDiscordCommandInteraction(params: {
     parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
   });
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
-  const boundSessionKey = threadBinding?.targetSessionKey?.trim();
+  const configuredRoute =
+    threadBinding == null
+      ? resolveConfiguredAcpRoute({
+          cfg,
+          route,
+          channel: "discord",
+          accountId,
+          conversationId: channelId,
+          parentConversationId: threadParentId,
+        })
+      : null;
+  const configuredBinding = configuredRoute?.configuredBinding ?? null;
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredAcpRouteReady({
+      cfg,
+      configuredBinding,
+    });
+    if (!ensured.ok) {
+      logVerbose(
+        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+      );
+      await respond("Configured ACP binding is unavailable right now. Please try again.");
+      return;
+    }
+  }
+  const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
+  const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
   const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
   const effectiveRoute = boundSessionKey
     ? {
         ...route,
         sessionKey: boundSessionKey,
         agentId: boundAgentId ?? route.agentId,
+        ...(configuredBinding ? { matchedBy: "binding.channel" as const } : {}),
       }
-    : route;
+    : (configuredRoute?.route ?? route);
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
@@ -1614,6 +1645,7 @@ async function dispatchDiscordCommandInteraction(params: {
     // preserve the real Discord target separately.
     OriginatingChannel: "discord" as const,
     OriginatingTo: isDirectMessage ? `user:${user.id}` : `channel:${channelId}`,
+    ThreadParentId: isThreadChannel ? threadParentId : undefined,
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({

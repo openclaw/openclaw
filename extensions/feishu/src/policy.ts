@@ -2,7 +2,7 @@ import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/feishu";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
@@ -92,7 +92,7 @@ export function resolveFeishuGroupToolPolicy(
 }
 
 export function isFeishuGroupAllowed(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "allowall";
   allowFrom: Array<string | number>;
   senderId: string;
   senderIds?: Array<string | null | undefined>;
@@ -102,7 +102,7 @@ export function isFeishuGroupAllowed(params: {
   if (groupPolicy === "disabled") {
     return false;
   }
-  if (groupPolicy === "open") {
+  if (groupPolicy === "open" || groupPolicy === "allowall") {
     return true;
   }
   return resolveFeishuAllowlistMatch(params).allowed;

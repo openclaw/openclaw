@@ -4,12 +4,12 @@ import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
   WindowsSpawnResolution,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/acpx";
 import {
   applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgramCandidate,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/acpx";
 
 export type SpawnExit = {
   code: number | null;
@@ -114,6 +114,12 @@ export function resolveSpawnCommand(
   };
 }
 
+function createAbortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
 export function spawnWithResolvedCommand(
   params: {
     command: string;
@@ -140,6 +146,15 @@ export function spawnWithResolvedCommand(
 }
 
 export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<SpawnExit> {
+  // Handle callers that start waiting after the child has already exited.
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return {
+      code: child.exitCode,
+      signal: child.signalCode,
+      error: null,
+    };
+  }
+
   return await new Promise<SpawnExit>((resolve) => {
     let settled = false;
     const finish = (result: SpawnExit) => {
@@ -167,12 +182,23 @@ export async function spawnAndCollect(
     cwd: string;
   },
   options?: SpawnCommandOptions,
+  runtime?: {
+    signal?: AbortSignal;
+  },
 ): Promise<{
   stdout: string;
   stderr: string;
   code: number | null;
   error: Error | null;
 }> {
+  if (runtime?.signal?.aborted) {
+    return {
+      stdout: "",
+      stderr: "",
+      code: null,
+      error: createAbortError(),
+    };
+  }
   const child = spawnWithResolvedCommand(params, options);
   child.stdin.end();
 
@@ -185,13 +211,43 @@ export async function spawnAndCollect(
     stderr += String(chunk);
   });
 
-  const exit = await waitForExit(child);
-  return {
-    stdout,
-    stderr,
-    code: exit.code,
-    error: exit.error,
+  let abortKillTimer: NodeJS.Timeout | undefined;
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Ignore kill races when child already exited.
+    }
+    abortKillTimer = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Ignore kill races when child already exited.
+      }
+    }, 250);
+    abortKillTimer.unref?.();
   };
+  runtime?.signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    const exit = await waitForExit(child);
+    return {
+      stdout,
+      stderr,
+      code: exit.code,
+      error: aborted ? createAbortError() : exit.error,
+    };
+  } finally {
+    runtime?.signal?.removeEventListener("abort", onAbort);
+    if (abortKillTimer) {
+      clearTimeout(abortKillTimer);
+    }
+  }
 }
 
 export function resolveSpawnFailure(
