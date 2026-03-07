@@ -208,8 +208,9 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 
+type Http402Reason = "billing" | "rate_limit";
+
 const BILLING_402_HINTS = [
-  "payment required",
   "insufficient credits",
   "insufficient quota",
   "credit balance",
@@ -221,9 +222,20 @@ const BILLING_402_HINTS = [
 
 const RETRYABLE_402_RETRY_HINTS = ["try again", "retry", "temporary", "cooldown"] as const;
 const RETRYABLE_402_LIMIT_HINTS = ["usage limit", "rate limit", "organization usage"] as const;
-const RETRYABLE_402_SPEND_HINTS = ["spend limit", "spending limit"] as const;
-const RETRYABLE_402_SCOPE_HINTS = ["organization", "workspace"] as const;
-const RETRYABLE_402_SCOPE_LIMIT_HINTS = ["limit", "exceeded"] as const;
+const BILLING_402_HARD_CAP_RE =
+  /\b(?:billing hard limit|hard limit reached|maximum allowed(?:\s+(?:daily|weekly|monthly))?(?:\s+spend(?:ing)?)?\s+limit)\b/i;
+const RAW_402_MARKER_RE =
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b/i;
+const LEADING_402_WRAPPER_RE =
+  /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
+const RETRYABLE_402_PERIODIC_USAGE_OR_SPEND_RE =
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))*\s+(?:usage|spend(?:ing)?)\s+limit(?:s)?(?:\s+(?:exhausted|reached|exceeded))?\b/i;
+const RETRYABLE_402_SCOPED_SPEND_LIMIT_RE =
+  /\b(?:organization|workspace)\s+(?:spend(?:ing)?\s+)?limit(?:s)?(?:\s+(?:reached|exhausted|exceeded))?\b/i;
+const RETRYABLE_402_SCOPED_LIMIT_EXCEEDED_RE =
+  /\b(?:organization|workspace)\b[\s\S]{0,30}\blimit(?:s)?\b[\s\S]{0,30}\bexceeded\b/i;
+const RETRYABLE_402_SCOPED_BILLING_PERIOD_RE =
+  /\b(?:organization|workspace)\b[\s\S]{0,30}\blimit(?:s)?\b[\s\S]{0,30}\bbilling period\b/i;
 
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
   const lower = text.toLowerCase();
@@ -231,35 +243,54 @@ function includesAnyHint(text: string, hints: readonly string[]): boolean {
 }
 
 function hasExplicit402BillingSignal(text: string): boolean {
-  return includesAnyHint(text, BILLING_402_HINTS);
+  return includesAnyHint(text, BILLING_402_HINTS) || BILLING_402_HARD_CAP_RE.test(text);
 }
 
-function hasRetryable402UsageSignal(text: string): boolean {
+function hasRetryable402TransientSignal(text: string): boolean {
+  const lower = text.toLowerCase();
   return (
-    includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
-    includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)
+    (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
+      includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
+    RETRYABLE_402_PERIODIC_USAGE_OR_SPEND_RE.test(text) ||
+    (includesAnyHint(lower, ["daily", "weekly", "monthly"]) &&
+      lower.includes("limit") &&
+      lower.includes("reset")) ||
+    RETRYABLE_402_SCOPED_SPEND_LIMIT_RE.test(text) ||
+    RETRYABLE_402_SCOPED_LIMIT_EXCEEDED_RE.test(text) ||
+    RETRYABLE_402_SCOPED_BILLING_PERIOD_RE.test(text)
   );
 }
 
-function shouldTreat402AsRateLimit(raw: string): boolean {
-  if (hasExplicit402BillingSignal(raw)) {
-    return false;
+function normalize402Message(raw: string): string {
+  let normalized = raw.trim();
+  while (LEADING_402_WRAPPER_RE.test(normalized)) {
+    normalized = normalized.replace(LEADING_402_WRAPPER_RE, "").trim();
+  }
+  return normalized;
+}
+
+function classify402Message(message: string): Http402Reason {
+  const normalized = normalize402Message(message);
+  if (!normalized) {
+    return "billing";
   }
 
-  if (hasRetryable402UsageSignal(raw)) {
-    return true;
+  if (hasExplicit402BillingSignal(normalized)) {
+    return "billing";
   }
 
-  if (isPeriodicUsageLimitErrorMessage(raw)) {
-    return true;
+  if (hasRetryable402TransientSignal(normalized)) {
+    return "rate_limit";
   }
 
-  return (
-    includesAnyHint(raw, RETRYABLE_402_SPEND_HINTS) ||
-    includesAnyHint(raw, RETRYABLE_402_LIMIT_HINTS) ||
-    (includesAnyHint(raw, RETRYABLE_402_SCOPE_HINTS) &&
-      includesAnyHint(raw, RETRYABLE_402_SCOPE_LIMIT_HINTS))
-  );
+  return "billing";
+}
+
+function classifyFailoverReasonFromRaw402Message(raw: string): Http402Reason | null {
+  if (!RAW_402_MARKER_RE.test(raw)) {
+    return null;
+  }
+  return classify402Message(raw);
 }
 
 function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
@@ -315,12 +346,7 @@ export function classifyFailoverReasonFromHttpStatus(
   }
 
   if (status === 402) {
-    // Some providers surface temporary usage caps as HTTP 402. Keep those
-    // retryable, but let explicit insufficient-credit signals stay billing.
-    if (message && shouldTreat402AsRateLimit(message)) {
-      return "rate_limit";
-    }
-    return "billing";
+    return message ? classify402Message(message) : "billing";
   }
   if (status === 429) {
     return "rate_limit";
@@ -898,6 +924,10 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
+  }
+  const raw402Reason = classifyFailoverReasonFromRaw402Message(raw);
+  if (raw402Reason) {
+    return raw402Reason;
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return isBillingErrorMessage(raw) ? "billing" : "rate_limit";

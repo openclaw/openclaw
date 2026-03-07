@@ -18,6 +18,8 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
+  "The account associated with this API key has reached its maximum allowed monthly spending limit.";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
@@ -201,6 +203,27 @@ describe("failover-error", () => {
         message: `${"x".repeat(520)} insufficient credits. Monthly spend limit reached.`,
       }),
     ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: TOGETHER_MONTHLY_SPEND_CAP_MESSAGE,
+      }),
+    ).toBe("billing");
+  });
+
+  it("keeps raw 402 wrappers aligned with status-split temporary spend limits", () => {
+    const message = "Monthly spend limit reached. Please visit your billing settings.";
+    expect(
+      resolveFailoverReasonFromError({
+        message: `402 Payment Required: ${message}`,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message,
+      }),
+    ).toBe("rate_limit");
   });
 
   it("infers format errors from error messages", () => {

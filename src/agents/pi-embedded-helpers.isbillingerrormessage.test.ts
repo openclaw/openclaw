@@ -542,6 +542,12 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
         "Insufficient credits. Organization limit reached.",
       ),
     ).toBe("billing");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "The account associated with this API key has reached its maximum allowed monthly spending limit.",
+      ),
+    ).toBe("billing");
   });
 
   it("keeps long 402 payloads with explicit billing text as billing", () => {
@@ -553,6 +559,17 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReasonFromHttpStatus(402, undefined)).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, "")).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, "Payment required")).toBe("billing");
+  });
+
+  it("matches raw 402 wrappers and status-split payloads for the same message", () => {
+    const transientMessage = "Monthly spend limit reached. Please visit your billing settings.";
+    expect(classifyFailoverReason(`402 Payment Required: ${transientMessage}`)).toBe("rate_limit");
+    expect(classifyFailoverReasonFromHttpStatus(402, transientMessage)).toBe("rate_limit");
+
+    const billingMessage =
+      "The account associated with this API key has reached its maximum allowed monthly spending limit.";
+    expect(classifyFailoverReason(`402 Payment Required: ${billingMessage}`)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, billingMessage)).toBe("billing");
   });
 });
 
