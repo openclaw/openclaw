@@ -202,6 +202,9 @@ describe("web media loading", () => {
     expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
     expect(result.buffer.length).toBeGreaterThan(0);
     expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
+    // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
+    expect(result.buffer[0]).toBe(0xff);
+    expect(result.buffer[1]).toBe(0xd8);
   });
 
   it("includes URL + status in fetch errors", async () => {
