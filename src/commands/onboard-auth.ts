@@ -5,6 +5,8 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyAipingConfig,
+  applyAipingProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyHuggingfaceConfig,
@@ -66,6 +68,7 @@ export {
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
+  setAipingApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
   setLitellmApiKey,
@@ -91,6 +94,7 @@ export {
   ZAI_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  AIPING_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {

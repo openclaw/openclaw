@@ -38,6 +38,7 @@ describe("buildAuthChoiceOptions", () => {
       "qwen-portal",
       "xai-api-key",
       "mistral-api-key",
+      "aiping-api-key",
       "volcengine-api-key",
       "byteplus-api-key",
       "vllm",

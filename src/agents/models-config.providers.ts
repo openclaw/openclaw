@@ -176,6 +176,17 @@ const VLLM_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const AIPING_BASE_URL = "https://aiping.cn/api/v1";
+export const AIPING_DEFAULT_MODEL_ID = "DeepSeek-V3.2";
+const AIPING_DEFAULT_CONTEXT_WINDOW = 131072;
+const AIPING_DEFAULT_MAX_TOKENS = 8192;
+const AIPING_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -868,6 +879,33 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export function buildAipingProvider(): ProviderConfig {
+  return {
+    baseUrl: AIPING_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: AIPING_DEFAULT_MODEL_ID,
+        name: "DeepSeek V3.2",
+        reasoning: false,
+        input: ["text"],
+        cost: AIPING_DEFAULT_COST,
+        contextWindow: AIPING_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AIPING_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "Auto",
+        name: "AIPing Auto",
+        reasoning: false,
+        input: ["text"],
+        cost: AIPING_DEFAULT_COST,
+        contextWindow: AIPING_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AIPING_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildNvidiaProvider(): ProviderConfig {
   return {
     baseUrl: NVIDIA_BASE_URL,
@@ -1113,6 +1151,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const aipingKey =
+    resolveEnvApiKeyVarName("aiping") ??
+    resolveApiKeyFromProfiles({ provider: "aiping", store: authStore });
+  if (aipingKey) {
+    providers.aiping = { ...buildAipingProvider(), apiKey: aipingKey };
   }
 
   const openrouterKey =
