@@ -164,4 +164,27 @@ describe("executeSendAction", () => {
       }),
     );
   });
+
+  it("suppresses outbound message when content is SILENT_REPLY_TOKEN", async () => {
+    const result = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: {},
+        dryRun: false,
+      },
+      to: "user:123",
+      message: "NO_REPLY",
+    });
+
+    expect(result.handledBy).toBe("silent");
+    expect(result.sendResult?.channel).toBe("telegram");
+    expect(result.sendResult?.to).toBe("user:123");
+    expect(result.sendResult?.via).toBe("direct");
+    expect(result.sendResult?.mediaUrl).toBeNull();
+    expect(result.sendResult?.delivered).toBe(false);
+    expect(result.sendResult?.discarded).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
 });
