@@ -317,6 +317,28 @@ export function resolveConfiguredModelRef(params: {
       return resolved.ref;
     }
   }
+  // Before falling back to the hardcoded default, check if the default provider
+  // is actually available. If it isn't but other providers are configured, prefer
+  // the first configured provider's first model to avoid reporting a stale default
+  // from a removed provider. (See #38880)
+  const configuredProviders = params.cfg.models?.providers;
+  if (configuredProviders && typeof configuredProviders === "object") {
+    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
+    if (!hasDefaultProvider) {
+      const availableProvider = Object.entries(configuredProviders).find(
+        ([, providerCfg]) =>
+          providerCfg &&
+          Array.isArray(providerCfg.models) &&
+          providerCfg.models.length > 0 &&
+          providerCfg.models[0]?.id,
+      );
+      if (availableProvider) {
+        const [providerName, providerCfg] = availableProvider;
+        const firstModel = providerCfg.models[0];
+        return { provider: providerName, model: firstModel.id };
+      }
+    }
+  }
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 

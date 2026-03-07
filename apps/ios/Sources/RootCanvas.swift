@@ -66,6 +66,23 @@ struct RootCanvas: View {
         return .none
     }
 
+    static func shouldPresentQuickSetup(
+        quickSetupDismissed: Bool,
+        showOnboarding: Bool,
+        hasPresentedSheet: Bool,
+        gatewayConnected: Bool,
+        hasExistingGatewayConfig: Bool,
+        discoveredGatewayCount: Int) -> Bool
+    {
+        guard !quickSetupDismissed else { return false }
+        guard !showOnboarding else { return false }
+        guard !hasPresentedSheet else { return false }
+        guard !gatewayConnected else { return false }
+        // If a gateway target is already configured (manual or last-known), skip quick setup.
+        guard !hasExistingGatewayConfig else { return false }
+        return discoveredGatewayCount > 0
+    }
+
     var body: some View {
         ZStack {
             CanvasContent(
@@ -222,6 +239,10 @@ struct RootCanvas: View {
     private func hasExistingGatewayConfig() -> Bool {
         if !GatewaySettingsStore.loadGatewayProfiles().isEmpty { return true }
         if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+
+        let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preferredStableID.isEmpty { return true }
+
         let manualHost = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return self.manualGatewayEnabled && !manualHost.isEmpty
     }
@@ -241,11 +262,14 @@ struct RootCanvas: View {
     }
 
     private func maybeShowQuickSetup() {
-        guard !self.quickSetupDismissed else { return }
-        guard !self.showOnboarding else { return }
-        guard self.presentedSheet == nil else { return }
-        guard self.appModel.gatewayServerName == nil else { return }
-        guard !self.gatewayController.gateways.isEmpty else { return }
+        let shouldPresent = Self.shouldPresentQuickSetup(
+            quickSetupDismissed: self.quickSetupDismissed,
+            showOnboarding: self.showOnboarding,
+            hasPresentedSheet: self.presentedSheet != nil,
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            discoveredGatewayCount: self.gatewayController.gateways.count)
+        guard shouldPresent else { return }
         self.presentedSheet = .quickSetup
     }
 }
@@ -266,9 +290,10 @@ private struct CanvasContent: View {
     var openSettings: () -> Void
 
     private var brightenButtons: Bool { self.systemColorScheme == .light }
+    private var talkActive: Bool { self.appModel.talkMode.isEnabled || self.talkEnabled }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             ScreenTab()
 
             VStack(spacing: 10) {
@@ -343,7 +368,7 @@ private struct CanvasContent: View {
             .padding(.trailing, 10)
         }
         .overlay(alignment: .center) {
-            if self.appModel.talkMode.isEnabled {
+            if self.talkActive {
                 TalkOrbOverlay()
                     .transition(.opacity)
             }
@@ -367,6 +392,12 @@ private struct CanvasContent: View {
             },
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.openSettings() })
+        .onAppear {
+            // Keep the runtime talk state aligned with persisted toggle state on cold launch.
+            if self.talkEnabled != self.appModel.talkMode.isEnabled {
+                self.appModel.setTalkEnabled(self.talkEnabled)
+            }
+        }
     }
 
     private var activeGatewayProfileName: String {

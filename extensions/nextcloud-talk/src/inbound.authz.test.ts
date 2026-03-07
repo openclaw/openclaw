@@ -45,7 +45,7 @@ describe("nextcloud-talk inbound authz", () => {
       enabled: true,
       baseUrl: "",
       secret: "",
-      secretSource: "none",
+      secretSource: "none", // pragma: allowlist secret
       config: {
         dmPolicy: "pairing",
         allowFrom: [],

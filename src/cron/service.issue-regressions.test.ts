@@ -580,6 +580,7 @@ describe("Cron issue regressions", () => {
     const runRetryScenario = async (params: {
       id: string;
       deleteAfterRun: boolean;
+      firstError?: string;
     }): Promise<{
       state: ReturnType<typeof createCronServiceState>;
       runIsolatedAgentJob: ReturnType<typeof vi.fn>;
@@ -600,7 +601,10 @@ describe("Cron issue regressions", () => {
       let now = scheduledAt;
       const runIsolatedAgentJob = vi
         .fn()
-        .mockResolvedValueOnce({ status: "error", error: "429 rate limit exceeded" })
+        .mockResolvedValueOnce({
+          status: "error",
+          error: params.firstError ?? "429 rate limit exceeded",
+        })
         .mockResolvedValueOnce({ status: "ok", summary: "done" });
       const state = createCronServiceState({
         cronEnabled: true,
@@ -644,6 +648,19 @@ describe("Cron issue regressions", () => {
     );
     expect(deletedJob).toBeUndefined();
     expect(deleteResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+
+    const overloadedResult = await runRetryScenario({
+      id: "oneshot-overloaded-retry",
+      deleteAfterRun: false,
+      firstError:
+        "All models failed (2): anthropic/claude-3-5-sonnet: LLM error overloaded_error: overloaded (overloaded); openai/gpt-5.3-codex: LLM error overloaded_error: overloaded (overloaded)",
+    });
+    const overloadedJob = overloadedResult.state.store?.jobs.find(
+      (j) => j.id === "oneshot-overloaded-retry",
+    );
+    expect(overloadedJob).toBeDefined();
+    expect(overloadedJob!.state.lastStatus).toBe("ok");
+    expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("#24355: one-shot job disabled after max transient retries", async () => {
@@ -733,6 +750,54 @@ describe("Cron issue regressions", () => {
       }
     }
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(3);
+  });
+
+  it("#24355: one-shot job retries status-only 529 failures when retryOn only includes overloaded", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-overloaded-529-only",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", error: "FailoverError: HTTP 529" })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["overloaded"] },
+      },
+    });
+
+    await onTimer(state);
+    const jobAfterRetry = state.store?.jobs.find((j) => j.id === "oneshot-overloaded-529-only");
+    expect(jobAfterRetry).toBeDefined();
+    expect(jobAfterRetry!.enabled).toBe(true);
+    expect(jobAfterRetry!.state.lastStatus).toBe("error");
+    expect(jobAfterRetry!.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+    now = (jobAfterRetry!.state.nextRunAtMs ?? now) + 1;
+    await onTimer(state);
+
+    const finishedJob = state.store?.jobs.find((j) => j.id === "oneshot-overloaded-529-only");
+    expect(finishedJob).toBeDefined();
+    expect(finishedJob!.state.lastStatus).toBe("ok");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("#24355: one-shot job disabled immediately on permanent error", async () => {

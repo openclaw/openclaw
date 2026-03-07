@@ -23,6 +23,16 @@ describe("resolveFinalAssistantText", () => {
       }),
     ).toBe("All done");
   });
+
+  it("falls back to formatted error text when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
+      }),
+    ).toContain("HTTP 401");
+  });
 });
 
 describe("tui slash commands", () => {

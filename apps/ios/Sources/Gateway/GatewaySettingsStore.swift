@@ -44,7 +44,7 @@ enum GatewaySettingsStore {
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
     private static let lastGatewayConnectionAccount = "lastConnection"
-    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey."
+    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
@@ -805,7 +805,7 @@ enum GatewayDiagnostics {
         guard let url = fileURL else { return }
         queue.async {
             self.truncateLogIfNeeded(url: url)
-            let timestamp = self.isoFormatter.string(from: Date())
+            let timestamp = self.isoTimestamp()
             let line = "[\(timestamp)] gateway diagnostics started\n"
             if let data = line.data(using: .utf8) {
                 self.appendToLog(url: url, data: data)
@@ -815,7 +815,7 @@ enum GatewayDiagnostics {
     }
 
     static func log(_ message: String) {
-        let timestamp = self.isoFormatter.string(from: Date())
+        let timestamp = self.isoTimestamp()
         let line = "[\(timestamp)] \(message)"
         logger.info("\(line, privacy: .public)")
 

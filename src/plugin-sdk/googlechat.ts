@@ -14,6 +14,11 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
+export {
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryUserEntriesFromAllowFrom,
+} from "../channels/plugins/directory-config-helpers.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { resolveGoogleChatGroupRequireMention } from "../channels/plugins/group-mentions.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
@@ -30,8 +35,10 @@ export {
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
   ChannelAccountSnapshot,
   ChannelMessageActionAdapter,
@@ -63,6 +70,7 @@ export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { extractToolSend } from "./tool-send.js";
 export { resolveWebhookPath } from "./webhook-path.js";
 export type { WebhookInFlightLimiter } from "./webhook-request-guards.js";

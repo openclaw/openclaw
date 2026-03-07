@@ -42,9 +42,29 @@ export const ACPX_BACKEND_ID = "acpx";
 
 const ACPX_RUNTIME_HANDLE_PREFIX = "acpx:v1:";
 const DEFAULT_AGENT_FALLBACK = "codex";
+const ACPX_EXIT_CODE_PERMISSION_DENIED = 5;
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
+
+function formatPermissionModeGuidance(): string {
+  return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
+}
+
+function formatAcpxExitMessage(params: {
+  stderr: string;
+  exitCode: number | null | undefined;
+}): string {
+  const stderr = params.stderr.trim();
+  if (params.exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return [
+      stderr || "Permission denied by ACP runtime (acpx).",
+      "ACPX blocked a write/exec permission request in a non-interactive session.",
+      formatPermissionModeGuidance(),
+    ].join(" ");
+  }
+  return stderr || `acpx exited with code ${params.exitCode ?? "unknown"}`;
+}
 
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
@@ -333,7 +353,10 @@ export class AcpxRuntime implements AcpRuntime {
       if ((exit.code ?? 0) !== 0 && !sawError) {
         yield {
           type: "error",
-          message: stderr.trim() || `acpx exited with code ${exit.code ?? "unknown"}`,
+          message: formatAcpxExitMessage({
+            stderr,
+            exitCode: exit.code,
+          }),
         };
         return;
       }
@@ -639,7 +662,10 @@ export class AcpxRuntime implements AcpRuntime {
     if ((result.code ?? 0) !== 0) {
       throw new AcpRuntimeError(
         params.fallbackCode,
-        result.stderr.trim() || `acpx exited with code ${result.code ?? "unknown"}`,
+        formatAcpxExitMessage({
+          stderr: result.stderr,
+          exitCode: result.code,
+        }),
       );
     }
     return events;

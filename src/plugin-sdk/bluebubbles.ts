@@ -45,6 +45,7 @@ export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
 export type {
   BaseProbeResult,
@@ -61,6 +62,7 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export type { ParsedChatTarget } from "../imessage/target-parsing-helpers.js";
@@ -85,7 +87,12 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { isAllowedParsedChatSender } from "./allow-from.js";
 export { readBooleanParam } from "./boolean-param.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
-export { buildProbeChannelStatusSummary } from "./status-helpers.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { resolveRequestUrl } from "./request-url.js";
+export {
+  buildComputedAccountStatusSnapshot,
+  buildProbeChannelStatusSummary,
+} from "./status-helpers.js";
 export { extractToolSend } from "./tool-send.js";
 export { normalizeWebhookPath } from "./webhook-path.js";
 export {
