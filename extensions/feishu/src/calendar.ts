@@ -34,7 +34,7 @@ export async function createCalendarEvent(params: {
   const { cfg, accountId, event, log } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured || !account.appId) {
-    return { error: "飞书账号未配置" };
+    return { error: "Feishu account not configured" };
   }
 
   const client = createFeishuClient(account);
@@ -60,18 +60,18 @@ export async function createCalendarEvent(params: {
         );
         if (permErr) return { error: permErr };
         return {
-          error: `获取日历失败: ${calResponse.msg || `code ${calResponse.code}`}`,
+          error: `Failed to get calendar: ${calResponse.msg || `code ${calResponse.code}`}`,
         };
       }
 
       calendarId = calResponse.data?.calendars?.[0]?.calendar?.calendar_id;
       if (!calendarId) {
-        return { error: "无法获取机器人日历 ID" };
+        return { error: "Cannot get bot calendar ID" };
       }
     } catch (err) {
       const permErr = checkPermissionError(err, account.appId, "calendar:calendar", account.domain);
       if (permErr) return { error: permErr };
-      return { error: `获取日历失败: ${String(err)}` };
+      return { error: `Failed to get calendar: ${String(err)}` };
     }
   }
 
@@ -103,20 +103,20 @@ export async function createCalendarEvent(params: {
       );
       if (permErr) return { error: permErr };
       return {
-        error: `创建日程失败: ${createResponse.msg || `code ${createResponse.code}`}`,
+        error: `Failed to create event: ${createResponse.msg || `code ${createResponse.code}`}`,
       };
     }
 
     eventId = createResponse.data?.event?.event_id ?? "";
     if (!eventId) {
-      return { error: "创建日程成功但未返回 event_id" };
+      return { error: "Event created but no event_id returned" };
     }
 
     log?.(`feishu: created calendar event ${eventId}`);
   } catch (err) {
     const permErr = checkPermissionError(err, account.appId, "calendar:calendar", account.domain);
     if (permErr) return { error: permErr };
-    return { error: `创建日程失败: ${String(err)}` };
+    return { error: `Failed to create event: ${String(err)}` };
   }
 
   // Step 3: Add attendees if provided

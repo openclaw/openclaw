@@ -113,7 +113,7 @@ export async function syncGroupsFromAPI(params: {
   const { cfg, accountId, log } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured || !account.appId) {
-    return { error: "飞书账号未配置 appId/appSecret" };
+    return { error: "Feishu account not configured (missing appId/appSecret)" };
   }
 
   initDb();
@@ -153,7 +153,7 @@ export async function syncGroupsFromAPI(params: {
           account.domain,
         );
         if (permErr) return { error: permErr };
-        return { error: `飞书 API 错误: ${response.msg || `code ${response.code}`}` };
+        return { error: `Feishu API error: ${response.msg || `code ${response.code}`}` };
       }
 
       const items = response.data?.items ?? [];
@@ -174,7 +174,7 @@ export async function syncGroupsFromAPI(params: {
   } catch (err) {
     const permErr = checkPermissionError(err, account.appId, "im:chat:readonly", account.domain);
     if (permErr) return { error: permErr };
-    return { error: `同步群列表失败: ${String(err)}` };
+    return { error: `Group sync failed: ${String(err)}` };
   }
 }
 
@@ -197,4 +197,48 @@ export async function listGroupsOrSync(params: {
   }
 
   return { results: listGroupsLocal() };
+}
+
+/**
+ * Search groups by keyword with auto-sync.
+ * If no match found after sync, returns a hint to add the bot to the group.
+ */
+export async function searchGroupsOrSync(params: {
+  keyword: string;
+  cfg: ClawdbotConfig;
+  accountId?: string;
+  log?: (msg: string) => void;
+}): Promise<{ results: FeishuGroup[] } | { error: string }> {
+  const { keyword, cfg, accountId, log } = params;
+
+  // First, try local search
+  let results = searchGroupsLocal(keyword);
+  if (results.length > 0) {
+    return { results };
+  }
+
+  // Sync from API and retry
+  log?.(`feishu: group "${keyword}" not found locally, syncing from API...`);
+  const syncResult = await syncGroupsFromAPI({ cfg, accountId, log });
+  if ("error" in syncResult) {
+    return { error: syncResult.error };
+  }
+
+  results = searchGroupsLocal(keyword);
+  if (results.length > 0) {
+    return { results };
+  }
+
+  // Still not found — bot is not in any matching group
+  const allGroups = listGroupsLocal();
+  const groupList =
+    allGroups.length > 0
+      ? `Bot is currently in these groups:\n${allGroups.map((g) => `  - ${g.name} (${g.chat_id})`).join("\n")}`
+      : "Bot is not in any group.";
+
+  return {
+    error:
+      `No group matching "${keyword}" found. The bot can only send messages to groups it has joined.\n` +
+      `Please add the bot to the target group first, then retry.\n\n${groupList}`,
+  };
 }

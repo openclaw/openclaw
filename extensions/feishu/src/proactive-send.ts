@@ -35,7 +35,7 @@ export async function sendTextMessage(params: {
   const { cfg, accountId, receiveId, receiveIdType, text, log } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured || !account.appId) {
-    return { error: "飞书账号未配置" };
+    return { error: "Feishu account not configured" };
   }
 
   const client = createFeishuClient(account);
@@ -84,7 +84,7 @@ export async function sendFileMessage(params: {
   }
 
   if (!fs.existsSync(filePath)) {
-    return { error: `文件不存在: ${filePath}` };
+    return { error: `File not found: ${filePath}` };
   }
 
   const client = createFeishuClient(account);
@@ -109,12 +109,14 @@ export async function sendFileMessage(params: {
         account.domain,
       );
       if (permErr) return { error: permErr };
-      return { error: `文件上传失败: ${uploadResponse.msg || `code ${uploadResponse.code}`}` };
+      return {
+        error: `File upload failed: ${uploadResponse.msg || `code ${uploadResponse.code}`}`,
+      };
     }
 
     const fileKey = uploadResponse.data?.file_key;
     if (!fileKey) {
-      return { error: "文件上传成功但未返回 file_key" };
+      return { error: "File uploaded but no file_key returned" };
     }
 
     log?.(`feishu: uploaded file "${fileName}" → file_key=${fileKey}`);
@@ -206,9 +208,9 @@ function handleSendError(err: unknown, appId: string, domain?: FeishuDomain): { 
     const msg = (err as { msg?: string }).msg;
     const code = (err as { code?: number }).code;
     if (msg || code) {
-      return { error: `发送消息失败: ${msg || `code ${code}`}` };
+      return { error: `Send failed: ${msg || `code ${code}`}` };
     }
   }
 
-  return { error: `发送消息失败: ${String(err)}` };
+  return { error: `Send failed: ${String(err)}` };
 }

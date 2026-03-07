@@ -136,7 +136,7 @@ export async function syncContactsFromAPI(params: {
   const { cfg, accountId, log } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured || !account.appId) {
-    return { error: "飞书账号未配置 appId/appSecret" };
+    return { error: "Feishu account not configured (missing appId/appSecret)" };
   }
 
   initDb();
@@ -180,7 +180,7 @@ export async function syncContactsFromAPI(params: {
           account.domain,
         );
         if (permErr) return { error: permErr };
-        return { error: `飞书 API 错误: ${response.msg || `code ${response.code}`}` };
+        return { error: `Feishu API error: ${response.msg || `code ${response.code}`}` };
       }
 
       const items = response.data?.items ?? [];
@@ -208,7 +208,7 @@ export async function syncContactsFromAPI(params: {
       account.domain,
     );
     if (permErr) return { error: permErr };
-    return { error: `同步联系人失败: ${String(err)}` };
+    return { error: `Contact sync failed: ${String(err)}` };
   }
 }
 
