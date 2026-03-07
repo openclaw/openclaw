@@ -17,7 +17,7 @@ import Testing
             bind: nil,
             token: token,
             password: password)
-    }
+    } // pragma: allowlist secret
 
     private func makeDefaults() -> UserDefaults {
         let suiteName = "GatewayEndpointStoreTests.\(UUID().uuidString)"
