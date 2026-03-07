@@ -659,6 +659,20 @@ export function buildAfterTurnLegacyCompactionParams(params: {
   workspaceDir: string;
   agentDir: string;
 }): Partial<CompactEmbeddedPiSessionParams> {
+  // Resolve compaction model: use config override or fall back to primary model
+  const compactionModelOverride = params.attempt.config?.agents?.defaults?.compaction?.model;
+  let compactionProvider = params.attempt.provider;
+  let compactionModelId = params.attempt.modelId;
+  if (compactionModelOverride) {
+    const slashIdx = compactionModelOverride.indexOf("/");
+    if (slashIdx > 0) {
+      compactionProvider = compactionModelOverride.slice(0, slashIdx);
+      compactionModelId = compactionModelOverride.slice(slashIdx + 1);
+    } else {
+      compactionModelId = compactionModelOverride;
+    }
+  }
+
   return {
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
@@ -670,8 +684,8 @@ export function buildAfterTurnLegacyCompactionParams(params: {
     config: params.attempt.config,
     skillsSnapshot: params.attempt.skillsSnapshot,
     senderIsOwner: params.attempt.senderIsOwner,
-    provider: params.attempt.provider,
-    model: params.attempt.modelId,
+    provider: compactionProvider,
+    model: compactionModelId,
     thinkLevel: params.attempt.thinkLevel,
     reasoningLevel: params.attempt.reasoningLevel,
     bashElevated: params.attempt.bashElevated,
