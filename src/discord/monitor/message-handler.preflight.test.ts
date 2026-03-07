@@ -168,6 +168,71 @@ function createMessage(params: {
   } as unknown as import("@buape/carbon").Message;
 }
 
+async function runThreadBoundPreflight(params: {
+  threadId: string;
+  parentId: string;
+  message: import("@buape/carbon").Message;
+  threadBinding: import("../../infra/outbound/session-binding-service.js").SessionBindingRecord;
+  discordConfig: DiscordConfig;
+  registerBindingAdapter?: boolean;
+}) {
+  if (params.registerBindingAdapter) {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === params.threadId ? params.threadBinding : null,
+    });
+  }
+
+  const client = createThreadClient({
+    threadId: params.threadId,
+    parentId: params.parentId,
+  });
+
+  return preflightDiscordMessage({
+    ...createPreflightArgs({
+      cfg: DEFAULT_CFG,
+      discordConfig: params.discordConfig,
+      data: createGuildEvent({
+        channelId: params.threadId,
+        guildId: "guild-1",
+        author: params.message.author,
+        message: params.message,
+      }),
+      client,
+    }),
+    threadBindings: {
+      getByThreadId: (id: string) => (id === params.threadId ? params.threadBinding : undefined),
+    } as import("./thread-bindings.js").ThreadBindingManager,
+  });
+}
+
+async function runGuildPreflight(params: {
+  channelId: string;
+  guildId: string;
+  message: import("@buape/carbon").Message;
+  discordConfig: DiscordConfig;
+  cfg?: import("../../config/config.js").OpenClawConfig;
+  guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
+}) {
+  return preflightDiscordMessage({
+    ...createPreflightArgs({
+      cfg: params.cfg ?? DEFAULT_CFG,
+      discordConfig: params.discordConfig,
+      data: createGuildEvent({
+        channelId: params.channelId,
+        guildId: params.guildId,
+        author: params.message.author,
+        message: params.message,
+      }),
+      client: createGuildTextClient(params.channelId),
+    }),
+    guildEntries: params.guildEntries,
+  });
+}
+
 describe("resolvePreflightMentionRequirement", () => {
   it("requires mention when config requires mention and thread is not bound", () => {
     expect(
@@ -210,7 +275,6 @@ describe("preflightDiscordMessage", () => {
     });
     const threadId = "thread-system-1";
     const parentId = "channel-parent-1";
-    const client = createThreadClient({ threadId, parentId });
     const message = createMessage({
       id: "m-system-1",
       channelId: threadId,
@@ -223,23 +287,14 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
-        discordConfig: {
-          allowBots: true,
-        } as DiscordConfig,
-        data: createGuildEvent({
-          channelId: threadId,
-          guildId: "guild-1",
-          author: message.author,
-          message,
-        }),
-        client,
-      }),
-      threadBindings: {
-        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
-      } as import("./thread-bindings.js").ThreadBindingManager,
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      message,
+      threadBinding,
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
     });
 
     expect(result).toBeNull();
@@ -252,7 +307,6 @@ describe("preflightDiscordMessage", () => {
     });
     const threadId = "thread-bot-regular-1";
     const parentId = "channel-parent-regular-1";
-    const client = createThreadClient({ threadId, parentId });
     const message = createMessage({
       id: "m-bot-regular-1",
       channelId: threadId,
@@ -264,30 +318,15 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: (ref) => (ref.conversationId === threadId ? threadBinding : null),
-    });
-
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
-        discordConfig: {
-          allowBots: true,
-        } as DiscordConfig,
-        data: createGuildEvent({
-          channelId: threadId,
-          guildId: "guild-1",
-          author: message.author,
-          message,
-        }),
-        client,
-      }),
-      threadBindings: {
-        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
-      } as import("./thread-bindings.js").ThreadBindingManager,
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      message,
+      threadBinding,
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+      registerBindingAdapter: true,
     });
 
     expect(result).not.toBeNull();
@@ -343,7 +382,6 @@ describe("preflightDiscordMessage", () => {
   it("drops bot messages without mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-mentions-off";
     const guildId = "guild-bot-mentions-off";
-    const client = createGuildTextClient(channelId);
     const message = createMessage({
       id: "m-bot-mentions-off",
       channelId,
@@ -355,20 +393,13 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
-        discordConfig: {
-          allowBots: "mentions",
-        } as DiscordConfig,
-        data: createGuildEvent({
-          channelId,
-          guildId,
-          author: message.author,
-          message,
-        }),
-        client,
-      }),
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: "mentions",
+      } as DiscordConfig,
     });
 
     expect(result).toBeNull();
@@ -377,7 +408,6 @@ describe("preflightDiscordMessage", () => {
   it("allows bot messages with explicit mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-mentions-on";
     const guildId = "guild-bot-mentions-on";
-    const client = createGuildTextClient(channelId);
     const message = createMessage({
       id: "m-bot-mentions-on",
       channelId,
@@ -390,20 +420,13 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
-        discordConfig: {
-          allowBots: "mentions",
-        } as DiscordConfig,
-        data: createGuildEvent({
-          channelId,
-          guildId,
-          author: message.author,
-          message,
-        }),
-        client,
-      }),
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: "mentions",
+      } as DiscordConfig,
     });
 
     expect(result).not.toBeNull();
@@ -412,7 +435,6 @@ describe("preflightDiscordMessage", () => {
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-1";
     const guildId = "guild-other-mention-1";
-    const client = createGuildTextClient(channelId);
     const message = createMessage({
       id: "m-other-mention-1",
       channelId,
@@ -425,18 +447,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
-        discordConfig: {} as DiscordConfig,
-        data: createGuildEvent({
-          channelId,
-          guildId,
-          author: message.author,
-          message,
-        }),
-        client,
-      }),
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
       guildEntries: {
         [guildId]: {
           requireMention: false,
@@ -451,7 +466,6 @@ describe("preflightDiscordMessage", () => {
   it("does not drop @everyone messages when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-everyone";
     const guildId = "guild-other-mention-everyone";
-    const client = createGuildTextClient(channelId);
     const message = createMessage({
       id: "m-other-mention-everyone",
       channelId,
@@ -464,18 +478,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
-        discordConfig: {} as DiscordConfig,
-        data: createGuildEvent({
-          channelId,
-          guildId,
-          author: message.author,
-          message,
-        }),
-        client,
-      }),
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
       guildEntries: {
         [guildId]: {
           requireMention: false,
