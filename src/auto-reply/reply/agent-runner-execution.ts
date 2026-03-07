@@ -22,6 +22,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -48,6 +49,8 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const log = createSubsystemLogger("agent-runner");
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -180,7 +183,7 @@ export async function runAgentTurnWithFallback(params: {
       path === "error"
         ? "Self-escalation triggered (from error path)"
         : "Self-escalation triggered";
-    logVerbose(`${label}: reason="${pending.reason}" → ${resolved.provider}/${resolved.model}`);
+    log.info(`${label}: reason="${pending.reason}" → ${resolved.provider}/${resolved.model}`);
     params.followupRun.run.provider = resolved.provider;
     params.followupRun.run.model = resolved.model;
     didNotifyAgentRunStart = false;

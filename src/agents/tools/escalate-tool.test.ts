@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeProviderId } from "../model-selection.js";
 import { createEscalateTool, pendingEscalations, resolveEscalationModel } from "./escalate-tool.js";
 
 afterEach(() => {
@@ -175,5 +176,104 @@ describe("resolveEscalationModel", () => {
       model: "claude-opus-4-6",
       ref: "amazon-bedrock/claude-opus-4-6",
     });
+  });
+});
+
+describe("escalation identity check (tool suppression for escalation model)", () => {
+  // Mirrors the condition in attempt.ts that prevents the escalation target
+  // from receiving the escalate tool (which would cause infinite loops).
+  const isEscalationTarget = (provider: string, modelId: string, escalationRef: string) =>
+    `${normalizeProviderId(provider)}/${modelId}` === escalationRef;
+
+  it("skips escalate tool when current model matches escalation target", () => {
+    const cfg = {
+      agents: { defaults: { model: { escalation: "bedrock/claude-opus-4-6" } } },
+    } as OpenClawConfig;
+
+    const resolved = resolveEscalationModel(cfg)!;
+    expect(isEscalationTarget("amazon-bedrock", "claude-opus-4-6", resolved.ref)).toBe(true);
+  });
+
+  it("skips escalate tool when provider alias normalizes to match", () => {
+    const cfg = {
+      agents: { defaults: { model: { escalation: "bedrock/claude-opus-4-6" } } },
+    } as OpenClawConfig;
+
+    const resolved = resolveEscalationModel(cfg)!;
+    // "bedrock" normalizes to "amazon-bedrock"
+    expect(isEscalationTarget("bedrock", "claude-opus-4-6", resolved.ref)).toBe(true);
+  });
+
+  it("registers escalate tool when current model differs from escalation target", () => {
+    const cfg = {
+      agents: { defaults: { model: { escalation: "bedrock/claude-opus-4-6" } } },
+    } as OpenClawConfig;
+
+    const resolved = resolveEscalationModel(cfg)!;
+    expect(isEscalationTarget("amazon-bedrock", "claude-haiku-4-5", resolved.ref)).toBe(false);
+  });
+});
+
+describe("escalation map consumption (tryHandleEscalation behavior)", () => {
+  it("entry is consumed on read (simulating success path)", async () => {
+    const tool = createEscalateTool({ sessionKey: "session-a" });
+    await tool.execute("call-1", { reason: "complex task" });
+
+    expect(pendingEscalations.has("session-a")).toBe(true);
+
+    // Simulate what tryHandleEscalation does: read + delete
+    const pending = pendingEscalations.get("session-a");
+    pendingEscalations.delete("session-a");
+
+    expect(pending?.reason).toBe("complex task");
+    expect(pendingEscalations.has("session-a")).toBe(false);
+  });
+
+  it("entry is consumed on error path the same way", async () => {
+    const tool = createEscalateTool({ sessionKey: "session-err" });
+    await tool.execute("call-1", { reason: "needs analysis" });
+
+    // Error path also reads + deletes the entry
+    const pending = pendingEscalations.get("session-err");
+    pendingEscalations.delete("session-err");
+
+    expect(pending?.reason).toBe("needs analysis");
+    expect(pendingEscalations.has("session-err")).toBe(false);
+  });
+
+  it("concurrent sessions do not collide", async () => {
+    const toolA = createEscalateTool({ sessionKey: "session-a" });
+    const toolB = createEscalateTool({ sessionKey: "session-b" });
+
+    await toolA.execute("call-1", { reason: "reason A" });
+    await toolB.execute("call-2", { reason: "reason B" });
+
+    expect(pendingEscalations.size).toBe(2);
+
+    // Consuming one does not affect the other
+    pendingEscalations.delete("session-a");
+    expect(pendingEscalations.has("session-b")).toBe(true);
+    expect(pendingEscalations.get("session-b")?.reason).toBe("reason B");
+  });
+});
+
+describe("escalation cleanup (post-loop safety)", () => {
+  it("stale entry is cleaned up by key-based delete", async () => {
+    const tool = createEscalateTool({ sessionKey: "stale-session" });
+    await tool.execute("call-1", { reason: "will not be consumed normally" });
+
+    expect(pendingEscalations.has("stale-session")).toBe(true);
+
+    // Simulate the post-loop defensive cleanup in agent-runner-execution.ts
+    pendingEscalations.delete("stale-session");
+    expect(pendingEscalations.has("stale-session")).toBe(false);
+  });
+
+  it("delete on non-existent key is a no-op", () => {
+    // Ensures the post-loop cleanup is safe even when tryHandleEscalation
+    // already consumed the entry (the normal happy path).
+    expect(pendingEscalations.has("never-set")).toBe(false);
+    pendingEscalations.delete("never-set");
+    expect(pendingEscalations.size).toBe(0);
   });
 });
