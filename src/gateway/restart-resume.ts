@@ -1,18 +1,23 @@
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import { type RestartSentinel, readRestartSentinel } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearInflightAgentRuns,
   ensureInflightAgentRunLifecycleCleanerStarted,
+  isInflightAgentRunRecoveryEnabled,
   listInflightAgentRuns,
-  markInflightAgentRunResumed,
+  markInflightAgentRunsResumed,
 } from "./inflight-agent-runs.js";
 
 const DEFAULT_RESUME_PROMPT =
   "Continue where you left off. The OpenClaw gateway restarted while you were running.";
 const MAX_RESUME_ATTEMPTS = 10;
+// Skip records older than 10 minutes — stale runs are unlikely to produce
+// useful continuations after such a long gap.
+const MAX_AGE_MS = 10 * 60 * 1000;
 
 function isRestartEligibleSentinel(sentinel: RestartSentinel | null | undefined): boolean {
   const payload = sentinel?.payload;
@@ -47,8 +52,7 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   getActiveRunCount?: () => number;
   runAgent?: typeof agentCommandFromIngress;
 }): Promise<{ resumed: number; considered: number; skipped: boolean }> {
-  const enabled = params.cfg.gateway?.restartRecovery?.resumeInflightAgentRuns === true;
-  if (!enabled) {
+  if (!isInflightAgentRunRecoveryEnabled(params.cfg)) {
     return { resumed: 0, considered: 0, skipped: true };
   }
 
@@ -70,8 +74,9 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
   ensureInflightAgentRunLifecycleCleanerStarted(env);
   const inflight = await listInflightAgentRuns(env);
   const run = params.runAgent ?? agentCommandFromIngress;
+  const now = Date.now();
 
-  let resumed = 0;
+  const resumedIds: string[] = [];
   for (const entry of inflight) {
     const runId = entry.runId?.trim();
     if (!runId) {
@@ -80,19 +85,23 @@ export async function maybeResumeInflightAgentRunsAfterRestart(params: {
     if ((entry.resumeCount ?? 0) >= MAX_RESUME_ATTEMPTS) {
       continue;
     }
+    if (now - entry.acceptedAt > MAX_AGE_MS) {
+      logVerbose(`restart recovery: skipping stale run ${runId} (age ${now - entry.acceptedAt}ms)`);
+      continue;
+    }
     const baseOpts = entry.opts;
-    // Force idempotency key stability and avoid re-playing the original prompt.
-    // The resumed run uses the existing session transcript as context.
     const resumeOpts = {
       ...baseOpts,
       runId,
       message: DEFAULT_RESUME_PROMPT,
-      senderIsOwner: baseOpts.senderIsOwner,
     };
-    await markInflightAgentRunResumed(runId, env).catch(() => {});
-    void run(resumeOpts, params.runtime, params.deps).catch(() => {});
-    resumed += 1;
+    void run(resumeOpts, params.runtime, params.deps).catch((err) => {
+      logVerbose(`restart recovery: resumed run ${runId} failed: ${String(err)}`);
+    });
+    resumedIds.push(runId);
   }
 
-  return { resumed, considered: inflight.length, skipped: false };
+  await markInflightAgentRunsResumed(resumedIds, env).catch(() => {});
+
+  return { resumed: resumedIds.length, considered: inflight.length, skipped: false };
 }

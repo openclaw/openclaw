@@ -60,10 +60,16 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
-vi.mock("../../gateway/inflight-agent-runs.js", () => ({
-  addInflightAgentRun: (params: unknown) => addInflightAgentRunMock(params),
-  removeInflightAgentRun: (runId: string) => removeInflightAgentRunMock(runId),
-}));
+vi.mock("../../gateway/inflight-agent-runs.js", async () => {
+  const { isInflightAgentRunRecoveryEnabled } = await vi.importActual<
+    typeof import("../../gateway/inflight-agent-runs.js")
+  >("../../gateway/inflight-agent-runs.js");
+  return {
+    addInflightAgentRun: (params: unknown) => addInflightAgentRunMock(params),
+    removeInflightAgentRun: (runId: string) => removeInflightAgentRunMock(runId),
+    isInflightAgentRunRecoveryEnabled,
+  };
+});
 
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
