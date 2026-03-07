@@ -118,21 +118,22 @@ function looksLikeTimeoutError(err: unknown): boolean {
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const isLocal = !isAbsoluteHttp(url);
-  // Model-facing suffix: explicitly tell the LLM NOT to retry.
-  // Without this, models see "try again" and enter an infinite tool-call loop.
-  const modelHint =
-    "Do NOT retry the browser tool — it will keep failing. " +
-    "Use an alternative approach or inform the user that the browser is currently unavailable.";
+  const localTimeoutModelHint =
+    "Retry only after changing something concrete (for example: refresh snapshot refs or increase timeoutMs). " +
+    "Do not repeat the exact same browser action call unchanged.";
+  const serviceOutageModelHint =
+    "Do NOT retry the browser tool unchanged — it will likely keep failing while the service is unavailable. " +
+    "Use an alternative approach or inform the user that the browser service is currently unavailable.";
 
   if (looksLikeTimeoutError(err)) {
     if (isLocal) {
       return new Error(
-        `Browser action timed out after ${timeoutMs}ms while the local browser control service remained reachable. Try a fresh snapshot and retry with a stable ref, or increase timeoutMs if the action is expected to take longer. ${modelHint}`,
+        `Browser action timed out after ${timeoutMs}ms while the local browser control service remained reachable. Try a fresh snapshot and retry with a stable ref, or increase timeoutMs if the action is expected to take longer. ${localTimeoutModelHint}`,
       );
     }
 
     return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). If this is a sandboxed session, ensure the sandbox browser is running. ${modelHint}`,
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). If this is a sandboxed session, ensure the sandbox browser is running. ${serviceOutageModelHint}`,
     );
   }
 
@@ -142,7 +143,7 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
 
   return new Error(
-    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${errorMessage(err)})`,
+    `Can't reach the OpenClaw browser control service. ${operatorHint} ${serviceOutageModelHint} (${errorMessage(err)})`,
   );
 }
 

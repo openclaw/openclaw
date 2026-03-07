@@ -20,5 +20,8 @@ describe("fetchBrowserJson timeout error mapping", () => {
     await expect(fetchBrowserJson("/act", { method: "POST", timeoutMs: 1234 })).rejects.toThrow(
       "Browser action timed out after 1234ms while the local browser control service remained reachable",
     );
+    await expect(fetchBrowserJson("/act", { method: "POST", timeoutMs: 1234 })).rejects.toThrow(
+      "Retry only after changing something concrete",
+    );
   });
 });
