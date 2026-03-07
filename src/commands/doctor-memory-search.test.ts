@@ -6,7 +6,17 @@ const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveAgentConfig = vi.hoisted(() =>
-  vi.fn<() => { memorySearch?: { provider?: string } } | undefined>(() => undefined),
+  vi.fn<() => { memorySearch?: { provider?: string; enabled?: boolean } } | undefined>(
+    () => undefined,
+  ),
+);
+const normalizeMemorySearchProvider = vi.hoisted(() =>
+  vi.fn((provider: unknown) => (typeof provider === "string" ? provider.trim() : "")),
+);
+const isBuiltinMemorySearchProvider = vi.hoisted(() =>
+  vi.fn((provider: string) =>
+    new Set(["openai", "local", "gemini", "voyage", "mistral", "ollama", "auto"]).has(provider),
+  ),
 );
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
@@ -23,6 +33,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
+  normalizeMemorySearchProvider,
+  isBuiltinMemorySearchProvider,
   resolveMemorySearchConfig,
 }));
 
@@ -311,6 +323,23 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain('provider "memory-openviking" is delegated');
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("prefers disabled note over plugin-provider note when memory search is disabled", async () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+    resolveAgentConfig.mockReturnValue({
+      memorySearch: {
+        enabled: false,
+        provider: "memory-openviking",
+      },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("explicitly disabled");
+    expect(message).not.toContain("delegated to the memory plugin slot");
   });
 });
 

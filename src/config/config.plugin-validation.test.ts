@@ -372,4 +372,30 @@ describe("config plugin validation", () => {
       ).toBe(true);
     }
   });
+
+  it('rejects memorySearch provider "memory-core" as reserved bundled slot id', async () => {
+    const res = validateInSuite({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "memory-core",
+          },
+        },
+      },
+      plugins: {
+        slots: { memory: "memory-core" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "agents.defaults.memorySearch.provider" &&
+            issue.message.includes('provider "memory-core" is reserved'),
+        ),
+      ).toBe(true);
+    }
+  });
 });

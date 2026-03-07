@@ -1,5 +1,9 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  isBuiltinMemorySearchProvider,
+  normalizeMemorySearchProvider,
+} from "../agents/memory-search.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
@@ -25,16 +29,6 @@ import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
-const BUILTIN_MEMORY_SEARCH_PROVIDER_IDS = new Set([
-  "openai",
-  "local",
-  "gemini",
-  "voyage",
-  "mistral",
-  "ollama",
-  "auto",
-]);
-
 type UnknownIssueRecord = Record<string, unknown>;
 type AllowedValuesCollection = {
   values: unknown[];
@@ -394,8 +388,21 @@ function validateConfigObjectWithPluginsBase(
     if (typeof provider !== "string") {
       return;
     }
-    const normalizedProvider = provider.trim();
-    if (!normalizedProvider || BUILTIN_MEMORY_SEARCH_PROVIDER_IDS.has(normalizedProvider)) {
+    const normalizedProvider = normalizeMemorySearchProvider(provider);
+    if (!normalizedProvider) {
+      return;
+    }
+    const normalizedBuiltinProvider = normalizedProvider.toLowerCase();
+    if (isBuiltinMemorySearchProvider(normalizedBuiltinProvider)) {
+      return;
+    }
+
+    if (normalizedProvider === "memory-core") {
+      issues.push({
+        path: providerPath,
+        message:
+          'memory search provider "memory-core" is reserved for the bundled memory plugin; use a built-in provider (for example "auto") and keep plugins.slots.memory="memory-core"',
+      });
       return;
     }
 

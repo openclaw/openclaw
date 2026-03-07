@@ -4,7 +4,11 @@ import {
   resolveAgentDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import {
+  isBuiltinMemorySearchProvider,
+  normalizeMemorySearchProvider,
+  resolveMemorySearchConfig,
+} from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,16 +17,6 @@ import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
-
-const BUILTIN_MEMORY_SEARCH_PROVIDERS = new Set([
-  "openai",
-  "local",
-  "gemini",
-  "voyage",
-  "mistral",
-  "ollama",
-  "auto",
-]);
 
 /**
  * Check whether memory search has a usable embedding provider.
@@ -40,19 +34,24 @@ export async function noteMemorySearchHealth(
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const enabledOverride = resolveAgentConfig(cfg, agentId)?.memorySearch?.enabled;
+  const enabledDefault = cfg.agents?.defaults?.memorySearch?.enabled;
+  const memorySearchEnabled = enabledOverride ?? enabledDefault ?? true;
   const rawProvider =
-    (
+    normalizeMemorySearchProvider(
       resolveAgentConfig(cfg, agentId)?.memorySearch?.provider ??
-      cfg.agents?.defaults?.memorySearch?.provider ??
-      "auto"
-    )
-      ?.trim()
-      .toLowerCase() ?? "auto";
+        cfg.agents?.defaults?.memorySearch?.provider ??
+        "auto",
+    ).toLowerCase() || "auto";
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
-    if (rawProvider && !BUILTIN_MEMORY_SEARCH_PROVIDERS.has(rawProvider)) {
+    if (!memorySearchEnabled) {
+      note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+      return;
+    }
+    if (rawProvider && !isBuiltinMemorySearchProvider(rawProvider)) {
       note(
         [
           `Memory search provider "${rawProvider}" is delegated to the memory plugin slot (plugins.slots.memory).`,
@@ -62,7 +61,7 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
-    note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    note("Memory search is unavailable for the configured provider.", "Memory search");
     return;
   }
 

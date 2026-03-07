@@ -98,6 +98,20 @@ export type BuiltinMemorySearchProvider =
   | "ollama"
   | "auto";
 
+export function normalizeMemorySearchProvider(provider: unknown): string {
+  if (typeof provider !== "string") {
+    return "";
+  }
+  return provider.trim();
+}
+
+export function resolveBuiltinMemorySearchProvider(
+  provider: unknown,
+): BuiltinMemorySearchProvider | null {
+  const normalized = normalizeMemorySearchProvider(provider).toLowerCase();
+  return isBuiltinMemorySearchProvider(normalized) ? normalized : null;
+}
+
 export function isBuiltinMemorySearchProvider(
   provider: string,
 ): provider is BuiltinMemorySearchProvider {
@@ -165,7 +179,10 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const provider = overrides?.provider ?? defaults?.provider ?? "auto";
+  const rawProvider = overrides?.provider ?? defaults?.provider;
+  const builtinProvider = resolveBuiltinMemorySearchProvider(rawProvider);
+  const pluginProvider = normalizeMemorySearchProvider(rawProvider);
+  const provider = builtinProvider ?? (pluginProvider || "auto");
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const hasRemoteConfig = Boolean(
