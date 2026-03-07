@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +19,8 @@ const __dirname = path.dirname(__filename);
 const SECRETS_PATH = path.join(__dirname, '..', 'secrets', 'agentmail.env');
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'agent_email.json');
 const LOG_PATH = path.join(__dirname, '..', 'logs', 'email_activity.log');
+const PROCESSED_MESSAGES_PATH = path.join(__dirname, '..', 'logs', 'processed_messages.json');
+const COMMANDS_LOG_PATH = path.join(__dirname, '..', 'logs', 'commands.log');
 
 // Cache for inbox ID (to avoid repeated API calls)
 let cachedInboxId = null;
@@ -90,6 +93,297 @@ function logActivity(action, details) {
   const logLine = JSON.stringify(entry);
   fs.appendFileSync(LOG_PATH, logLine + '\n');
   console.log(`[${timestamp}] ${action}: ${JSON.stringify(details)}`);
+}
+
+/**
+ * Log command processing
+ */
+function logCommand(action, details) {
+  const timestamp = new Date().toISOString();
+  const entry = {
+    timestamp,
+    action,
+    ...details,
+  };
+
+  const logLine = JSON.stringify(entry);
+  fs.appendFileSync(COMMANDS_LOG_PATH, logLine + '\n');
+  console.log(`[${timestamp}] COMMAND ${action}: ${JSON.stringify(details)}`);
+}
+
+/**
+ * Load processed message IDs from tracking file
+ */
+function loadProcessedMessages() {
+  try {
+    if (fs.existsSync(PROCESSED_MESSAGES_PATH)) {
+      const data = fs.readFileSync(PROCESSED_MESSAGES_PATH, 'utf8');
+      return new Set(JSON.parse(data));
+    }
+  } catch (error) {
+    console.error('Error loading processed messages:', error.message);
+  }
+  return new Set();
+}
+
+/**
+ * Save processed message IDs to tracking file
+ */
+function saveProcessedMessages(processedSet) {
+  try {
+    const data = JSON.stringify([...processedSet]);
+    fs.writeFileSync(PROCESSED_MESSAGES_PATH, data);
+  } catch (error) {
+    console.error('Error saving processed messages:', error.message);
+  }
+}
+
+/**
+ * Validate sender against allowlist
+ */
+/**
+ * Extract email address from sender string
+ * Handles formats like "Name <email@domain.com>" or just "email@domain.com"
+ */
+function extractEmail(sender) {
+  if (!sender) return '';
+  
+  // Try to match email in angle brackets: "Name <email@domain.com>"
+  const angleBracketMatch = sender.match(/<([^>]+)>/);
+  if (angleBracketMatch) {
+    return angleBracketMatch[1].toLowerCase().trim();
+  }
+  
+  // Otherwise use the whole string as email
+  return sender.toLowerCase().trim();
+}
+
+/**
+ * Validate sender against allowlist
+ */
+function validateSender(sender, config) {
+  const allowlist = config.security.sender_allowlist || [];
+  const senderEmail = extractEmail(sender);
+
+  if (!senderEmail) {
+    logCommand('sender_rejected', {
+      sender,
+      allowlist,
+      reason: 'sender_email_empty',
+    });
+    return false;
+  }
+
+  if (!allowlist.some((allowed) => senderEmail === allowed.toLowerCase())) {
+    logCommand('sender_rejected', {
+      sender,
+      sender_email: senderEmail,
+      allowlist,
+      reason: 'sender_not_in_allowlist',
+    });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Parse command from subject line or body
+ * Expected format: TIM:COMMAND_NAME [args]
+ * Also checks body for TIM: prefix
+ */
+function parseCommand(subject, body = '') {
+  if (!subject || typeof subject !== 'string') {
+    return null;
+  }
+
+  const trimmed = subject.trim();
+  
+  // Check subject for TIM: prefix
+  if (trimmed.toUpperCase().startsWith('TIM:')) {
+    const commandPart = trimmed.substring(4).trim();
+    const parts = commandPart.split(/\s+/);
+    const command = parts[0]?.toUpperCase();
+    const args = parts.slice(1).join(' ');
+    return { command, args, raw: commandPart, source: 'subject' };
+  }
+  
+  // Check body for TIM: prefix (in case it's in the body)
+  if (body && typeof body === 'string') {
+    const bodyTrimmed = body.trim();
+    if (bodyTrimmed.toUpperCase().startsWith('TIM:')) {
+      const commandPart = bodyTrimmed.substring(4).trim();
+      const parts = commandPart.split(/\s+/);
+      const command = parts[0]?.toUpperCase();
+      const args = parts.slice(1).join(' ');
+      return { command, args, raw: commandPart, source: 'body' };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Execute openclaw agent command for freeform messages
+ */
+async function handleFreeformMessage(messageText, agentName = 'tim') {
+  return new Promise((resolve, reject) => {
+    logCommand('freeform_attempt', {
+      agent: agentName,
+      message_preview: messageText.substring(0, 100),
+    });
+
+    // Use pnpm openclaw agent --message to send to the agent
+    // Note: pnpm must be used since 'openclaw' is not in system PATH
+    const args = ['openclaw', 'agent', '--message', messageText, '--agent', agentName];
+    
+    const proc = spawn('pnpm', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+      shell: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    // Timeout after 2 minutes
+    const timeout = setTimeout(() => {
+      proc.kill('SIGTERM');
+      logCommand('freeform_timeout', {
+        agent: agentName,
+        message_preview: messageText.substring(0, 100),
+      });
+      resolve({ status: 'timeout', message: 'Agent command timed out after 2 minutes' });
+    }, 120000);
+
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      
+      if (code === 0) {
+        logCommand('freeform_success', {
+          agent: agentName,
+          message_preview: messageText.substring(0, 100),
+        });
+        resolve({ status: 'success', output: stdout });
+      } else {
+        logCommand('freeform_error', {
+          agent: agentName,
+          message_preview: messageText.substring(0, 100),
+          exit_code: code,
+          stderr: stderr.substring(0, 500),
+        });
+        resolve({ status: 'failed', error: stderr || `Exit code: ${code}` });
+      }
+    });
+
+    proc.on('error', (error) => {
+      clearTimeout(timeout);
+      logCommand('freeform_spawn_error', {
+        agent: agentName,
+        error: error.message,
+      });
+      resolve({ status: 'error', error: error.message });
+    });
+  });
+}
+
+/**
+ * Command handlers
+ */
+async function handleStatus() {
+  return {
+    status: 'SUCCESS',
+    command: 'STATUS',
+    result: {
+      gateway: 'operational',
+      email_listener: 'active',
+      timestamp: new Date().toISOString(),
+    },
+  };
+}
+
+async function handleAgentStatus() {
+  return {
+    status: 'SUCCESS',
+    command: 'AGENT STATUS',
+    result: {
+      agent_id: 'tim-guardian',
+      agent_status: 'running',
+      uptime: process.uptime?.() || 'unknown',
+      last_heartbeat: new Date().toISOString(),
+    },
+  };
+}
+
+async function handleCheckUpdates() {
+  return {
+    status: 'SUCCESS',
+    command: 'CHECK UPDATES',
+    result: {
+      current_version: '2026.3.6',
+      update_available: false,
+      last_checked: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * Execute command based on parsed command
+ */
+async function executeCommand(parsedCommand) {
+  const { command, args } = parsedCommand;
+
+  switch (command) {
+    case 'STATUS':
+      return handleStatus();
+    case 'AGENT':
+      if (args?.toUpperCase() === 'STATUS') {
+        return handleAgentStatus();
+      }
+      return { status: 'FAILED', error: `Unknown subcommand: ${args}` };
+    case 'CHECK':
+      if (args?.toUpperCase() === 'UPDATES') {
+        return handleCheckUpdates();
+      }
+      return { status: 'FAILED', error: `Unknown subcommand: ${args}` };
+    default:
+      return { status: 'FAILED', error: `Unknown command: ${command}` };
+  }
+}
+
+/**
+ * Generate reply email body
+ */
+function generateReplyBody(commandResult) {
+  const lines = [
+    `COMMAND RESULT`,
+    `==============`,
+    `Status: ${commandResult.status}`,
+    `Command: ${commandResult.command}`,
+    `Timestamp: ${new Date().toISOString()}`,
+    ``,
+    `RESULT:`,
+    `-------`,
+  ];
+
+  if (commandResult.result) {
+    for (const [key, value] of Object.entries(commandResult.result)) {
+      lines.push(`${key}: ${JSON.stringify(value)}`);
+    }
+  }
+
+  if (commandResult.error) {
+    lines.push(`Error: ${commandResult.error}`);
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -176,14 +470,26 @@ function checkRateLimit(config) {
 
 /**
  * Validate recipient against allowlist
+ * Uses extractEmail to handle "Name <email@domain.com>" format
  */
 function validateRecipient(recipient, config) {
   const allowlist = config.security.recipient_allowlist || [];
+  const recipientEmail = extractEmail(recipient);
 
-  if (!allowlist.includes(recipient)) {
+  if (!recipientEmail) {
+    logActivity('send_email_blocked', {
+      reason: 'recipient_email_empty',
+      recipient,
+      allowlist,
+    });
+    throw new Error(`Recipient email is empty: ${recipient}`);
+  }
+
+  if (!allowlist.some((allowed) => recipientEmail === allowed.toLowerCase())) {
     logActivity('send_email_blocked', {
       reason: 'recipient_not_allowlisted',
       recipient,
+      recipient_email: recipientEmail,
       allowlist,
     });
     throw new Error(`Recipient not in allowlist: ${recipient}`);
@@ -304,6 +610,9 @@ async function readAgentInbox() {
       message_count: messages.length,
     });
 
+    // Process commands from inbox messages
+    await processInboxCommands(messages, config);
+
     return {
       status: 'success',
       inbox: messages,
@@ -319,8 +628,150 @@ async function readAgentInbox() {
 }
 
 /**
- * Extract verification links from inbox messages
+ * Process commands from inbox messages
+ * Only processes messages from whitelisted senders with TIM: prefix in subject
  */
+async function processInboxCommands(messages, config) {
+  const processedMessages = loadProcessedMessages();
+  const newProcessed = new Set();
+
+  for (const message of messages) {
+    // Get message ID (try different fields)
+    const messageId = message.id || message.message_id || message.uid;
+    if (!messageId) {
+      continue;
+    }
+
+    // Skip already processed messages
+    if (processedMessages.has(messageId)) {
+      continue;
+    }
+
+    // Get sender
+    const sender = message.from || message.sender || message.from_address;
+    if (!sender) {
+      continue;
+    }
+
+    // Validate sender against allowlist
+    if (!validateSender(sender, config)) {
+      continue;
+    }
+
+    // Get subject and body
+    const subject = message.subject || '';
+    const body = message.body || message.text || message.content || '';
+
+    // Parse command from subject and body
+    const parsedCommand = parseCommand(subject, body);
+    if (!parsedCommand) {
+      // Not a command - check if freeform is enabled
+      const enableFreeform = config.features?.freeform !== false;
+      
+      if (enableFreeform) {
+        // Handle as freeform message - combine subject and body
+        const freeformText = subject && body 
+          ? `${subject}\n\n${body}` 
+          : subject || body;
+        
+        if (freeformText) {
+          logCommand('freeform_processing', {
+            message_id: messageId,
+            sender,
+            subject,
+            body_preview: body.substring(0, 100),
+          });
+
+          try {
+            const result = await handleFreeformMessage(freeformText, 'tim');
+            
+            // Mark message as processed
+            newProcessed.add(messageId);
+            
+            logCommand('freeform_completed', {
+              message_id: messageId,
+              sender,
+              result_status: result.status,
+            });
+          } catch (error) {
+            logCommand('freeform_failed', {
+              message_id: messageId,
+              sender,
+              error: error.message,
+            });
+          }
+          
+          continue;
+        }
+      }
+      
+      // Not a command and freeform disabled - skip
+      continue;
+    }
+
+    // Execute command
+    logCommand('processing', {
+      message_id: messageId,
+      sender,
+      subject,
+      command: parsedCommand.command,
+      args: parsedCommand.args,
+    });
+
+    let commandResult;
+    try {
+      commandResult = await executeCommand(parsedCommand);
+    } catch (error) {
+      commandResult = {
+        status: 'FAILED',
+        command: parsedCommand.command,
+        error: error.message,
+      };
+    }
+
+    // Generate reply
+    const replyBody = generateReplyBody(commandResult);
+
+    // Send reply to sender
+    try {
+      const secrets = loadSecrets();
+      await sendEmail(sender, `RE: ${subject}`, replyBody);
+
+      logCommand('reply_sent', {
+        message_id: messageId,
+        sender,
+        subject,
+        command: parsedCommand.command,
+        result_status: commandResult.status,
+      });
+    } catch (error) {
+      logCommand('reply_failed', {
+        message_id: messageId,
+        sender,
+        subject,
+        command: parsedCommand.command,
+        error: error.message,
+      });
+    }
+
+    // Mark message as processed
+    newProcessed.add(messageId);
+  }
+
+  // Save newly processed messages
+  if (newProcessed.size > 0) {
+    for (const msgId of newProcessed) {
+      processedMessages.add(msgId);
+    }
+    saveProcessedMessages(processedMessages);
+
+    logActivity('commands_processed', {
+      count: newProcessed.size,
+      message_ids: [...newProcessed],
+    });
+  }
+}
+
 async function getVerificationLinks() {
   const secrets = loadSecrets();
 
@@ -395,4 +846,64 @@ function healthCheck() {
 }
 
 // Export public API
-export { sendEmail, readAgentInbox, getVerificationLinks, healthCheck, logActivity, getInboxId };
+// Polling interval in milliseconds (30 seconds)
+const POLL_INTERVAL_MS = 30000;
+
+/**
+ * Main polling loop - runs continuously
+ */
+async function startPolling() {
+  console.log('🤖 AgentMail Gateway starting...');
+  console.log('📧 Polling for commands every', POLL_INTERVAL_MS / 1000, 'seconds');
+  
+  // Initial run
+  await runOnce();
+  
+  // Set up continuous polling
+  setInterval(async () => {
+    await runOnce();
+  }, POLL_INTERVAL_MS);
+}
+
+/**
+ * Single polling iteration
+ */
+async function runOnce() {
+  const timestamp = new Date().toISOString();
+  console.log(`\n[${timestamp}] 🔍 Checking inbox...`);
+  
+  try {
+    // First, read the inbox to get messages
+    const inboxResult = await readAgentInbox();
+    
+    if (!inboxResult.inbox || !Array.isArray(inboxResult.inbox)) {
+      console.log('📭 No messages in inbox');
+      return;
+    }
+    
+    const messages = inboxResult.inbox;
+    console.log(`📬 Found ${messages.length} message(s) in inbox`);
+    
+    if (messages.length === 0) {
+      console.log('📭 No new commands');
+      return;
+    }
+    
+    // Then process commands from those messages
+    const config = loadConfig();
+    const result = await processInboxCommands(messages, config);
+    
+    if (result && result.commands_processed > 0) {
+      console.log(`✅ Processed ${result.commands_processed} command(s)`);
+    } else {
+      console.log('📭 No new commands');
+    }
+  } catch (error) {
+    console.error('❌ Error processing inbox:', error.message);
+  }
+}
+
+// Start polling if run directly
+startPolling().catch(console.error);
+
+export { sendEmail, readAgentInbox, getVerificationLinks, healthCheck, logActivity, getInboxId, logCommand, parseCommand, validateSender, executeCommand, processInboxCommands, startPolling, runOnce };

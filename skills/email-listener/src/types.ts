@@ -1,0 +1,273 @@
+/**
+ * Email Listener Skill - Type Definitions
+ *
+ * Type definitions for the Tim Email Listener skill that provides
+ * email-based remote command interface for FrankOS.
+ */
+
+import type { ImapSimple } from "imap-simple";
+
+/**
+ * Agent configuration for freeform messaging
+ */
+export interface AgentConfig {
+  /** Name of the agent to forward messages to (e.g., "tim") */
+  agentName: string;
+  /** Whether freeform messaging is enabled */
+  enableFreeform: boolean;
+  /** Timeout for agent response in milliseconds */
+  messageTimeoutMs: number;
+}
+
+/**
+ * Configuration for the email listener
+ */
+export interface EmailListenerConfig {
+  /** IMAP connection settings */
+  imap: ImapConfig;
+  /** Security settings */
+  security: SecurityConfig;
+  /** Polling configuration */
+  polling: PollingConfig;
+  /** Command configuration */
+  commands: CommandConfig;
+  /** Agent configuration for freeform messaging */
+  agent: AgentConfig;
+  /** Cleanup configuration */
+  cleanup: CleanupConfig;
+}
+
+/**
+ * IMAP server configuration
+ */
+export interface ImapConfig {
+  /** IMAP host */
+  host: string;
+  /** IMAP port */
+  port: number;
+  /** Use TLS/SSL */
+  secure: boolean;
+  /** Username/email for authentication */
+  user: string;
+  /** Password or reference to secret */
+  password: string;
+}
+
+/**
+ * Security configuration
+ */
+export interface SecurityConfig {
+  /** List of allowed sender email addresses */
+  allowedSenders: string[];
+  /** Commands that require explicit confirmation */
+  requireConfirmation: string[];
+  /** Confirmation timeout in milliseconds */
+  confirmationTimeout: number;
+}
+
+/**
+ * Polling configuration
+ */
+export interface PollingConfig {
+  /** Polling interval in milliseconds */
+  intervalMs: number;
+  /** Whether polling is enabled */
+  enabled: boolean;
+}
+
+/**
+ * Command configuration
+ */
+export interface CommandConfig {
+  /** List of enabled commands */
+  enabled: string[];
+  /** List of disabled commands */
+  disabled: string[];
+}
+
+/**
+ * Parsed email message
+ */
+export interface ParsedEmail {
+  /** Unique message ID */
+  messageId: string;
+  /** Sender email address */
+  sender: string;
+  /** Sender display name */
+  senderName: string;
+  /** Email subject */
+  subject: string;
+  /** Email body (plain text) */
+  body: string;
+  /** Timestamp when email was received */
+  timestamp: Date;
+}
+
+/**
+ * Message classification types
+ */
+export type MessageType = "command" | "normal" | "unauthorized" | "confirmation" | "freeform";
+
+/**
+ * Classified message result
+ */
+export interface ClassifiedMessage {
+  /** Type of message */
+  type: MessageType;
+  /** Parsed email data */
+  email: ParsedEmail;
+  /** Command name if applicable */
+  command?: string;
+  /** Command arguments if applicable */
+  args?: string[];
+}
+
+/**
+ * Risk levels for commands
+ */
+export type RiskLevel = "safe" | "medium" | "high";
+
+/**
+ * Command definition
+ */
+export interface CommandDefinition {
+  /** Command name */
+  name: string;
+  /** Command description */
+  description: string;
+  /** Risk level */
+  risk: RiskLevel;
+  /** Handler function */
+  handler: CommandHandler;
+}
+
+/**
+ * Command handler function type
+ */
+export type CommandHandler = (
+  args: string[],
+  email: ParsedEmail
+) => Promise<CommandResult>;
+
+/**
+ * Command execution result
+ */
+export interface CommandResult {
+  /** Whether command succeeded */
+  success: boolean;
+  /** Result message */
+  message: string;
+  /** Optional data to include in response */
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Email response
+ */
+export interface EmailResponse {
+  /** Recipient email address */
+  to: string;
+  /** Email subject */
+  subject: string;
+  /** Response body */
+  body: string;
+  /** Reference to original message ID */
+  inReplyTo?: string;
+}
+
+/**
+ * Pending confirmation state
+ */
+export interface PendingConfirmation {
+  /** Original command that needs confirmation */
+  command: string;
+  /** Original arguments */
+  args: string[];
+  /** Sender who needs to confirm */
+  sender: string;
+  /** Timestamp when confirmation was requested */
+  requestedAt: Date;
+  /** Message ID of the confirmation request */
+  messageId: string;
+}
+
+/**
+ * Email listener state
+ */
+export interface EmailListenerState {
+  /** Whether listener is running */
+  isRunning: boolean;
+  /** Last poll timestamp */
+  lastPoll: Date | null;
+  /** Pending confirmations */
+  pendingConfirmations: Map<string, PendingConfirmation>;
+}
+
+/**
+ * Logger interface
+ */
+export interface Logger {
+  info(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+  debug(message: string, meta?: Record<string, unknown>): void;
+}
+
+/**
+ * Cleanup action type
+ */
+export type CleanupAction = "trash" | "delete";
+
+/**
+ * Cleanup configuration
+ */
+export interface CleanupConfig {
+  /** Whether cleanup is enabled */
+  enabled: boolean;
+  /** Cleanup interval in milliseconds */
+  intervalMs: number;
+  /** Retention period in milliseconds - emails older than this will be cleaned */
+  retentionPeriodMs: number;
+  /** Action to perform: move to trash or delete permanently */
+  action: CleanupAction;
+}
+
+/**
+ * Processed email tracking for cleanup
+ */
+export interface ProcessedEmail {
+  /** Message UID */
+  uid: number;
+  /** When email was processed */
+  processedAt: Date;
+}
+
+/**
+ * Default configuration
+ */
+export const DEFAULT_CONFIG: Partial<EmailListenerConfig> = {
+  polling: {
+    intervalMs: 300000, // 5 minutes
+    enabled: true,
+  },
+  security: {
+    allowedSenders: [],
+    requireConfirmation: ["DELETE", "RESTART", "SHUTDOWN"],
+    confirmationTimeout: 300000, // 5 minutes
+  },
+  commands: {
+    enabled: ["STATUS", "SECURITY_AUDIT", "CHECK_UPDATES", "MEMORY_COMPACT", "AGENT_STATUS"],
+    disabled: [],
+  },
+  agent: {
+    agentName: "tim",
+    enableFreeform: true,
+    messageTimeoutMs: 120000, // 2 minutes
+  },
+  cleanup: {
+    enabled: true,
+    intervalMs: 3600000, // 1 hour
+    retentionPeriodMs: 86400000, // 24 hours
+    action: "trash",
+  },
+};
