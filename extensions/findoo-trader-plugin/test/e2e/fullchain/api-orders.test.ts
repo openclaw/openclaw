@@ -70,7 +70,8 @@ describe("Phase F — B3: Orders + Positions", () => {
     });
 
     expect(status).toBe(201);
-    const order = body as Record<string, unknown>;
+    const wrapper = body as { domain?: string; order: Record<string, unknown> };
+    const order = wrapper.order;
     expect(order.symbol).toBe("BTC/USDT");
     expect(order.side).toBe("buy");
     expect(order.status).toBe("filled");
@@ -140,7 +141,7 @@ describe("Phase F — B3: Orders + Positions", () => {
 
     expect(status).toBe(400);
     const result = body as Record<string, unknown>;
-    expect(result.error).toContain("Missing required fields");
+    expect(result.error).toContain("Validation failed:");
   });
 
   // ── 5. Cancel order → 200 ──
@@ -294,7 +295,8 @@ describe("Phase F — B3: Orders + Positions", () => {
     });
 
     expect(status).toBe(201);
-    const order = body as Record<string, unknown>;
+    const wrapper2 = body as { domain?: string; order: Record<string, unknown> };
+    const order = wrapper2.order;
     expect(order.symbol).toBe("AVAX/USDT");
     expect(order.side).toBe("buy");
     expect(order.status).toBe("filled");

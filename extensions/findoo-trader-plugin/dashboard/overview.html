@@ -1058,7 +1058,7 @@
         function renderPipeline(strategies) {
           var l0 = 0, l1 = 0, l2 = 0, l3 = 0;
           (strategies || []).forEach(function (s) {
-            var lvl = s.level || "";
+            var lvl = s.level != null ? s.level : "";
             if (lvl === "L0_INCUBATE" || lvl === 0) l0++;
             else if (lvl === "L1_BACKTEST" || lvl === 1) l1++;
             else if (lvl === "L2_PAPER" || lvl === 2) l2++;

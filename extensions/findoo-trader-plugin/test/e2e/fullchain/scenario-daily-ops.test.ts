@@ -119,7 +119,7 @@ describe("Phase F — Scenario: Daily Operations", () => {
     const briefEvent = events.find((e) => e.type === "system" && e.title === "Daily Brief");
     expect(briefEvent).toBeDefined();
     expect(briefEvent!.status).toBe("completed");
-    expect(briefEvent!.detail).toContain("Equity:");
+    expect(briefEvent!.detail).toContain("Paper: $");
     expect(briefEvent!.detail).toContain("Strategies:");
   });
 

@@ -239,9 +239,9 @@ describe("Phase F — Scenario: Emergency Recovery", () => {
       }),
     });
     expect(smallOrder.status).toBe(201);
-    const smallData = smallOrder.body as { status: string; symbol: string };
-    expect(smallData.symbol).toBe("BTC/USDT");
-    expect(smallData.status).toBe("filled");
+    const smallWrapper = smallOrder.body as { domain?: string; order: { status: string; symbol: string } };
+    expect(smallWrapper.order.symbol).toBe("BTC/USDT");
+    expect(smallWrapper.order.status).toBe("filled");
 
     // Medium order (confirm tier): quantity=3, price=200 -> $600
     // $100 < $600 <= $1000 -> confirm tier -> 202

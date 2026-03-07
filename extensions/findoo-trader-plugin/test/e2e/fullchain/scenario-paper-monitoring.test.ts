@@ -121,9 +121,9 @@ describe("Scenario — Day 14-30 Paper Trading Monitoring", () => {
         }),
       });
       expect(status).toBe(201);
-      const order = body as { status: string; symbol: string };
-      expect(order.status).toBe("filled");
-      expect(order.symbol).toBe(o.symbol);
+      const wrapper = body as { domain?: string; order: { status: string; symbol: string } };
+      expect(wrapper.order.status).toBe("filled");
+      expect(wrapper.order.symbol).toBe(o.symbol);
     }
   });
 
