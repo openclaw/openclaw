@@ -6,6 +6,7 @@ export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
 export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
+export const sendMessageSpy: Mock = vi.fn(async () => ({ message_id: 1 }));
 
 async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
   return {
@@ -49,7 +50,7 @@ type ApiStub = {
 const apiStub: ApiStub = {
   config: { use: useSpy },
   sendChatAction: sendChatActionSpy,
-  sendMessage: vi.fn(async () => ({ message_id: 1 })),
+  sendMessage: sendMessageSpy,
   setMyCommands: vi.fn(async () => undefined),
 };
 
