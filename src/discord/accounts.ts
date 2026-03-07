@@ -19,18 +19,21 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("di
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
+export function resolveDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig | undefined {
   return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
 }
 
-function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): DiscordAccountConfig {
+export function mergeDiscordAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): DiscordAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
     accounts?: unknown;
   };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const account = resolveDiscordAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
 
@@ -41,7 +44,7 @@ export function createDiscordActionGate(params: {
   const accountId = normalizeAccountId(params.accountId);
   return createAccountActionGate({
     baseActions: params.cfg.channels?.discord?.actions,
-    accountActions: resolveAccountConfig(params.cfg, accountId)?.actions,
+    accountActions: resolveDiscordAccountConfig(params.cfg, accountId)?.actions,
   });
 }
 

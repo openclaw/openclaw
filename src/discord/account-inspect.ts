@@ -1,9 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig } from "../config/types.discord.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-import { resolveDefaultDiscordAccountId } from "./accounts.js";
+import {
+  mergeDiscordAccountConfig,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccountConfig,
+} from "./accounts.js";
 
 export type DiscordCredentialStatus = "available" | "configured_unavailable" | "missing";
 
@@ -17,21 +20,6 @@ export type InspectedDiscordAccount = {
   configured: boolean;
   config: DiscordAccountConfig;
 };
-
-function resolveDiscordAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): DiscordAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
-}
-
-function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): DiscordAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveDiscordAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
-}
 
 function inspectDiscordTokenValue(value: unknown): {
   token: string;
