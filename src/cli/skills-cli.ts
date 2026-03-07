@@ -87,7 +87,7 @@ export function registerSkillsCli(program: Command) {
         const config = loadConfig();
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
         const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
-        const report = await buildWorkspaceSkillStatus(workspaceDir, { config });
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         const skill = report.skills.find((s) => s.name === name);
         if (!skill) {
           defaultRuntime.error(`Skill not found: ${name}`);
