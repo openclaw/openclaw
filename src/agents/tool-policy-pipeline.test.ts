@@ -67,6 +67,28 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("warns when an unavailable-core-only allowlist is ignored to preserve active core tools", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }, { name: "read" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["apply_patch", "cron"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(warnings).toEqual([
+      "tools: tools.profile (coding) allowlist includes known tools unavailable in this runtime context (apply_patch, cron). Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement.",
+    ]);
+  });
+
   test("applies allowlist filtering when core tools are explicitly listed", () => {
     const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({

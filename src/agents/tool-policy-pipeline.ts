@@ -91,8 +91,11 @@ export function applyToolPolicyPipeline(params: {
       const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
       if (resolved.unavailableCoreAllowlist.length > 0) {
         const entries = resolved.unavailableCoreAllowlist.join(", ");
+        const suffix = resolved.strippedAllowlist
+          ? " Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
+          : "";
         params.warn(
-          `tools: ${step.label} allowlist includes known tools unavailable in this runtime context (${entries}).`,
+          `tools: ${step.label} allowlist includes known tools unavailable in this runtime context (${entries}).${suffix}`,
         );
       }
       if (resolved.unknownAllowlist.length > 0) {
