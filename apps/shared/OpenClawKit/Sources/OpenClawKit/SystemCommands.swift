@@ -1,6 +1,7 @@
 import Foundation
 
 public enum OpenClawSystemCommand: String, Codable, Sendable {
+    case prepare = "system.run.prepare"
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
