@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyConfiguredRouteWarnings,
+  formatAllowFromLowercase,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -166,11 +167,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.toLowerCase()),
+    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
     resolveDefaultTo: ({ cfg, accountId }) =>
       resolveSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },

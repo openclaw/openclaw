@@ -1,6 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -72,10 +73,10 @@ export const googlechatDock: ChannelDock = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry))
-        .filter(Boolean)
-        .map(formatAllowFromEntry),
+      formatNormalizedAllowFromEntries({
+        allowFrom,
+        normalizeEntry: formatAllowFromEntry,
+      }),
   },
   groups: {
     resolveRequireMention: resolveGoogleChatGroupRequireMention,
@@ -183,10 +184,10 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         }).config.dm?.allowFrom ?? []
       ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry))
-        .filter(Boolean)
-        .map(formatAllowFromEntry),
+      formatNormalizedAllowFromEntries({
+        allowFrom,
+        normalizeEntry: formatAllowFromEntry,
+      }),
     resolveDefaultTo: ({ cfg, accountId }) =>
       resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
