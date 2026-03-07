@@ -32,6 +32,32 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
+  it("normalizes sent media URLs before deduping normalized reply media", async () => {
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => {
+      const normalizeMedia = (value?: string) =>
+        value === "./out/photo.jpg" ? "/tmp/workspace/out/photo.jpg" : value;
+      return {
+        ...payload,
+        mediaUrl: normalizeMedia(payload.mediaUrl),
+        mediaUrls: payload.mediaUrls?.map((value) => normalizeMedia(value) ?? value),
+      };
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello", mediaUrl: "./out/photo.jpg" }],
+      messagingToolSentMediaUrls: ["./out/photo.jpg"],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "hello",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
   it("applies media filter after text filter", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
