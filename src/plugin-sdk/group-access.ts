@@ -30,6 +30,7 @@ export type GroupRouteAccessDecision = {
 export type MatchedGroupAccessReason =
   | "allowed"
   | "disabled"
+  | "missing_match_input"
   | "empty_allowlist"
   | "not_allowlisted";
 
@@ -99,6 +100,8 @@ export function evaluateMatchedGroupAccessForPolicy(params: {
   groupPolicy: GroupPolicy;
   allowlistConfigured: boolean;
   allowlistMatched: boolean;
+  requireMatchInput?: boolean;
+  hasMatchInput?: boolean;
 }): MatchedGroupAccessDecision {
   if (params.groupPolicy === "disabled") {
     return {
@@ -109,6 +112,13 @@ export function evaluateMatchedGroupAccessForPolicy(params: {
   }
 
   if (params.groupPolicy === "allowlist") {
+    if (params.requireMatchInput && !params.hasMatchInput) {
+      return {
+        allowed: false,
+        groupPolicy: params.groupPolicy,
+        reason: "missing_match_input",
+      };
+    }
     if (!params.allowlistConfigured) {
       return {
         allowed: false,
