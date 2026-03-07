@@ -103,15 +103,16 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 WORKDIR /app
 ENV PNPM_HOME=/home/node/.local/share/pnpm
 ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
+ENV COREPACK_HOME=/home/node/.cache/node/corepack
 ENV GOPATH=/home/node/go
 ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
 ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
 ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
 ENV PATH="${PNPM_HOME}:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PATH}"
 RUN chown node:node /app
-RUN mkdir -p "${PNPM_HOME}" "${NPM_CONFIG_PREFIX}/bin" "${GOPATH}/bin" \
+RUN mkdir -p "${PNPM_HOME}" "${NPM_CONFIG_PREFIX}/bin" "${COREPACK_HOME}" "${GOPATH}/bin" \
     "${HOMEBREW_REPOSITORY}" "${HOMEBREW_CELLAR}" "${HOMEBREW_PREFIX}/bin" && \
-    chown -R node:node /home/node/.local /home/node/.npm-global /home/node/go /home/linuxbrew
+    chown -R node:node /home/node/.cache /home/node/.local /home/node/.npm-global /home/node/go /home/linuxbrew
 RUN corepack enable
 
 COPY --from=build --chown=node:node /app/dist ./dist
@@ -154,7 +155,7 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
   mkdir -p /home/node/.cache/ms-playwright && \
   PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
   node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-  chown -R node:node /home/node/.cache/ms-playwright && \
+  chown -R node:node /home/node/.cache && \
   apt-get clean; \
   fi
 
