@@ -345,4 +345,105 @@ describe("runWithModelFallback – probe logic", () => {
       allowTransientCooldownProbe: true,
     });
   });
+
+  it("probes billing-cooldowned primary when no fallback candidates exist", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    // Billing cooldown far from expiry — would normally be skipped
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("billing-recovered");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      fallbacksOverride: [],
+      run,
+    });
+
+    expect(result.result).toBe("billing-recovered");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("throttles billing probe for single-candidate at 30s intervals", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    // Simulate a recent probe 10s ago
+    _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
+
+    const run = vi.fn().mockResolvedValue("unreachable");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toThrow("All models failed");
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {
+    const cfg = makeCfg();
+    // Cooldown expires in 1 minute — within 2-min probe margin
+    const expiresIn1Min = NOW + 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("billing-probe-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("billing-probe-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("skips billing-cooldowned primary with fallbacks when far from cooldown expiry", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("billing");
+  });
 });

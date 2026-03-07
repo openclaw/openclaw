@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
+  classifyFailoverReasonFromHttpStatus,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -502,6 +503,56 @@ describe("image dimension errors", () => {
     expect(parsed?.messageIndex).toBe(84);
     expect(parsed?.contentIndex).toBe(1);
     expect(isImageDimensionErrorMessage(raw)).toBe(true);
+  });
+});
+
+describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => {
+  it("reclassifies 402 with periodic usage limit as rate_limit", () => {
+    expect(classifyFailoverReasonFromHttpStatus(402, "Monthly spend limit reached.")).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(402, "Weekly usage limit exhausted.")).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(402, "Daily limit reached, resets tomorrow.")).toBe(
+      "rate_limit",
+    );
+  });
+
+  it("reclassifies 402 with organization/workspace limit as rate_limit", () => {
+    expect(classifyFailoverReasonFromHttpStatus(402, "Organization spending limit exceeded.")).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(402, "Workspace spend limit reached.")).toBe(
+      "rate_limit",
+    );
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "Organization limit exceeded for this billing period.",
+      ),
+    ).toBe("rate_limit");
+  });
+
+  it("keeps 402 as billing when explicit billing signals are present", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "Your credit balance is too low. Monthly limit exceeded.",
+      ),
+    ).toBe("billing");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "Insufficient credits. Organization limit reached.",
+      ),
+    ).toBe("billing");
+  });
+
+  it("keeps 402 as billing without message or with generic message", () => {
+    expect(classifyFailoverReasonFromHttpStatus(402, undefined)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, "")).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, "Payment required")).toBe("billing");
   });
 });
 

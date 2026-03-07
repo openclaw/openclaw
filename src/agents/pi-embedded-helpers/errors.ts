@@ -262,12 +262,12 @@ export function classifyFailoverReasonFromHttpStatus(
 
   if (status === 402) {
     // Some providers (e.g. Anthropic Claude Max plan) surface temporary
-    // usage/rate-limit failures as HTTP 402. Use a narrow matcher for
-    // temporary limits to avoid misclassifying billing failures (#30484).
+    // usage/rate-limit failures as HTTP 402. Detect temporary limits to
+    // avoid misclassifying them as persistent billing failures (#30484).
     if (message) {
       const lower = message.toLowerCase();
-      // Temporary usage limit signals: retry language + usage/limit terminology
-      const hasTemporarySignal =
+      // Explicit retry language + usage/limit terminology
+      const hasTemporaryRetrySignal =
         (lower.includes("try again") ||
           lower.includes("retry") ||
           lower.includes("temporary") ||
@@ -275,7 +275,23 @@ export function classifyFailoverReasonFromHttpStatus(
         (lower.includes("usage limit") ||
           lower.includes("rate limit") ||
           lower.includes("organization usage"));
-      if (hasTemporarySignal) {
+      if (hasTemporaryRetrySignal) {
+        return "rate_limit";
+      }
+      // Periodic usage limits (daily/weekly/monthly) are inherently temporary
+      // and should not trigger persistent billing cooldown, unless the message
+      // also contains explicit billing signals (e.g. "insufficient credits").
+      if (isPeriodicUsageLimitErrorMessage(message) && !isBillingErrorMessage(message)) {
+        return "rate_limit";
+      }
+      // Spending/organization/workspace limits are typically resettable caps
+      // set by the organization admin, not permanent credit-balance failures.
+      const hasSpendOrOrgLimitSignal =
+        lower.includes("spend limit") ||
+        lower.includes("spending limit") ||
+        ((lower.includes("organization") || lower.includes("workspace")) &&
+          (lower.includes("limit") || lower.includes("exceeded")));
+      if (hasSpendOrOrgLimitSignal && !isBillingErrorMessage(message)) {
         return "rate_limit";
       }
     }

@@ -182,6 +182,68 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("treats 402 with periodic usage limit as rate_limit", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Monthly spend limit reached. Please visit your billing settings.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Weekly usage limit exhausted for this plan.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Daily limit reached. Your limit will reset tomorrow.",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("treats 402 with organization/workspace limit as rate_limit", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Organization spending limit exceeded.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Workspace spend limit reached. Contact your admin.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Organization limit exceeded for this billing period.",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("keeps 402 with explicit billing signals as billing even with limit language", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Your credit balance is too low. Monthly limit exceeded.",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Insufficient credits. Spend limit reached.",
+      }),
+    ).toBe("billing");
+  });
+
+  it("keeps 402 without message body as billing", () => {
+    expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
+    expect(resolveFailoverReasonFromError({ status: 402, message: undefined })).toBe("billing");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({

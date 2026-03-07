@@ -419,11 +419,30 @@ function resolveCooldownDecision(params: {
       profileIds: params.profileIds,
       now: params.now,
     }) ?? "rate_limit";
-  const isPersistentIssue =
-    inferredReason === "auth" ||
-    inferredReason === "auth_permanent" ||
-    inferredReason === "billing";
-  if (isPersistentIssue) {
+  const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
+  if (isPersistentAuthIssue) {
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+    };
+  }
+
+  // Billing is semi-persistent: the user may fix their balance, or a transient
+  // 402 might have been misclassified. Without fallback candidates, skipping is
+  // guaranteed failure so we attempt (throttled). With fallbacks, probe the
+  // primary when the standard probe schedule allows.
+  if (inferredReason === "billing") {
+    if (params.isPrimary) {
+      if (!params.hasFallbackCandidates) {
+        const lastProbe = lastProbeAttempt.get(params.probeThrottleKey) ?? 0;
+        if (params.now - lastProbe >= MIN_PROBE_INTERVAL_MS) {
+          return { type: "attempt", reason: inferredReason, markProbe: true };
+        }
+      } else if (shouldProbe) {
+        return { type: "attempt", reason: inferredReason, markProbe: true };
+      }
+    }
     return {
       type: "skip",
       reason: inferredReason,
@@ -518,7 +537,11 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
-        if (decision.reason === "rate_limit" || decision.reason === "overloaded") {
+        if (
+          decision.reason === "rate_limit" ||
+          decision.reason === "overloaded" ||
+          decision.reason === "billing"
+        ) {
           runOptions = { allowTransientCooldownProbe: true };
         }
       }
