@@ -187,20 +187,27 @@ export async function runGatewayLoop(params: {
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
+    let isFirstStart = true;
     // eslint-disable-next-line no-constant-condition
     while (true) {
       onIteration();
       try {
         server = await params.start();
+        isFirstStart = false;
       } catch (err) {
-        // If startup fails (e.g., invalid config after a config-triggered
-        // restart), keep the process alive and wait for the next SIGUSR1
-        // instead of crashing. A crash here would respawn a new process that
-        // loses macOS Full Disk Access (TCC permissions are PID-bound). (#35862)
+        // On initial startup, let the error propagate so the outer handler
+        // can report "Gateway failed to start" and exit non-zero. Only
+        // swallow errors on subsequent in-process restarts to keep the
+        // process alive (a crash would lose macOS TCC permissions). (#35862)
+        if (isFirstStart) {
+          throw err;
+        }
         server = null;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         gatewayLog.error(
-          `gateway startup failed: ${err instanceof Error ? err.message : String(err)}. ` +
-            "Process will stay alive; fix the issue and restart.",
+          `gateway startup failed: ${errMsg}. ` +
+            `Process will stay alive; fix the issue and restart.${errStack}`,
         );
       }
       await new Promise<void>((resolve) => {
