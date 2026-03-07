@@ -402,6 +402,19 @@ const saveSessionToMemory: HookHandler = async (event) => {
         : redirectPath
       : path.join("memory", filename);
 
+    // Pre-flight guard: if the resolved relative path starts with '..',
+    // the redirect target is outside the workspace.  writeFileWithinRoot
+    // will catch this anyway, but failing early with a clear log message
+    // is more useful for debugging than a generic SafeOpenError.
+    if (isRedirected && writeRelativePath.startsWith("..")) {
+      log.warn("Redirect path resolves outside workspace, rejecting", {
+        redirectPath,
+        resolvedRelative: writeRelativePath,
+        workspace: canonicalWorkspace,
+      });
+      return;
+    }
+
     log.debug("Memory file path resolved", {
       filename,
       redirected: isRedirected,
