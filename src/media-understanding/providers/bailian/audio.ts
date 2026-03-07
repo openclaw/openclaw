@@ -67,10 +67,10 @@ export async function transcribeBailianAudio(
   const url = `${baseUrl}/chat/completions`;
   const model = resolveModel(params.model);
   const mime = params.mime?.trim() || "application/octet-stream";
-  const audioData = `data:${mime};base64,${params.buffer.toString("base64")}`;
-  if (Buffer.byteLength(audioData, "utf8") > MAX_BAILIAN_AUDIO_DATA_URL_BYTES) {
+  if (params.buffer.byteLength > MAX_BAILIAN_AUDIO_DATA_URL_BYTES) {
     throw new Error("Bailian audio input exceeds the 10MB compatible-mode limit");
   }
+  const audioData = `data:${mime};base64,${params.buffer.toString("base64")}`;
   const asrOptions = buildAsrOptions(params.language, params.query);
 
   const headers = new Headers(params.headers);

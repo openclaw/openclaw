@@ -124,7 +124,7 @@ describe("transcribeBailianAudio", () => {
   it("rejects audio payloads that exceed the compatible-mode size limit", async () => {
     await expect(
       transcribeBailianAudio({
-        buffer: Buffer.alloc(8 * 1024 * 1024, 1),
+        buffer: Buffer.alloc(10 * 1024 * 1024 + 1, 1),
         fileName: "voice.wav",
         apiKey: "test-key",
         timeoutMs: 1234,
