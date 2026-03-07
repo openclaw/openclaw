@@ -1,5 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { evaluateSenderGroupAccess, evaluateSenderGroupAccessForPolicy } from "./group-access.js";
+import {
+  evaluateSenderGroupAccess,
+  evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "./group-access.js";
+
+describe("resolveSenderScopedGroupPolicy", () => {
+  it("preserves disabled policy", () => {
+    expect(
+      resolveSenderScopedGroupPolicy({
+        groupPolicy: "disabled",
+        groupAllowFrom: ["a"],
+      }),
+    ).toBe("disabled");
+  });
+
+  it("maps open/allowlist based on effective sender allowlist", () => {
+    expect(
+      resolveSenderScopedGroupPolicy({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["a"],
+      }),
+    ).toBe("allowlist");
+    expect(
+      resolveSenderScopedGroupPolicy({
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+      }),
+    ).toBe("open");
+  });
+});
 
 describe("evaluateSenderGroupAccessForPolicy", () => {
   it("blocks disabled policy", () => {

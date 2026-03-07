@@ -7,6 +7,7 @@ import {
   createScopedPairingAccess,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveDefaultGroupPolicy,
@@ -175,12 +176,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationId,
       channelName,
     });
-    const senderGroupPolicy =
-      groupPolicy === "disabled"
-        ? "disabled"
-        : effectiveGroupAllowFrom.length > 0
-          ? "allowlist"
-          : "open";
+    const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+      groupPolicy,
+      groupAllowFrom: effectiveGroupAllowFrom,
+    });
     const access = resolveDmGroupAccessWithLists({
       isGroup: !isDirectMessage,
       dmPolicy,
