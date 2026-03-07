@@ -6,6 +6,7 @@ import {
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
 } from "./compaction.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function makeMessage(id: number, size: number): AgentMessage {
   return {
@@ -24,26 +25,15 @@ function makeAssistantToolCall(
   toolCallId: string,
   text = "x".repeat(4000),
 ): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     content: [
       { type: "text", text },
       { type: "toolCall", id: toolCallId, name: "test_tool", arguments: {} },
     ],
-    api: "openai-responses",
-    provider: "openai",
     model: "gpt-5.2",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
     stopReason: "stop",
     timestamp,
-  };
+  });
 }
 
 function makeToolResult(timestamp: number, toolCallId: string, text: string): ToolResultMessage {
@@ -229,27 +219,16 @@ describe("pruneHistoryForContextShare", () => {
     // all corresponding tool_results should be removed from kept messages
     const messages: AgentMessage[] = [
       // Chunk 1 (will be dropped) - contains multiple tool_use blocks
-      {
-        role: "assistant",
+      makeAgentAssistantMessage({
         content: [
           { type: "text", text: "x".repeat(4000) },
           { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
           { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
         ],
-        api: "openai-responses",
-        provider: "openai",
         model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
         stopReason: "stop",
         timestamp: 1,
-      },
+      }),
       // Chunk 2 (will be kept) - contains orphaned tool_results
       makeToolResult(2, "call_a", "result_a"),
       makeToolResult(3, "call_b", "result_b"),
