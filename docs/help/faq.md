@@ -2097,41 +2097,41 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
    - **Auto-discovery (recommended, simplest)**: Just set the `OLLAMA_API_KEY` environment variable (any value works) - OpenClaw will automatically detect and use local Ollama models:
 
    ```bash
-   # Windows 
-   set OLLAMA_API_KEY=ollama-local 
-   
-   # macOS/Linux 
-   export OLLAMA_API_KEY=ollama-local 
+   # Windows
+   set OLLAMA_API_KEY=ollama-local
+
+   # macOS/Linux
+   export OLLAMA_API_KEY=ollama-local
    ```
 
    - Or add to your config file:
 
    ```json5
-   { 
-     env: { OLLAMA_API_KEY: "ollama-local" } 
-   } 
+   {
+     env: { OLLAMA_API_KEY: "ollama-local" },
+   }
    ```
 
    - **Advanced setups** (custom host/port or manual model definitions):
 
    ```json5
-   { 
-     env: { OLLAMA_API_KEY: "ollama-local" }, 
-     models: { 
-       providers: { 
-         ollama: { 
-           baseUrl: "http://localhost:11434", // No /v1 suffix - use native Ollama API 
-           apiKey: "ollama-local", 
-           api: "ollama" // Use native Ollama API for reliable tool calling (OpenAI-compatible mode breaks tool calling) 
-         } 
-       } 
-     }, 
-     agents: { 
-       defaults: { 
-         model: { primary: "ollama/llama3.3" } 
-       } 
-     } 
-   } 
+   {
+     env: { OLLAMA_API_KEY: "ollama-local" },
+     models: {
+       providers: {
+         ollama: {
+           baseUrl: "http://localhost:11434", // No /v1 suffix - use native Ollama API
+           apiKey: "ollama-local",
+           api: "ollama", // Use native Ollama API for reliable tool calling (OpenAI-compatible mode breaks tool calling)
+         },
+       },
+     },
+     agents: {
+       defaults: {
+         model: { primary: "ollama/llama3.3" },
+       },
+     },
+   }
    ```
 
    **Why native Ollama API?** The native Ollama API (no `/v1` suffix, `api: "ollama"`) provides reliable tool calling. The OpenAI-compatible mode (`/v1` URL) breaks tool calling functionality, causing models to output raw tool JSON as plain text.
@@ -2142,11 +2142,11 @@ Yes, OpenClaw supports self-hosted models through various providers. The most us
 
    ```bash
    # List available Ollama models
-   openclaw models list | grep ollama 
-   
+   openclaw models list | grep ollama
+
    # Set Ollama model as default (optional)
    openclaw models set ollama/llama3.3
-   
+
    # Test the model with a simple message
    openclaw agent --message "Hello, are you working?"
    ```
