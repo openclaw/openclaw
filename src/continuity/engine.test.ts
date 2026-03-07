@@ -87,6 +87,14 @@ describe("ContinuityContextEngine", () => {
       messages: [makeMessage("previous")],
       prePromptMessageCount: 1,
     });
+    await engine.afterTurn({
+      sessionId: "session-heartbeat",
+      sessionKey: "main",
+      sessionFile: "/tmp/session.jsonl",
+      messages: [makeMessage("heartbeat message")],
+      prePromptMessageCount: 0,
+      isHeartbeat: true,
+    });
 
     expect(service.captureTurn).not.toHaveBeenCalled();
   });

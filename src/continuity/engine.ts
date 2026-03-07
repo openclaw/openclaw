@@ -68,6 +68,9 @@ export class ContinuityContextEngine implements ContextEngine {
     tokenBudget?: number;
     legacyCompactionParams?: Record<string, unknown>;
   }): Promise<void> {
+    if (params.isHeartbeat) {
+      return;
+    }
     if (!params.sessionKey) {
       return;
     }
