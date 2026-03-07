@@ -600,7 +600,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("read");
   });
-
   it("does not override explicit non-blank tool names with inferred ids", async () => {
     const finalToolCall = { type: "toolCall", id: "functionswrite4", name: "someOtherTool" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
