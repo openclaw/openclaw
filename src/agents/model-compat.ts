@@ -20,6 +20,21 @@ function isOpenAINativeEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Azure OpenAI endpoints use the same Chat Completions API as native OpenAI
+ * and fully support `stream_options: { include_usage: true }`. They must NOT
+ * have `supportsUsageInStreaming` forced off — only `supportsDeveloperRole`
+ * should be disabled (Azure rejects the `developer` message role).
+ */
+function isAzureOpenAIEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -55,17 +70,24 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // The `developer` role and stream usage chunks are OpenAI-native behaviors.
   // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
   // chunks that break strict parsers expecting choices[0]. For non-native
-  // openai-completions endpoints, force both compat flags off.
+  // openai-completions endpoints, force compat flags off as needed.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for non-native
-  // endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+
+  // Azure OpenAI supports stream_options/include_usage just like native OpenAI.
+  // Only disable `developer` role; preserve streaming usage support.
+  const isAzure = isAzureOpenAIEndpoint(baseUrl);
+  const forcedUsageInStreaming = isAzure ? (compat?.supportsUsageInStreaming ?? true) : false;
+
+  if (
+    compat?.supportsDeveloperRole === false &&
+    compat?.supportsUsageInStreaming === forcedUsageInStreaming
+  ) {
     return model;
   }
 
@@ -73,7 +95,11 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   return {
     ...model,
     compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+      ? {
+          ...compat,
+          supportsDeveloperRole: false,
+          supportsUsageInStreaming: forcedUsageInStreaming,
+        }
+      : { supportsDeveloperRole: false, supportsUsageInStreaming: forcedUsageInStreaming },
   } as typeof model;
 }
