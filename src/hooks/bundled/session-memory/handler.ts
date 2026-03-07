@@ -176,7 +176,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // If no slug, use timestamp
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
+      slug = timeSlug.slice(0, 6); // HHMMSS — seconds prevent same-minute overwrites
       log.debug("Using fallback timestamp slug", { slug });
     }
 
