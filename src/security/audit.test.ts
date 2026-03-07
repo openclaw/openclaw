@@ -1490,7 +1490,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
         },
       },
     };
@@ -1522,7 +1522,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
           tools: { doc: false },
         },
       },
@@ -1978,8 +1978,8 @@ description: test skill
             mode: "http",
             botTokenSource: "config",
             botTokenStatus: "available",
-            signingSecretSource: "config",
-            signingSecretStatus: "available",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "available", // pragma: allowlist secret
             config: channel,
           };
         },
@@ -2042,8 +2042,8 @@ description: test skill
               mode: "http",
               botTokenSource: "config",
               botTokenStatus: "configured_unavailable",
-              signingSecretSource: "config",
-              signingSecretStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
               config: channel,
             };
           }

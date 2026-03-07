@@ -51,7 +51,7 @@ function requestApproval(params: {
         client: { id: "client-1" },
         device: { id: "device-1" },
       },
-    } as RequestArgs["client"],
+    } as unknown as RequestArgs["client"],
     req: { id: "req-1", type: "req", method: "knowledge.transfer.approval.request" },
     isWebchatConnect: () => false,
   });
