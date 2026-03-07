@@ -77,6 +77,14 @@ function mergeLegacyDeliveryInto(
   return { delivery: next, mutated };
 }
 
+function normalizeTimestampMs(value: unknown): number | undefined {
+  const coerced = coerceFiniteScheduleNumber(value);
+  if (coerced === undefined) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(coerced));
+}
+
 function normalizePayloadKind(payload: Record<string, unknown>) {
   const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
   if (raw === "agentturn") {
@@ -254,9 +262,37 @@ export async function ensureLoaded(
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
   for (const raw of jobs) {
-    const state = raw.state;
-    if (!state || typeof state !== "object" || Array.isArray(state)) {
+    const jobState = raw.state;
+    if (!jobState || typeof jobState !== "object" || Array.isArray(jobState)) {
       raw.state = {};
+      mutated = true;
+    }
+    const stateRecord =
+      raw.state && typeof raw.state === "object" && !Array.isArray(raw.state)
+        ? (raw.state as Record<string, unknown>)
+        : null;
+
+    // Backfill required contract fields so legacy jobs remain decodable via cron.list.
+    const nowMs = Math.max(0, Math.floor(state.deps.nowMs()));
+    const createdAtMs = normalizeTimestampMs(raw.createdAtMs);
+    const updatedAtMs = normalizeTimestampMs(raw.updatedAtMs);
+    const lastRunAtMs = normalizeTimestampMs(stateRecord?.lastRunAtMs);
+    const createdFallbackAtMs = updatedAtMs ?? lastRunAtMs ?? nowMs;
+    const updatedFallbackAtMs = createdAtMs ?? lastRunAtMs ?? nowMs;
+
+    if (createdAtMs === undefined) {
+      raw.createdAtMs = createdFallbackAtMs;
+      mutated = true;
+    } else if (raw.createdAtMs !== createdAtMs) {
+      raw.createdAtMs = createdAtMs;
+      mutated = true;
+    }
+
+    if (updatedAtMs === undefined) {
+      raw.updatedAtMs = updatedFallbackAtMs;
+      mutated = true;
+    } else if (raw.updatedAtMs !== updatedAtMs) {
+      raw.updatedAtMs = updatedAtMs;
       mutated = true;
     }
 
