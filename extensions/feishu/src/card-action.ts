@@ -1,6 +1,7 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
+import { createFeishuClient } from "./client.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -17,7 +18,8 @@ export type FeishuCardActionEvent = {
   context: {
     open_id: string;
     user_id: string;
-    chat_id: string;
+    open_chat_id?: string;
+    open_message_id?: string;
   };
 };
 
@@ -41,8 +43,12 @@ export async function handleFeishuCardAction(params: {
   let content = "";
   if (typeof mergedValue === "object" && mergedValue !== null) {
     if (hasFormValue) {
-      // Form submit: serialize the full merged object so the agent receives all fields
-      content = JSON.stringify(mergedValue);
+      // Form submit: serialize the full merged object so the agent receives all fields;
+      // inject _card_message_id so downstream skills can update the original card
+      const withCardId = event.context.open_message_id
+        ? { ...mergedValue, _card_message_id: event.context.open_message_id }
+        : mergedValue;
+      content = JSON.stringify(withCardId);
     } else if ("text" in mergedValue && typeof mergedValue.text === "string") {
       content = mergedValue.text;
     } else if ("command" in mergedValue && typeof mergedValue.command === "string") {
@@ -52,6 +58,26 @@ export async function handleFeishuCardAction(params: {
     }
   } else {
     content = String(mergedValue);
+  }
+
+  // Resolve chat_type via Feishu API — card.action.trigger events do not include
+  // chat_type, and open_chat_id uses the oc_ prefix for both group and p2p chats
+  const chatId = event.context.open_chat_id || event.operator.open_id;
+  let chatType: "p2p" | "group" = "p2p"; // safe default
+
+  if (event.context.open_chat_id) {
+    try {
+      const client = createFeishuClient(account);
+      const res = await client.im.chat.get({
+        path: { chat_id: event.context.open_chat_id },
+      });
+      // chat_type = visibility (public/private), chat_mode = session type (group/p2p/topic)
+      if (res.code === 0 && res.data?.chat_mode === "group") {
+        chatType = "group";
+      }
+    } catch {
+      // API failure → safe fallback to p2p
+    }
   }
 
   // Construct a synthetic message event
@@ -64,9 +90,9 @@ export async function handleFeishuCardAction(params: {
       },
     },
     message: {
-      message_id: `card-action-${event.token}`,
-      chat_id: event.context.chat_id || event.operator.open_id,
-      chat_type: event.context.chat_id ? "group" : "p2p",
+      message_id: event.context.open_message_id ?? `card-action-${event.token}`,
+      chat_id: chatId,
+      chat_type: chatType,
       message_type: "text",
       content: JSON.stringify({ text: content }),
     },
