@@ -4,7 +4,7 @@ const completeMock = vi.fn();
 const minimaxUnderstandImageMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn(async () => {});
 const getApiKeyForModelMock = vi.fn(async () => ({
-  apiKey: "oauth-test",
+  apiKey: "oauth-test", // pragma: allowlist secret
   source: "test",
   mode: "oauth",
 }));
@@ -82,7 +82,7 @@ describe("describeImageWithModel", () => {
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
     expect(minimaxUnderstandImageMock).toHaveBeenCalledWith({
-      apiKey: "oauth-test",
+      apiKey: "oauth-test", // pragma: allowlist secret
       prompt: "Describe the image.",
       imageDataUrl: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       modelBaseUrl: "https://api.minimax.io/anthropic",
