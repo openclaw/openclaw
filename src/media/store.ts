@@ -92,6 +92,24 @@ export async function ensureMediaDir() {
   return mediaDir;
 }
 
+function isMissingPathError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err && err.code === "ENOENT";
+}
+
+async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isMissingPathError(err)) {
+      throw err;
+    }
+    // Recursive cleanup can prune an empty directory between mkdir and the later
+    // file open/write. Recreate once and retry the media write path.
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    return await run();
+  }
+}
+
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   const mediaDir = await ensureMediaDir();
   const now = Date.now();
@@ -294,7 +312,9 @@ export async function saveMediaSource(
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
+    const { headerMime, sniffBuffer, size } = await retryAfterRecreatingDir(dir, () =>
+      downloadToFile(source, tempDest, headers),
+    );
     const mime = await detectMime({
       buffer: sniffBuffer,
       headerMime,
@@ -313,7 +333,7 @@ export async function saveMediaSource(
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = ext ? `${baseId}${ext}` : baseId;
     const dest = path.join(dir, id);
-    await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
+    await retryAfterRecreatingDir(dir, () => fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE }));
     return { id, path: dest, size: stat.size, contentType: mime };
   } catch (err) {
     if (err instanceof SafeOpenError) {
@@ -352,6 +372,6 @@ export async function saveMediaBuffer(
   }
 
   const dest = path.join(dir, id);
-  await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
+  await retryAfterRecreatingDir(dir, () => fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE }));
   return { id, path: dest, size: buffer.byteLength, contentType: mime };
 }

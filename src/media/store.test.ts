@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -23,6 +23,10 @@ describe("media store", () => {
     } catch {
       // ignore cleanup failures in tests
     }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   async function withTempStore<T>(
@@ -64,6 +68,33 @@ describe("media store", () => {
     });
   });
 
+  it("retries buffer writes when cleanup prunes the target directory", async () => {
+    await withTempStore(async (store) => {
+      const originalWriteFile = fs.writeFile.bind(fs);
+      let injectedEnoent = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [filePath] = args;
+        if (
+          !injectedEnoent &&
+          typeof filePath === "string" &&
+          filePath.includes(`${path.sep}race-buffer${path.sep}`)
+        ) {
+          injectedEnoent = true;
+          await fs.rm(path.dirname(filePath), { recursive: true, force: true });
+          const err = new Error("missing dir") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return await originalWriteFile(...args);
+      });
+
+      const saved = await store.saveMediaBuffer(Buffer.from("hello"), "text/plain", "race-buffer");
+      const savedStat = await fs.stat(saved.path);
+      expect(injectedEnoent).toBe(true);
+      expect(savedStat.isFile()).toBe(true);
+    });
+  });
+
   it("copies local files and cleans old media", async () => {
     await withTempStore(async (store, home) => {
       const srcFile = path.join(home, "tmp-src.txt");
@@ -80,6 +111,36 @@ describe("media store", () => {
       await fs.utimes(saved.path, past / 1000, past / 1000);
       await store.cleanOldMedia(1);
       await expect(fs.stat(saved.path)).rejects.toThrow();
+    });
+  });
+
+  it("retries local-source writes when cleanup prunes the target directory", async () => {
+    await withTempStore(async (store, home) => {
+      const srcFile = path.join(home, "tmp-src-race.txt");
+      await fs.writeFile(srcFile, "local file");
+
+      const originalWriteFile = fs.writeFile.bind(fs);
+      let injectedEnoent = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [filePath] = args;
+        if (
+          !injectedEnoent &&
+          typeof filePath === "string" &&
+          filePath.includes(`${path.sep}race-source${path.sep}`)
+        ) {
+          injectedEnoent = true;
+          await fs.rm(path.dirname(filePath), { recursive: true, force: true });
+          const err = new Error("missing dir") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return await originalWriteFile(...args);
+      });
+
+      const saved = await store.saveMediaSource(srcFile, undefined, "race-source");
+      const savedStat = await fs.stat(saved.path);
+      expect(injectedEnoent).toBe(true);
+      expect(savedStat.isFile()).toBe(true);
     });
   });
 
