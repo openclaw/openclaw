@@ -806,6 +806,15 @@ export const ToolsSchema = z
       .optional(),
     exec: ToolExecSchema,
     fs: ToolFsSchema,
+    imageGen: z
+      .object({
+        provider: z.literal("sglang-diffusion").optional(),
+        baseUrl: z.string().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     subagents: z
       .object({
         tools: ToolPolicySchema,

@@ -23,6 +23,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   kilocode: ["KILOCODE_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
   byteplus: ["BYTEPLUS_API_KEY"],
+  "sglang-diffusion": ["SGLANG_DIFFUSION_API_KEY"],
 };
 
 export function listKnownSecretEnvVarNames(): string[] {

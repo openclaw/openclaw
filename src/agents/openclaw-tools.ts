@@ -11,6 +11,7 @@ import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createImageGenTool } from "./tools/image-gen-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -192,6 +193,11 @@ export function createOpenClawTools(
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
+
+  const imageGenTool = createImageGenTool({ config: options?.config, agentDir: options?.agentDir });
+  if (imageGenTool) {
+    tools.push(imageGenTool);
+  }
 
   const pluginTools = resolvePluginTools({
     context: {

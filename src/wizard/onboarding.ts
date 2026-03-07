@@ -522,6 +522,27 @@ export async function runOnboardingWizard(
     });
   }
 
+  // Image generation (SGLang-Diffusion) — optional tool integration
+  if (flow !== "quickstart") {
+    const setupImageGen = await prompter.confirm({
+      message: "Configure image generation? (SGLang-Diffusion)",
+      initialValue: false,
+    });
+    if (setupImageGen) {
+      const { promptAndConfigureSglangDiffusion } =
+        await import("../commands/sglang-diffusion-setup.js");
+      // agentDir is intentionally omitted: undefined resolves to the default agent
+      // dir via resolveOpenClawAgentDir(), and ensureAuthProfileStore merges the
+      // main store into agent-scoped lookups. Same pattern as vLLM in promptDefaultModel.
+      const { config: updatedConfig } = await promptAndConfigureSglangDiffusion({
+        cfg: nextConfig,
+        prompter,
+      });
+      nextConfig = updatedConfig;
+      await prompter.note("SGLang-Diffusion image generation configured.", "Image Generation");
+    }
+  }
+
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");
   } else {

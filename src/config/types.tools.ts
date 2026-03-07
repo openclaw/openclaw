@@ -585,6 +585,17 @@ export type ToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Image generation tool configuration (e.g. SGLang-Diffusion). */
+  imageGen?: {
+    /** Image generation provider (currently only "sglang-diffusion"). */
+    provider?: "sglang-diffusion";
+    /** Base URL for the image generation API (default: http://127.0.0.1:30000/v1). */
+    baseUrl?: string;
+    /** API key or env var name for the image generation server. */
+    apiKey?: SecretInput;
+    /** Model served by the image generation server (e.g. "black-forest-labs/FLUX.1-schnell"). */
+    model?: string;
+  };
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Sub-agent tool policy defaults (deny wins). */

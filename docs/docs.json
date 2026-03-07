@@ -1003,6 +1003,7 @@
                   "tools/lobster",
                   "tools/loop-detection",
                   "tools/reactions",
+                  "tools/sglang-diffusion",
                   "tools/thinking",
                   "tools/web"
                 ]
