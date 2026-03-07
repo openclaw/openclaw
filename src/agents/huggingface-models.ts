@@ -6,6 +6,9 @@ const log = createSubsystemLogger("huggingface-models");
 /** Hugging Face Inference Providers (router) — OpenAI-compatible chat completions. */
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 
+/** Default timeout for model discovery (20 seconds). HF has many models and can be slow. */
+export const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 20_000;
+
 /** Router policy suffixes: router picks backend by cost or speed; no specific provider selection. */
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
 
@@ -149,8 +152,13 @@ function displayNameFromApiEntry(entry: HFModelEntry, inferredName: string): str
 /**
  * Discover chat-completion models from Hugging Face Inference Providers (GET /v1/models).
  * Requires a valid HF token. Falls back to static catalog on failure or in test env.
+ * @param apiKey - Hugging Face API key
+ * @param timeoutMs - Timeout for the discovery request (default: 20s)
  */
-export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverHuggingfaceModels(
+  apiKey: string,
+  timeoutMs: number = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
+): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
@@ -163,7 +171,7 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
   try {
     // GET https://router.huggingface.co/v1/models — response: { object, data: [{ id, owned_by, architecture: { input_modalities }, providers: [{ provider, context_length?, pricing? }] }] }. POST /v1/chat/completions requires Authorization.
     const response = await fetch(`${HUGGINGFACE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Authorization: `Bearer ${trimmedKey}`,
         "Content-Type": "application/json",
