@@ -1,5 +1,5 @@
 import { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
 import { getDeJoyRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";

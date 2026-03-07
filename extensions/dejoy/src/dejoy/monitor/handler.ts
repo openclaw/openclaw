@@ -10,7 +10,7 @@ import {
   resolveControlCommandGate,
   type PluginRuntime,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
@@ -680,7 +680,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload: unknown) => {
             await deliverMatrixReplies({
-              replies: [payload as import("openclaw/plugin-sdk").ReplyPayload],
+              replies: [payload as import("openclaw/plugin-sdk/matrix").ReplyPayload],
               roomId,
               client,
               runtime,

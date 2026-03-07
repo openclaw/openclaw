@@ -1,5 +1,5 @@
 import { format } from "node:util";
-import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
+import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getDeJoyRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";

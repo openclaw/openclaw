@@ -1,4 +1,4 @@
-import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/matrix";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -6,7 +6,7 @@ import {
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixAccount } from "./dejoy/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./dejoy/deps.js";
 import { listDeJoyDirectoryGroupsLive } from "./directory-live.js";

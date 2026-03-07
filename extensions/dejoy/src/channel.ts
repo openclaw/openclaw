@@ -8,7 +8,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import { dejoyMessageActions } from "./actions.js";
 import { DeJoyConfigSchema } from "./config-schema.js";
 import {

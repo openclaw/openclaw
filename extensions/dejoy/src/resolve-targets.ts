@@ -3,7 +3,7 @@ import type {
   ChannelResolveKind,
   ChannelResolveResult,
   RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/matrix";
 import { listDeJoyDirectoryGroupsLive, listDeJoyDirectoryPeersLive } from "./directory-live.js";
 
 function pickBestGroupMatch(

@@ -1,4 +1,4 @@
-import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
+import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixRoomConfig } from "./dejoy/monitor/rooms.js";
 import type { CoreConfig } from "./types.js";
 

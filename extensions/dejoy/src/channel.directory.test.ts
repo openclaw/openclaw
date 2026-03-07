@@ -1,4 +1,4 @@
-import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it } from "vitest";
 import { dejoyPlugin } from "./channel.js";
 import { setDeJoyRuntime } from "./runtime.js";

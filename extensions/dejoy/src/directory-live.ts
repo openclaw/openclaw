@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard, type ChannelDirectoryEntry } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard, type ChannelDirectoryEntry } from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixAuth } from "./dejoy/client.js";
 
 type MatrixUserResult = {

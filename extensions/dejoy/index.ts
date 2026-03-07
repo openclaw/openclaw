@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/matrix";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/matrix";
 import { dejoyPlugin } from "./src/channel.js";
 import { setDeJoyRuntime } from "./src/runtime.js";
 
