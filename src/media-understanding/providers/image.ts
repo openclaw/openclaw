@@ -6,6 +6,8 @@ import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
 import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
 
+const CODEX_IMAGE_INSTRUCTIONS =
+  "Analyze the provided image and answer the user's request accurately.";
 let piModelDiscoveryRuntimePromise: Promise<
   typeof import("../../agents/pi-model-discovery-runtime.js")
 > | null = null;
@@ -50,7 +52,10 @@ export async function describeImageWithModel(
     return { text, model: model.id };
   }
 
+  const systemPrompt =
+    model.api === "openai-codex-responses" ? CODEX_IMAGE_INSTRUCTIONS : undefined;
   const context: Context = {
+    ...(systemPrompt ? { systemPrompt } : {}),
     messages: [
       {
         role: "user",
