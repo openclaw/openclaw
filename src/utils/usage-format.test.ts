@@ -12,6 +12,7 @@ describe("usage-format", () => {
     expect(formatTokenCount(999)).toBe("999");
     expect(formatTokenCount(1234)).toBe("1.2k");
     expect(formatTokenCount(12000)).toBe("12k");
+    expect(formatTokenCount(999_499)).toBe("999k");
     expect(formatTokenCount(999_500)).toBe("1.0m");
     expect(formatTokenCount(2_500_000)).toBe("2.5m");
   });
