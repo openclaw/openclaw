@@ -1669,7 +1669,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               ) {
                 streamText = streamText.slice(prefixOptions.responsePrefix.length);
               }
-              blockStreamAccumulatedText += streamText;
+              // The block chunker strips leading/trailing whitespace at break points,
+              // so consecutive blocks may lack a separator. Insert one when needed.
+              const needsJoiner =
+                blockStreamAccumulatedText.length > 0 &&
+                !blockStreamAccumulatedText.endsWith("\n") &&
+                !streamText.startsWith("\n");
+              blockStreamAccumulatedText += needsJoiner ? "\n\n" + streamText : streamText;
               try {
                 await patchMattermostPost(blockStreamingClient, {
                   postId: blockStreamMessageId,
