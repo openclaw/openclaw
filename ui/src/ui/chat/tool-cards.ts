@@ -152,5 +152,14 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.content === "string") {
     return item.content;
   }
+  // Handle array content (e.g. [{type: "text", text: "..."}] from Anthropic-style tool results)
+  if (Array.isArray(item.content)) {
+    const parts = (item.content as Array<Record<string, unknown>>)
+      .filter((p) => p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
   return undefined;
 }
