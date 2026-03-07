@@ -159,7 +159,8 @@ function isSystemctlMissing(detail: string): boolean {
     normalized.includes("not found") ||
     normalized.includes("no such file or directory") ||
     normalized.includes("spawn systemctl enoent") ||
-    normalized.includes("spawn systemctl eacces")
+    normalized.includes("spawn systemctl eacces") ||
+    normalized.includes("failed to connect to bus")
   );
 }
 
