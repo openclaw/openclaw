@@ -77,7 +77,7 @@ if (
 
   function ensureExperimentalWarningSuppressed(): boolean {
     // Bun-compiled binaries cannot respawn through the Node-only warning flag.
-    if (typeof Bun !== "undefined") {
+    if (typeof (globalThis as Record<string, unknown>).Bun !== "undefined") {
       return false;
     }
     if (shouldSkipRespawnForArgv(process.argv)) {

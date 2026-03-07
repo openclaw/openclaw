@@ -507,8 +507,14 @@ function registerEventHandlers(
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("chat_member_bot_added")) {
+        // chat_member_* hooks are defined by the feishu streaming pipeline and
+        // may not be present in the base plugin hook type system yet. Use
+        // runtime-safe duck-typed dispatch to avoid coupling to unmerged types.
+        const hookRunner = getGlobalHookRunner() as Record<
+          string,
+          (...args: unknown[]) => unknown
+        > | null;
+        if (hookRunner && typeof hookRunner.runChatMemberBotAdded === "function") {
           void hookRunner.runChatMemberBotAdded(
             { chatId: event.chat_id },
             { channelId: "feishu", accountId },
@@ -523,8 +529,11 @@ function registerEventHandlers(
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("chat_member_bot_deleted")) {
+        const hookRunner = getGlobalHookRunner() as Record<
+          string,
+          (...args: unknown[]) => unknown
+        > | null;
+        if (hookRunner && typeof hookRunner.runChatMemberBotDeleted === "function") {
           void hookRunner.runChatMemberBotDeleted(
             { chatId: event.chat_id },
             { channelId: "feishu", accountId },
@@ -545,8 +554,11 @@ function registerEventHandlers(
         };
         log(`feishu[${accountId}]: users added to chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("chat_member_user_added")) {
+        const hookRunner = getGlobalHookRunner() as Record<
+          string,
+          (...args: unknown[]) => unknown
+        > | null;
+        if (hookRunner && typeof hookRunner.runChatMemberUserAdded === "function") {
           const users = (event.users ?? [])
             .filter((u) => !!u.user_id?.open_id)
             .map((u) => ({
@@ -574,8 +586,11 @@ function registerEventHandlers(
         };
         log(`feishu[${accountId}]: users deleted from chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("chat_member_user_deleted")) {
+        const hookRunner = getGlobalHookRunner() as Record<
+          string,
+          (...args: unknown[]) => unknown
+        > | null;
+        if (hookRunner && typeof hookRunner.runChatMemberUserDeleted === "function") {
           const users = (event.users ?? [])
             .filter((u) => !!u.user_id?.open_id)
             .map((u) => ({
@@ -603,8 +618,11 @@ function registerEventHandlers(
         };
         log(`feishu[${accountId}]: users withdrawn from chat ${event.chat_id}`);
         if (!event.chat_id) return;
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("chat_member_user_withdrawn")) {
+        const hookRunner = getGlobalHookRunner() as Record<
+          string,
+          (...args: unknown[]) => unknown
+        > | null;
+        if (hookRunner && typeof hookRunner.runChatMemberUserWithdrawn === "function") {
           const users = (event.users ?? [])
             .filter((u) => !!u.user_id?.open_id)
             .map((u) => ({

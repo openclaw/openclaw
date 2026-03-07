@@ -797,6 +797,7 @@ describe("runReplyAgent claude-cli routing", () => {
       }) => Promise<void> | void;
       onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
+      onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     };
   }) {
     const typing = createMockTypingController();

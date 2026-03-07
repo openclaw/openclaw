@@ -261,6 +261,7 @@ type MessageSentEvent = {
   content: string;
   error?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
 };
 
 function buildMirrorMessageMeta(params: {

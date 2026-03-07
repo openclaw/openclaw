@@ -43,7 +43,7 @@ export function emitMessageReceivedHooks(params: { ctx: FinalizedMsgContext }): 
             originatingChannel: ctx.OriginatingChannel,
             originatingTo: ctx.OriginatingTo,
             messageId: messageIdForHook,
-            channelData: ctx.ChannelData,
+            channelData: (ctx as Record<string, unknown>).ChannelData,
             senderId: ctx.SenderId,
             senderName: ctx.SenderName,
             senderUsername: ctx.SenderUsername,

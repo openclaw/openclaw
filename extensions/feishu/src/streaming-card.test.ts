@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/feishu", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
@@ -291,7 +291,7 @@ describe("FeishuStreamingSession.close", () => {
     );
 
     expect(cardSettings).toHaveBeenCalled();
-    const cardSettingsArg = cardSettings.mock.calls[0]?.[0] as {
+    const cardSettingsArg = (cardSettings.mock.calls[0] as unknown[])?.[0] as {
       data?: { settings?: string };
     };
     const settingsPayload = JSON.parse(cardSettingsArg.data?.settings ?? "{}") as {

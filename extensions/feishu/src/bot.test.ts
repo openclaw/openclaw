@@ -67,6 +67,17 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
+vi.mock("openclaw/plugin-sdk/feishu", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    getSessionBindingService: () => ({
+      resolveByConversation: () => undefined,
+      touch: vi.fn(),
+    }),
+  };
+});
+
 function createRuntimeEnv(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -627,7 +638,9 @@ describe("handleFeishuMessage command authorization", () => {
         },
       });
 
-      const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(-1)?.[0] as
+      const dispatcherParams = (
+        mockCreateFeishuReplyDispatcher.mock.calls.at(-1) as unknown[]
+      )?.[0] as
         | {
             onFinalTextDelivered?: (params: {
               text: string;
@@ -714,9 +727,9 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
 
-    const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls.at(-1)?.[0] as
-      | { onFinalTextDelivered?: unknown }
-      | undefined;
+    const dispatcherParams = (
+      mockCreateFeishuReplyDispatcher.mock.calls.at(-1) as unknown[]
+    )?.[0] as { onFinalTextDelivered?: unknown } | undefined;
     expect(dispatcherParams?.onFinalTextDelivered).toBeUndefined();
   });
 

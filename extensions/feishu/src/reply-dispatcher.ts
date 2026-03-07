@@ -617,7 +617,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onReasoningStream: streamingEnabled
-        ? () => {
+        ? (_payload?: { text?: string; isReasoning?: boolean }) => {
             queueThinkingPrelude();
             streamPhase = "thinking";
             stagedStatusLine = resolveStatusLine();

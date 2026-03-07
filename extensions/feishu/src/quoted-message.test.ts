@@ -59,7 +59,7 @@ function appendUserTurn(params: {
     role: "user",
     content: [
       {
-        type: params.contentType ?? "text",
+        type: (params.contentType ?? "text") as "text",
         text: [
           "Conversation info (untrusted metadata):",
           "```json",
@@ -108,7 +108,7 @@ function appendAssistantTurn(params: {
   const sessionManager = SessionManager.open(params.sessionFile);
   sessionManager.appendMessage({
     role: "assistant",
-    content: [{ type: params.contentType ?? "text", text: params.body }],
+    content: [{ type: (params.contentType ?? "text") as "text", text: params.body }],
     api: "openai-responses",
     provider: "openclaw",
     model: "test-helper",
