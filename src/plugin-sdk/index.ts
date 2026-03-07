@@ -537,7 +537,10 @@ export {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
 } from "../channels/plugins/group-policy-warnings.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  buildAccountScopedDmSecurityPolicy,
+  formatPairingApproveHint,
+} from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
 export type {

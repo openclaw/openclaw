@@ -1,3 +1,4 @@
+import { buildAccountScopedDmSecurityPolicy } from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -18,11 +19,9 @@ import {
   chunkTextForOutbound,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
-  formatPairingApproveHint,
   isNumericTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-  resolveChannelAccountConfigBasePath,
   sendPayloadWithChunkedTextAndMedia,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/zalouser";
@@ -282,20 +281,16 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const basePath = resolveChannelAccountConfigBasePath({
+      return buildAccountScopedDmSecurityPolicy({
         cfg,
         channelKey: "zalouser",
-        accountId: resolvedAccountId,
-      });
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("zalouser"),
+        policyPathSuffix: "dmPolicy",
         normalizeEntry: (raw) => raw.replace(/^(zalouser|zlu):/i, ""),
-      };
+      });
     },
   },
   groups: {

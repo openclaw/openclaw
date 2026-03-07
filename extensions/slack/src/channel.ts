@@ -1,4 +1,5 @@
 import {
+  buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   buildOpenGroupPolicyWarning,
 } from "openclaw/plugin-sdk";
@@ -9,7 +10,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   extractSlackToolSend,
-  formatPairingApproveHint,
   getChatChannelMeta,
   handleSlackMessageAction,
   inspectSlackAccount,
@@ -177,18 +177,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.slack?.accounts?.[resolvedAccountId]);
-      const allowFromPath = useAccountPath
-        ? `channels.slack.accounts.${resolvedAccountId}.dm.`
-        : "channels.slack.dm.";
-      return {
-        policy: account.dm?.policy ?? "pairing",
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "slack",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.dm?.policy,
         allowFrom: account.dm?.allowFrom ?? [],
-        allowFromPath,
-        approveHint: formatPairingApproveHint("slack"),
+        allowFromPathSuffix: "dm.",
         normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
-      };
+      });
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
