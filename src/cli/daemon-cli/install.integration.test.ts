@@ -72,10 +72,11 @@ describe("runDaemonInstall integration", () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    // Keep these defined-but-empty so dotenv won't repopulate from local .env.
+    process.env.OPENCLAW_GATEWAY_TOKEN = "";
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "";
+    process.env.CLAWDBOT_GATEWAY_PASSWORD = "";
     serviceMock.isLoaded.mockResolvedValue(false);
     await fs.writeFile(configPath, JSON.stringify({}, null, 2));
     clearConfigCache();
