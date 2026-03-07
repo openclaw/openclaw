@@ -38,6 +38,7 @@ import {
   fetchMattermostMe,
   fetchMattermostUser,
   fetchMattermostUserTeams,
+  deleteMattermostPost,
   normalizeMattermostBaseUrl,
   patchMattermostPost,
   sendMattermostTyping,
@@ -1834,7 +1835,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // corrupting markdown. onPartialReply provides the complete text each time,
             // so heading/paragraph formatting is always correct.
             onPartialReply: blockStreamingClient
-              ? (payload: import("../../auto-reply/types.js").ReplyPayload) => {
+              ? (payload: ReplyPayload) => {
                   const rawText = payload.text ?? "";
                   const fullText = core.channel.text.convertMarkdownTables(rawText, tableMode);
                   if (fullText) {
