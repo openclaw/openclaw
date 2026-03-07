@@ -277,8 +277,9 @@ export async function compactEmbeddedPiSessionDirect(
   const prevCwd = process.cwd();
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
 
-  // Circuit breaker: skip compaction if too many recent consecutive failures
-  if (isCompactionCircuitOpen(sessionKey)) {
+  // Circuit breaker: skip automatic compaction if too many recent consecutive failures.
+  // Manual /compact requests bypass the breaker so operators can force recovery.
+  if (trigger !== "manual" && isCompactionCircuitOpen(sessionKey)) {
     log.warn(
       `[compaction-circuit-breaker] skipping compaction: sessionKey=${sessionKey} ` +
         `diagId=${diagId} trigger=${trigger} — circuit open due to repeated failures`,
