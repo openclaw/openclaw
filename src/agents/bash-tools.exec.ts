@@ -43,6 +43,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { initRtkDetection, tryRtkRewrite } from "./rtk-rewrite.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -152,6 +153,9 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
+  // Trigger async rtk detection on tool creation (cached after first call)
+  initRtkDetection();
+
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -468,6 +472,17 @@ export function createExecTool(
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
       await validateScriptFileForShellBleed({ command: params.command, workdir });
+
+      // --- rtk compact output rewrite ---
+      // Runs after all security/approval checks, before process spawn.
+      // Only applies to gateway host, non-elevated commands, when not explicitly disabled.
+      if (host === "gateway" && !elevatedRequested && defaults?.compactOutput !== "off") {
+        const commandToRewrite = execCommandOverride ?? params.command;
+        const rtkRewrite = await tryRtkRewrite(commandToRewrite);
+        if (rtkRewrite) {
+          execCommandOverride = rtkRewrite;
+        }
+      }
 
       const run = await runExecProcess({
         command: params.command,
