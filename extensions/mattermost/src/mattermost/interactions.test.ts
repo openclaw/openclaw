@@ -735,6 +735,51 @@ describe("createMattermostInteractionHandler", () => {
     expect(res.body).toContain("Unknown action");
   });
 
+  it("accepts actions when the button name matches the action id", async () => {
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async (path: string, init?: { method?: string }) => {
+          requestLog.push({ path, method: init?.method });
+          if (init?.method === "PUT") {
+            return { id: "post-1" };
+          }
+          return {
+            channel_id: "chan-1",
+            message: "Choose",
+            props: {
+              attachments: [{ actions: [{ id: "approve", name: "approve" }] }],
+            },
+          };
+        },
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    const req = createReq({
+      body: {
+        user_id: "user-1",
+        user_name: "alice",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+    expect(requestLog).toEqual([
+      { path: "/posts/post-1", method: undefined },
+      { path: "/posts/post-1", method: "PUT" },
+    ]);
+  });
+
   it("lets a custom interaction handler short-circuit generic completion updates", async () => {
     const context = { action_id: "mdlprov", __openclaw_channel_id: "chan-1" };
     const token = generateInteractionToken(context, "acct");
