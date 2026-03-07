@@ -211,7 +211,7 @@ describe("block streaming", () => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0]).toMatchObject({
         text: "Result",
-        mediaUrls: ["./image.png"],
+        mediaUrls: [path.join(home, "openclaw", "image.png")],
       });
     });
   });
