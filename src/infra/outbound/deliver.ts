@@ -355,6 +355,7 @@ function createMessageSentEmitter(params: {
       messageId: event.messageId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
+      sessionKey: params.sessionKeyForInternalHooks,
     });
     if (hasMessageSentHooks) {
       fireAndForgetHook(
@@ -397,6 +398,7 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  sessionKey?: string;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -423,6 +425,7 @@ async function applyMessageSendingHook(params: {
       {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
+        sessionKey: params.sessionKey,
       },
     );
     if (sendingResult?.cancel) {
@@ -701,6 +704,7 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        sessionKey: sessionKeyForInternalHooks,
       });
       if (hookResult.cancelled) {
         continue;

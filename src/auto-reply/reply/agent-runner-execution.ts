@@ -328,6 +328,8 @@ export async function runAgentTurnWithFallback(params: {
                 params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
               groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
               ...senderContext,
+              spawnedBy: params.followupRun.run.spawnedBy,
+              sourceProvider: params.followupRun.run.sourceProvider,
               ...runBaseParams,
               prompt: params.commandBody,
               extraSystemPrompt: params.followupRun.run.extraSystemPrompt,

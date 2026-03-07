@@ -491,6 +491,11 @@ export async function runPreparedReply(
         // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
+      // Resolve true origin platform — OriginatingChannel carries the real source
+      // in relayed/cross-channel scenarios (e.g. Provider="webchat" but origin is "telegram").
+      sourceProvider:
+        (ctx.OriginatingChannel ?? ctx.Provider ?? sessionCtx.Provider)?.trim().toLowerCase() ||
+        undefined,
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
@@ -500,6 +505,7 @@ export async function runPreparedReply(
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
+      spawnedBy: sessionEntry?.spawnedBy ?? undefined,
       sessionFile,
       workspaceDir,
       config: cfg,

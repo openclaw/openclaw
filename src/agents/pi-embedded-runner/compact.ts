@@ -108,8 +108,14 @@ export type CompactEmbeddedPiSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Sender identity for plugin hooks (e.g. trust classification). */
+  senderId?: string | null;
+  /** Sender display name for plugin hooks. */
+  senderName?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Raw platform origin for trust classification (e.g. "slack", "discord"). */
+  sourceProvider?: string;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -405,6 +411,8 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
       senderIsOwner: params.senderIsOwner,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -709,6 +717,12 @@ export async function compactEmbeddedPiSessionDirect(
                 sessionKey: hookSessionKey,
                 workspaceDir: effectiveWorkspace,
                 messageProvider: resolvedMessageProvider,
+                senderId: params.senderId ?? null,
+                senderName: params.senderName ?? null,
+                senderIsOwner: params.senderIsOwner,
+                groupId: params.groupId ?? null,
+                spawnedBy: params.spawnedBy ?? null,
+                sourceProvider: params.sourceProvider,
               },
             );
           } catch (err) {
@@ -818,6 +832,12 @@ export async function compactEmbeddedPiSessionDirect(
                 sessionKey: hookSessionKey,
                 workspaceDir: effectiveWorkspace,
                 messageProvider: resolvedMessageProvider,
+                senderId: params.senderId ?? null,
+                senderName: params.senderName ?? null,
+                senderIsOwner: params.senderIsOwner,
+                groupId: params.groupId ?? null,
+                spawnedBy: params.spawnedBy ?? null,
+                sourceProvider: params.sourceProvider,
               },
             );
           } catch (err) {
