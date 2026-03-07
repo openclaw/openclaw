@@ -161,6 +161,7 @@ describe("delivery-queue", () => {
     it.each([
       "No conversation reference found for user:abc",
       "Telegram send failed: chat not found (chat_id=user:123)",
+      "Discord API /channels/123/messages failed (404): Unknown Channel",
       "user not found",
       "Bot was blocked by the user",
       "Forbidden: bot was kicked from the group chat",
