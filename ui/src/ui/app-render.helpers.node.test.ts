@@ -1,16 +1,60 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const TEST_GLOBALS = vi.hoisted(() => {
+  const store = new Map<string, string>();
+  const localStorage = {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, String(value));
+    },
+  } as Storage;
+  vi.stubGlobal("localStorage", localStorage);
+  vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+  return { localStorage };
+});
+
 import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
 }
+
+const AGENTS_LIST: AgentsListResult = {
+  defaultId: "main",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: [
+    { id: "main", identity: { name: "Hal", emoji: "🔴" } },
+    { id: "butler", identity: { name: "Jarvis", emoji: "🎩" } },
+    { id: "sentinel", identity: { name: "Vigil", emoji: "🛡️" } },
+  ],
+};
+
+afterEach(() => {
+  TEST_GLOBALS.localStorage.clear();
+  vi.restoreAllMocks();
+});
 
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
@@ -135,6 +179,26 @@ describe("resolveSessionDisplayName", () => {
 
   it("returns raw key for unknown patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
+  });
+
+  it("uses agent identity for canonical agent main session keys", () => {
+    expect(resolveSessionDisplayName("agent:butler:main", undefined, AGENTS_LIST)).toBe(
+      "🎩 Jarvis (butler)",
+    );
+  });
+
+  it("uses agent identity for legacy webchat main session keys", () => {
+    expect(resolveSessionDisplayName("webchat:g-agent-sentinel-main", undefined, AGENTS_LIST)).toBe(
+      "🛡️ Vigil (sentinel)",
+    );
+  });
+
+  it("omits id suffix when agent identity name already matches id", () => {
+    const agentsList: AgentsListResult = {
+      ...AGENTS_LIST,
+      agents: [{ id: "main", identity: { name: "main", emoji: "🔴" } }],
+    };
+    expect(resolveSessionDisplayName("agent:main:main", undefined, agentsList)).toBe("🔴 main");
   });
 
   // ── With row data (label / displayName) ──────────

@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -10,11 +11,16 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
+};
+
+type SessionOption = {
+  key: string;
+  displayName?: string;
 };
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
@@ -131,6 +137,7 @@ export function renderChatControls(state: AppViewState) {
   const sessionOptions = resolveSessionOptions(
     state.sessionKey,
     state.sessionsResult,
+    state.agentsList,
     mainSessionKey,
     hideCron,
   );
@@ -337,6 +344,46 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolveSessionAgentId(key: string, agentsList?: AgentsListResult | null): string | null {
+  const parsed = parseAgentSessionKey(key);
+  const mainKey = agentsList?.mainKey?.trim().toLowerCase() || "main";
+  if (parsed?.rest === mainKey) {
+    return parsed.agentId;
+  }
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const legacyMatch = normalized.match(
+    new RegExp(`(?:^|:)g-agent-(.+)-${escapeRegExp(mainKey)}$`, "i"),
+  );
+  const legacyAgentId = legacyMatch?.[1]?.trim();
+  return legacyAgentId || null;
+}
+
+function resolveAgentSessionDisplayName(
+  key: string,
+  agentsList?: AgentsListResult | null,
+): string | null {
+  const agentId = resolveSessionAgentId(key, agentsList);
+  if (!agentId || !agentsList?.agents?.length) {
+    return null;
+  }
+  const agent = agentsList.agents.find((entry) => entry.id.trim().toLowerCase() === agentId);
+  if (!agent) {
+    return null;
+  }
+  const name = agent.identity?.name?.trim() || agent.name?.trim() || agent.id;
+  const emoji = agent.identity?.emoji?.trim() || "";
+  const suffix =
+    name.trim().toLowerCase() === agent.id.trim().toLowerCase() ? "" : ` (${agent.id})`;
+  return `${emoji ? `${emoji} ` : ""}${name}${suffix}`;
+}
+
 /**
  * Parse a session key to extract type information and a human-readable
  * fallback display name.  Exported for testing.
@@ -390,6 +437,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
 export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
+  agentsList?: AgentsListResult | null,
 ): string {
   const label = row?.label?.trim() || "";
   const displayName = row?.displayName?.trim() || "";
@@ -399,7 +447,7 @@ export function resolveSessionDisplayName(
     if (!prefix) {
       return name;
     }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    const prefixPattern = new RegExp(`^${escapeRegExp(prefix)}\\s*`, "i");
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
@@ -408,6 +456,10 @@ export function resolveSessionDisplayName(
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
+  }
+  const agentDisplayName = resolveAgentSessionDisplayName(key, agentsList);
+  if (agentDisplayName) {
+    return applyTypedPrefix(agentDisplayName);
   }
   return fallbackName;
 }
@@ -434,11 +486,12 @@ export function isCronSessionKey(key: string): boolean {
 function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
+  agentsList?: AgentsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
 ) {
   const seen = new Set<string>();
-  const options: Array<{ key: string; displayName?: string }> = [];
+  const options: SessionOption[] = [];
 
   const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
@@ -448,7 +501,7 @@ function resolveSessionOptions(
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
+      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined, agentsList),
     });
   }
 
@@ -458,7 +511,7 @@ function resolveSessionOptions(
     seen.add(sessionKey);
     options.push({
       key: sessionKey,
-      displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
+      displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent, agentsList),
     });
   }
 
@@ -469,7 +522,7 @@ function resolveSessionOptions(
         seen.add(s.key);
         options.push({
           key: s.key,
-          displayName: resolveSessionDisplayName(s.key, s),
+          displayName: resolveSessionDisplayName(s.key, s, agentsList),
         });
       }
     }
