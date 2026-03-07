@@ -718,6 +718,49 @@ describe("session-memory hook", () => {
     expect(content).toContain("important data");
   });
 
+  it("blockSessionSave pre-set then cleared with sessionSaveContent creates file (mkdir edge case)", async () => {
+    // Regression: when blockSessionSave is true initially, the inline write
+    // is skipped — including the fs.mkdir.  If a later hook clears the flag
+    // and sets sessionSaveContent, the post-hook write must create the
+    // directory itself or it fails with ENOENT.
+    const tempDir = await createCaseWorkspace("block-then-clear");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "secret" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    event.context.blockSessionSave = true;
+
+    // Handler runs — inline write is skipped, memoryDir never created
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const existsBefore = await fs
+      .stat(memoryDir)
+      .then(() => true)
+      .catch(() => false);
+    expect(existsBefore).toBe(false);
+
+    // A later hook clears blockSessionSave and sets custom content
+    event.context.blockSessionSave = false;
+    event.context.sessionSaveContent = "Replacement content from policy hook";
+
+    // Post-hook should create the directory and write the file
+    await drainPostHookActions(event);
+
+    const files = (await fs.readdir(memoryDir)).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+    const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(content).toBe("Replacement content from policy hook");
+  });
+
   it("blockSessionSave takes precedence over sessionSaveContent (both pre-set)", async () => {
     const tempDir = await createCaseWorkspace("block-beats-content-pre");
     const sessionsDir = path.join(tempDir, "sessions");

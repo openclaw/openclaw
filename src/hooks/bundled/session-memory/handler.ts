@@ -268,6 +268,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
           typeof postContent === "string" &&
           postContent !== writtenEntry
         ) {
+          // Ensure memoryDir exists — the inline write may have been
+          // skipped (e.g. blockSessionSave was true initially) so mkdir
+          // might never have run.
+          await fs.mkdir(memoryDir, { recursive: true });
           await writeFileWithinRoot({
             rootDir: memoryDir,
             relativePath: filename,
