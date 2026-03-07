@@ -1,9 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRouteAllowlistWarnings,
+  createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -94,6 +93,14 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
+const telegramConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedTelegramAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
+  resolveDefaultTo: (account: ResolvedTelegramAccount) => account.config.defaultTo,
+});
+
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
   meta: {
@@ -177,12 +184,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
       tokenSource: account.tokenSource,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveTelegramAccount({ cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(resolveTelegramAccount({ cfg, accountId }).config.defaultTo),
+    ...telegramConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

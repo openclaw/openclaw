@@ -1,9 +1,8 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyWarning,
+  createScopedAccountConfigAccessors,
   formatNormalizedAllowFromEntries,
-  mapAllowFromEntries,
-  resolveOptionalConfigString,
 } from "openclaw/plugin-sdk";
 import {
   buildBaseAccountStatusSnapshot,
@@ -48,6 +47,17 @@ function normalizePairingTarget(raw: string): string {
   }
   return normalized.split(/[!@]/, 1)[0]?.trim() ?? "";
 }
+
+const ircConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
+  resolveAllowFrom: (account: ResolvedIrcAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: normalizeIrcAllowEntry,
+    }),
+  resolveDefaultTo: (account: ResolvedIrcAccount) => account.config.defaultTo,
+});
 
 export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   id: "irc",
@@ -116,19 +126,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       nick: account.nick,
       passwordSource: account.passwordSource,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(
-        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom,
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: normalizeIrcAllowEntry,
-      }),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(
-        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.defaultTo,
-      ),
+    ...ircConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
