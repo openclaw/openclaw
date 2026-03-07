@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+token_file="${OPENCLAW_GITHUB_TOKEN_FILE:-$HOME/.openclaw/identity/github-token}"
+if [[ -f "$token_file" ]]; then
+  token="$(tr -d '\r\n' < "$token_file" 2>/dev/null || true)"
+  if [[ -n "$token" ]]; then
+    export GH_TOKEN="$token"
+    export GITHUB_TOKEN="$token"
+    export COPILOT_GITHUB_TOKEN="${COPILOT_GITHUB_TOKEN:-$token}"
+  fi
+fi
+
+real_gh="${OPENCLAW_REAL_GH:-}"
+if [[ -z "$real_gh" || ! -x "$real_gh" ]]; then
+  for candidate in /usr/bin/gh /usr/local/bin/gh; do
+    if [[ -x "$candidate" ]]; then
+      real_gh="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$real_gh" || ! -x "$real_gh" ]]; then
+  echo "gh binary not found" >&2
+  exit 127
+fi
+
+exec "$real_gh" "$@"
