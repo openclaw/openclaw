@@ -3034,17 +3034,15 @@ export async function runEmbeddedAttempt(
               const { clearAllAssistantContent } = await import("./hook-response-emit.js");
               clearAllAssistantContent(activeSession.messages);
             } catch {
-              // If even the import fails, clear manually as last resort
+              // If even the import fails, clear manually as last resort.
+              // Set content = [] (not selective text clearing) to also remove
+              // tool_use blocks whose input arguments may contain sensitive data.
               for (const msg of activeSession.messages) {
                 if (msg.role === "assistant" && "content" in msg) {
                   if (typeof msg.content === "string") {
                     (msg as unknown as Record<string, unknown>).content = "";
                   } else if (Array.isArray(msg.content)) {
-                    for (const part of msg.content) {
-                      if (part && typeof part === "object" && "text" in part) {
-                        (part as unknown as Record<string, unknown>).text = "";
-                      }
-                    }
+                    msg.content.length = 0;
                   }
                 }
               }
