@@ -154,7 +154,8 @@ export const zh_CN: TranslationMap = {
     tokensTitle: "Token",
     costTitle: "成本",
     refresh: "刷新",
-    filterPlaceholder: "筛选会话（示例：key:agent:main:cron* model:gpt-4o has:errors minTokens:2000）",
+    filterPlaceholder:
+      "筛选会话（示例：key:agent:main:cron* model:gpt-4o has:errors minTokens:2000）",
     filterClient: "应用",
     sessionsMatch: "匹配 {matched}/{total} 个会话",
     sessionsInRange: "当前范围共 {total} 个会话",

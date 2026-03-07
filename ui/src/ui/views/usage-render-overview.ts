@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { t } from "../../i18n/index.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -86,7 +86,9 @@ function renderFilterChips(
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
       ? selectedSessions[0].slice(0, 8) + "…"
-      : tr("usageOverview.sessionsN", "{count} sessions", { count: String(selectedSessions.length) });
+      : tr("usageOverview.sessionsN", "{count} sessions", {
+          count: String(selectedSessions.length),
+        });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key
     : selectedSessions.length === 1

@@ -22,9 +22,8 @@ class I18nManager {
   }
 
   private resolveInitialLocale(): Locale {
-    const saved = typeof localStorage !== "undefined"
-      ? localStorage.getItem("openclaw.i18n.locale")
-      : null;
+    const saved =
+      typeof localStorage !== "undefined" ? localStorage.getItem("openclaw.i18n.locale") : null;
     if (isSupportedLocale(saved)) {
       return saved;
     }

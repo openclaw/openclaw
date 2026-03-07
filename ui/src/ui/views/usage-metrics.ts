@@ -1,10 +1,10 @@
 import { html } from "lit";
-import { t, i18n } from "../../i18n/index.ts";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
+import { t, i18n } from "../../i18n/index.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const tr = (key: string, fallback: string, params?: Record<string, string>) => {
