@@ -339,22 +339,30 @@ jobs:
           fi
 
           BASE="$PR_BASE_SHA"
-          changed_files=()
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            while IFS= read -r path; do
-              [ -n "$path" ] || continue
-              [ -f "$path" ] || continue
-              changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+            echo "::error::Unable to resolve PR base commit $BASE for detect-secrets."
+            exit 1
           fi
 
-          if [ "${#changed_files[@]}" -gt 0 ]; then
-            echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
-            pre-commit run detect-secrets --files "${changed_files[@]}"
-          else
-            echo "Skipping detect-secrets: unable to resolve changed files for this PR."
+          if ! diff_output="$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)"; then
+            echo "::error::Failed to diff PR base commit $BASE for detect-secrets."
+            exit 1
+          fi
+
+          changed_files=()
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            [ -f "$path" ] || continue
+            changed_files+=("$path")
+          done <<< "$diff_output"
+
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "No scan-eligible changed files detected; skipping detect-secrets."
             exit 0
           fi
+
+          echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
+          pre-commit run detect-secrets --files "${changed_files[@]}"
 
       - name: Detect committed private keys
         run: pre-commit run --all-files detect-private-key
