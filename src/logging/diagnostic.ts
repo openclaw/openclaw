@@ -27,6 +27,7 @@ const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_STUCK_SESSION_AUTO_RECOVER_MS = 300_000;
 const MIN_STUCK_SESSION_AUTO_RECOVER_MS = 30_000;
+const MAX_STUCK_SESSION_AUTO_RECOVER_MS = 24 * 60 * 60 * 1000;
 let commandPollBackoffRuntimePromise: Promise<
   typeof import("../agents/command-poll-backoff.runtime.js")
 > | null = null;
@@ -34,7 +35,7 @@ let embeddedRunnerRuntimePromise: Promise<
   typeof import("../agents/pi-embedded-runner/runs.js")
 > | null = null;
 
-/** Sessions already auto-recovered this heartbeat cycle — avoid repeated aborts. */
+/** Sessions already auto-recovered — cleared on idle transition to allow retry after recovery. */
 const autoRecoveredSessions = new Set<string>();
 
 function loadCommandPollBackoffRuntime() {
@@ -79,7 +80,7 @@ export function resolveStuckSessionAutoRecoverMs(config?: OpenClawConfig): numbe
   if (rounded < MIN_STUCK_SESSION_AUTO_RECOVER_MS) {
     return DEFAULT_STUCK_SESSION_AUTO_RECOVER_MS;
   }
-  return Math.min(rounded, MAX_STUCK_SESSION_WARN_MS);
+  return Math.min(rounded, MAX_STUCK_SESSION_AUTO_RECOVER_MS);
 }
 
 export function logWebhookReceived(params: {
@@ -432,17 +433,19 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
     const autoRecoverMs = resolveStuckSessionAutoRecoverMs(heartbeatConfig);
 
     for (const [, state] of diagnosticSessionStates) {
-      const ageMs = now - state.lastActivity;
-      if (state.state !== "processing" || ageMs <= stuckSessionWarnMs) {
+      if (state.state !== "processing") {
         continue;
       }
+      const ageMs = now - state.lastActivity;
 
-      logSessionStuck({
-        sessionId: state.sessionId,
-        sessionKey: state.sessionKey,
-        state: state.state,
-        ageMs,
-      });
+      if (ageMs > stuckSessionWarnMs) {
+        logSessionStuck({
+          sessionId: state.sessionId,
+          sessionKey: state.sessionKey,
+          state: state.state,
+          ageMs,
+        });
+      }
 
       const sessionId = state.sessionId;
       if (
@@ -474,6 +477,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
           })
           .catch((err) => {
             diag.error(`auto-recovery failed: sessionId=${sessionId} error="${String(err)}"`);
+            autoRecoveredSessions.delete(sessionId);
           });
       }
     }
