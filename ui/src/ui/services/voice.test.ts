@@ -39,6 +39,14 @@ describe("voice service", () => {
     vi.unstubAllGlobals();
   });
 
+  it("stopTTS cancels speechSynthesis", () => {
+    const cancelSpy = vi.fn();
+    vi.stubGlobal("window", { speechSynthesis: { cancel: cancelSpy } });
+    voice.stopTTS();
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
   it("playTTS speaks via speechSynthesis", () => {
     const speakSpy = vi.fn();
     vi.stubGlobal(

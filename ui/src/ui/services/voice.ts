@@ -120,6 +120,15 @@ export function primeSpeechSynthesis(): void {
 }
 
 /**
+ * Cancel any ongoing speechSynthesis playback immediately.
+ */
+export function stopTTS(): void {
+  if (typeof window !== "undefined" && "speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+/**
  * Play text via browser speechSynthesis.
  */
 export function playTTS(text: string): void {

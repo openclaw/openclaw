@@ -150,6 +150,8 @@ export class OpenClawApp extends LitElement {
       this._lastVoiceSuffix = "";
       void import("./services/voice.ts").then((m) => {
         this._voiceModule = m;
+        // Silence any ongoing TTS so it doesn't bleed into the microphone
+        m.stopTTS();
         m.startRecording(
           (interim) => {
             this._replaceVoiceSuffix(interim);
@@ -197,6 +199,9 @@ export class OpenClawApp extends LitElement {
     if (this.audioOutputEnabled) {
       // Prime speechSynthesis on the user gesture so later automated TTS isn't blocked
       void import("./services/voice.ts").then((m) => m.primeSpeechSynthesis());
+    } else {
+      // Stop any in-progress TTS immediately when audio output is turned off
+      void import("./services/voice.ts").then((m) => m.stopTTS());
     }
   }
   @state() password = "";
