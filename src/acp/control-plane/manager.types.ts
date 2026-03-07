@@ -39,6 +39,13 @@ export type AcpSessionResolution =
       meta: SessionAcpMeta;
     };
 
+export type AcpSessionStoreTarget = {
+  sessionKey: string;
+  storeSessionKey?: string;
+};
+
+export type AcpReadySessionResolution = Extract<AcpSessionResolution, { kind: "ready" }>;
+
 export type AcpInitializeSessionInput = {
   cfg: OpenClawConfig;
   sessionKey: string;

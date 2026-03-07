@@ -393,6 +393,73 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
+  it("keeps legacy alias entries active during ACP upserts under disk-budget enforcement", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const now = Date.now();
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:helper:main": {
+              sessionId: "acp-helper-budget",
+              updatedAt: now - 60_000,
+              displayName: "x".repeat(4096),
+              acp: {
+                backend: "acpx",
+                agent: "helper",
+                runtimeSessionName: "legacy-helper-main",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: now - 60_000,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const cfg = createAcpEnabledConfig(home, storePath);
+      cfg.session = {
+        store: storePath,
+        mainKey: "desk",
+        maintenance: {
+          mode: "enforce",
+          maxDiskBytes: "300b",
+          highWaterBytes: "200b",
+        },
+      };
+      cfg.acp = {
+        ...cfg.acp,
+        allowedAgents: ["helper"],
+      };
+      loadConfigSpy.mockReturnValue(cfg);
+
+      await upsertAcpSessionMeta({
+        cfg,
+        sessionKey: "agent:helper:desk",
+        rawSessionKey: "agent:helper:main",
+        mutate: (current, entry) => ({
+          ...(current ?? entry?.acp),
+          backend: "acpx",
+          agent: "helper",
+          runtimeSessionName: "legacy-helper-main",
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: now + 1,
+        }),
+      });
+
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { acp?: { state?: string } }
+      >;
+      expect(Object.keys(store)).toEqual(["agent:helper:main"]);
+      expect(store["agent:helper:main"]?.acp?.state).toBe("running");
+    });
+  });
+
   it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

@@ -230,6 +230,12 @@ export async function upsertAcpSessionMeta(params: {
     sessionKey,
     cfg,
   });
+  const activeStoreSessionKey =
+    readAcpSessionEntry({
+      cfg,
+      sessionKey,
+      rawSessionKey: params.rawSessionKey,
+    })?.storeSessionKey ?? sessionKey;
   return await updateSessionStore(
     storePath,
     (store) => {
@@ -260,7 +266,7 @@ export async function upsertAcpSessionMeta(params: {
       return nextEntry;
     },
     {
-      activeSessionKey: sessionKey.toLowerCase(),
+      activeSessionKey: activeStoreSessionKey.toLowerCase(),
     },
   );
 }

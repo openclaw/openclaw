@@ -9,13 +9,12 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../runtime/session-identity.js";
 import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeStatus } from "../runtime/types.js";
-import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
+import type { AcpSessionStoreTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
 export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   cfg: OpenClawConfig;
-  sessionKey: string;
-  storeSessionKey?: string;
+  target: AcpSessionStoreTarget;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
@@ -24,8 +23,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
-    sessionKey: string;
-    storeSessionKey?: string;
+    target: AcpSessionStoreTarget;
     mutate: (
       current: SessionAcpMeta | undefined,
       entry: SessionEntry | undefined,
@@ -53,7 +51,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         throw error;
       }
       logVerbose(
-        `acp-manager: failed to refresh ACP runtime status for ${params.sessionKey}: ${String(error)}`,
+        `acp-manager: failed to refresh ACP runtime status for ${params.target.sessionKey}: ${String(error)}`,
       );
       return {
         handle: params.handle,
@@ -90,7 +88,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       }
     : params.handle;
   if (handleChanged) {
-    params.setCachedHandle(params.sessionKey, nextHandle);
+    params.setCachedHandle(params.target.sessionKey, nextHandle);
   }
 
   const metaChanged =
@@ -122,7 +120,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     const currentAcpxRecordId = currentIdentity?.acpxRecordId ?? "<none>";
     const nextAcpxRecordId = nextIdentity?.acpxRecordId ?? "<none>";
     logVerbose(
-      `acp-manager: session identity updated for ${params.sessionKey} ` +
+      `acp-manager: session identity updated for ${params.target.sessionKey} ` +
         `(agentSessionId ${currentAgentSessionId} -> ${nextAgentSessionId}, ` +
         `acpxSessionId ${currentAcpxSessionId} -> ${nextAcpxSessionId}, ` +
         `acpxRecordId ${currentAcpxRecordId} -> ${nextAcpxRecordId})`,
@@ -130,8 +128,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   }
   await params.writeSessionMeta({
     cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    storeSessionKey: params.storeSessionKey,
+    target: params.target,
     mutate: (current, entry) => {
       if (!entry) {
         return null;
