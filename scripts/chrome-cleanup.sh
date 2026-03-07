@@ -120,7 +120,7 @@ find_main_chrome_pids() {
         [[ -n "$pid" ]] && pids+=("$pid")
     done < <(
         echo "$ps_output" \
-        | grep -E '/chrome$|/chrome |/chromium|/Chromium|/Google Chrome|google-chrome|chromium-browser' \
+        | grep -E '(^|/)(chrome|Chromium|Google[[:space:]]Chrome|google-chrome(-stable|-beta|-unstable)?|chromium(-browser)?)([[:space:]]|$)' \
         | grep -v 'crashpad_handler' \
         | grep -v '\-\-type=' \
         | grep -v 'grep' \
