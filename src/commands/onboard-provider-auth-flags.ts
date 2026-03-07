@@ -24,6 +24,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "litellmApiKey"
   | "qianfanApiKey"
   | "volcengineApiKey"
+  | "orqApiKey"
   | "byteplusApiKey"
 >;
 
@@ -190,6 +191,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--volcengine-api-key",
     cliOption: "--volcengine-api-key <key>",
     description: "Volcano Engine API key",
+  },
+  {
+    optionKey: "orqApiKey",
+    authChoice: "orq-api-key",
+    cliFlag: "--orq-api-key",
+    cliOption: "--orq-api-key <key>",
+    description: "Orq API key",
   },
   {
     optionKey: "byteplusApiKey",
