@@ -12,6 +12,7 @@ import {
   extractMessagingToolSend,
   extractToolErrorMessage,
   extractToolResultMediaPaths,
+  extractToolResultMediaPathsAsync,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -139,14 +140,14 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function emitToolResultOutput(params: {
+async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
   meta?: string;
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
-}) {
+}): Promise<void> {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
   if (!ctx.params.onToolResult) {
     return;
@@ -166,12 +167,20 @@ function emitToolResultOutput(params: {
 
   // emitToolOutput() already handles MEDIA: directives when enabled; this path
   // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
-  if (mediaPaths.length === 0) {
+  // Use async version to handle base64 image data that needs to be saved to temp files.
+  let mediaPaths: string[];
+  try {
+    mediaPaths = await extractToolResultMediaPathsAsync(result);
+  } catch {
+    // Fall back to sync version if async fails
+    mediaPaths = extractToolResultMediaPaths(result);
+  }
+  const filteredPaths = filterToolResultMediaUrls(toolName, mediaPaths);
+  if (filteredPaths.length === 0) {
     return;
   }
   try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    void ctx.params.onToolResult({ mediaUrls: filteredPaths });
   } catch {
     // ignore delivery failures
   }
@@ -427,7 +436,7 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();

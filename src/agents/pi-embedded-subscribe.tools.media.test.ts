@@ -1,5 +1,10 @@
+import { existsSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultMediaPaths,
+  extractToolResultMediaPathsAsync,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -228,5 +233,122 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+});
+
+describe("extractToolResultMediaPathsAsync", () => {
+  // A tiny 1x1 PNG (base64 encoded)
+  const TINY_PNG_BASE64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+  it("saves base64 image to temp file when no MEDIA: or details.path", async () => {
+    const result = {
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ],
+    };
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths.length).toBe(1);
+
+    const filePath = paths[0];
+    // Should be a PNG file
+    expect(filePath).toMatch(/\.png$/);
+    // File should exist
+    expect(existsSync(filePath)).toBe(true);
+
+    // Verify the content is correct
+    const fileBuffer = await readFile(filePath);
+    const fileBase64 = fileBuffer.toString("base64");
+    expect(fileBase64).toBe(TINY_PNG_BASE64);
+
+    // Cleanup
+    await rm(filePath, { force: true });
+  });
+
+  it("handles multiple image blocks", async () => {
+    const result = {
+      content: [
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ],
+    };
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths.length).toBe(2);
+    expect(paths[0]).toMatch(/\.png$/);
+    expect(paths[1]).toMatch(/\.png$/);
+    expect(paths[0]).not.toBe(paths[1]);
+
+    // Cleanup
+    for (const p of paths) {
+      await rm(p, { force: true });
+    }
+  });
+
+  it("extracts extension from mimeType", async () => {
+    // Test JPEG
+    const jpegResult = {
+      content: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/jpeg" }],
+    };
+    const jpegPaths = await extractToolResultMediaPathsAsync(jpegResult);
+    expect(jpegPaths[0]).toMatch(/\.jpg$/);
+
+    // Test WebP
+    const webpResult = {
+      content: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/webp" }],
+    };
+    const webpPaths = await extractToolResultMediaPathsAsync(webpResult);
+    expect(webpPaths[0]).toMatch(/\.webp$/);
+
+    // Cleanup
+    for (const p of [...jpegPaths, ...webpPaths]) {
+      await rm(p, { force: true });
+    }
+  });
+
+  it("returns paths from MEDIA: text when available", async () => {
+    const result = {
+      content: [
+        { type: "text", text: "MEDIA:/tmp/existing.png" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ],
+    };
+    // When MEDIA: exists, it should use that path instead of creating temp file
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths).toEqual(["/tmp/existing.png"]);
+  });
+
+  it("returns paths from details.path when available", async () => {
+    const result = {
+      content: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+      details: { path: "/tmp/from-details.png" },
+    };
+    // When details.path exists, it should use that path instead of creating temp file
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths).toEqual(["/tmp/from-details.png"]);
+  });
+
+  it("returns empty array for results without images", async () => {
+    const result = {
+      content: [{ type: "text", text: "No images here" }],
+    };
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths).toEqual([]);
+  });
+
+  it("ignores image blocks without data", async () => {
+    const result = {
+      content: [{ type: "image", mimeType: "image/png" }],
+    };
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths).toEqual([]);
+  });
+
+  it("ignores image blocks without mimeType", async () => {
+    const result = {
+      content: [{ type: "image", data: TINY_PNG_BASE64 }],
+    };
+    const paths = await extractToolResultMediaPathsAsync(result);
+    expect(paths).toEqual([]);
   });
 });

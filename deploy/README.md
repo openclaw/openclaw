@@ -144,11 +144,61 @@ sudo ./deploy/install-daemon.sh
 
 > _注：此脚本会自动替换 `deploy/openclaw.service` 中的路径和用户名，并将其安装到 `/etc/systemd/system/`，最后会拉起服务。_
 
-   </details>
+---
+
+## 🔄 三、版本更新（保留会话记录）
+
+当有新版本发布时，使用更新脚本可以保留现有的会话记录和配置。
+
+### 数据存储位置
+
+| 路径            | 说明                                                   | 更新时处理  |
+| --------------- | ------------------------------------------------------ | ----------- |
+| `agents/`       | 会话记录、Agent 配置                                   | ✅ **保留** |
+| `workspace/`    | 用户自定义文件 (AGENTS.md, SOUL.md, TOOLS.md, skills/) | ✅ **保留** |
+| `openclaw.json` | 服务配置文件                                           | ✅ **保留** |
+| `.env`          | 环境变量                                               | ✅ **保留** |
+| `dist/`         | 程序代码                                               | 🔄 覆盖更新 |
+| `package.json`  | 依赖描述                                               | 🔄 覆盖更新 |
+
+### 更新步骤
+
+1. 在本地源码目录重新打包：
+
+   ```bash
+   cd /path/to/openclaw-source
+   pnpm build
+   pnpm pack
+   # 生成 openclaw-2026.x.x.tgz
+   ```
+
+2. 将压缩包上传到服务器：
+
+   ```bash
+   scp openclaw-*.tgz user@server:/tmp/
+   ```
+
+3. 在服务器上执行更新脚本：
+
+   ```bash
+   sudo ./deploy/update.sh <安装目录> <压缩包路径>
+   ```
+
+   示例：
+
+   ```bash
+   sudo ./deploy/update.sh /opt/openclaw /tmp/openclaw-2026.3.3.tgz
+   ```
+
+该脚本会：
+
+- 自动停止 systemd 服务
+- 解压新版本（排除 `agents/`、`openclaw.json`、`.env`）
+- 重启服务
 
 ---
 
-## 🛑 三、如何停止或重启
+## 🛑 四、如何停止或重启
 
 **如果你使用的是系统服务（原生 `gateway install` 服务）后台运行：**
 
@@ -162,7 +212,7 @@ pnpm exec node dist/index.js logs --follow
 
 ---
 
-## 🗑️ 四、卸载与数据清理
+## 🗑️ 五、卸载与数据清理
 
 当前采用的是「绿色免安装」模式，工作区状态默认都存在了解压的 `package` 目录下，所以卸载十分简单。
 

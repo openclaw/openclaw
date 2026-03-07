@@ -1,3 +1,5 @@
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -238,6 +240,125 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   }
 
   return [];
+}
+
+type ImageContentBlock = {
+  type: "image";
+  data: string;
+  mimeType: string;
+};
+
+function extractImageBlocks(content: unknown[]): ImageContentBlock[] {
+  const images: ImageContentBlock[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type !== "image") {
+      continue;
+    }
+    const data = typeof entry.data === "string" ? entry.data : undefined;
+    const mimeType = typeof entry.mimeType === "string" ? entry.mimeType : undefined;
+    if (!data || !mimeType) {
+      continue;
+    }
+    images.push({ type: "image", data, mimeType });
+  }
+  return images;
+}
+
+function mimeTypeToExtension(mimeType: string): string {
+  const normalized = mimeType.toLowerCase().trim();
+  switch (normalized) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+    case "image/jpg":
+      return ".jpg";
+    case "image/gif":
+      return ".gif";
+    case "image/webp":
+      return ".webp";
+    case "image/bmp":
+      return ".bmp";
+    case "image/tiff":
+    case "image/tif":
+      return ".tiff";
+    case "image/svg+xml":
+      return ".svg";
+    default:
+      // Fall back to first part after "image/"
+      const match = normalized.match(/^image\/([a-z0-9+-]+)$/i);
+      return match ? `.${match[1]}` : ".bin";
+  }
+}
+
+/**
+ * Extract media paths from tool result, saving base64 image data to temp files.
+ * This is an async version that handles image content blocks that don't have
+ * an associated file path by saving them to temporary files.
+ *
+ * Strategy (order of precedence):
+ * 1. Parse `MEDIA:` tokens from text content blocks.
+ * 2. Use `details.path` when image content exists.
+ * 3. Save base64 image data to temp files when no path is available.
+ */
+export async function extractToolResultMediaPathsAsync(result: unknown): Promise<string[]> {
+  if (!result || typeof result !== "object") {
+    return [];
+  }
+  const record = result as Record<string, unknown>;
+  const content = Array.isArray(record.content) ? record.content : null;
+  if (!content) {
+    return [];
+  }
+
+  // First, try to extract paths from text and details.path
+  const paths = extractToolResultMediaPaths(result);
+  if (paths.length > 0) {
+    return paths;
+  }
+
+  // If no paths found but we have image content blocks, save them to temp files
+  const imageBlocks = extractImageBlocks(content);
+  if (imageBlocks.length === 0) {
+    return [];
+  }
+
+  // Use tmp directory under current working directory
+  const tempRoot = path.join(process.cwd(), "tmp");
+  const tempDir = path.join(
+    tempRoot,
+    `openclaw-tool-image-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const savedPaths: string[] = [];
+
+  try {
+    await mkdir(tempDir, { recursive: true });
+
+    for (let i = 0; i < imageBlocks.length; i++) {
+      const block = imageBlocks[i];
+      const ext = mimeTypeToExtension(block.mimeType);
+      const fileName = `image-${i}${ext}`;
+      const filePath = path.join(tempDir, fileName);
+
+      // Decode base64 and write to file
+      const buffer = Buffer.from(block.data, "base64");
+      await writeFile(filePath, buffer);
+      savedPaths.push(filePath);
+    }
+
+    return savedPaths;
+  } catch (err) {
+    // Clean up on failure
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+    throw err;
+  }
 }
 
 export function isToolResultError(result: unknown): boolean {
