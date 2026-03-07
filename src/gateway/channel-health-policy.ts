@@ -108,6 +108,9 @@ export function evaluateChannelHealth(
     snapshot.connected === true &&
     snapshot.lastEventAt != null
   ) {
+    if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
+      return { healthy: true, reason: "healthy" };
+    }
     const eventAge = policy.now - snapshot.lastEventAt;
     if (eventAge > policy.staleEventThresholdMs) {
       return { healthy: false, reason: "stale-socket" };
