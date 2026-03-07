@@ -266,7 +266,7 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
-### Session Events
+### Session Patch Events
 
 Triggered when session properties are modified:
 

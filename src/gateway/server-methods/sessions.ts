@@ -453,12 +453,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const hookEvent: SessionPatchHookEvent = {
-      ...createInternalHookEvent("session", "patch", target.canonicalKey ?? key),
+      type: "session",
+      action: "patch",
+      sessionKey: target.canonicalKey ?? key,
       context: {
         sessionEntry: applied.entry,
         patch: p,
         cfg,
       },
+      timestamp: new Date(),
+      messages: [],
     };
     void triggerInternalHook(hookEvent);
 
