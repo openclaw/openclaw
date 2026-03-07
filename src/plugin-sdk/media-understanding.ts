@@ -7,11 +7,13 @@ export type {
   ImageDescriptionResult,
   ImagesDescriptionInput,
   ImagesDescriptionRequest,
-  ImagesDescriptionResult,
   MediaUnderstandingProvider,
   VideoDescriptionRequest,
   VideoDescriptionResult,
 } from "../media-understanding/types.js";
+
+import type { ImageDescriptionResult } from "../media-understanding/types.js";
+export type ImagesDescriptionResult = ImageDescriptionResult;
 
 export {
   describeImageWithModel,

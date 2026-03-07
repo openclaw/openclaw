@@ -84,7 +84,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?: string;
   protected fallbackReason?: string;
   private providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;

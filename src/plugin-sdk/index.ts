@@ -75,7 +75,62 @@ export type {
   TranscriptRewriteResult,
 } from "../context-engine/types.js";
 
+export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
-export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+// Model authentication types for plugins.
+// Plugins should use runtime.modelAuth (which strips unsafe overrides like
+// agentDir/store) rather than importing raw helpers directly.
+export { requireApiKey } from "../agents/model-auth.js";
+export type { ResolvedProviderAuth } from "../agents/model-auth.js";
+export type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDiscoveryContext,
+} from "../plugins/types.js";
+export {
+  applyProviderDefaultModel,
+  promptAndConfigureOpenAICompatibleSelfHostedProvider,
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
+  SELF_HOSTED_DEFAULT_MAX_TOKENS,
+} from "../commands/self-hosted-provider-setup.js";
+export {
+  OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_MODEL,
+  configureOllamaNonInteractive,
+  ensureOllamaModelPulled,
+  promptAndConfigureOllama,
+} from "../commands/ollama-setup.js";
+export {
+  VLLM_DEFAULT_BASE_URL,
+  VLLM_DEFAULT_CONTEXT_WINDOW,
+  VLLM_DEFAULT_COST,
+  VLLM_DEFAULT_MAX_TOKENS,
+  promptAndConfigureVllm,
+} from "../commands/vllm-setup.js";
+export {
+  buildOllamaProvider,
+  buildSglangProvider,
+  buildVllmProvider,
+} from "../agents/models-config.providers.discovery.js";
+
+// Security utilities
+export { redactSensitiveText } from "../logging/redact.js";
+
+// Media provider plugin types
+export type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
+  ImageDescriptionRequest,
+  ImageDescriptionResult,
+  TextToSpeechRequest,
+  TextToSpeechResult,
+  PluginImageDescriptionRequest,
+  PluginAudioTranscriptionRequest,
+  PluginVideoDescriptionRequest,
+  PluginTextToSpeechRequest,
+} from "../plugins/types.js";

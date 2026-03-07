@@ -176,4 +176,97 @@ describe("normalizeRegisteredProvider", () => {
       'provider "demo" registered both catalog and discovery; using catalog',
     ]);
   });
+
+  it("normalizes provider IDs during registration", () => {
+    const { pushDiagnostic } = collectDiagnostics();
+
+    const provider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: " OpenAI ",
+      }),
+      pushDiagnostic,
+    });
+
+    expect(provider?.id).toBe("openai");
+  });
+
+  it("normalizes z.ai alias to zai", () => {
+    const { pushDiagnostic } = collectDiagnostics();
+
+    const provider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: "z.ai",
+      }),
+      pushDiagnostic,
+    });
+
+    expect(provider?.id).toBe("zai");
+  });
+
+  it("normalizes qwen to qwen-portal", () => {
+    const { pushDiagnostic } = collectDiagnostics();
+
+    const provider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: "Qwen",
+      }),
+      pushDiagnostic,
+    });
+
+    expect(provider?.id).toBe("qwen-portal");
+  });
+
+  it("normalizes bedrock variants to amazon-bedrock", () => {
+    const { pushDiagnostic } = collectDiagnostics();
+
+    const bedrockProvider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: "bedrock",
+      }),
+      pushDiagnostic,
+    });
+    expect(bedrockProvider?.id).toBe("amazon-bedrock");
+
+    const awsBedrockProvider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: "aws-bedrock",
+      }),
+      pushDiagnostic,
+    });
+    expect(awsBedrockProvider?.id).toBe("amazon-bedrock");
+  });
+
+  it("normalizes bytedance/doubao to volcengine", () => {
+    const { pushDiagnostic } = collectDiagnostics();
+
+    const bytedanceProvider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: "ByteDance",
+      }),
+      pushDiagnostic,
+    });
+    expect(bytedanceProvider?.id).toBe("volcengine");
+
+    const doubaoProvider = normalizeRegisteredProvider({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id: "Doubao",
+      }),
+      pushDiagnostic,
+    });
+    expect(doubaoProvider?.id).toBe("volcengine");
+  });
 });

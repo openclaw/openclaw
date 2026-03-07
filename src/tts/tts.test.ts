@@ -70,6 +70,14 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
+const mockTextToSpeech = vi.fn();
+vi.mock("./providers.js", () => {
+  return {
+    buildTtsProviderRegistryAsync: vi.fn(async () => new Map()),
+    getTtsProvider: vi.fn(),
+  };
+});
+
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
@@ -868,6 +876,259 @@ describe("tts", () => {
           }
         });
       }
+    });
+  });
+
+  describe("plugin TTS return values", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let buildTtsProviderRegistryAsync: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let getTtsProvider: any;
+
+    beforeAll(async () => {
+      const providersModule = await import("./providers.js");
+      buildTtsProviderRegistryAsync = providersModule.buildTtsProviderRegistryAsync;
+      getTtsProvider = providersModule.getTtsProvider;
+    });
+
+    beforeEach(() => {
+      buildTtsProviderRegistryAsync.mockResolvedValue(
+        new Map([
+          [
+            "custom-tts",
+            {
+              id: "custom-tts",
+              textToSpeech: mockTextToSpeech,
+            },
+          ],
+        ]),
+      );
+      getTtsProvider.mockImplementation((id: string) => {
+        if (id === "custom-tts" || id === "CUSTOM-TTS" || id === "custom_tts") {
+          return {
+            id: "custom-tts",
+            textToSpeech: mockTextToSpeech,
+          };
+        }
+        return undefined;
+      });
+      mockTextToSpeech.mockReset();
+    });
+
+    describe("synthesizeSpeech with plugin", () => {
+      it("returns all required fields for non-telephony plugin TTS", async () => {
+        const audioData = Buffer.from("test audio data");
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: audioData,
+          mime: "audio/mp3",
+        });
+
+        const result = await tts.synthesizeSpeech({
+          text: "Hello world",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+          disableFallback: true,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.audioBuffer).toBe(audioData);
+        expect(result.fileExtension).toBe(".mp3");
+        expect(result.provider).toBe("custom-tts");
+        expect(result.outputFormat).toBe("audio/mp3");
+        expect(typeof result.latencyMs).toBe("number");
+      });
+
+      it("adds leading dot to fileExtension when missing", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("test"),
+          mime: "audio/wav",
+        });
+
+        const result = await tts.synthesizeSpeech({
+          text: "Hello",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+          disableFallback: true,
+        });
+
+        expect(result.fileExtension).toBe(".wav");
+        expect(result.fileExtension).toMatch(/^\./);
+      });
+
+      it("preserves leading dot in fileExtension when already present", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("test"),
+          mime: "audio/.mp3",
+        });
+
+        const result = await tts.synthesizeSpeech({
+          text: "Hello",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+          disableFallback: true,
+        });
+
+        expect(result.fileExtension).toBe(".mp3");
+      });
+    });
+
+    describe("textToSpeechTelephony with plugin", () => {
+      it("returns all required fields for telephony plugin TTS", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("pcm data"),
+          mime: "audio/l16",
+          sampleRate: 8000,
+        });
+
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello telephony",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.audioBuffer).toBeDefined();
+        expect(result.fileExtension).toMatch(/^\./);
+        expect(result.sampleRate).toBe(8000);
+        expect(result.provider).toBe("custom-tts");
+        expect(result.outputFormat).toBeDefined();
+      });
+
+      it("fails when plugin TTS for telephony is missing sampleRate", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("test"),
+          mime: "audio/l16",
+        });
+
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("sampleRate");
+      });
+
+      it("fails when plugin TTS returns non-PCM mime for telephony", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("mp3 data"),
+          mime: "audio/mp3",
+          sampleRate: 44100,
+        });
+
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("PCM format");
+      });
+
+      it("accepts audio/pcm mime for telephony", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("pcm data"),
+          mime: "audio/pcm",
+          sampleRate: 16000,
+        });
+
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.sampleRate).toBe(16000);
+      });
+
+      it("accepts audio/raw mime for telephony", async () => {
+        vi.mocked(mockTextToSpeech).mockResolvedValue({
+          audio: Buffer.from("raw data"),
+          mime: "audio/raw",
+          sampleRate: 8000,
+        });
+
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello",
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "custom-tts" } },
+          },
+        });
+
+        expect(result.success).toBe(true);
+      });
+    });
+
+    describe("resolveTtsApiKey for custom plugin providers", () => {
+      it("looks up apiKey from models.providers via normalized lookup", async () => {
+        const { _test } = await import("./tts.js");
+        const { resolveTtsApiKey } = _test;
+
+        const cfg = {
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          models: {
+            providers: {
+              "CUSTOM-TTS": {
+                baseUrl: "https://api.example.com",
+                apiKey: "secret-key-from-config",
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+
+        const config = resolveTtsConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: { tts: {} },
+        });
+
+        const apiKey = resolveTtsApiKey(config, cfg, "custom-tts");
+        expect(apiKey).toBe("secret-key-from-config");
+      });
+
+      it("normalizes provider ID when looking up from models.providers", async () => {
+        const { _test } = await import("./tts.js");
+        const { resolveTtsApiKey } = _test;
+
+        const cfg = {
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          models: {
+            providers: {
+              "Custom-TTS": {
+                baseUrl: "https://api.example.com",
+                apiKey: "my-api-key",
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+
+        const config = resolveTtsConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: { tts: {} },
+        });
+
+        const apiKey = resolveTtsApiKey(config, cfg, "custom-tts");
+        expect(apiKey).toBe("my-api-key");
+      });
     });
   });
 });

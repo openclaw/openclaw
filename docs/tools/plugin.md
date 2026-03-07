@@ -217,7 +217,8 @@ openclaw plugins enable <id>
 openclaw plugins disable <id>
 ```
 
-See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
+See [`openclaw plugins` CLI reference](/cli/plugins) for full details on each
+command (install rules, inspect output, marketplace installs, uninstall).
 
 ## Plugin API overview
 
@@ -243,20 +244,22 @@ export default definePluginEntry({
 
 Common registration methods:
 
-| Method                               | What it registers    |
-| ------------------------------------ | -------------------- |
-| `registerProvider`                   | Model provider (LLM) |
-| `registerChannel`                    | Chat channel         |
-| `registerTool`                       | Agent tool           |
-| `registerHook` / `on(...)`           | Lifecycle hooks      |
-| `registerSpeechProvider`             | Text-to-speech / STT |
-| `registerMediaUnderstandingProvider` | Image/audio analysis |
-| `registerImageGenerationProvider`    | Image generation     |
-| `registerWebSearchProvider`          | Web search           |
-| `registerHttpRoute`                  | HTTP endpoint        |
-| `registerCommand` / `registerCli`    | CLI commands         |
-| `registerContextEngine`              | Context engine       |
-| `registerService`                    | Background service   |
+| Method                               | What it registers    | Notes                                  |
+| ------------------------------------ | -------------------- | -------------------------------------- |
+| `registerProvider`                   | Model provider (LLM) | **Preferred** unified API              |
+| `registerChannel`                    | Chat channel         |                                        |
+| `registerTool`                       | Agent tool           |                                        |
+| `registerHook` / `on(...)`           | Lifecycle hooks      |                                        |
+| `registerSpeechProvider`             | Text-to-speech / STT | Legacy; use `registerProvider` instead |
+| `registerMediaUnderstandingProvider` | Image/audio analysis | Legacy; use `registerProvider instead  |
+| `registerImageGenerationProvider`    | Image generation     |                                        |
+| `registerWebSearchProvider`          | Web search           |                                        |
+| `registerHttpRoute`                  | HTTP endpoint        |                                        |
+| `registerCommand` / `registerCli`    | CLI commands         |                                        |
+| `registerContextEngine`              | Context engine       |                                        |
+| `registerService`                    | Background service   |                                        |
+
+See [Model Provider Plugins](/plugins/model-providers) for how to register providers with capabilities for chat, embeddings, TTS, speech, and media understanding.
 
 ## Related
 
@@ -266,3 +269,9 @@ Common registration methods:
 - [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
 - [Plugin Internals](/plugins/architecture) — capability model and load pipeline
 - [Community Plugins](/plugins/community) — third-party listings
+- [Plugin architecture and internals](/plugins/architecture) — capability model,
+  ownership model, contracts, load pipeline, runtime helpers, and developer API
+  reference
+- [Building extensions](/plugins/building-extensions)
+- [Plugin agent tools](/plugins/agent-tools)
+- [Capability Cookbook](/tools/capability-cookbook)

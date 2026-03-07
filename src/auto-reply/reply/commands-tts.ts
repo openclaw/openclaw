@@ -160,8 +160,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
-      const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
+      const hasOpenAI = Boolean(resolveTtsApiKey(config, params.cfg, "openai"));
+      const hasElevenLabs = Boolean(resolveTtsApiKey(config, params.cfg, "elevenlabs"));
       const hasMicrosoft = isTtsProviderConfigured(config, "microsoft", params.cfg);
       return {
         shouldContinue: false,

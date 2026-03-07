@@ -1,4 +1,10 @@
-import type { PluginDiagnostic, ProviderAuthMethod, ProviderPlugin } from "./types.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
+import type {
+  PluginDiagnostic,
+  ProviderAuthMethod,
+  ProviderPlugin,
+  ProviderCapability,
+} from "./types.js";
 
 function pushProviderDiagnostic(params: {
   level: PluginDiagnostic["level"];
@@ -251,7 +257,21 @@ export function normalizeRegisteredProvider(params: {
   provider: ProviderPlugin;
   pushDiagnostic: (diag: PluginDiagnostic) => void;
 }): ProviderPlugin | null {
-  const id = normalizeText(params.provider.id);
+  // NOTE: normalizeProviderId includes alias mapping, so plugin IDs are normalized to
+  // their canonical form (e.g., "qwen" becomes "qwen-portal"). This is intentional—
+  // plugin IDs should be normalized for consistent lookups, and plugins should not
+  // depend on their original ID being preserved.
+  if (typeof params.provider.id !== "string") {
+    pushProviderDiagnostic({
+      level: "error",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: "provider registration missing id",
+      pushDiagnostic: params.pushDiagnostic,
+    });
+    return null;
+  }
+  const id = normalizeProviderId(params.provider.id);
   if (!id) {
     pushProviderDiagnostic({
       level: "error",
@@ -300,12 +320,16 @@ export function normalizeRegisteredProvider(params: {
     envVars: _ignoredEnvVars,
     catalog: _ignoredCatalog,
     discovery: _ignoredDiscovery,
+    routingCapabilities: _routingCapabilities,
     ...restProvider
   } = params.provider;
+  // Map legacy `capabilities` field to `routingCapabilities` for compatibility
+  const legacyCaps = (params.provider as { capabilities?: string[] }).capabilities;
   return {
     ...restProvider,
     id,
     label: normalizeText(params.provider.label) ?? id,
+    routingCapabilities: _routingCapabilities ?? (legacyCaps as ProviderCapability[]),
     ...(docsPath ? { docsPath } : {}),
     ...(aliases ? { aliases } : {}),
     ...(deprecatedProfileIds ? { deprecatedProfileIds } : {}),

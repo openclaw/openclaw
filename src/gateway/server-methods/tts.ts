@@ -41,8 +41,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
         fallbackProvider: fallbackProviders[0] ?? null,
         fallbackProviders,
         prefsPath,
-        hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
-        hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
+        hasOpenAIKey: Boolean(resolveTtsApiKey(config, cfg, "openai")),
+        hasElevenLabsKey: Boolean(resolveTtsApiKey(config, cfg, "elevenlabs")),
         microsoftEnabled: isTtsProviderConfigured(config, "microsoft", cfg),
       });
     } catch (err) {

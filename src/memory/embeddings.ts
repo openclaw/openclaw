@@ -1,8 +1,13 @@
 import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { getPluginProvidersByCapability, type PluginProviderEntry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
@@ -19,6 +24,7 @@ import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./emb
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
+import { resolveMemorySecretInputString } from "./secret-input.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
@@ -36,8 +42,8 @@ export type EmbeddingProvider = {
 };
 
 export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
-export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
-export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
+export type EmbeddingProviderRequest = EmbeddingProviderId | "auto" | (string & {});
+export type EmbeddingProviderFallback = EmbeddingProviderId | "none" | (string & {});
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
@@ -47,7 +53,7 @@ const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
   requestedProvider: EmbeddingProviderRequest;
-  fallbackFrom?: EmbeddingProviderId;
+  fallbackFrom?: string;
   fallbackReason?: string;
   providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
@@ -165,13 +171,228 @@ async function createLocalEmbeddingProvider(
   };
 }
 
+function mapEmbeddingCapability(cap: string): cap is "embedding" {
+  return cap === "embedding";
+}
+
+function getEmbeddingTimeout(options: EmbeddingProviderOptions): number {
+  return options.config?.memory?.qmd?.limits?.timeoutMs ?? 60000;
+}
+
+function getPluginEmbeddingProvidersSync(
+  options: EmbeddingProviderOptions,
+): Record<string, EmbeddingProvider> {
+  const fetchFn = resolveProxyFetchFromEnv();
+  const providers = getPluginProvidersByCapability(
+    mapEmbeddingCapability,
+    (p: PluginProviderEntry) => {
+      const embedFn = p.embed as
+        | ((req: {
+            text: string;
+            model?: string;
+            apiKey: string;
+            baseUrl?: string;
+            headers?: Record<string, string>;
+            timeoutMs: number;
+            fetchFn?: typeof fetch;
+          }) => Promise<{ embedding: number[] }>)
+        | undefined;
+      const embedBatchFn = p.embedBatch as
+        | ((req: {
+            texts: string[];
+            model?: string;
+            apiKey: string;
+            baseUrl?: string;
+            headers?: Record<string, string>;
+            timeoutMs: number;
+            fetchFn?: typeof fetch;
+          }) => Promise<{ embeddings: number[][] }>)
+        | undefined;
+      const embedBatchInputsFn = p.embedBatchInputs as
+        | ((req: {
+            inputs: {
+              text: string;
+              parts?: (
+                | { type: "text"; text: string }
+                | { type: "inline-data"; mimeType: string; data: string }
+              )[];
+            }[];
+            model?: string;
+            apiKey: string;
+            baseUrl?: string;
+            headers?: Record<string, string>;
+            timeoutMs: number;
+            fetchFn?: typeof fetch;
+          }) => Promise<{ embeddings: number[][]; model?: string }>)
+        | undefined;
+
+      if (!embedFn && !embedBatchFn) {
+        return undefined;
+      }
+      const normalizedId = normalizeProviderId(p.id);
+
+      // Resolve provider config baseUrl/headers, merging with remote settings
+      // Try original ID first, then normalized ID (handles alias normalization)
+      const providers = options.config.models?.providers ?? {};
+      const providerConfig = providers[p.id] ?? providers[normalizedId];
+      const providerHeaders = providerConfig?.headers;
+      const sanitizedHeaders: Record<string, string> = {};
+      if (providerHeaders) {
+        for (const [key, value] of Object.entries(providerHeaders)) {
+          if (typeof value === "string") {
+            sanitizedHeaders[key] = value;
+          }
+        }
+      }
+      const resolvedBaseUrl = options.remote?.baseUrl ?? providerConfig?.baseUrl;
+      const resolvedHeaders = {
+        ...sanitizedHeaders,
+        ...options.remote?.headers,
+      };
+
+      // Helper to resolve API key from config or auth sources (per-request, not cached)
+      const resolveApiKey = async (): Promise<string> => {
+        const resolvedApiKey = resolveMemorySecretInputString({
+          value: options.remote?.apiKey,
+          path: "agents.*.memorySearch.remote.apiKey",
+        });
+        if (resolvedApiKey) {
+          return resolvedApiKey;
+        }
+        // Try to resolve from auth sources - but allow keyless plugins to proceed
+        try {
+          const auth = await resolveApiKeyForProvider({
+            provider: normalizedId,
+            cfg: options.config,
+            agentDir: options.agentDir,
+          });
+          if (!auth) {
+            return "";
+          }
+          if (typeof auth === "string") {
+            return auth;
+          }
+          return auth.apiKey ?? "";
+        } catch {
+          // No API key found - let the plugin decide what to do (may be keyless)
+          return "";
+        }
+      };
+
+      return {
+        id: normalizedId,
+        model: options.model,
+        embedQuery: async (text: string) => {
+          const apiKey = await resolveApiKey();
+          if (embedFn) {
+            const result = await embedFn({
+              text,
+              model: options.model,
+              apiKey,
+              baseUrl: resolvedBaseUrl,
+              headers: resolvedHeaders,
+              timeoutMs: getEmbeddingTimeout(options),
+              fetchFn,
+            });
+            return sanitizeAndNormalizeEmbedding(result.embedding);
+          }
+          if (embedBatchFn) {
+            const result = await embedBatchFn({
+              texts: [text],
+              model: options.model,
+              apiKey,
+              baseUrl: resolvedBaseUrl,
+              headers: resolvedHeaders,
+              timeoutMs: getEmbeddingTimeout(options),
+              fetchFn,
+            });
+            const embedding = result.embeddings[0];
+            if (!embedding) {
+              throw new Error(`Plugin embedding provider ${p.id} returned empty embeddings array`);
+            }
+            return sanitizeAndNormalizeEmbedding(embedding);
+          }
+          throw new Error(
+            `Plugin embedding provider ${p.id} does not implement embed or embedBatch`,
+          );
+        },
+        embedBatch: async (texts: string[]) => {
+          const apiKey = await resolveApiKey();
+          if (embedBatchFn) {
+            const result = await embedBatchFn({
+              texts,
+              model: options.model,
+              apiKey,
+              baseUrl: resolvedBaseUrl,
+              headers: resolvedHeaders,
+              timeoutMs: getEmbeddingTimeout(options),
+              fetchFn,
+            });
+            return result.embeddings.map(sanitizeAndNormalizeEmbedding);
+          }
+          if (!embedFn) {
+            throw new Error(
+              `Plugin embedding provider ${p.id} does not implement embed or embedBatch`,
+            );
+          }
+          const results = await Promise.all(
+            texts.map(async (text) => {
+              const result = await embedFn({
+                text,
+                model: options.model,
+                apiKey,
+                baseUrl: resolvedBaseUrl,
+                headers: resolvedHeaders,
+                timeoutMs: getEmbeddingTimeout(options),
+                fetchFn,
+              });
+              return sanitizeAndNormalizeEmbedding(result.embedding);
+            }),
+          );
+          return results;
+        },
+        ...(embedBatchInputsFn
+          ? {
+              embedBatchInputs: async (inputs: EmbeddingInput[]) => {
+                const apiKey = await resolveApiKey();
+                const result = await embedBatchInputsFn({
+                  inputs: inputs as {
+                    text: string;
+                    parts?: (
+                      | { type: "text"; text: string }
+                      | { type: "inline-data"; mimeType: string; data: string }
+                    )[];
+                  }[],
+                  model: options.model,
+                  apiKey,
+                  baseUrl: resolvedBaseUrl,
+                  headers: resolvedHeaders,
+                  timeoutMs: getEmbeddingTimeout(options),
+                  fetchFn,
+                });
+                return result.embeddings.map(sanitizeAndNormalizeEmbedding);
+              },
+            }
+          : {}),
+      };
+    },
+  );
+  return providers;
+}
+
 export async function createEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
   const requestedProvider = options.provider;
   const fallback = options.fallback;
 
-  const createProvider = async (id: EmbeddingProviderId) => {
+  // Ensure plugins are loaded before resolving embedding providers
+  loadOpenClawPlugins({ config: options.config });
+
+  const pluginProviders = getPluginEmbeddingProvidersSync(options);
+  const normalizedRequested = normalizeProviderId(requestedProvider);
+
+  const createProvider = async (id: string) => {
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
@@ -192,61 +413,108 @@ export async function createEmbeddingProvider(
       const { provider, client } = await createMistralEmbeddingProvider(options);
       return { provider, mistral: client };
     }
-    const { provider, client } = await createOpenAiEmbeddingProvider(options);
-    return { provider, openAi: client };
+    if (id === "openai") {
+      const { provider, client } = await createOpenAiEmbeddingProvider(options);
+      return { provider, openAi: client };
+    }
+    // Unknown ID and not a plugin – surface a clear error
+    throw new Error(
+      `Unknown embedding provider "${id}". Check your configuration or ensure the plugin that provides this ID is loaded.`,
+    );
   };
 
-  const formatPrimaryError = (err: unknown, provider: EmbeddingProviderId) =>
-    provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
-
+  // Handle auto-selection mode
   if (requestedProvider === "auto") {
     const missingKeyErrors: string[] = [];
-    let localError: string | null = null;
 
+    // Try local first if available
     if (canAutoSelectLocal(options)) {
       try {
         const local = await createProvider("local");
         return { ...local, requestedProvider };
       } catch (err) {
-        localError = formatLocalSetupError(err);
+        missingKeyErrors.push(formatLocalSetupError(err));
       }
     }
 
-    for (const provider of REMOTE_EMBEDDING_PROVIDER_IDS) {
+    // Try remote providers in order
+    // First, collect any custom plugin providers (non-builtin IDs)
+    const customPlugins: { id: string; provider: EmbeddingProvider }[] = [];
+    for (const [pid, pp] of Object.entries(pluginProviders)) {
+      if (
+        !REMOTE_EMBEDDING_PROVIDER_IDS.includes(
+          pid as (typeof REMOTE_EMBEDDING_PROVIDER_IDS)[number],
+        )
+      ) {
+        customPlugins.push({ id: pid, provider: pp });
+      }
+    }
+
+    // In auto mode, prefer built-in providers over custom plugins
+    // Custom plugins will be tried as fallback after built-ins fail
+    // Try built-in remote providers first
+    for (const pid of REMOTE_EMBEDDING_PROVIDER_IDS) {
+      const pp = pluginProviders[pid];
+      if (pp && (await resolveApiKeyForProvider({ cfg: options.config, provider: pid }))) {
+        return { provider: pp, requestedProvider };
+      }
+      // Try built-in
       try {
-        const result = await createProvider(provider);
-        return { ...result, requestedProvider };
+        const r = await createProvider(pid);
+        return { ...r, requestedProvider };
       } catch (err) {
-        const message = formatPrimaryError(err, provider);
-        if (isMissingApiKeyError(err)) {
-          missingKeyErrors.push(message);
-          continue;
+        if (!isMissingApiKeyError(err)) {
+          throw err;
         }
-        // Non-auth errors (e.g., network) are still fatal
-        const wrapped = new Error(message) as Error & { cause?: unknown };
-        wrapped.cause = err;
-        throw wrapped;
+        missingKeyErrors.push(formatErrorMessage(err));
       }
     }
 
-    // All providers failed due to missing API keys - return null provider for FTS-only mode
-    const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
+    // Built-ins failed or unavailable - try custom plugins as fallback
+    // Only reach here if all built-ins failed
+    for (const cp of customPlugins) {
+      // Return the plugin provider directly - let first real call surface errors
+      return { provider: cp.provider, requestedProvider };
+    }
+
+    // All failed - return null for FTS-only mode
     return {
       provider: null,
       requestedProvider,
-      providerUnavailableReason: reason,
+      providerUnavailableReason:
+        missingKeyErrors.join("\n\n") || "No embeddings provider available.",
     };
   }
 
+  // Explicit fallback mode: primary is tried first, fallback only if primary fails
+  const pluginProvider = pluginProviders[normalizedRequested];
+  if (pluginProvider) {
+    return { provider: pluginProvider, requestedProvider };
+  }
+
+  // Try primary provider first
   try {
-    const primary = await createProvider(requestedProvider);
+    const primary = await createProvider(normalizeProviderId(requestedProvider));
     return { ...primary, requestedProvider };
   } catch (primaryErr) {
-    const reason = formatPrimaryError(primaryErr, requestedProvider);
+    // Primary failed - try fallback if configured
+    const reason = formatErrorMessage(primaryErr);
+    // Skip fallback if "none" or same as primary
     if (fallback && fallback !== "none" && fallback !== requestedProvider) {
+      const normalizedFallback = normalizeProviderId(fallback);
+      const fallbackPluginProvider = pluginProviders[normalizedFallback];
+      // Try plugin fallback first if it exists
+      if (fallbackPluginProvider) {
+        return {
+          provider: fallbackPluginProvider,
+          requestedProvider,
+          fallbackFrom: requestedProvider,
+          fallbackReason: reason,
+        };
+      }
+      // Try built-in fallback
       try {
-        const fallbackResult = await createProvider(fallback);
+        const fallbackResult = await createProvider(normalizedFallback);
         return {
           ...fallbackResult,
           requestedProvider,
@@ -254,26 +522,26 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        // Both primary and fallback failed - check if it's auth-related
+        // Both failed - check if both are missing API key errors
         const fallbackReason = formatErrorMessage(fallbackErr);
-        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
         if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
-          // Both failed due to missing API keys - return null for FTS-only mode
+          // Both missing keys - degrade to FTS-only mode
           return {
             provider: null,
             requestedProvider,
             fallbackFrom: requestedProvider,
             fallbackReason: reason,
-            providerUnavailableReason: combinedReason,
+            providerUnavailableReason: `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`,
           };
         }
-        // Non-auth errors are still fatal
+        // Both failed with other errors - throw combined error
+        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
         const wrapped = new Error(combinedReason) as Error & { cause?: unknown };
         wrapped.cause = fallbackErr;
         throw wrapped;
       }
     }
-    // No fallback configured - check if we should degrade to FTS-only
+    // No fallback configured - degrade to FTS-only on auth errors
     if (isMissingApiKeyError(primaryErr)) {
       return {
         provider: null,
@@ -281,6 +549,7 @@ export async function createEmbeddingProvider(
         providerUnavailableReason: reason,
       };
     }
+    // Other errors are fatal
     const wrapped = new Error(reason) as Error & { cause?: unknown };
     wrapped.cause = primaryErr;
     throw wrapped;

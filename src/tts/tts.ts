@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -23,7 +24,9 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { isVoiceCompatibleAudio } from "../media/audio.js";
 import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
@@ -36,6 +39,11 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
+import {
+  buildTtsProviderRegistryAsync as buildPluginTtsRegistry,
+  getTtsProvider as getPluginTtsProvider,
+  type TtsProvider as PluginTtsProviderObject,
+} from "./providers.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,
@@ -213,6 +221,7 @@ export type TtsSynthesisResult = {
 export type TtsTelephonyResult = {
   success: boolean;
   audioBuffer?: Buffer;
+  fileExtension?: string;
   error?: string;
   latencyMs?: number;
   provider?: string;
@@ -472,10 +481,10 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
     return normalizeSpeechProviderId(config.provider) ?? config.provider;
   }
 
-  if (resolveTtsApiKey(config, "openai")) {
+  if (resolveTtsApiKey(config, undefined, "openai")) {
     return "openai";
   }
-  if (resolveTtsApiKey(config, "elevenlabs")) {
+  if (resolveTtsApiKey(config, undefined, "elevenlabs")) {
     return "elevenlabs";
   }
   return "microsoft";
@@ -537,19 +546,68 @@ function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
 
 export function resolveTtsApiKey(
   config: ResolvedTtsConfig,
-  provider: TtsProvider,
+  cfg: OpenClawConfig | undefined,
+  provider: string,
 ): string | undefined {
-  const normalizedProvider = normalizeSpeechProviderId(provider);
-  if (normalizedProvider === "elevenlabs") {
+  if (provider === "elevenlabs") {
     return config.elevenlabs.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
   }
-  if (normalizedProvider === "openai") {
+  if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
+  }
+  // Check for custom/plugin provider API key in config
+  const providerConfig = findNormalizedProviderValue(cfg?.models?.providers, provider);
+  if (providerConfig?.apiKey) {
+    if (typeof providerConfig.apiKey === "string") {
+      return providerConfig.apiKey;
+    }
+    return normalizeResolvedSecretInputString({
+      value: providerConfig.apiKey,
+      path: `models.providers.${provider}.apiKey`,
+    });
   }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+function resolveTtsProviderHeaders(
+  cfg: OpenClawConfig,
+  provider: string,
+): Record<string, string> | undefined {
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+  const headers = providerConfig?.headers;
+  if (!headers) {
+    return undefined;
+  }
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === "string") {
+      sanitized[key] = value;
+    }
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+function resolveTtsProviderBaseUrl(
+  config: ResolvedTtsConfig,
+  cfg: OpenClawConfig,
+  provider: string,
+): string | undefined {
+  // Only look up from ResolvedTtsConfig for providers that have baseUrl
+  let configBaseUrl: string | undefined;
+  if (provider === "openai") {
+    configBaseUrl = config.openai.baseUrl;
+  } else if (provider === "elevenlabs") {
+    configBaseUrl = config.elevenlabs.baseUrl;
+  }
+  if (configBaseUrl) {
+    return configBaseUrl;
+  }
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+  return providerConfig?.baseUrl;
+}
+
+// TTS_PROVIDERS - edge and microsoft are aliases, use edge as canonical
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "microsoft"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;
@@ -577,7 +635,7 @@ export function isTtsProviderConfigured(
   return resolvedProvider?.isConfigured({ cfg, config }) ?? false;
 }
 
-function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
+function formatTtsProviderError(provider: string, err: unknown): string {
   const error = err instanceof Error ? err : new Error(String(err));
   if (error.name === "AbortError") {
     return `${provider}: request timed out`;
@@ -624,20 +682,19 @@ function resolveTtsRequestSetup(params: {
 }):
   | {
       config: ResolvedTtsConfig;
-      providers: TtsProvider[];
+      providers: string[];
     }
   | {
       error: string;
     } {
   const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   if (params.text.length > config.maxTextLength) {
     return {
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
     };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
+  const userProvider = getTtsProvider(config, params.prefsPath ?? resolveTtsPrefsPath(config));
   const provider = normalizeSpeechProviderId(params.providerOverride) ?? userProvider;
   return {
     config,
@@ -694,13 +751,125 @@ export async function synthesizeSpeech(params: {
     return { success: false, error: setup.error };
   }
 
-  const { config, providers } = setup;
+  const { config, providers: legacyProviders } = setup;
   const channelId = resolveChannelId(params.channel);
   const target = channelId && VOICE_BUBBLE_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
 
+  const pluginTtsRegistry = await buildPluginTtsRegistry(params.cfg);
+  const userProvider = getTtsProvider(config, params.prefsPath ?? resolveTtsPrefsPath(config));
+  const overrideProvider = params.overrides?.provider;
+  const primaryProvider = overrideProvider ?? userProvider;
+  const normalizedPrimary = primaryProvider
+    ? normalizeSpeechProviderId(primaryProvider)
+    : undefined;
+
+  const builtinSet = new Set<string>(TTS_PROVIDERS.map((p) => p.toLowerCase()));
+  const customPlugins: string[] = [];
+  for (const [, pluginProvider] of pluginTtsRegistry) {
+    if (pluginProvider.id !== normalizedPrimary && !builtinSet.has(pluginProvider.id)) {
+      customPlugins.push(pluginProvider.id);
+    }
+  }
+
+  const providerOrder: string[] = [];
+  const addedProviders = new Set<string>();
+
+  // If primary is a custom plugin, ensure it heads the provider order
+  if (
+    normalizedPrimary &&
+    !builtinSet.has(normalizedPrimary) &&
+    pluginTtsRegistry.has(normalizedPrimary)
+  ) {
+    providerOrder.push(normalizedPrimary);
+    addedProviders.add(normalizedPrimary);
+  }
+
+  for (const p of legacyProviders) {
+    if (!addedProviders.has(p.toLowerCase())) {
+      providerOrder.push(p);
+      addedProviders.add(p.toLowerCase());
+    }
+  }
+  for (const p of customPlugins) {
+    if (!addedProviders.has(p.toLowerCase())) {
+      providerOrder.push(p);
+      addedProviders.add(p.toLowerCase());
+    }
+  }
+
   const errors: string[] = [];
 
-  for (const provider of providers) {
+  for (const provider of providerOrder) {
+    const pluginTtsProvider = getPluginTtsProvider(provider, pluginTtsRegistry);
+    if (pluginTtsProvider) {
+      const providerStart = Date.now();
+      try {
+        const apiKey = resolveTtsApiKey(config, params.cfg, provider) ?? "";
+        const fetchFn = resolveProxyFetchFromEnv();
+        const headers = resolveTtsProviderHeaders(params.cfg, provider);
+        const baseUrl = resolveTtsProviderBaseUrl(config, params.cfg, provider);
+        const allOverrides = params.overrides as Record<string, unknown> | undefined;
+        const providerOverrides = allOverrides?.[provider] as
+          | { model?: string; modelId?: string; voice?: string; voiceId?: string }
+          | undefined;
+
+        // Get defaults from config when not overridden
+        // Check ResolvedTtsConfig first, then fall back to models.providers
+        const ttsConfigDefaults = config[provider as keyof typeof config] as
+          | { model?: string; modelId?: string; voice?: string; voiceId?: string }
+          | undefined;
+        const modelsProviderDefaults = findNormalizedProviderValue(
+          params.cfg.models?.providers,
+          provider,
+        ) as { model?: string; modelId?: string; voice?: string; voiceId?: string } | undefined;
+        const result = await pluginTtsProvider.textToSpeech({
+          text: params.text,
+          model:
+            providerOverrides?.model ?? ttsConfigDefaults?.model ?? modelsProviderDefaults?.model,
+          modelId:
+            providerOverrides?.modelId ??
+            ttsConfigDefaults?.modelId ??
+            modelsProviderDefaults?.modelId,
+          voice:
+            providerOverrides?.voice ?? ttsConfigDefaults?.voice ?? modelsProviderDefaults?.voice,
+          voiceId:
+            providerOverrides?.voiceId ??
+            ttsConfigDefaults?.voiceId ??
+            modelsProviderDefaults?.voiceId,
+          apiKey,
+          baseUrl,
+          headers,
+          fetchFn,
+          timeoutMs: config.timeoutMs,
+        });
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const mimeSubtype = result.mime.split("/")[1] ?? "mp3";
+        const mimeExt = mimeSubtype.split(";")[0].trim() || "mp3";
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.${mimeExt}`);
+        writeFileSync(audioPath, result.audio);
+        scheduleCleanup(tempDir);
+
+        return {
+          success: true,
+          audioBuffer: result.audio,
+          fileExtension: mimeExt.startsWith(".") ? mimeExt : "." + mimeExt,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: result.mime,
+          voiceCompatible: isVoiceCompatibleAudio({ fileName: audioPath }),
+        };
+      } catch (err) {
+        const isBuiltin = builtinSet.has(provider.toLowerCase());
+        errors.push(formatTtsProviderError(provider, err));
+        if (!isBuiltin) {
+          continue;
+        }
+        // Fall through to try built-in for same provider
+      }
+    }
     const providerStart = Date.now();
     try {
       const resolvedProvider = resolveReadySpeechProvider({
@@ -736,6 +905,63 @@ export async function synthesizeSpeech(params: {
   return buildTtsFailureResult(errors);
 }
 
+async function invokePluginTelephonyTts(
+  pluginProvider: PluginTtsProviderObject,
+  provider: string,
+  config: ResolvedTtsConfig,
+  cfg: OpenClawConfig,
+  text: string,
+): Promise<TtsTelephonyResult> {
+  const providerStart = Date.now();
+  const apiKey = resolveTtsApiKey(config, cfg, provider) ?? "";
+  const fetchFn = resolveProxyFetchFromEnv();
+  const headers = resolveTtsProviderHeaders(cfg, provider);
+  const baseUrl = resolveTtsProviderBaseUrl(config, cfg, provider);
+  const ttsConfigDefaults = config[provider as keyof typeof config] as
+    | { model?: string; modelId?: string; voice?: string; voiceId?: string }
+    | undefined;
+  const modelsProviderDefaults = findNormalizedProviderValue(cfg.models?.providers, provider) as
+    | { model?: string; modelId?: string; voice?: string; voiceId?: string }
+    | undefined;
+  const result = await pluginProvider.textToSpeech({
+    text,
+    model: ttsConfigDefaults?.model ?? modelsProviderDefaults?.model,
+    modelId: ttsConfigDefaults?.modelId ?? modelsProviderDefaults?.modelId,
+    voice: ttsConfigDefaults?.voice ?? modelsProviderDefaults?.voice,
+    voiceId: ttsConfigDefaults?.voiceId ?? modelsProviderDefaults?.voiceId,
+    apiKey,
+    baseUrl,
+    headers,
+    fetchFn,
+    timeoutMs: config.timeoutMs,
+    telephony: true,
+  });
+
+  if (!result.sampleRate) {
+    throw new Error("plugin TTS result missing required sampleRate for telephony");
+  }
+
+  const isPcm =
+    result.mime.startsWith("audio/l16") ||
+    result.mime === "audio/raw" ||
+    result.mime === "audio/pcm";
+  if (!isPcm) {
+    throw new Error(`plugin TTS result must be PCM format for telephony, got ${result.mime}`);
+  }
+
+  const mimeExt = result.mime.split("/")[1]?.split(";")[0].trim() || "pcm";
+
+  return {
+    success: true,
+    audioBuffer: result.audio,
+    fileExtension: `.${mimeExt}`,
+    outputFormat: result.mime,
+    sampleRate: result.sampleRate,
+    latencyMs: Date.now() - providerStart,
+    provider,
+  };
+}
+
 export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -750,11 +976,82 @@ export async function textToSpeechTelephony(params: {
     return { success: false, error: setup.error };
   }
 
-  const { config, providers } = setup;
+  const { config, providers: legacyProviders } = setup;
+  const pluginTtsRegistry = await buildPluginTtsRegistry(params.cfg);
+  const userProvider = getTtsProvider(config, params.prefsPath ?? resolveTtsPrefsPath(config));
+  const normalizedUser = userProvider ? normalizeSpeechProviderId(userProvider) : undefined;
+
+  const builtinSetTelephony = new Set<string>(TTS_PROVIDERS.map((p) => p.toLowerCase()));
+  const customPluginsTelephony: string[] = [];
+  for (const [, pluginProvider] of pluginTtsRegistry) {
+    if (pluginProvider.id !== normalizedUser && !builtinSetTelephony.has(pluginProvider.id)) {
+      customPluginsTelephony.push(pluginProvider.id);
+    }
+  }
+
+  const providers: string[] = [];
+  const addedProviders = new Set<string>();
+
+  // If user provider is a custom plugin, ensure it heads the provider order
+  if (
+    normalizedUser &&
+    !builtinSetTelephony.has(normalizedUser) &&
+    pluginTtsRegistry.has(normalizedUser)
+  ) {
+    providers.push(normalizedUser);
+    addedProviders.add(normalizedUser);
+  }
+
+  for (const p of legacyProviders) {
+    if (!addedProviders.has(p.toLowerCase())) {
+      providers.push(p);
+      addedProviders.add(p.toLowerCase());
+    }
+  }
+  for (const p of customPluginsTelephony) {
+    if (!addedProviders.has(p.toLowerCase())) {
+      providers.push(p);
+      addedProviders.add(p.toLowerCase());
+    }
+  }
 
   const errors: string[] = [];
 
   for (const provider of providers) {
+    const pluginTtsProvider = getPluginTtsProvider(provider, pluginTtsRegistry);
+    const isBuiltin = builtinSetTelephony.has(provider.toLowerCase());
+
+    if (pluginTtsProvider) {
+      try {
+        if (isBuiltin) {
+          const result = await invokePluginTelephonyTts(
+            pluginTtsProvider,
+            provider,
+            config,
+            params.cfg,
+            params.text,
+          );
+          return result;
+        } else {
+          const result = await invokePluginTelephonyTts(
+            pluginTtsProvider,
+            provider,
+            config,
+            params.cfg,
+            params.text,
+          );
+          return result;
+        }
+      } catch (err) {
+        const errorPrefix = isBuiltin ? `${provider} (plugin)` : provider;
+        errors.push(formatTtsProviderError(errorPrefix, err));
+        if (!isBuiltin) {
+          continue;
+        }
+      }
+    }
+
+    // Try built-in provider (or fallback after plugin failed for built-in)
     const providerStart = Date.now();
     try {
       const resolvedProvider = resolveReadySpeechProvider({
@@ -982,4 +1279,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  resolveTtsApiKey,
 };

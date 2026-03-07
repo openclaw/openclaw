@@ -17,7 +17,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider: string; // Allows built-in IDs or custom plugin provider IDs
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -33,7 +33,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback: string; // Allows built-in IDs, "none", or custom plugin provider IDs
   model: string;
   outputDimensionality?: number;
   local: {

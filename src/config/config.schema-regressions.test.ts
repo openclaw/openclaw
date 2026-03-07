@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject, validateConfigObjectWithPlugins } from "./config.js";
 
 describe("config schema regressions", () => {
   it("accepts nested telegram groupPolicy overrides", () => {
@@ -49,6 +49,58 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(true);
+  });
+
+  it('rejects memorySearch provider typo "olama" (should be "ollama")', () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "olama",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it('rejects memorySearch fallback typo "ollma" (should be "ollama")', () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: {
+        defaults: {
+          memorySearch: {
+            fallback: "ollma",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects undiscovered plugin ID in memorySearch provider (plugin not loaded)", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "my-custom-embedding-plugin",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "my-custom-embedding-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.message).toContain("unknown memorySearch provider");
+    }
   });
 
   it("accepts safe iMessage remoteHost", () => {

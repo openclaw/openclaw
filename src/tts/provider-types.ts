@@ -29,6 +29,8 @@ export type SpeechTelephonySynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
+  telephony?: boolean;
+  fetchFn?: typeof fetch;
 };
 
 export type SpeechTelephonySynthesisResult = {

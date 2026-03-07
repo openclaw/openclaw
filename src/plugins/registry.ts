@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
@@ -545,7 +546,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const id = normalizedProvider.id;
-    const existing = registry.providers.find((entry) => entry.provider.id === id);
+    const existing = registry.providers.find(
+      (entry) => normalizeProviderId(entry.provider.id) === id,
+    );
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -575,7 +578,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrations: R[];
     ownedIds: string[];
   }) => {
-    const id = params.provider.id.trim();
+    const id = normalizeProviderId(params.provider.id);
     const { record, kindLabel } = params;
     const missingLabel = `${kindLabel} registration missing id`;
     const duplicateLabel = `${kindLabel} already registered: ${id}`;
@@ -588,7 +591,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = params.registrations.find((entry) => entry.provider.id === id);
+    const existing = params.registrations.find(
+      (entry) => normalizeProviderId(entry.provider.id) === id,
+    );
     if (existing) {
       pushDiagnostic({
         level: "error",
