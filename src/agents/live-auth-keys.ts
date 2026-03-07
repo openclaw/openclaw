@@ -167,6 +167,13 @@ export function isApiKeyRateLimitError(message: string): boolean {
   if (lower.includes("too many requests")) {
     return true;
   }
+  // ChatGPT usage limit errors (e.g. "You have hit your ChatGPT usage limit (plus plan)")
+  if (lower.includes("usage limit")) {
+    return true;
+  }
+  if (lower.includes("credit") && lower.includes("exhausted")) {
+    return true;
+  }
   return false;
 }
 
