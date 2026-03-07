@@ -63,9 +63,9 @@ import Testing
 
     @Test func resolveGatewayPasswordFallsBackToLaunchd() {
         let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
+            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"], // pragma: allowlist secret
             token: nil,
-            password: "launchd-pass")
+            password: "launchd-pass") // pragma: allowlist secret
 
         let password = GatewayEndpointStore._testResolveGatewayPassword(
             isRemote: false,
