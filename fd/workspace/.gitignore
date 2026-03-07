@@ -1,0 +1,28 @@
+# Secrets
+.env
+*.key
+*.pem
+
+# Logs (tracked via logs/README.md, actual logs ignored)
+logs/*.log
+logs/*.jsonl
+
+# Runtime data
+*.db
+*.sqlite3
+
+# Memory snapshots (generated at runtime)
+memory/*.snapshot.json
+
+# Cache
+.cache/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

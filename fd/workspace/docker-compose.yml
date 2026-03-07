@@ -1,0 +1,44 @@
+# OpenClaw Docker Compose — optional sidecar services
+# The core agent runs natively on the cluster nodes.
+# This file provides supporting services for local development.
+
+version: "3.9"
+
+services:
+  # Local dashboard for monitoring agent activity
+  dashboard:
+    image: nginx:alpine
+    ports:
+      - "3000:80"
+    volumes:
+      - ./logs:/usr/share/nginx/html/logs:ro
+    profiles:
+      - monitoring
+
+  # Redis for shared state (optional, not required for core operation)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    profiles:
+      - cache
+
+  # Webhook receiver for local development
+  webhook-dev:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ../services/webhook_gateway:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=dev
+      - DRY_RUN=true
+    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    profiles:
+      - dev
+
+volumes:
+  redis_data:

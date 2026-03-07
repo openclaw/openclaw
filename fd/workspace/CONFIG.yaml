@@ -1,0 +1,83 @@
+# OpenClaw Runtime Configuration
+# This is the agent-level config. Gateway config lives in gateway/openclaw.json5.
+
+agent:
+  name: "OpenClaw"
+  version: "0.1.0"
+  environment: "dev"  # dev | stage | prod
+
+safety:
+  dry_run: true
+  kill_switch: false
+  read_only: false
+  safe_mode: true
+  approval_ttl_minutes: 60
+
+brands:
+  - id: "fulldigital"
+    display_name: "Full Digital LLC"
+    aliases: ["full digital", "fd"]
+    primary_agent: "fulldigital-ops"
+
+  - id: "cutmv"
+    display_name: "CUTMV"
+    aliases: ["cutmv", "cut mv"]
+    primary_agent: "cutmv-ops"
+
+cluster:
+  primary_node: "claw-m4"
+  nodes:
+    - hostname: "claw-m4"
+      role: "brain"
+      services: ["gateway", "orchestrator", "webhook-gateway"]
+
+    - hostname: "claw-m1"
+      role: "workhorse"
+      services: ["ollama", "worker"]
+
+    - hostname: "claw-i7"
+      role: "sentinel"
+      services: ["cron", "monitoring", "backup-worker"]
+
+inference:
+  primary_provider: "ollama"
+  fallback_provider: "anthropic"
+  ollama:
+    host: "http://10.0.0.145:11434"
+    fallback_host: "http://localhost:11434"
+    default_model: "qwen3.5:4b"
+    models:
+      reasoning: "qwen3.5:9b"
+      content: "qwen3.5:4b"
+      triage: "qwen3.5:2b"
+      deep: "qwen3.5:27b"
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+    escalation_only: true
+
+memory:
+  workspace: "openclaw/memory"
+  bank: "openclaw/bank"
+  sync_interval_minutes: 15
+  conversation_max_turns: 20
+  context_cache_ttl_seconds: 30
+
+logging:
+  level: "INFO"
+  format: "json"
+  redact_secrets: true
+  log_dir: "openclaw/logs"
+  retention_days: 30
+
+channels:
+  telegram:
+    enabled: true
+    polling_interval_seconds: 2
+
+  ui:
+    enabled: true
+    port: 3000
+
+  notion:
+    enabled: false
+    write_enabled: false

@@ -1,0 +1,73 @@
+# Node routing policy
+#
+# Defines which tasks run on which cluster node.
+# The gateway (M4) makes routing decisions based on task type and load.
+
+nodes:
+  claw-m4:
+    role: brain
+    capacity: medium
+    strengths:
+      - intent classification
+      - planning
+      - routing
+      - lightweight inference (2b, 4b)
+      - gateway operations
+      - cron coordination
+    assigned_tasks:
+      - triage
+      - routing
+      - approval_management
+      - webhook_processing
+      - scheduling
+
+  claw-m1:
+    role: workhorse
+    capacity: high
+    strengths:
+      - heavy inference (9b, 27b)
+      - research
+      - content generation
+      - file processing
+      - media rendering
+      - long-running jobs
+    assigned_tasks:
+      - content_generation
+      - deep_analysis
+      - grant_scanning
+      - media_processing
+      - large_context_tasks
+
+  claw-i7:
+    role: sentinel
+    capacity: low
+    strengths:
+      - monitoring
+      - alerting
+      - lightweight cron
+      - backup execution
+    assigned_tasks:
+      - healthcheck
+      - log_rotation
+      - memory_sync
+      - failover_monitoring
+      - scheduled_reports
+
+# Failover rules
+failover:
+  # If M1 goes down, M4 takes over inference with smaller models
+  - if_down: claw-m1
+    redirect_to: claw-m4
+    model_override: "qwen3.5:4b"
+    alert: true
+
+  # If M4 goes down, i7 becomes temporary gateway
+  - if_down: claw-m4
+    redirect_to: claw-i7
+    mode: "read_only"
+    alert: true
+    escalation: "critical"
+
+# Load balancing (future)
+# When multiple nodes can handle a task, prefer the one with lower load.
+load_balance: false
