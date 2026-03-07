@@ -50,6 +50,12 @@ const TRUSTED_SIDS = new Set([
   "s-1-5-32-544",
   "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
 ]);
+// SIDs for world-equivalent principals that icacls /sid emits as raw SIDs.
+// Without this list these would be classified as "group" instead of "world".
+//   S-1-1-0        Everyone
+//   S-1-5-11       Authenticated Users
+//   S-1-5-32-545   BUILTIN\Users
+const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545"]);
 const STATUS_PREFIXES = [
   "successfully processed",
   "processed",
@@ -95,9 +101,16 @@ function classifyPrincipal(
   if (SID_RE.test(normalized)) {
     // Strip the leading * that icacls /sid prefixes to SIDs before lookup.
     const sid = normalized.startsWith("*") ? normalized.slice(1) : normalized;
-    return TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid) || trustedPrincipals.has(normalized)
-      ? "trusted"
-      : "group";
+    if (TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid) || trustedPrincipals.has(normalized)) {
+      return "trusted";
+    }
+    // World-equivalent SIDs must be classified as "world", not "group", so
+    // that callers applying world-write policies catch everyone/authenticated-
+    // users entries the same way they would catch the human-readable names.
+    if (WORLD_SIDS.has(sid)) {
+      return "world";
+    }
+    return "group";
   }
 
   if (

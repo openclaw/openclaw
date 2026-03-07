@@ -295,6 +295,53 @@ Successfully processed 1 files`;
       expect(summary.trusted).toHaveLength(0);
     });
 
+    it("classifies Everyone SID (S-1-1-0) as world, not group", () => {
+      // When icacls is run with /sid, "Everyone" becomes *S-1-1-0.
+      // It must be classified as "world" to preserve security-audit severity.
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-1-0",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies Authenticated Users SID (S-1-5-11) as world, not group", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-5-11",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies BUILTIN\\Users SID (S-1-5-32-545) as world, not group", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-5-32-545",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
     it("full scenario: SYSTEM SID + owner SID only → no findings", () => {
       const ownerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
       const entries: WindowsAclEntry[] = [
