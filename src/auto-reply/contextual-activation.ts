@@ -1,10 +1,48 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId, resolveModelRefFromString } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveHomeDir } from "../utils.js";
+
+// ---------------------------------------------------------------------------
+// Identity context loader — reads SOUL.md / IDENTITY.md from workspace
+// ---------------------------------------------------------------------------
+
+let cachedIdentityContext: string | null = null;
+
+function loadIdentityContext(cfg: OpenClawConfig): string {
+  if (cachedIdentityContext !== null) {
+    return cachedIdentityContext;
+  }
+  try {
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const parts: string[] = [];
+    for (const filename of ["SOUL.md", "IDENTITY.md"]) {
+      const filePath = path.join(workspaceDir, filename);
+      try {
+        const content = fs.readFileSync(filePath, "utf-8").trim();
+        if (content) {
+          parts.push(content);
+        }
+      } catch {
+        // File doesn't exist, skip
+      }
+    }
+    cachedIdentityContext = parts.length > 0 ? parts.join("\n\n") : "";
+  } catch {
+    cachedIdentityContext = "";
+  }
+  return cachedIdentityContext;
+}
+
+/** Reset the cached identity context (e.g. after config reload). */
+export function resetIdentityContextCache() {
+  cachedIdentityContext = null;
+}
 
 export type ScheduleRule = {
   /** Time range in "HH:MM-HH:MM" format (e.g. "00:00-08:00"). Supports overnight wrap (e.g. "23:00-06:00"). */
@@ -236,25 +274,26 @@ Respond with a JSON object (no markdown fencing):
 or
 {"decision":"DISENGAGE","reason":"brief reason"}`;
 
-const DEFAULT_MENTION_FILTER_PROMPT = `You are a group chat participation advisor for an AI assistant named {botName}.
+const DEFAULT_MENTION_FILTER_PROMPT = `You are {botName}. Someone just mentioned you or replied to your message in a group chat. Decide whether you should RESPOND or IGNORE this message.
 
-Someone just mentioned or replied to the assistant in a group chat. Your job is to decide whether the assistant should RESPOND or IGNORE this message.
+Think from your own perspective: as a member of this group, is this message directed at you? Do you need to respond?
 
-**RESPOND — the message genuinely needs a reply:**
-1. Someone is directly asking the assistant a question or requesting help
-2. Someone is continuing a substantive conversation with the assistant
-3. Someone is sharing something and clearly wants the assistant's reaction or input
-4. The message contains meaningful content directed at the assistant
+**RESPOND — you should reply:**
+1. Someone is directly asking you a question or requesting your help
+2. Someone is continuing a substantive conversation with you
+3. Someone is challenging, correcting, or disagreeing with you — you should defend your position or acknowledge the correction
+4. Someone provides evidence (links, screenshots, quotes) that supports or refutes something you said — you should look at it and engage
+5. Someone is asking you to take an action (e.g. "go search for it", "look at this link", "try again")
+6. The message is short but carries a challenge or provocation (e.g. "can't you search?", "really?", "are you sure?") — sarcastic tone does NOT mean you should ignore it; address the underlying point
+7. Someone shares something interesting and clearly wants your reaction
 
-**IGNORE — the message does NOT need a reply:**
-1. A trivial conversation-ender: "ok", "好的", "嗯", "got it", "thanks", "👍", "lol", etc.
-2. Someone is quoting/replying to the assistant's message but is actually talking to someone else
-3. Someone mentioned the assistant casually without expecting a response (e.g. "像{botName}之前说的...")
-4. The topic has clearly concluded and this is just an acknowledgment
-5. A single emoji reaction or sticker with no substantive content
-6. Someone is just forwarding or referencing the assistant's message for context
+**IGNORE — you do not need to reply:**
+1. A pure conversation-ender with NO new information: "ok", "got it", "thanks", "👍" — but ONLY when the topic is truly concluded
+2. Someone is quoting/replying to your message but is clearly talking to someone else (check if they are addressing another person by name)
+3. Someone mentioned you casually as a reference without expecting a response (e.g. "like {botName} said earlier...")
+4. A single emoji reaction or sticker with no substantive content, AND the conversation has moved on
 
-**Key principle:** Not every mention or reply deserves a response. A real person wouldn't reply to every "ok" or "got it" — neither should the assistant. When in doubt, lean towards IGNORE for short, low-effort messages.
+**Key principle:** Whenever someone directly engages with you — whether asking, challenging, correcting, or providing evidence — you should almost always respond. Only filter out messages that are truly content-free acknowledgments or clearly not directed at you. When in doubt, lean towards RESPOND.
 
 **Output format:**
 Respond with a JSON object (no markdown fencing):
@@ -783,6 +822,9 @@ export async function shouldParticipateInGroup(params: {
   const botLabel = botName ?? "AI Assistant";
   const historyBlock = formatDecisionHistory(groupKey);
 
+  // Load identity context once for all decision paths
+  const identityContext = loadIdentityContext(cfg);
+
   if (state.mode === "engaged") {
     // --- ENGAGED MODE: ask if we should disengage ---
     const baseDisengage =
@@ -790,7 +832,10 @@ export async function shouldParticipateInGroup(params: {
       (config.disengagePromptExtra
         ? `${DEFAULT_DISENGAGE_PROMPT}\n\n**Additional rules:**\n${config.disengagePromptExtra}`
         : DEFAULT_DISENGAGE_PROMPT);
-    const systemPrompt = baseDisengage.replace(/\{botName\}/g, botLabel);
+    const disengageWithIdentity = identityContext
+      ? `${identityContext}\n\n---\n\n${baseDisengage}`
+      : baseDisengage;
+    const systemPrompt = disengageWithIdentity.replace(/\{botName\}/g, botLabel);
     const userPrompt = [
       "**Recent group chat messages:**",
       chatContent,
@@ -879,7 +924,10 @@ export async function shouldParticipateInGroup(params: {
     (config.promptExtra
       ? `${DEFAULT_PEEKING_PROMPT}\n\n**Additional rules:**\n${config.promptExtra}`
       : DEFAULT_PEEKING_PROMPT);
-  const systemPrompt = basePeeking.replace(/\{botName\}/g, botLabel);
+  const peekingWithIdentity = identityContext
+    ? `${identityContext}\n\n---\n\n${basePeeking}`
+    : basePeeking;
+  const systemPrompt = peekingWithIdentity.replace(/\{botName\}/g, botLabel);
   const userPrompt = [
     "**Recent group chat messages:**",
     chatContent,
@@ -980,12 +1028,18 @@ export async function shouldRespondToMention(params: {
     (mentionFilter.promptExtra
       ? `${DEFAULT_MENTION_FILTER_PROMPT}\n\n**Additional rules:**\n${mentionFilter.promptExtra}`
       : DEFAULT_MENTION_FILTER_PROMPT);
-  const systemPrompt = basePrompt.replace(/\{botName\}/g, botLabel);
+
+  // Prepend identity context (SOUL.md / IDENTITY.md) so the model understands who it is
+  const identityContext = loadIdentityContext(cfg);
+  const promptWithIdentity = identityContext
+    ? `${identityContext}\n\n---\n\n${basePrompt}`
+    : basePrompt;
+  const systemPrompt = promptWithIdentity.replace(/\{botName\}/g, botLabel);
   const userPrompt = [
     "**Recent group chat messages:**",
     chatContent,
     "",
-    "The last message mentions or replies to the assistant. Should the assistant respond?",
+    "The last message mentions or replies to you. Should you respond?",
   ].join("\n");
 
   const result = await callDecisionModel({
