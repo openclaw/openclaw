@@ -31,6 +31,7 @@ export function emitPreAgentMessageHooks(params: {
           sessionKey,
           toInternalMessageTranscribedContext(canonical, params.cfg),
         ),
+        { config: params.cfg },
       ),
       "get-reply: message:transcribed internal hook failed",
     );
@@ -44,6 +45,7 @@ export function emitPreAgentMessageHooks(params: {
         sessionKey,
         toInternalMessagePreprocessedContext(canonical, params.cfg),
       ),
+      { config: params.cfg },
     ),
     "get-reply: message:preprocessed internal hook failed",
   );

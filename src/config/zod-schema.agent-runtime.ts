@@ -10,6 +10,7 @@ import {
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
+import { InternalHookPolicySchema } from "./zod-schema.hooks.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
@@ -718,6 +719,7 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
+    hooks: InternalHookPolicySchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

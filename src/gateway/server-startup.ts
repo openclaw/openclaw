@@ -146,7 +146,7 @@ export async function startGatewaySidecars(params: {
         deps: params.deps,
         workspaceDir: params.defaultWorkspaceDir,
       });
-      void triggerInternalHook(hookEvent);
+      void triggerInternalHook(hookEvent, { config: params.cfg });
     }, 250);
   }
 

@@ -313,29 +313,33 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          GH_REF: ${{ github.ref }}
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GH_REF" = "refs/heads/main" ]; then
             echo "Skipping detect-secrets on main until the allowlist cleanup lands."
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$GH_EVENT_NAME" = "push" ]; then
             echo "Running full detect-secrets scan on push."
             pre-commit run --all-files detect-secrets
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            while IFS= read -r path; do
-              [ -n "$path" ] || continue
-              [ -f "$path" ] || continue
-              changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
-          fi
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            [ -f "$path" ] || continue
+            changed_files+=("$path")
+          done < <(
+            gh api "/repos/${GITHUB_REPOSITORY}/pulls/${GH_PR_NUMBER}/files" --paginate --jq '.[].filename'
+          )
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
             echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
