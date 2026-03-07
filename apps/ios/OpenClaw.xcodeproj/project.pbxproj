@@ -27,6 +27,7 @@
 		2879255B6083AEDF76C9BAD3 /* DeviceStatusService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E40D94E3DF1C78958C205B8 /* DeviceStatusService.swift */; };
 		29EABD1040E66C00E13BB247 /* OpenClawKit in Frameworks */ = {isa = PBXBuildFile; productRef = EF9364B6255E79EEFF2D5368 /* OpenClawKit */; };
 		2B9259EBC75B6577EA352D5F /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4451B081C0AB0A0BF4580959 /* LiveActivityManager.swift */; };
+		DCE0A02B2F3C8B1D00B7E9F2 /* TaskSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE0A02A2F3C8B1D00B7E9F2 /* TaskSummaryService.swift */; };
 		2CAED6D9B33C38C7C05AECEE /* CameraControllerClampTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F9146DA7A3291D2A9B2AE7 /* CameraControllerClampTests.swift */; };
 		2E08391E75BE2706F6E6CB25 /* NodeAppModelInvokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65D1B23433BE6FA1F51B1A30 /* NodeAppModelInvokeTests.swift */; };
 		2ED14DBB1ED9598F1ECF4C8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 49CF318584399AAF023BB355 /* Assets.xcassets */; };
@@ -246,6 +247,7 @@
 		41E2BCDB634962F7BE995CAF /* GatewaySettingsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewaySettingsStoreTests.swift; sourceTree = "<group>"; };
 		429CA11841D724BA03BABE06 /* VoiceWakePreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceWakePreferencesTests.swift; sourceTree = "<group>"; };
 		4451B081C0AB0A0BF4580959 /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManager.swift; sourceTree = "<group>"; };
+		DCE0A02A2F3C8B1D00B7E9F2 /* TaskSummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskSummaryService.swift; sourceTree = "<group>"; };
 		45698A14CE12F7A5E5E1782A /* GatewayServiceResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayServiceResolver.swift; sourceTree = "<group>"; };
 		45BD8430CFED5D664CC19F5D /* GatewayDiscoveryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayDiscoveryModel.swift; sourceTree = "<group>"; };
 		47E384E907D93F136E80B444 /* OnboardingStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingStateStore.swift; sourceTree = "<group>"; };
@@ -677,6 +679,7 @@
 			children = (
 				4451B081C0AB0A0BF4580959 /* LiveActivityManager.swift */,
 				1030EAC28227B640B4329A97 /* OpenClawActivityAttributes.swift */,
+				DCE0A02A2F3C8B1D00B7E9F2 /* TaskSummaryService.swift */,
 			);
 			path = LiveActivity;
 			sourceTree = "<group>";
@@ -1124,6 +1127,7 @@
 				1C16A2EFF2F3634294E76C95 /* IOSGatewayChatTransport.swift in Sources */,
 				48DE8C5AE3A983F7C2325BEC /* KeychainStore.swift in Sources */,
 				2B9259EBC75B6577EA352D5F /* LiveActivityManager.swift in Sources */,
+				DCE0A02B2F3C8B1D00B7E9F2 /* TaskSummaryService.swift in Sources */,
 				6B7FDACB0AAB7E5B72616BD6 /* LocationService.swift in Sources */,
 				8542C0ADD5AA02011B20AABD /* MotionService.swift in Sources */,
 				14BDD6A1FAA4916CD5F5A965 /* NetworkStatusService.swift in Sources */,

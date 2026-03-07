@@ -99,10 +99,6 @@ final class TalkModeManager: NSObject {
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
-    private var sttProvider: String = "apple"
-    private var sttLanguage: String?
-    private var whisperAudioBuffer: Data?
-    private var whisperSampleRate: Double?
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
@@ -756,167 +752,6 @@ final class TalkModeManager: NSObject {
         }
         self.audioEngine.stop()
         self.speechRecognizer = nil
-        self.whisperAudioBuffer = nil
-        self.whisperSampleRate = nil
-    }
-
-    // MARK: - Gateway STT capture
-
-    /// Start audio capture for gateway STT — mic tap only, no SFSpeechRecognizer.
-    private func startWhisperCapture() throws {
-        GatewayDiagnostics.log("talk audio: whisper capture session \(Self.describeAudioSession())")
-        let input = self.audioEngine.inputNode
-        let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw NSError(domain: "TalkMode", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "Invalid audio input format",
-            ])
-        }
-        input.removeTap(onBus: 0)
-
-        self.whisperAudioBuffer = Data()
-        self.whisperSampleRate = format.sampleRate
-
-        let tapDiagnostics = self.makeSharedTapDiagnostics()
-        self.audioTapDiagnostics = tapDiagnostics
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-            tapDiagnostics.onBuffer(buffer)
-            // Accumulate Float32 PCM for Whisper.
-            guard let data = buffer.floatChannelData else { return }
-            let frames = Int(buffer.frameLength)
-            let bytes = Data(bytes: data.pointee, count: frames * MemoryLayout<Float>.size)
-            Task { @MainActor [weak self] in
-                self?.whisperAudioBuffer?.append(bytes)
-                // Track speech activity for silence detection via lastHeard.
-                let rms = Self.computeRMS(data.pointee, count: frames)
-                let raw = max(0, min(Double(rms) * 10.0, 1.0))
-                let threshold: Double = if let floor = self?.noiseFloor, self?.noiseFloorReady == true {
-                    min(0.35, max(0.12, floor + 0.10))
-                } else {
-                    0.18
-                }
-                if raw >= threshold {
-                    self?.lastHeard = Date()
-                    self?.lastAudioActivity = Date()
-                }
-            }
-        }
-        self.inputTapInstalled = true
-
-        self.audioEngine.prepare()
-        try self.audioEngine.start()
-
-        GatewayDiagnostics.log(
-            "talk whisper: capture started mode=\(String(describing: self.captureMode)) "
-                + "sampleRate=\(format.sampleRate) engineRunning=\(self.audioEngine.isRunning)"
-        )
-    }
-
-    /// Shared tap diagnostics factory (mic level + noise floor).
-    private func makeSharedTapDiagnostics() -> AudioTapDiagnostics {
-        AudioTapDiagnostics(label: "talk") { [weak self] level in
-            guard let self else { return }
-            Task { @MainActor in
-                let raw = max(0, min(Double(level) * 10.0, 1.0))
-                let next = (self.micLevel * 0.80) + (raw * 0.20)
-                self.micLevel = next
-
-                if self.isListening, !self.isSpeaking, !self.noiseFloorReady {
-                    self.noiseFloorSamples.append(raw)
-                    if self.noiseFloorSamples.count >= 22 {
-                        let sorted = self.noiseFloorSamples.sorted()
-                        let take = max(6, sorted.count / 2)
-                        let slice = sorted.prefix(take)
-                        let avg = slice.reduce(0.0, +) / Double(slice.count)
-                        self.noiseFloor = avg
-                        self.noiseFloorReady = true
-                        self.noiseFloorSamples.removeAll(keepingCapacity: true)
-                        let threshold = min(0.35, max(0.12, avg + 0.10))
-                        GatewayDiagnostics.log(
-                            "talk audio: noiseFloor=\(String(format: "%.3f", avg)) "
-                                + "threshold=\(String(format: "%.3f", threshold))"
-                        )
-                    }
-                }
-
-                let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
-                    min(0.35, max(0.12, floor + 0.10))
-                } else {
-                    0.18
-                }
-                if raw >= threshold {
-                    self.lastAudioActivity = Date()
-                }
-            }
-        }
-    }
-
-    private nonisolated static func computeRMS(_ floats: UnsafeMutablePointer<Float>, count: Int) -> Float {
-        guard count > 0 else { return 0 }
-        var sum: Float = 0
-        for i in 0..<count {
-            let v = floats[i]
-            sum += v * v
-        }
-        return sqrt(sum / Float(count))
-    }
-
-    /// Called when silence is detected — encode PCM to WAV, send to gateway for transcription.
-    private func whisperTranscribeAndProcess(restartAfter: Bool) async {
-        guard let pcmData = self.whisperAudioBuffer, !pcmData.isEmpty,
-              let sampleRate = self.whisperSampleRate else {
-            self.logger.warning("gateway stt: no audio data")
-            if restartAfter { await self.start() }
-            return
-        }
-        guard self.gatewayConnected, let gateway else {
-            self.logger.warning("gateway stt: gateway not connected")
-            if restartAfter { await self.start() }
-            return
-        }
-
-        self.isListening = false
-        self.captureMode = .idle
-        self.statusText = "Transcribing\u{2026}"
-        self.stopRecognition()
-
-        do {
-            let wavData = WhisperSTTClient.wavFromPCM(pcmData: pcmData, sampleRate: UInt32(sampleRate))
-            let base64Audio = wavData.base64EncodedString()
-
-            var paramsDict: [String: Any] = ["audio": base64Audio, "mime": "audio/wav"]
-            if let lang = self.sttLanguage, !lang.isEmpty {
-                paramsDict["language"] = lang
-            }
-            let paramsJSON = try JSONSerialization.data(withJSONObject: paramsDict)
-            let paramsString = String(data: paramsJSON, encoding: .utf8) ?? "{}"
-
-            let res = try await gateway.request(
-                method: "talk.transcribe",
-                paramsJSON: paramsString,
-                timeoutSeconds: 30
-            )
-            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
-                  let text = json["text"] as? String else {
-                GatewayDiagnostics.log("talk gateway stt: invalid response")
-                if restartAfter { await self.start() }
-                return
-            }
-
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                GatewayDiagnostics.log("talk gateway stt: empty transcript")
-                if restartAfter { await self.start() }
-                return
-            }
-            GatewayDiagnostics.log("talk gateway stt: transcript chars=\(trimmed.count)")
-            await self.processTranscript(trimmed, restartAfter: restartAfter)
-        } catch {
-            self.logger.error("gateway stt failed: \(error.localizedDescription, privacy: .public)")
-            GatewayDiagnostics.log("talk gateway stt: error=\(error.localizedDescription)")
-            self.statusText = "Transcription error"
-            if restartAfter { await self.start() }
-        }
     }
 
     private nonisolated static func makeAudioTapAppendCallback(
@@ -973,18 +808,6 @@ final class TalkModeManager: NSObject {
     private func checkSilence() async {
         if self.captureMode == .continuous {
             guard self.isListening, !self.isSpeechOutputActive else { return }
-
-            // Gateway STT: silence detection triggers batch transcription (no streaming partial transcript).
-            if self.sttProvider == "gateway" {
-                guard self.whisperAudioBuffer != nil, !(self.whisperAudioBuffer?.isEmpty ?? true) else { return }
-                guard self.lastHeard != nil || self.lastAudioActivity != nil else { return }
-                let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
-                guard let lastActivity else { return }
-                if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
-                await self.whisperTranscribeAndProcess(restartAfter: true)
-                return
-            }
-
             let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !transcript.isEmpty else { return }
             let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
@@ -2344,20 +2167,6 @@ extension TalkModeManager {
 
             // STT config: "gateway" sends audio to the gateway for server-side transcription;
             // anything else (or absent) falls back to on-device Apple Speech.
-            if let sttBlock = talk?["stt"] as? [String: Any] {
-                let provider = (sttBlock["provider"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                self.sttProvider = (provider == "gateway") ? "gateway" : "apple"
-                self.sttLanguage = (sttBlock["language"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if self.sttProvider == "gateway" {
-                    GatewayDiagnostics.log("talk stt: provider=gateway")
-                }
-            } else {
-                self.sttProvider = "apple"
-                self.sttLanguage = nil
-            }
-
             if selection != nil {
                 GatewayDiagnostics.log("talk config provider=\(activeProvider)")
             }
@@ -2370,8 +2179,6 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
-            self.sttProvider = "apple"
-            self.sttLanguage = nil
             self.pcmFormatUnavailable = false
         }
     }
