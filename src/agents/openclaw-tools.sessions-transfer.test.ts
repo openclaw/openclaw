@@ -72,6 +72,7 @@ describe("sessions_transfer_knowledge proof scenario", () => {
     await fs.mkdir(requesterWorkspace, { recursive: true });
     await fs.mkdir(path.join(sourceWorkspace, "memory", "public"), { recursive: true });
     await fs.mkdir(path.join(sourceWorkspace, "memory", "private"), { recursive: true });
+    await fs.mkdir(path.join(sourceWorkspace, "memory", "transfers"), { recursive: true });
 
     await fs.writeFile(path.join(sourceWorkspace, "MEMORY.md"), "Fact A\nFact B\n", "utf-8");
     await fs.writeFile(
@@ -82,6 +83,19 @@ describe("sessions_transfer_knowledge proof scenario", () => {
     await fs.writeFile(
       path.join(sourceWorkspace, "memory", "private", "secret.md"),
       "Secret X\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sourceWorkspace, "memory", "transfers", "previous-transfer.md"),
+      [
+        "# Knowledge Transfer",
+        "",
+        "Requester Agent: legacy",
+        "Source: memory/public/share.md",
+        "Modes: export=auto, import=auto",
+        "Transferred metadata that should not be re-imported.",
+        "",
+      ].join("\n"),
       "utf-8",
     );
 
@@ -294,6 +308,7 @@ describe("sessions_transfer_knowledge proof scenario", () => {
     expect(firstTransferText).toContain("Fact A");
     expect(firstTransferText).toContain("Fact C");
     expect(firstTransferText).not.toContain("Secret X");
+    expect(firstTransferText).not.toContain("Transferred metadata that should not be re-imported.");
     expect(firstTransferText).toContain("openclaw-transfer-fingerprint");
     expect(firstTransferText).toContain(computeFingerprint("Fact A", "MEMORY.md"));
     expect(firstTransferText).toContain(computeFingerprint("Fact C", "memory/public/share.md"));

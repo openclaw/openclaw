@@ -1966,8 +1966,8 @@ description: test skill
               mode: "http",
               botTokenSource: "config",
               botTokenStatus: "configured_unavailable",
-              signingSecretSource: "config",
-              signingSecretStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
               config: channel,
             };
           }
@@ -2054,8 +2054,8 @@ description: test skill
             mode: "http",
             botTokenSource: "config",
             botTokenStatus: "available",
-            signingSecretSource: "config",
-            signingSecretStatus: "missing",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "missing", // pragma: allowlist secret
             config: channel,
           };
         },

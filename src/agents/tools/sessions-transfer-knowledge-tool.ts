@@ -108,7 +108,13 @@ function isMarkdownMemoryFile(relPath: string): boolean {
   if (normalized === "memory.md") {
     return true;
   }
-  return normalized.startsWith("memory/") && normalized.endsWith(".md");
+  if (!normalized.startsWith("memory/") || !normalized.endsWith(".md")) {
+    return false;
+  }
+  if (normalized.startsWith("memory/transfers/")) {
+    return false;
+  }
+  return true;
 }
 
 async function listMemoryFiles(

@@ -176,6 +176,7 @@ export function createKnowledgeTransferApprovalHandlers(
           },
           undefined,
         );
+        return;
       }
 
       const decision = await decisionPromise;
