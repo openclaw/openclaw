@@ -31,6 +31,11 @@ export type ActiveWebListener = {
 let _currentListener: ActiveWebListener | null = null;
 
 const listeners = new Map<string, ActiveWebListener>();
+// Track every account ID that has been registered during this process lifetime.
+// This prevents the sole-listener fallback from mis-routing when a multi-account
+// setup has one account temporarily disconnected (listeners.size === 1 but two
+// accounts are configured).
+const knownAccountIds = new Set<string>();
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -45,10 +50,12 @@ export function requireActiveWebListener(accountId?: string | null): {
   if (listener) {
     return { accountId: id, listener };
   }
-  // Fallback: when no explicit account was requested and only one listener is
-  // active, use it regardless of its registered key.  This covers configs where
-  // the single WhatsApp account is named something other than "default".
-  if (!accountId?.trim() && listeners.size === 1) {
+  // Fallback: when no explicit account was requested and only one account has
+  // ever been registered, use it regardless of its key.  This covers configs
+  // where the single WhatsApp account is named something other than "default".
+  // We check knownAccountIds (not listeners.size) to avoid mis-routing when a
+  // multi-account setup has one account temporarily disconnected.
+  if (!accountId?.trim() && listeners.size === 1 && knownAccountIds.size === 1) {
     const [[resolvedId, soleListener]] = listeners;
     return { accountId: resolvedId, listener: soleListener };
   }
@@ -79,10 +86,18 @@ export function setActiveWebListener(
     listeners.delete(id);
   } else {
     listeners.set(id, listener);
+    knownAccountIds.add(id);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
     _currentListener = listener;
   }
+}
+
+/** Reset all listener state. Test-only — not for production use. */
+export function resetActiveWebListeners(): void {
+  listeners.clear();
+  knownAccountIds.clear();
+  _currentListener = null;
 }
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
@@ -92,7 +107,7 @@ export function getActiveWebListener(accountId?: string | null): ActiveWebListen
     return listener;
   }
   // Same sole-listener fallback as requireActiveWebListener — see comment there.
-  if (!accountId?.trim() && listeners.size === 1) {
+  if (!accountId?.trim() && listeners.size === 1 && knownAccountIds.size === 1) {
     const [[, soleListener]] = listeners;
     return soleListener;
   }

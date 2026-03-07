@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getActiveWebListener,
   requireActiveWebListener,
+  resetActiveWebListeners,
   setActiveWebListener,
   type ActiveWebListener,
 } from "./active-listener.js";
@@ -18,9 +19,7 @@ function stubListener(overrides?: Partial<ActiveWebListener>): ActiveWebListener
 
 describe("active-listener", () => {
   afterEach(() => {
-    setActiveWebListener(null);
-    setActiveWebListener("work", null);
-    setActiveWebListener("custom", null);
+    resetActiveWebListeners();
   });
 
   it("registers and retrieves the default listener", () => {
@@ -49,12 +48,9 @@ describe("active-listener", () => {
   });
 
   it("falls back to sole listener when no explicit account is given", () => {
-    // Simulate a config where the single account is named "custom" (not "default").
     const listener = stubListener();
     setActiveWebListener("custom", listener);
 
-    // No explicit accountId -> would normally look up "default" and fail.
-    // With the fallback, it should find the sole registered listener.
     const result = requireActiveWebListener();
     expect(result.listener).toBe(listener);
     expect(result.accountId).toBe("custom");
@@ -70,18 +66,24 @@ describe("active-listener", () => {
   });
 
   it("does not fall back when an explicit account is requested", () => {
-    const listener = stubListener();
-    setActiveWebListener("custom", listener);
-
-    // Explicit "work" requested -> should NOT fall back to "custom"
+    setActiveWebListener("custom", stubListener());
     expect(() => requireActiveWebListener("work")).toThrow(/No active WhatsApp Web listener/);
   });
 
   it("does not fall back when multiple listeners are registered", () => {
     setActiveWebListener("custom", stubListener());
     setActiveWebListener("work", stubListener());
+    expect(() => requireActiveWebListener()).toThrow(/No active WhatsApp Web listener/);
+  });
 
-    // Two listeners registered, no default -> should not guess
+  it("does not fall back when a second account was previously registered then disconnected", () => {
+    // Multi-account setup: both registered, then one disconnects.
+    // The fallback must NOT fire — it could mis-route to the wrong account.
+    setActiveWebListener("custom", stubListener());
+    setActiveWebListener("work", stubListener());
+    setActiveWebListener("work", null);
+
+    // Only "custom" is active, but knownAccountIds has both.
     expect(() => requireActiveWebListener()).toThrow(/No active WhatsApp Web listener/);
   });
 
@@ -116,6 +118,13 @@ describe("active-listener", () => {
     it("returns null when multiple listeners exist and no default", () => {
       setActiveWebListener("custom", stubListener());
       setActiveWebListener("work", stubListener());
+      expect(getActiveWebListener()).toBeNull();
+    });
+
+    it("returns null when a second account was previously registered then disconnected", () => {
+      setActiveWebListener("custom", stubListener());
+      setActiveWebListener("work", stubListener());
+      setActiveWebListener("work", null);
       expect(getActiveWebListener()).toBeNull();
     });
   });
