@@ -111,7 +111,7 @@ describe("evaluateChannelHealth", () => {
         enabled: true,
         configured: true,
         lastStartAt: 0,
-        lastEventAt: null,
+        lastEventAt: 0,
       },
       {
         channelId: "discord",
@@ -135,6 +135,65 @@ describe("evaluateChannelHealth", () => {
       },
       {
         channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not flag stale sockets for channels without event tracking", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "discord",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not flag stale sockets without an active connected socket", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "slack",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("ignores inherited event timestamps from a previous lifecycle", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 50_000,
+        lastEventAt: 10_000,
+      },
+      {
+        channelId: "slack",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
