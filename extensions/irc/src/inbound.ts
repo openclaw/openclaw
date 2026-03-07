@@ -69,12 +69,13 @@ async function deliverIrcReply(params: {
     return;
   }
 
+  const replyToId = params.payload.replyToId ?? undefined;
   if (params.sendReply) {
-    await params.sendReply(params.target, combined, params.payload.replyToId);
+    await params.sendReply(params.target, combined, replyToId);
   } else {
     await sendMessageIrc(params.target, combined, {
       accountId: params.accountId,
-      replyTo: params.payload.replyToId,
+      replyTo: replyToId,
     });
   }
   params.statusSink?.({ lastOutboundAt: Date.now() });

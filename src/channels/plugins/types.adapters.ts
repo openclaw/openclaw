@@ -94,6 +94,7 @@ export type ChannelOutboundContext = {
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   replyToId?: string | null;
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
   identity?: OutboundIdentity;

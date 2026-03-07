@@ -66,9 +66,9 @@ describe("resolveAcpClientSpawnEnv", () => {
     const env = resolveAcpClientSpawnEnv(
       {
         PATH: "/usr/bin",
-        OPENAI_API_KEY: "sk-leaked-from-skill",
-        ELEVENLABS_API_KEY: "el-leaked",
-        ANTHROPIC_API_KEY: "sk-keep-this",
+        OPENAI_API_KEY: "sk-leaked-from-skill", // pragma: allowlist secret
+        ELEVENLABS_API_KEY: "el-leaked", // pragma: allowlist secret
+        ANTHROPIC_API_KEY: "sk-keep-this", // pragma: allowlist secret
       },
       { stripKeys },
     );
@@ -82,7 +82,7 @@ describe("resolveAcpClientSpawnEnv", () => {
 
   it("does not modify the original baseEnv when stripping keys", () => {
     const baseEnv: NodeJS.ProcessEnv = {
-      OPENAI_API_KEY: "sk-original",
+      OPENAI_API_KEY: "sk-original", // pragma: allowlist secret
       PATH: "/usr/bin",
     };
     const stripKeys = new Set(["OPENAI_API_KEY"]);
@@ -95,7 +95,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     const env = resolveAcpClientSpawnEnv(
       {
         OPENCLAW_SHELL: "skill-overridden",
-        OPENAI_API_KEY: "sk-leaked",
+        OPENAI_API_KEY: "sk-leaked", // pragma: allowlist secret
       },
       { stripKeys: new Set(["OPENCLAW_SHELL", "OPENAI_API_KEY"]) },
     );

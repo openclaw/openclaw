@@ -72,7 +72,7 @@ export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
-  replyToId?: string;
+  replyToId?: string | null;
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
   replyToCurrent?: boolean;

@@ -108,7 +108,7 @@ function makeConfig(): OpenClawConfig {
       providers: {
         openai: {
           api: "openai-responses",
-          apiKey: "sk-openai",
+          apiKey: "sk-openai", // pragma: allowlist secret
           baseUrl: "https://example.com/openai",
           models: [
             {
@@ -124,7 +124,7 @@ function makeConfig(): OpenClawConfig {
         },
         groq: {
           api: "openai-responses",
-          apiKey: "sk-groq",
+          apiKey: "sk-groq", // pragma: allowlist secret
           baseUrl: "https://example.com/groq",
           models: [
             {
