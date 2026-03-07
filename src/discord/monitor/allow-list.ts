@@ -6,6 +6,7 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "../../channels/channel-config.js";
+import { evaluateGroupRouteAccessForPolicy } from "../../plugin-sdk/group-access.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -512,20 +513,18 @@ export function isDiscordGroupAllowedByPolicy(params: {
   channelAllowlistConfigured: boolean;
   channelAllowed: boolean;
 }): boolean {
-  const { groupPolicy, guildAllowlisted, channelAllowlistConfigured, channelAllowed } = params;
-  if (groupPolicy === "disabled") {
+  if (params.groupPolicy === "allowlist" && !params.guildAllowlisted) {
     return false;
   }
-  if (groupPolicy === "open") {
-    return true;
-  }
-  if (!guildAllowlisted) {
-    return false;
-  }
-  if (!channelAllowlistConfigured) {
-    return true;
-  }
-  return channelAllowed;
+
+  return evaluateGroupRouteAccessForPolicy({
+    groupPolicy:
+      params.groupPolicy === "allowlist" && !params.channelAllowlistConfigured
+        ? "open"
+        : params.groupPolicy,
+    routeAllowlistConfigured: params.channelAllowlistConfigured,
+    routeMatched: params.channelAllowed,
+  }).allowed;
 }
 
 export function resolveGroupDmAllow(params: {
