@@ -31,6 +31,7 @@ import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
+import { logDebug } from "../../logger.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -248,6 +249,11 @@ async function resolveAgentWorkspaceFilePath(params: {
           "symlink target is outside workspace root (add the target directory to workspaceConfig.allowedExternalPaths to permit)",
       };
     }
+    if (!withinWorkspace) {
+      logDebug(
+        `[agents] symlink permitted: ${candidatePath} -> ${targetReal} (within allowedExternalPaths)`,
+      );
+    }
 
     let targetStat: Awaited<ReturnType<typeof fs.stat>>;
     try {
@@ -306,6 +312,9 @@ async function statFileSafely(
       if (!allowedExternalPaths || !isWithinAllowedPrefixes(realPath, allowedExternalPaths)) {
         return null;
       }
+      logDebug(
+        `[agents] symlink stat permitted: ${filePath} -> ${realPath} (within allowedExternalPaths)`,
+      );
       const realStat = await fs.stat(realPath);
       if (!realStat.isFile() || realStat.nlink > 1) {
         return null;
