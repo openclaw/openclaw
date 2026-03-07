@@ -55,16 +55,44 @@ describe("detectReflectedContent", () => {
     expect(result.matchedLabels.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("ignores reflection markers inside inline code", () => {
+    const result = detectReflectedContent(
+      "Please keep `<thinking>debug trace</thinking>` in the example output",
+    );
+    expect(result.isReflection).toBe(false);
+    expect(result.matchedLabels).toEqual([]);
+  });
+
+  it("ignores reflection markers inside fenced code blocks", () => {
+    const result = detectReflectedContent(
+      [
+        "User pasted a repro snippet:",
+        "```xml",
+        "<relevant_memories>cached</relevant_memories>",
+        "assistant to=final",
+        "```",
+      ].join("\n"),
+    );
+    expect(result.isReflection).toBe(false);
+    expect(result.matchedLabels).toEqual([]);
+  });
+
+  it("still flags markers that appear outside code blocks", () => {
+    const result = detectReflectedContent(
+      ["```xml", "<thinking>inside code</thinking>", "```", "", "assistant to=final"].join("\n"),
+    );
+    expect(result.isReflection).toBe(true);
+    expect(result.matchedLabels).toContain("assistant-role-marker");
+  });
+
   it("does not flag normal code discussion about thinking", () => {
     const result = detectReflectedContent("I was thinking about your question");
     expect(result.isReflection).toBe(false);
   });
 
-  it("does not flag '<final answer>' as reflection (requires closing >)", () => {
+  it("flags '<final answer>' as reflection when it forms a complete tag", () => {
     const result = detectReflectedContent("Here is my <final answer>");
     expect(result.isReflection).toBe(true);
-    // This matches because <final answer> is a complete tag with closing >.
-    // However, a bare fragment like "<final answer" without > is not matched.
   });
 
   it("does not flag partial tag without closing bracket", () => {

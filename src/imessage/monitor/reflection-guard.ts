@@ -4,6 +4,8 @@
  * bounced back as a new inbound message — creating an echo loop.
  */
 
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
+
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/i;
 // Require closing `>` to avoid false-positives on phrases like "<thought experiment>".
@@ -25,6 +27,20 @@ export type ReflectionDetection = {
   matchedLabels: string[];
 };
 
+function hasMatchOutsideCode(text: string, re: RegExp): boolean {
+  const codeRegions = findCodeRegions(text);
+  const globalRe = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+
+  for (const match of text.matchAll(globalRe)) {
+    const start = match.index ?? -1;
+    if (start >= 0 && !isInsideCode(start, codeRegions)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Check whether an inbound message appears to be a reflection of
  * assistant-originated content. Returns matched pattern labels for telemetry.
@@ -36,7 +52,7 @@ export function detectReflectedContent(text: string): ReflectionDetection {
 
   const matchedLabels: string[] = [];
   for (const { re, label } of REFLECTION_PATTERNS) {
-    if (re.test(text)) {
+    if (hasMatchOutsideCode(text, re)) {
       matchedLabels.push(label);
     }
   }
