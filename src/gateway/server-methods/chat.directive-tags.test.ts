@@ -823,7 +823,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       client: {
         connect: {
           client: {
-            mode: GATEWAY_CLIENT_MODES.UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
             id: "openclaw-webchat",
           },
         },

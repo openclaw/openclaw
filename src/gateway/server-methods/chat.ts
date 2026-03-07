@@ -32,11 +32,7 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -168,8 +164,7 @@ function resolveChatSendOriginatingRoute(params: {
     !isChannelScopedSession &&
     typeof sessionScopeParts[1] === "string" &&
     sessionChannelHint === routeChannelCandidate;
-  const isFromWebchatClient =
-    isWebchatClient(params.client) || params.client?.mode === GATEWAY_CLIENT_MODES.UI;
+  const isFromWebchatClient = isWebchatClient(params.client);
   const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
   const isConfiguredMainSessionScope =
     normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
