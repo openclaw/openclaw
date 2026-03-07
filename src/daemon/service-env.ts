@@ -30,7 +30,7 @@ type SharedServiceEnvironmentFields = {
   stateDir: string | undefined;
   configPath: string | undefined;
   tmpDir: string;
-  minimalPath: string;
+  minimalPath: string | undefined;
   proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
@@ -297,16 +297,19 @@ function buildCommonServiceEnvironment(
   env: Record<string, string | undefined>,
   sharedEnv: SharedServiceEnvironmentFields,
 ): Record<string, string | undefined> {
-  return {
+  const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
-    PATH: sharedEnv.minimalPath,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
   };
+  if (sharedEnv.minimalPath) {
+    serviceEnv.PATH = sharedEnv.minimalPath;
+  }
+  return serviceEnv;
 }
 
 function resolveSharedServiceEnvironmentFields(
@@ -328,7 +331,9 @@ function resolveSharedServiceEnvironmentFields(
     stateDir,
     configPath,
     tmpDir,
-    minimalPath: buildMinimalServicePath({ env }),
+    // On Windows, Scheduled Tasks should inherit the current task PATH instead of
+    // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
+    minimalPath: platform === "win32" ? undefined : buildMinimalServicePath({ env, platform }),
     proxyEnv,
     nodeCaCerts,
     nodeUseSystemCa,
