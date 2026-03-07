@@ -3164,6 +3164,13 @@ export async function runEmbeddedAttempt(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
         }
+        // Clean up after_llm_call gate to prevent module-level Map from growing
+        // unbounded across sessions. Turn-level clearing happens at turn_start,
+        // but session-level clearing must happen here on run end.
+        {
+          const { clearAfterLlmCallGate } = await import("./after-llm-call-gate.js");
+          clearAfterLlmCallGate(params.sessionId);
+        }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
