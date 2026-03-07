@@ -423,15 +423,34 @@ async function promptBaseUrlAndKey(params: {
   };
 }
 
-type CustomApiRetryChoice = "baseUrl" | "model" | "both";
+type CustomApiRetryChoice = "baseUrl" | "model" | "both" | "selectType";
 
 async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
   return await prompter.select({
     message: "What would you like to change?",
     options: [
+      { value: "selectType", label: "Select endpoint type manually" },
       { value: "baseUrl", label: "Change base URL" },
       { value: "model", label: "Change model" },
       { value: "both", label: "Change base URL and model" },
+    ],
+  });
+}
+
+async function promptManualEndpointType(prompter: WizardPrompter): Promise<CustomApiCompatibility> {
+  return await prompter.select({
+    message: "Endpoint type",
+    options: [
+      {
+        value: "openai" as CustomApiCompatibility,
+        label: "OpenAI-compatible",
+        hint: "Uses /chat/completions",
+      },
+      {
+        value: "anthropic" as CustomApiCompatibility,
+        label: "Anthropic-compatible",
+        hint: "Uses /messages",
+      },
     ],
   });
 }
@@ -726,10 +745,14 @@ export async function promptCustomApiConfig(params: {
         } else {
           probeSpinner.stop("Could not detect endpoint type.");
           await prompter.note(
-            "This endpoint did not respond to OpenAI or Anthropic style requests.",
+            "This endpoint did not respond to OpenAI or Anthropic style requests.\nYou can select the type manually if you know your endpoint is compatible.",
             "Endpoint detection",
           );
           const retryChoice = await promptCustomApiRetryChoice(prompter);
+          if (retryChoice === "selectType") {
+            compatibility = await promptManualEndpointType(prompter);
+            break;
+          }
           ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
             prompter,
             config,
@@ -761,6 +784,10 @@ export async function promptCustomApiConfig(params: {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
+    if (retryChoice === "selectType") {
+      compatibility = await promptManualEndpointType(prompter);
+      continue;
+    }
     ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
       prompter,
       config,
