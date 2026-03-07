@@ -292,7 +292,10 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   // a chance to mutate event.context, eliminating FIFO ordering issues.
   // Actions execute in push order; errors are caught per-action so one
   // failure doesn't block others.
-  for (const action of event.postHookActions) {
+  // Guard against manually constructed events that omit postHookActions.
+  // createInternalHookEvent always initializes it, but callers building
+  // events by hand (tests, JS integrations) may not.
+  for (const action of event.postHookActions ?? []) {
     try {
       await action();
     } catch (err) {

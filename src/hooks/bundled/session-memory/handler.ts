@@ -499,55 +499,73 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Defer retraction/replacement to post-hook phase so that hooks
     // registered after this handler can set blockSessionSave or
     // sessionSaveContent and still have them honored.
-    // Note: post-hook retraction/replacement is skipped for redirected writes —
-    // redirect paths are a security mechanism where the hook explicitly chose
-    // an alternative location; overriding that in post-hook would undermine the
-    // redirect contract.
+    //
+    // blockSessionSave is honored for ALL writes (including redirects) —
+    // it's a security primitive meaning "no persistence, period" and must
+    // win regardless of where the write was directed.
+    //
+    // sessionSaveContent replacement is only applied for non-redirected
+    // writes — redirect paths are a security contract where the hook
+    // explicitly chose an alternative location and content; overriding
+    // content in post-hook would undermine the redirect contract.
     const writtenEntry = context.blockSessionSave === true ? null : entry;
-    if (!isRedirected) {
-      // Post-hook callback — errors propagate to the framework's per-action
-      // catch in triggerInternalHook, which provides consistent log formatting
-      // and per-action isolation.
-      event.postHookActions.push(async () => {
-        // If a later hook blocked the save, retract the file we just wrote.
-        if (event.context.blockSessionSave === true && writtenEntry !== null) {
-          try {
-            await fs.unlink(memoryFilePath);
-            log.debug("Session save retracted by post-hook (blockSessionSave)");
-          } catch (err) {
-            // File may not exist if inline write also didn't happen — that's fine.
-            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-              throw err;
-            }
-          }
-          return;
-        }
+    const writtenFilePath = isRedirected
+      ? path.resolve(canonicalWorkspace, writeRelativePath)
+      : memoryFilePath;
 
-        // If a later hook set sessionSaveContent, overwrite with new content.
-        // blockSessionSave takes precedence — never create/overwrite a file that
-        // was blocked, even if sessionSaveContent is also set.
-        const postContent = event.context.sessionSaveContent;
-        if (
-          event.context.blockSessionSave !== true &&
-          typeof postContent === "string" &&
-          postContent !== writtenEntry
-        ) {
-          // Ensure memoryDir exists — the inline write may have been
-          // skipped (e.g. blockSessionSave was true initially) so mkdir
-          // might never have run.
-          await fs.mkdir(memoryDir, { recursive: true });
-          await writeFileWithinRoot({
-            rootDir: memoryDir,
-            relativePath: filename,
-            data: postContent,
-            encoding: "utf-8",
+    // Post-hook callback — errors propagate to the framework's per-action
+    // catch in triggerInternalHook, which provides consistent log formatting
+    // and per-action isolation.
+    event.postHookActions.push(async () => {
+      // If a later hook blocked the save, retract the file we just wrote.
+      // This applies to both redirected and non-redirected writes —
+      // blockSessionSave means "no persistence anywhere."
+      if (event.context.blockSessionSave === true && writtenEntry !== null) {
+        try {
+          await fs.unlink(writtenFilePath);
+          log.debug("Session save retracted by post-hook (blockSessionSave)", {
+            redirected: isRedirected,
           });
-          log.debug("Session save content replaced by post-hook (sessionSaveContent)", {
-            length: postContent.length,
-          });
+        } catch (err) {
+          // File may not exist if inline write also didn't happen — that's fine.
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw err;
+          }
         }
-      });
-    }
+        return;
+      }
+
+      // sessionSaveContent replacement only for non-redirected writes.
+      // Redirect hooks chose the target path and content; a later hook
+      // shouldn't silently overwrite that decision.
+      if (isRedirected) {
+        return;
+      }
+
+      // If a later hook set sessionSaveContent, overwrite with new content.
+      // blockSessionSave takes precedence — never create/overwrite a file that
+      // was blocked, even if sessionSaveContent is also set.
+      const postContent = event.context.sessionSaveContent;
+      if (
+        event.context.blockSessionSave !== true &&
+        typeof postContent === "string" &&
+        postContent !== writtenEntry
+      ) {
+        // Ensure memoryDir exists — the inline write may have been
+        // skipped (e.g. blockSessionSave was true initially) so mkdir
+        // might never have run.
+        await fs.mkdir(memoryDir, { recursive: true });
+        await writeFileWithinRoot({
+          rootDir: memoryDir,
+          relativePath: filename,
+          data: postContent,
+          encoding: "utf-8",
+        });
+        log.debug("Session save content replaced by post-hook (sessionSaveContent)", {
+          length: postContent.length,
+        });
+      }
+    });
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {
