@@ -33,6 +33,10 @@ beforeEach(() => {
 const mockRestPost = vi.hoisted(() => vi.fn());
 const mockRestPatch = vi.hoisted(() => vi.fn());
 const mockRestDelete = vi.hoisted(() => vi.fn());
+const gatewayClientStarts = vi.hoisted(() => vi.fn());
+const gatewayClientStops = vi.hoisted(() => vi.fn());
+const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
 vi.mock("../send.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.shared.js")>();
@@ -54,11 +58,16 @@ vi.mock("../../gateway/client.js", () => ({
     private params: Record<string, unknown>;
     constructor(params: Record<string, unknown>) {
       this.params = params;
+      gatewayClientParams.push(params);
     }
-    start() {}
-    stop() {}
+    start() {
+      gatewayClientStarts();
+    }
+    stop() {
+      gatewayClientStops();
+    }
     async request() {
-      return { ok: true };
+      return gatewayClientRequests();
     }
   },
 }));
@@ -118,6 +127,17 @@ function createRequest(
     expiresAtMs: Date.now() + 60000,
   };
 }
+
+beforeEach(() => {
+  mockRestPost.mockReset();
+  mockRestPatch.mockReset();
+  mockRestDelete.mockReset();
+  gatewayClientStarts.mockReset();
+  gatewayClientStops.mockReset();
+  gatewayClientRequests.mockReset();
+  gatewayClientRequests.mockResolvedValue({ ok: true });
+  gatewayClientParams.length = 0;
+});
 
 // ─── buildExecApprovalCustomId ────────────────────────────────────────────────
 
@@ -608,6 +628,61 @@ describe("DiscordExecApprovalHandler target config", () => {
       const handler = createHandler(testCase.config);
       expect(handler.shouldHandle(createRequest()), testCase.name).toBe(true);
     }
+  });
+});
+
+describe("DiscordExecApprovalHandler gateway auth", () => {
+  it("passes the shared gateway token from config into GatewayClient", async () => {
+    const handler = new DiscordExecApprovalHandler({
+      token: "discord-bot-token",
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          auth: { mode: "token", token: "shared-gateway-token" },
+        },
+      },
+    });
+
+    await handler.start();
+
+    expect(gatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(gatewayClientParams[0]).toMatchObject({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-gateway-token",
+      password: undefined,
+      scopes: ["operator.approvals"],
+    });
+  });
+
+  it("prefers OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token");
+    const handler = new DiscordExecApprovalHandler({
+      token: "discord-bot-token",
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          auth: { mode: "token" },
+        },
+      },
+    });
+
+    try {
+      await handler.start();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(gatewayClientStarts).toHaveBeenCalledTimes(1);
+    expect(gatewayClientParams[0]).toMatchObject({
+      token: "env-gateway-token",
+      password: undefined,
+    });
   });
 });
 
