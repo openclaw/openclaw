@@ -316,7 +316,8 @@ jobs:
         env:
           GH_REF: ${{ github.ref }}
           GH_EVENT_NAME: ${{ github.event_name }}
-          GH_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -331,19 +332,14 @@ jobs:
             exit 0
           fi
 
-          BASE="$GH_PR_BASE_SHA"
           changed_files=()
-          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            # actions/checkout uses fetch-depth=1 on PR merge refs, which can omit BASE.
-            git fetch --no-tags --depth=1 origin "$BASE" || true
-          fi
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            while IFS= read -r path; do
-              [ -n "$path" ] || continue
-              [ -f "$path" ] || continue
-              changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
-          fi
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            [ -f "$path" ] || continue
+            changed_files+=("$path")
+          done < <(
+            gh api "/repos/${GITHUB_REPOSITORY}/pulls/${GH_PR_NUMBER}/files" --paginate --jq '.[].filename'
+          )
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
             echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
