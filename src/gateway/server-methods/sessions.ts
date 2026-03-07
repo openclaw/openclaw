@@ -6,6 +6,7 @@ import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
+import { closeTrackedBrowserTabsForSessions } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -49,6 +50,7 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
+  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -186,6 +188,19 @@ async function ensureSessionRuntimeCleanup(params: {
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
 }) {
+  const closeTrackedBrowserTabs = async () => {
+    const closeKeys = new Set<string>([
+      params.key,
+      params.target.canonicalKey,
+      ...params.target.storeKeys,
+      params.sessionId ?? "",
+    ]);
+    return await closeTrackedBrowserTabsForSessions({
+      sessionKeys: [...closeKeys],
+      onWarn: (message) => logVerbose(message),
+    });
+  };
+
   const queueKeys = new Set<string>(params.target.storeKeys);
   queueKeys.add(params.target.canonicalKey);
   if (params.sessionId) {
@@ -195,11 +210,13 @@ async function ensureSessionRuntimeCleanup(params: {
   clearBootstrapSnapshot(params.target.canonicalKey);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
+    await closeTrackedBrowserTabs();
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
   if (ended) {
+    await closeTrackedBrowserTabs();
     return undefined;
   }
   return errorShape(
@@ -608,6 +625,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
+  },
+  "sessions.get": ({ params, respond }) => {
+    const p = params;
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.max(1, Math.floor(p.limit))
+        : 200;
+
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const store = loadSessionStore(storePath);
+    const entry = target.storeKeys.map((k) => store[k]).find(Boolean);
+    if (!entry?.sessionId) {
+      respond(true, { messages: [] }, undefined);
+      return;
+    }
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

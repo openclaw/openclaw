@@ -1,5 +1,6 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadWebMedia } from "../web/media.js";
 import {
   __resetDiscordDirectoryCacheForTest,
   rememberDiscordDirectoryUser,
@@ -264,6 +265,33 @@ describe("sendMessageDiscord", () => {
           files: [expect.objectContaining({ name: "photo.jpg" })],
         }),
       }),
+    );
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 8 * 1024 * 1024 }),
+    );
+  });
+
+  it("uses configured discord mediaMaxMb for uploads", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "photo", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+      cfg: {
+        channels: {
+          discord: {
+            mediaMaxMb: 32,
+          },
+        },
+      },
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "file:///tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 32 * 1024 * 1024 }),
     );
   });
 
