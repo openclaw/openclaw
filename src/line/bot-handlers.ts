@@ -30,6 +30,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
+import { evaluateSenderGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -344,23 +345,31 @@ async function shouldProcessLineEvent(
         return denied;
       }
     }
-    if (groupPolicy === "disabled") {
+    if (groupPolicy === "allowlist" && !senderId) {
+      logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
+      return denied;
+    }
+    const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
+      groupPolicy,
+      groupAllowFrom: effectiveGroupAllow.entries,
+      senderId,
+      isSenderAllowed: (candidateSenderId, allowFrom) =>
+        isSenderAllowed({
+          allow: normalizeAllowFrom(allowFrom),
+          senderId: candidateSenderId,
+        }),
+    });
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
       logVerbose("Blocked line group message (groupPolicy: disabled)");
       return denied;
     }
-    if (groupPolicy === "allowlist") {
-      if (!senderId) {
-        logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
-        return denied;
-      }
-      if (!effectiveGroupAllow.hasEntries) {
-        logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return denied;
-      }
-      if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
-        logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
-        return denied;
-      }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
+      logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
+      return denied;
+    }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "sender_not_allowlisted") {
+      logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
+      return denied;
     }
     return {
       allowed: true,

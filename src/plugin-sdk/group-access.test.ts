@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { evaluateSenderGroupAccess } from "./group-access.js";
+import { evaluateSenderGroupAccess, evaluateSenderGroupAccessForPolicy } from "./group-access.js";
+
+describe("evaluateSenderGroupAccessForPolicy", () => {
+  it("blocks disabled policy", () => {
+    const decision = evaluateSenderGroupAccessForPolicy({
+      groupPolicy: "disabled",
+      groupAllowFrom: ["123"],
+      senderId: "123",
+      isSenderAllowed: () => true,
+    });
+
+    expect(decision).toMatchObject({ allowed: false, reason: "disabled", groupPolicy: "disabled" });
+  });
+
+  it("blocks allowlist with empty list", () => {
+    const decision = evaluateSenderGroupAccessForPolicy({
+      groupPolicy: "allowlist",
+      groupAllowFrom: [],
+      senderId: "123",
+      isSenderAllowed: () => true,
+    });
+
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: "empty_allowlist",
+      groupPolicy: "allowlist",
+    });
+  });
+});
 
 describe("evaluateSenderGroupAccess", () => {
   it("defaults missing provider config to allowlist", () => {
