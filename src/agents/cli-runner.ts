@@ -44,6 +44,7 @@ import {
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
@@ -144,7 +145,7 @@ export async function runCliAgent(params: {
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt = buildSystemPrompt({
+  let systemPrompt = buildSystemPrompt({
     workspaceDir,
     config: params.config,
     defaultThinkLevel: params.thinkLevel,
@@ -158,6 +159,36 @@ export async function runCliAgent(params: {
     modelDisplay,
     agentId: sessionAgentId,
   });
+
+  // Run before_prompt_build plugin hook to allow context injection / system prompt overrides
+  const hookRunner = getGlobalHookRunner();
+  const hookCtx = {
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+  };
+  if (hookRunner?.hasHooks("before_prompt_build")) {
+    try {
+      const hookResult = await hookRunner.runBeforePromptBuild(
+        { prompt: params.prompt, messages: [] },
+        hookCtx,
+      );
+      if (hookResult) {
+        if (hookResult.systemPrompt) {
+          systemPrompt = hookResult.systemPrompt;
+        }
+        const prependSystem = hookResult.prependSystemContext?.trim();
+        const appendSystem = hookResult.appendSystemContext?.trim();
+        if (prependSystem || appendSystem) {
+          systemPrompt = [prependSystem, systemPrompt, appendSystem].filter(Boolean).join("\n");
+        }
+      }
+    } catch (hookErr) {
+      log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+    }
+  }
+
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -410,6 +441,22 @@ export async function runCliAgent(params: {
     const text = output.text?.trim();
     const payloads = text ? [{ text }] : undefined;
 
+    // Fire-and-forget: notify plugins the agent run completed
+    if (hookRunner?.hasHooks("agent_end")) {
+      hookRunner
+        .runAgentEnd(
+          {
+            messages: [],
+            success: true,
+            durationMs: Date.now() - started,
+          },
+          hookCtx,
+        )
+        .catch((hookErr) => {
+          log.warn(`agent_end hook failed: ${String(hookErr)}`);
+        });
+    }
+
     return {
       payloads,
       meta: {
@@ -440,6 +487,22 @@ export async function runCliAgent(params: {
         const text = output.text?.trim();
         const payloads = text ? [{ text }] : undefined;
 
+        // Fire-and-forget: notify plugins the agent run completed (after retry)
+        if (hookRunner?.hasHooks("agent_end")) {
+          hookRunner
+            .runAgentEnd(
+              {
+                messages: [],
+                success: true,
+                durationMs: Date.now() - started,
+              },
+              hookCtx,
+            )
+            .catch((hookErr) => {
+              log.warn(`agent_end hook failed: ${String(hookErr)}`);
+            });
+        }
+
         return {
           payloads,
           meta: {
@@ -454,9 +517,45 @@ export async function runCliAgent(params: {
           },
         };
       }
+
+      // Fire-and-forget: notify plugins the agent run failed
+      if (hookRunner?.hasHooks("agent_end")) {
+        hookRunner
+          .runAgentEnd(
+            {
+              messages: [],
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+              durationMs: Date.now() - started,
+            },
+            hookCtx,
+          )
+          .catch((hookErr) => {
+            log.warn(`agent_end hook failed: ${String(hookErr)}`);
+          });
+      }
+
       throw err;
     }
     const message = err instanceof Error ? err.message : String(err);
+
+    // Fire-and-forget: notify plugins the agent run failed (non-failover error)
+    if (hookRunner?.hasHooks("agent_end")) {
+      hookRunner
+        .runAgentEnd(
+          {
+            messages: [],
+            success: false,
+            error: message,
+            durationMs: Date.now() - started,
+          },
+          hookCtx,
+        )
+        .catch((hookErr) => {
+          log.warn(`agent_end hook failed: ${String(hookErr)}`);
+        });
+    }
+
     if (isFailoverErrorMessage(message)) {
       const reason = classifyFailoverReason(message) ?? "unknown";
       const status = resolveFailoverStatus(reason);
