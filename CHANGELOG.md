@@ -279,6 +279,7 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI WS max-token zero forwarding: treat `maxTokens: 0` as an explicit value in websocket `response.create` payloads (instead of dropping it as falsy), with regression coverage for zero-token forwarding. (#39148) Thanks @scoootscooob.
 - Podman/.env gateway bind precedence: evaluate `OPENCLAW_GATEWAY_BIND` after sourcing `.env` in `run-openclaw-podman.sh` so env-file overrides are honored. (#38785) Thanks @majinyu666.
 - Models/default alias refresh: bump `gpt` to `openai/gpt-5.4` and Gemini defaults to `gemini-3.1` preview aliases (including normalization/default wiring) to track current model IDs. (#38638) Thanks @ademczuk.
+- Config/env substitution degraded mode: convert missing `${VAR}` resolution in config reads from hard-fail to warning-backed degraded behavior, while preventing unresolved placeholders from being accepted as gateway credentials. (#39050) Thanks @akz142857.
 
 ## 2026.3.2
 
