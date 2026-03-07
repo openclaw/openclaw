@@ -1,7 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyNoRouteAllowlistWarning,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -210,30 +209,25 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
-      if (groupAllowlistConfigured) {
-        return [
-          buildOpenGroupPolicyRestrictSendersWarning({
-            surface: "Telegram groups",
-            openScope: "any member in allowed groups",
-            groupPolicyPath: "channels.telegram.groupPolicy",
-            groupAllowFromPath: "channels.telegram.groupAllowFrom",
-          }),
-        ];
-      }
-      return [
-        buildOpenGroupPolicyNoRouteAllowlistWarning({
+      return collectOpenGroupPolicyRouteAllowlistWarnings({
+        groupPolicy,
+        routeAllowlistConfigured: groupAllowlistConfigured,
+        restrictSenders: {
+          surface: "Telegram groups",
+          openScope: "any member in allowed groups",
+          groupPolicyPath: "channels.telegram.groupPolicy",
+          groupAllowFromPath: "channels.telegram.groupAllowFrom",
+        },
+        noRouteAllowlist: {
           surface: "Telegram groups",
           routeAllowlistPath: "channels.telegram.groups",
           routeScope: "group",
           groupPolicyPath: "channels.telegram.groupPolicy",
           groupAllowFromPath: "channels.telegram.groupAllowFrom",
-        }),
-      ];
+        },
+      });
     },
   },
   groups: {

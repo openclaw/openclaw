@@ -1,6 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyRestrictSendersWarning,
+  collectOpenGroupPolicyRestrictSendersWarnings,
 } from "openclaw/plugin-sdk";
 import {
   buildChannelConfigSchema,
@@ -181,18 +181,14 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        buildOpenGroupPolicyRestrictSendersWarning({
-          surface: "LINE groups",
-          openScope: "any member in groups",
-          groupPolicyPath: "channels.line.groupPolicy",
-          groupAllowFromPath: "channels.line.groupAllowFrom",
-          mentionGated: false,
-        }),
-      ];
+      return collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: "LINE groups",
+        openScope: "any member in groups",
+        groupPolicyPath: "channels.line.groupPolicy",
+        groupAllowFromPath: "channels.line.groupAllowFrom",
+        mentionGated: false,
+      });
     },
   },
   groups: {

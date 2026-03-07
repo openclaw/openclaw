@@ -1,7 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
-  buildOpenGroupPolicyWarning,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
 } from "openclaw/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -150,28 +149,25 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       const guildsConfigured = Object.keys(guildEntries).length > 0;
       const channelAllowlistConfigured = guildsConfigured;
 
-      if (groupPolicy === "open") {
-        if (channelAllowlistConfigured) {
-          warnings.push(
-            buildOpenGroupPolicyConfigureRouteAllowlistWarning({
-              surface: "Discord guilds",
-              openScope: "any channel not explicitly denied",
-              groupPolicyPath: "channels.discord.groupPolicy",
-              routeAllowlistPath: "channels.discord.guilds.<id>.channels",
-            }),
-          );
-        } else {
-          warnings.push(
-            buildOpenGroupPolicyWarning({
-              surface: "Discord guilds",
-              openBehavior:
-                "with no guild/channel allowlist; any channel can trigger (mention-gated)",
-              remediation:
-                'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
-            }),
-          );
-        }
-      }
+      warnings.push(
+        ...collectOpenGroupPolicyConfiguredRouteWarnings({
+          groupPolicy,
+          routeAllowlistConfigured: channelAllowlistConfigured,
+          configureRouteAllowlist: {
+            surface: "Discord guilds",
+            openScope: "any channel not explicitly denied",
+            groupPolicyPath: "channels.discord.groupPolicy",
+            routeAllowlistPath: "channels.discord.guilds.<id>.channels",
+          },
+          missingRouteAllowlist: {
+            surface: "Discord guilds",
+            openBehavior:
+              "with no guild/channel allowlist; any channel can trigger (mention-gated)",
+            remediation:
+              'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
+          },
+        }),
+      );
 
       return warnings;
     },
