@@ -1882,8 +1882,21 @@ export type PluginHookGatewayStopEvent = {
 // ============================================================================
 
 // before_response_emit hook (modifying — sequential)
+//
+// Error handling: FAIL-CLOSED. If the hook machinery throws, the response
+// is suppressed (assistantTexts cleared). Plugin authors can rely on crash = blocked.
+//
+// Content is raw assistant text (may include reasoning/tool-call artifacts that
+// are stripped in the final delivery pipeline). For PII scanning this is correct
+// (scan the superset), but content-based rewrites should be aware that the
+// delivered text may differ slightly from what the hook sees.
+//
+// Streaming: the hook fires post-prompt. In streaming mode, text_delta chunks
+// may already have been emitted. The hook modifies persisted session history
+// and the final delivered text, but cannot retract streamed chunks.
 export type PluginHookBeforeResponseEmitEvent = {
-  /** The final assistant response text about to be delivered. */
+  /** The final assistant response text about to be delivered.
+   *  This is raw text — may include artifacts that are stripped before delivery. */
   content: string;
   /** All assistant response texts from the current run (multi-turn).
    *  Enables full PII redaction across tool-loop iterations.

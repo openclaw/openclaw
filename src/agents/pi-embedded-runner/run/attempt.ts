@@ -2982,7 +2982,11 @@ export async function runEmbeddedAttempt(
         // (affecting future LLM context) and what gets delivered in non-streaming
         // paths. For full real-time stream interception, use before_llm_call to
         // block the call or after_llm_call to filter tool execution.
-        if (hookRunner?.hasHooks("before_response_emit") && !promptError) {
+        // Run regardless of promptError — prior tool-loop iterations may have
+        // accumulated PII in assistantTexts before the final call errored.
+        // The hook's natural no-op (assistantTexts.length === 0) handles the
+        // case where no content was produced.
+        if (hookRunner?.hasHooks("before_response_emit")) {
           try {
             const { applyBeforeResponseEmitHook } = await import("./hook-response-emit.js");
             const emitResult = await applyBeforeResponseEmitHook({
@@ -3007,16 +3011,23 @@ export async function runEmbeddedAttempt(
                 assistantTexts.splice(0, assistantTexts.length, ...bounded);
               } else if (emitResult.content !== undefined) {
                 // Single last-message modification (backward-compatible).
-                assistantTexts[assistantTexts.length - 1] = emitResult.content;
+                if (assistantTexts.length > 0) {
+                  assistantTexts[assistantTexts.length - 1] = emitResult.content;
+                }
               }
               // Refresh messagesSnapshot so downstream consumers (agent_end,
               // llm_output, cache trace) see the post-redaction content.
               messagesSnapshot = activeSession.messages.slice();
             }
           } catch (err) {
-            log.warn(
-              `before_response_emit hook error (non-fatal): runId=${params.runId} ${String(err)}`,
+            // Fail-closed: if the hook machinery itself throws (import failure,
+            // internal bug, plugin escaping per-handler catchErrors), suppress
+            // the response rather than delivering potentially unredacted PII.
+            // Plugin authors writing output-policy hooks expect crash = blocked.
+            log.error(
+              `before_response_emit hook error — FAIL CLOSED, clearing response: runId=${params.runId} ${String(err)}`,
             );
+            assistantTexts.splice(0, assistantTexts.length);
           }
         }
 
