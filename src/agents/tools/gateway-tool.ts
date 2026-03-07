@@ -3,6 +3,7 @@ import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { isInflightAgentRunRecoveryEnabled } from "../../gateway/inflight-agent-runs.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -95,9 +96,7 @@ export function createGatewayTool(opts?: {
             : undefined;
         const delayMs =
           explicitDelayMs ??
-          (opts?.config?.gateway?.restartRecovery?.resumeInflightAgentRuns === true
-            ? 0
-            : undefined);
+          (opts?.config && isInflightAgentRunRecoveryEnabled(opts.config) ? 0 : undefined);
         const reason =
           typeof params.reason === "string" && params.reason.trim()
             ? params.reason.trim().slice(0, 200)

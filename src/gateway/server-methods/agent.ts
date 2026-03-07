@@ -32,7 +32,11 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
-import { addInflightAgentRun, removeInflightAgentRun } from "../inflight-agent-runs.js";
+import {
+  addInflightAgentRun,
+  isInflightAgentRunRecoveryEnabled,
+  removeInflightAgentRun,
+} from "../inflight-agent-runs.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -613,7 +617,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
-    const shouldPersistInflight = cfg.gateway?.restartRecovery?.resumeInflightAgentRuns === true;
+    const shouldPersistInflight = isInflightAgentRunRecoveryEnabled(cfg);
     const runOpts = {
       message,
       images,

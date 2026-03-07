@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentCommandIngressOpts } from "../commands/agent/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "../infra/json-files.js";
@@ -26,22 +27,16 @@ const STORE_FILENAME = "inflight-agent-runs.json";
 const ERROR_GRACE_MS = 15_000;
 
 let lifecycleCleanerUnsub: (() => void) | null = null;
+let lifecycleCleanerEnv: NodeJS.ProcessEnv = process.env;
 const pendingErrorTimers = new Map<string, NodeJS.Timeout>();
-const knownStorePaths = new Set<string>();
-const storeLocks = new Map<string, ReturnType<typeof createAsyncLock>>();
+const storeLock = createAsyncLock();
+
+export function isInflightAgentRunRecoveryEnabled(cfg: OpenClawConfig): boolean {
+  return cfg.gateway?.restartRecovery?.resumeInflightAgentRuns === true;
+}
 
 function resolveStorePath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), STORE_FILENAME);
-}
-
-function registerStorePath(storePath: string) {
-  knownStorePaths.add(storePath);
-}
-
-function withStoreLock<T>(storePath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = storeLocks.get(storePath) ?? createAsyncLock();
-  storeLocks.set(storePath, lock);
-  return lock(fn);
 }
 
 function clearPendingErrorTimer(runId: string): void {
@@ -53,17 +48,17 @@ function clearPendingErrorTimer(runId: string): void {
   pendingErrorTimers.delete(runId);
 }
 
-function scheduleErrorCleanup(runId: string): void {
+function scheduleErrorCleanup(runId: string, env: NodeJS.ProcessEnv): void {
   clearPendingErrorTimer(runId);
   const timer = setTimeout(() => {
     pendingErrorTimers.delete(runId);
-    void removeInflightAgentRunFromAllKnownStores(runId);
+    void removeRunFromStore(resolveStorePath(env), runId);
   }, ERROR_GRACE_MS);
   timer.unref?.();
   pendingErrorTimers.set(runId, timer);
 }
 
-async function readStoreFromPath(storePath: string): Promise<InflightAgentRunsStore> {
+async function readStore(storePath: string): Promise<InflightAgentRunsStore> {
   const parsed = await readJsonFile<unknown>(storePath);
   if (!parsed || typeof parsed !== "object") {
     return { version: STORE_VERSION, runs: {} };
@@ -75,38 +70,23 @@ async function readStoreFromPath(storePath: string): Promise<InflightAgentRunsSt
   return { version: STORE_VERSION, runs: rec.runs };
 }
 
-async function writeStoreToPath(storePath: string, store: InflightAgentRunsStore): Promise<void> {
+async function writeStore(storePath: string, store: InflightAgentRunsStore): Promise<void> {
   await writeJsonAtomic(storePath, store, { trailingNewline: true, mode: 0o600 });
 }
 
-async function removeInflightAgentRunFromStorePath(
-  storePath: string,
-  runId: string,
-): Promise<void> {
+async function removeRunFromStore(storePath: string, runId: string): Promise<void> {
   const cleaned = runId.trim();
   if (!cleaned) {
     return;
   }
-  await withStoreLock(storePath, async () => {
-    const store = await readStoreFromPath(storePath);
+  await storeLock(async () => {
+    const store = await readStore(storePath);
     if (!store.runs[cleaned]) {
       return;
     }
     delete store.runs[cleaned];
-    await writeStoreToPath(storePath, store);
+    await writeStore(storePath, store);
   });
-}
-
-async function removeInflightAgentRunFromAllKnownStores(runId: string): Promise<void> {
-  const storePaths = Array.from(knownStorePaths);
-  if (storePaths.length === 0) {
-    return;
-  }
-  await Promise.all(
-    storePaths.map((storePath) =>
-      removeInflightAgentRunFromStorePath(storePath, runId).catch(() => {}),
-    ),
-  );
 }
 
 export async function addInflightAgentRun(
@@ -118,20 +98,14 @@ export async function addInflightAgentRun(
     return;
   }
   const storePath = resolveStorePath(env);
-  registerStorePath(storePath);
-  await withStoreLock(storePath, async () => {
-    const store = await readStoreFromPath(storePath);
+  await storeLock(async () => {
+    const store = await readStore(storePath);
     store.runs[cleanedRunId] = {
       ...record,
       runId: cleanedRunId,
       acceptedAt: Math.floor(record.acceptedAt),
-      opts: {
-        ...record.opts,
-        runId: cleanedRunId,
-        senderIsOwner: record.opts.senderIsOwner,
-      },
     };
-    await writeStoreToPath(storePath, store);
+    await writeStore(storePath, store);
   });
 }
 
@@ -147,50 +121,55 @@ export async function removeInflightAgentRun(
     return;
   }
   clearPendingErrorTimer(cleaned);
-  const storePath = resolveStorePath(env);
-  registerStorePath(storePath);
-  await removeInflightAgentRunFromStorePath(storePath, cleaned);
+  await removeRunFromStore(resolveStorePath(env), cleaned);
 }
 
-export async function markInflightAgentRunResumed(
-  runId: string,
+/**
+ * Batch-update resumeCount/lastResumeAt for all given runIds in a single
+ * read-modify-write cycle.
+ */
+export async function markInflightAgentRunsResumed(
+  runIds: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  const cleaned = runId.trim();
-  if (!cleaned) {
+  const cleaned = runIds.map((id) => id.trim()).filter(Boolean);
+  if (cleaned.length === 0) {
     return;
   }
   const storePath = resolveStorePath(env);
-  registerStorePath(storePath);
-  await withStoreLock(storePath, async () => {
-    const store = await readStoreFromPath(storePath);
-    const existing = store.runs[cleaned];
-    if (!existing) {
-      return;
+  const now = Date.now();
+  await storeLock(async () => {
+    const store = await readStore(storePath);
+    let changed = false;
+    for (const id of cleaned) {
+      const existing = store.runs[id];
+      if (!existing) {
+        continue;
+      }
+      store.runs[id] = {
+        ...existing,
+        resumeCount: (existing.resumeCount ?? 0) + 1,
+        lastResumeAt: now,
+      };
+      changed = true;
     }
-    store.runs[cleaned] = {
-      ...existing,
-      resumeCount: (existing.resumeCount ?? 0) + 1,
-      lastResumeAt: Date.now(),
-    };
-    await writeStoreToPath(storePath, store);
+    if (changed) {
+      await writeStore(storePath, store);
+    }
   });
 }
 
 export async function listInflightAgentRuns(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<InflightAgentRunRecord[]> {
-  const storePath = resolveStorePath(env);
-  registerStorePath(storePath);
-  const store = await readStoreFromPath(storePath);
+  const store = await readStore(resolveStorePath(env));
   return Object.values(store.runs ?? {});
 }
 
 export async function clearInflightAgentRuns(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const storePath = resolveStorePath(env);
-  registerStorePath(storePath);
-  await withStoreLock(storePath, async () => {
-    await writeStoreToPath(storePath, { version: STORE_VERSION, runs: {} });
+  await storeLock(async () => {
+    await writeStore(storePath, { version: STORE_VERSION, runs: {} });
   });
 }
 
@@ -205,7 +184,7 @@ export async function clearInflightAgentRuns(env: NodeJS.ProcessEnv = process.en
 export function ensureInflightAgentRunLifecycleCleanerStarted(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  registerStorePath(resolveStorePath(env));
+  lifecycleCleanerEnv = env;
   if (lifecycleCleanerUnsub) {
     return;
   }
@@ -222,14 +201,14 @@ export function ensureInflightAgentRunLifecycleCleanerStarted(
       if (shouldPreserveInflightAgentRunsForPendingRestart()) {
         return;
       }
-      void removeInflightAgentRunFromAllKnownStores(evt.runId);
+      void removeRunFromStore(resolveStorePath(lifecycleCleanerEnv), evt.runId);
       return;
     }
     if (phase === "error") {
       if (shouldPreserveInflightAgentRunsForPendingRestart()) {
         return;
       }
-      scheduleErrorCleanup(evt.runId);
+      scheduleErrorCleanup(evt.runId, lifecycleCleanerEnv);
     }
   });
 }
@@ -237,18 +216,15 @@ export function ensureInflightAgentRunLifecycleCleanerStarted(
 export const __test = {
   resolveStorePath,
   readStore: async (env: NodeJS.ProcessEnv = process.env) => {
-    const storePath = resolveStorePath(env);
-    registerStorePath(storePath);
-    return await readStoreFromPath(storePath);
+    return await readStore(resolveStorePath(env));
   },
   reset: () => {
     lifecycleCleanerUnsub?.();
     lifecycleCleanerUnsub = null;
+    lifecycleCleanerEnv = process.env;
     for (const timer of pendingErrorTimers.values()) {
       clearTimeout(timer);
     }
     pendingErrorTimers.clear();
-    knownStorePaths.clear();
-    storeLocks.clear();
   },
 };

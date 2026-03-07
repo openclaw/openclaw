@@ -73,7 +73,10 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { ensureInflightAgentRunLifecycleCleanerStarted } from "./inflight-agent-runs.js";
+import {
+  ensureInflightAgentRunLifecycleCleanerStarted,
+  isInflightAgentRunRecoveryEnabled,
+} from "./inflight-agent-runs.js";
 import { NodeRegistry } from "./node-registry.js";
 import { maybeResumeInflightAgentRunsAfterRestart } from "./restart-resume.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -556,7 +559,7 @@ export async function startGatewayServer(
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
-  if (cfgAtStart.gateway?.restartRecovery?.resumeInflightAgentRuns === true) {
+  if (isInflightAgentRunRecoveryEnabled(cfgAtStart)) {
     ensureInflightAgentRunLifecycleCleanerStarted(process.env);
   }
   let canvasHostServer: CanvasHostServer | null = null;
