@@ -2,6 +2,7 @@ import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
+  clearAccountEntryFields,
   collectTelegramStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -519,36 +520,20 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           cleared = true;
           changed = true;
         }
-        const accounts =
-          nextTelegram.accounts && typeof nextTelegram.accounts === "object"
-            ? { ...nextTelegram.accounts }
-            : undefined;
-        if (accounts && accountId in accounts) {
-          const entry = accounts[accountId];
-          if (entry && typeof entry === "object") {
-            const nextEntry = { ...entry } as Record<string, unknown>;
-            if ("botToken" in nextEntry) {
-              const token = nextEntry.botToken;
-              if (typeof token === "string" ? token.trim() : token) {
-                cleared = true;
-              }
-              delete nextEntry.botToken;
-              changed = true;
-            }
-            if (Object.keys(nextEntry).length === 0) {
-              delete accounts[accountId];
-              changed = true;
-            } else {
-              accounts[accountId] = nextEntry as typeof entry;
-            }
+        const accountCleanup = clearAccountEntryFields({
+          accounts: nextTelegram.accounts,
+          accountId,
+          fields: ["botToken"],
+        });
+        if (accountCleanup.changed) {
+          changed = true;
+          if (accountCleanup.cleared) {
+            cleared = true;
           }
-        }
-        if (accounts) {
-          if (Object.keys(accounts).length === 0) {
-            delete nextTelegram.accounts;
-            changed = true;
+          if (accountCleanup.nextAccounts) {
+            nextTelegram.accounts = accountCleanup.nextAccounts;
           } else {
-            nextTelegram.accounts = accounts;
+            delete nextTelegram.accounts;
           }
         }
       }

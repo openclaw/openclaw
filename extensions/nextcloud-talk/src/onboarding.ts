@@ -43,6 +43,45 @@ function setNextcloudTalkDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConf
   } as CoreConfig;
 }
 
+function setNextcloudTalkAccountConfig(
+  cfg: CoreConfig,
+  accountId: string,
+  updates: Record<string, unknown>,
+): CoreConfig {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        "nextcloud-talk": {
+          ...cfg.channels?.["nextcloud-talk"],
+          enabled: true,
+          ...updates,
+        },
+      },
+    };
+  }
+
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      "nextcloud-talk": {
+        ...cfg.channels?.["nextcloud-talk"],
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.["nextcloud-talk"]?.accounts,
+          [accountId]: {
+            ...cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId],
+            enabled: cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
+            ...updates,
+          },
+        },
+      },
+    },
+  };
+}
+
 async function noteNextcloudTalkSecretHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
@@ -105,40 +144,10 @@ async function promptNextcloudTalkAllowFrom(params: {
   ];
   const unique = mergeAllowFromEntries(undefined, merged);
 
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        "nextcloud-talk": {
-          ...cfg.channels?.["nextcloud-talk"],
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: unique,
-        },
-      },
-    };
-  }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      "nextcloud-talk": {
-        ...cfg.channels?.["nextcloud-talk"],
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.["nextcloud-talk"]?.accounts,
-          [accountId]: {
-            ...cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-            enabled: cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
-            dmPolicy: "allowlist",
-            allowFrom: unique,
-          },
-        },
-      },
-    },
-  };
+  return setNextcloudTalkAccountConfig(cfg, accountId, {
+    dmPolicy: "allowlist",
+    allowFrom: unique,
+  });
 }
 
 async function promptNextcloudTalkAllowFromForAccount(params: {
@@ -265,41 +274,10 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     if (secretResult.action === "use-env" || secret || baseUrl !== resolvedAccount.baseUrl) {
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            "nextcloud-talk": {
-              ...next.channels?.["nextcloud-talk"],
-              enabled: true,
-              baseUrl,
-              ...(secret ? { botSecret: secret } : {}),
-            },
-          },
-        };
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            "nextcloud-talk": {
-              ...next.channels?.["nextcloud-talk"],
-              enabled: true,
-              accounts: {
-                ...next.channels?.["nextcloud-talk"]?.accounts,
-                [accountId]: {
-                  ...next.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-                  enabled:
-                    next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
-                  baseUrl,
-                  ...(secret ? { botSecret: secret } : {}),
-                },
-              },
-            },
-          },
-        };
-      }
+      next = setNextcloudTalkAccountConfig(next, accountId, {
+        baseUrl,
+        ...(secret ? { botSecret: secret } : {}),
+      });
     }
 
     const existingApiUser = resolvedAccount.config.apiUser?.trim();
@@ -333,41 +311,10 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
         preferredEnvVar: "NEXTCLOUD_TALK_API_PASSWORD",
       });
       const apiPassword = apiPasswordResult.action === "set" ? apiPasswordResult.value : undefined;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            "nextcloud-talk": {
-              ...next.channels?.["nextcloud-talk"],
-              enabled: true,
-              apiUser,
-              ...(apiPassword ? { apiPassword } : {}),
-            },
-          },
-        };
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            "nextcloud-talk": {
-              ...next.channels?.["nextcloud-talk"],
-              enabled: true,
-              accounts: {
-                ...next.channels?.["nextcloud-talk"]?.accounts,
-                [accountId]: {
-                  ...next.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-                  enabled:
-                    next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
-                  apiUser,
-                  ...(apiPassword ? { apiPassword } : {}),
-                },
-              },
-            },
-          },
-        };
-      }
+      next = setNextcloudTalkAccountConfig(next, accountId, {
+        apiUser,
+        ...(apiPassword ? { apiPassword } : {}),
+      });
     }
 
     if (forceAllowFrom) {
