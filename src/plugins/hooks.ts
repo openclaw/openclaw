@@ -50,6 +50,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeLlmCallEvent,
+  PluginHookBeforeLlmCallResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -705,6 +707,41 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // LLM Call Hooks
+  // =========================================================================
+
+  /**
+   * Run before_llm_call hook.
+   * Fires before every LLM API call within the agent loop.
+   * Allows plugins to inspect/modify context, filter tools, or block the call.
+   * Runs sequentially, merging results across handlers.
+   */
+  async function runBeforeLlmCall(
+    event: PluginHookBeforeLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeLlmCallResult | undefined> {
+    return runModifyingHook<"before_llm_call", PluginHookBeforeLlmCallResult>(
+      "before_llm_call",
+      event,
+      ctx,
+      (acc, next) => ({
+        // First-writer-wins for messages/systemPrompt: once a higher-priority
+        // security plugin sanitizes inputs, later plugins cannot override them.
+        messages: acc?.messages ?? next.messages,
+        systemPrompt: acc?.systemPrompt ?? next.systemPrompt,
+        // Intersection latch: if both handlers provide tools, only keep tools
+        // present in both lists. Prevents a later handler from widening the allowlist.
+        tools:
+          acc?.tools !== undefined && next.tools !== undefined
+            ? next.tools.filter((t) => acc.tools!.some((a) => a.name === t.name))
+            : (next.tools ?? acc?.tools),
+        block: next.block || acc?.block,
+        blockReason: acc?.blockReason ?? next.blockReason,
+      }),
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -753,6 +790,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // LLM call hooks
+    runBeforeLlmCall,
     // Utility
     hasHooks,
     getHookCount,
