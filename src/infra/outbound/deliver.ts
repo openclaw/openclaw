@@ -653,6 +653,7 @@ async function deliverOutboundPayloadsCore(
     };
     return {
       channel: "signal" as const,
+      meta: undefined as Record<string, unknown> | undefined,
       ...(await sendSignal(to, formatted.text, {
         cfg,
         mediaUrl,
