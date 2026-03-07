@@ -63,13 +63,24 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
     }
   }
   if (wantsVersion) {
-    let version = process.env.OPENCLAW_BUNDLED_VERSION;
-    if (!version) {
+    // Match resolveBinaryVersion() priority: package metadata first,
+    // OPENCLAW_BUNDLED_VERSION only as fallback.
+    let version;
+    try {
       const require = module.createRequire(import.meta.url);
       version = require("./package.json").version;
+    } catch {
+      // package.json unreadable — fall through
     }
-    process.stdout.write(`${version}\n`);
-    process.exit(0);
+    if (!version) {
+      version = process.env.OPENCLAW_BUNDLED_VERSION;
+    }
+    if (version) {
+      process.stdout.write(`${version}\n`);
+      process.exit(0);
+    }
+    // Neither source available — fall through to full CLI which has
+    // additional candidates (build-info.json, __OPENCLAW_VERSION__).
   }
 }
 
