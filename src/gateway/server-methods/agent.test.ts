@@ -1,15 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  loadSessionStore: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   sessionsResetHandler: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  resolveGatewayAgentModelState: vi.fn(),
+  listAgentIds: vi.fn(() => ["main", "ops"]),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -26,8 +29,8 @@ vi.mock("../../config/sessions.js", async () => {
   );
   return {
     ...actual,
+    loadSessionStore: mocks.loadSessionStore,
     updateSessionStore: mocks.updateSessionStore,
-    resolveAgentIdFromSessionKey: () => "main",
     resolveExplicitAgentSessionKey: () => undefined,
     resolveAgentMainSessionKey: ({
       cfg,
@@ -54,7 +57,8 @@ vi.mock("../../config/config.js", async () => {
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: () => ["main"],
+  listAgentIds: () => mocks.listAgentIds(),
+  resolveAgentEffectiveModelPrimary: () => undefined,
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -73,6 +77,16 @@ vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
 
+vi.mock("../agent-model-blocking.js", async () => {
+  const actual = await vi.importActual<typeof import("../agent-model-blocking.js")>(
+    "../agent-model-blocking.js",
+  );
+  return {
+    ...actual,
+    resolveGatewayAgentModelState: mocks.resolveGatewayAgentModelState,
+  };
+});
+
 vi.mock("../../utils/delivery-context.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
     "../../utils/delivery-context.js",
@@ -87,6 +101,9 @@ const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
     addChatRun: vi.fn(),
+    removeChatRun: vi.fn(),
+    registerToolEventRecipient: vi.fn(),
+    chatAbortControllers: new Map(),
     logGateway: { info: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
 
@@ -271,6 +288,18 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+    mocks.loadSessionStore.mockReturnValue({});
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.resolveGatewayAgentModelState.mockReset();
+    mocks.resolveGatewayAgentModelState.mockResolvedValue({
+      status: "ready",
+      reason: undefined,
+    });
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -407,6 +436,106 @@ describe("gateway agent handler", () => {
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(callArgs.bestEffortDeliver).toBe(false);
+  });
+
+  it("removes queued chat runs when strict model resolution blocks the run", async () => {
+    primeMainAgentRun();
+    mocks.resolveGatewayAgentModelState.mockResolvedValue({
+      status: "blocked",
+      reason: "model_not_found",
+    });
+    const context = makeContext();
+
+    const respond = await invokeAgent(
+      {
+        message: "blocked run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "blocked-idem-1",
+      },
+      {
+        context,
+        reqId: "blocked-model-1",
+      },
+    );
+
+    expect(context.addChatRun).toHaveBeenCalledWith("blocked-idem-1", {
+      sessionKey: "agent:main:main",
+      clientRunId: "blocked-idem-1",
+    });
+    expect(context.removeChatRun).toHaveBeenCalledWith(
+      "blocked-idem-1",
+      "blocked-idem-1",
+      "agent:main:main",
+    );
+    expect(context.registerToolEventRecipient).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("blocked"),
+      }),
+    );
+  });
+
+  it("preserves canonical agent session keys when remapping from sessionId", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:ops:main": { sessionId: "ops-session-id", updatedAt: 1 },
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "resume by sessionId",
+        sessionId: "ops-session-id",
+        idempotencyKey: "ops-session-idem-1",
+      },
+      { reqId: "ops-session-remap-1" },
+    );
+
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
+    expect(call?.sessionKey).toBe("agent:ops:main");
+    expect(mocks.resolveGatewayAgentModelState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+      }),
+    );
+  });
+
+  it("resolves sessionId across agent stores before strict blocking", async () => {
+    mocks.loadSessionStore.mockImplementation((storePath: string) => {
+      if (storePath.includes("ops")) {
+        return {
+          "agent:ops:main": { sessionId: "ops-session-id", updatedAt: 1 },
+        };
+      }
+      return {};
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "resume across stores",
+        sessionId: "ops-session-id",
+        idempotencyKey: "ops-cross-store-idem-1",
+      },
+      { reqId: "ops-cross-store-1" },
+    );
+
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
+    expect(call?.sessionKey).toBe("agent:ops:main");
+    expect(mocks.resolveGatewayAgentModelState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+      }),
+    );
   });
 
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {

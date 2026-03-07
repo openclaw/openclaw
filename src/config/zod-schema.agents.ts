@@ -7,6 +7,7 @@ export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
+    strictModelResolution: z.boolean().optional(),
   })
   .strict()
   .optional();

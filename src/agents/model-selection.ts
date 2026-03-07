@@ -14,6 +14,17 @@ export type ModelRef = {
   model: string;
 };
 
+export type AgentModelStatus = "ready" | "blocked";
+export type AgentModelBlockCode =
+  | "primary_model_undefined"
+  | "provider_missing"
+  | "provider_offline"
+  | "model_not_found";
+
+export type AgentModelResolutionState =
+  | { status: "ready"; ref: ModelRef }
+  | { status: "blocked"; code: AgentModelBlockCode; reason: string };
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
 export type ModelAliasIndex = {
@@ -204,6 +215,55 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
+function inferUniqueProviderFromExplicitProviderModels(params: {
+  cfg: OpenClawConfig;
+  model: string;
+}): string | undefined {
+  const model = params.model.trim();
+  if (!model) {
+    return undefined;
+  }
+  const providersCfg = params.cfg.models?.providers;
+  if (!providersCfg || typeof providersCfg !== "object") {
+    return undefined;
+  }
+  const normalized = model.toLowerCase();
+  const providers = new Set<string>();
+  for (const [providerId, providerRaw] of Object.entries(providersCfg)) {
+    if (!providerRaw || typeof providerRaw !== "object") {
+      continue;
+    }
+    const modelsRaw = (providerRaw as { models?: unknown }).models;
+    if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
+      continue;
+    }
+    const provider = normalizeProviderId(providerId);
+    for (const entry of modelsRaw) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const idValue = (entry as { id?: unknown }).id;
+      if (typeof idValue !== "string") {
+        continue;
+      }
+      const id = idValue.trim();
+      if (!id) {
+        continue;
+      }
+      if (id === model || id.toLowerCase() === normalized) {
+        providers.add(provider);
+        if (providers.size > 1) {
+          return undefined;
+        }
+      }
+    }
+  }
+  if (providers.size !== 1) {
+    return undefined;
+  }
+  return providers.values().next().value;
+}
+
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
   const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
@@ -340,6 +400,167 @@ export function resolveConfiguredModelRef(params: {
     }
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
+}
+
+export function resolveConfiguredModelRefWithoutImplicitFallback(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+  rawModel: string;
+}): ModelRef | null {
+  const trimmed = params.rawModel.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (!trimmed.includes("/")) {
+    const aliasKey = normalizeAliasKey(trimmed);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+    const inferredProvider =
+      inferUniqueProviderFromConfiguredModels({
+        cfg: params.cfg,
+        model: trimmed,
+      }) ??
+      inferUniqueProviderFromExplicitProviderModels({
+        cfg: params.cfg,
+        model: trimmed,
+      });
+    if (!inferredProvider) {
+      return null;
+    }
+    return parseModelRef(trimmed, inferredProvider);
+  }
+  const resolved = resolveModelRefFromString({
+    raw: trimmed,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  return resolved?.ref ?? null;
+}
+
+function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
+  const out = new Set<string>();
+  for (const key of Object.keys(cfg.models?.providers ?? {})) {
+    const normalized = normalizeProviderId(key);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
+  for (const key of Object.keys(cfg.agents?.defaults?.cliBackends ?? {})) {
+    const normalized = normalizeProviderId(key);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
+  for (const provider of ["claude-cli", "codex-cli"]) {
+    if (isCliProvider(provider, cfg)) {
+      out.add(normalizeProviderId(provider));
+    }
+  }
+  return out;
+}
+
+export function resolveAgentModelResolutionState(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  defaultProvider: string;
+  strictModelResolution: boolean;
+  catalog?: ModelCatalogEntry[];
+}): AgentModelResolutionState {
+  if (!params.strictModelResolution) {
+    return {
+      status: "ready",
+      ref: resolveDefaultModelForAgent({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
+    };
+  }
+
+  const configuredPrimary = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  if (!configuredPrimary) {
+    return {
+      status: "blocked",
+      code: "primary_model_undefined",
+      reason: `Agent "${params.agentId}" has no primary model configured.`,
+    };
+  }
+
+  const resolved = resolveConfiguredModelRefWithoutImplicitFallback({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+    rawModel: configuredPrimary,
+  });
+  if (!resolved) {
+    return {
+      status: "blocked",
+      code: "provider_missing",
+      reason: `Model "${configuredPrimary}" does not resolve to a configured provider.`,
+    };
+  }
+
+  const strictModelId = splitTrailingAuthProfile(resolved.model).model;
+
+  const configuredProviders = collectConfiguredProviderIds(params.cfg);
+  const providerKnownByConfig = configuredProviders.has(resolved.provider);
+  const configuredProvider = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    resolved.provider,
+  );
+  const catalogProviders = new Set(
+    (params.catalog ?? []).map((entry) => normalizeProviderId(entry.provider)),
+  );
+  const providerKnownByCatalog = catalogProviders.has(resolved.provider);
+  if (!providerKnownByConfig && !providerKnownByCatalog) {
+    return {
+      status: "blocked",
+      code: "provider_missing",
+      reason: `Provider "${resolved.provider}" is not configured.`,
+    };
+  }
+
+  if (params.catalog && providerKnownByCatalog) {
+    const modelExistsInCatalog = params.catalog.some(
+      (entry) =>
+        normalizeProviderId(entry.provider) === resolved.provider &&
+        entry.id.toLowerCase().trim() === strictModelId.toLowerCase().trim(),
+    );
+    if (!modelExistsInCatalog) {
+      return {
+        status: "blocked",
+        code: "model_not_found",
+        reason: `Model "${resolved.provider}/${resolved.model}" was not found.`,
+      };
+    }
+  }
+  if (
+    params.catalog &&
+    !providerKnownByCatalog &&
+    providerKnownByConfig &&
+    configuredProvider?.models &&
+    configuredProvider.models.length > 0
+  ) {
+    const modelExistsInConfiguredProvider = configuredProvider.models.some(
+      (entry) => entry.id.toLowerCase().trim() === strictModelId.toLowerCase().trim(),
+    );
+    if (!modelExistsInConfiguredProvider) {
+      return {
+        status: "blocked",
+        code: "model_not_found",
+        reason: `Model "${resolved.provider}/${resolved.model}" was not found.`,
+      };
+    }
+  }
+
+  return {
+    status: "ready",
+    ref: resolved,
+  };
 }
 
 export function resolveDefaultModelForAgent(params: {

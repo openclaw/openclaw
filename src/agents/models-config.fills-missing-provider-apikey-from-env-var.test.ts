@@ -259,6 +259,7 @@ describe("models-config", () => {
         },
       });
       await ensureOpenClawModelsJson({
+        // pragma: allowlist secret
         models: {
           mode: "merge",
           providers: {

@@ -30,7 +30,7 @@ import Testing
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
             token: "launchd-token",
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let envToken = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: false,
@@ -51,7 +51,7 @@ import Testing
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
             token: "launchd-token",
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: true,
@@ -63,9 +63,9 @@ import Testing
 
     @Test func resolveGatewayPasswordFallsBackToLaunchd() {
         let snapshot = self.makeLaunchAgentSnapshot(
-            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
+            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"], // pragma: allowlist secret
             token: nil,
-            password: "launchd-pass")
+            password: "launchd-pass") // pragma: allowlist secret
 
         let password = GatewayEndpointStore._testResolveGatewayPassword(
             isRemote: false,
@@ -181,7 +181,7 @@ import Testing
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://127.0.0.1:18789")),
             token: nil,
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,
@@ -194,7 +194,7 @@ import Testing
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://gateway.example:18789")),
             token: nil,
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,
@@ -207,7 +207,7 @@ import Testing
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "wss://gateway.example:443/remote-ui")),
             token: nil,
-            password: nil)
+            password: nil) // pragma: allowlist secret
 
         let url = try GatewayEndpointStore.dashboardURL(
             for: config,
@@ -234,7 +234,7 @@ import Testing
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
         #expect(url?.absoluteString == "ws://127.0.0.1:18789")
-    }
+    } // pragma: allowlist secret
 
     @Test func normalizeGatewayUrlRejectsNonLoopbackWs() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")

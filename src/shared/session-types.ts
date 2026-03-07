@@ -9,6 +9,8 @@ export type GatewayAgentIdentity = {
 export type GatewayAgentRow = {
   id: string;
   name?: string;
+  status?: "ready" | "blocked";
+  reason?: string;
   identity?: GatewayAgentIdentity;
 };
 

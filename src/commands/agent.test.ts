@@ -418,6 +418,76 @@ describe("agentCommand", () => {
     });
   });
 
+  it("blocks ingress runs when strict model resolution marks the target agent blocked", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      configSpy.mockReturnValue({
+        agents: {
+          strictModelResolution: true,
+          defaults: {
+            model: { primary: "missing-model" },
+            models: {},
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+
+      await expect(
+        agentCommandFromIngress({ message: "hi", to: "+1555", senderIsOwner: true }, runtime),
+      ).rejects.toThrow('agent "main" is blocked');
+      expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows ingress runs in strict mode when model resolution is valid", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "openai/gpt-4.1-mini" },
+        models: {
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+      configSpy.mockReturnValue({
+        agents: {
+          strictModelResolution: true,
+          defaults: {
+            model: { primary: "openai/gpt-4.1-mini" },
+            models: { "openai/gpt-4.1-mini": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-4.1-mini",
+                  name: "gpt-4.1-mini",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_384,
+                },
+              ],
+            },
+          },
+        },
+        session: { store, mainKey: "main" },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { provider: "openai", id: "gpt-4.1-mini", name: "gpt-4.1-mini" },
+      ]);
+
+      await agentCommandFromIngress({ message: "hi", to: "+1555", senderIsOwner: true }, runtime);
+      expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalled();
+    });
+  });
+
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

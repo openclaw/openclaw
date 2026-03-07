@@ -12,6 +12,7 @@ import {
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveAgentModelResolutionState,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -643,5 +644,349 @@ describe("normalizeModelSelection", () => {
     expect(normalizeModelSelection(undefined)).toBeUndefined();
     expect(normalizeModelSelection(null)).toBeUndefined();
     expect(normalizeModelSelection(42)).toBeUndefined();
+  });
+});
+
+describe("strict model resolution", () => {
+  const strictTestModelDefinition = (id: string) => ({
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+  });
+
+  it("preserves implicit fallback when strictModelResolution is disabled", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: false,
+        defaults: {
+          model: {
+            primary: "missing-model",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: false,
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "anthropic", model: "missing-model" },
+    });
+  });
+
+  it("blocks when strictModelResolution is enabled and model ref is invalid", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "missing-model",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [],
+    });
+
+    expect(state.status).toBe("blocked");
+    if (state.status === "blocked") {
+      expect(state.code).toBe("provider_missing");
+    }
+  });
+
+  it("marks agent ready in strict mode when configured model is valid", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [strictTestModelDefinition("llama3.2:3b")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "ollama/llama3.2:3b",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "ollama", model: "llama3.2:3b" },
+    });
+  });
+
+  it("does not mark config-known providers offline when catalog does not include that provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [strictTestModelDefinition("claude-opus-4-6")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "anthropic", model: "claude-opus-4-6" },
+    });
+  });
+
+  it("blocks unknown models for config-known providers when catalog is missing that provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [strictTestModelDefinition("llama3.2:3b")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "ollama/not-installed",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "anthropic", id: "claude-opus-4-6", name: "claude-opus-4-6" }],
+    });
+
+    expect(state.status).toBe("blocked");
+    if (state.status === "blocked") {
+      expect(state.code).toBe("model_not_found");
+    }
+  });
+
+  it("strips trailing auth profile suffix before strict model existence checks", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [strictTestModelDefinition("gpt-4.1-mini")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini@work",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "openai", id: "gpt-4.1-mini", name: "gpt-4.1-mini" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "openai", model: "gpt-4.1-mini@work" },
+    });
+  });
+
+  it("ignores non-model allowlist keys when inferring configured providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [strictTestModelDefinition("claude-opus-4-6")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+          },
+          models: {
+            key: { enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "anthropic", model: "claude-opus-4-6" },
+    });
+  });
+
+  it("does not treat allowlist model refs as configured providers in strict mode", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "foo/bar",
+          },
+          models: {
+            "foo/bar": { alias: "bar" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [],
+    });
+
+    expect(state.status).toBe("blocked");
+    if (state.status === "blocked") {
+      expect(state.code).toBe("provider_missing");
+    }
+  });
+
+  it("treats configured CLI backends as available providers in strict mode", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+            },
+          },
+          model: {
+            primary: "claude-cli/sonnet",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "claude-cli", model: "sonnet" },
+    });
+  });
+
+  it("keeps resolution isolated across multiple agents", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [strictTestModelDefinition("llama3.2:3b")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "ollama/llama3.2:3b",
+          },
+        },
+        list: [
+          { id: "alpha", model: { primary: "ollama/llama3.2:3b" } },
+          { id: "beta", model: { primary: "ollama/not-installed" } },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const catalog = [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }];
+
+    const alpha = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "alpha",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog,
+    });
+    const beta = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "beta",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog,
+    });
+
+    expect(alpha.status).toBe("ready");
+    expect(beta.status).toBe("blocked");
+    if (beta.status === "blocked") {
+      expect(beta.code).toBe("model_not_found");
+    }
   });
 });

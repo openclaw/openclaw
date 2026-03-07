@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { resolveSessionKeyForRequest } from "../../commands/agent/session.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -29,6 +30,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveGatewayAgentModelState } from "../agent-model-blocking.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
@@ -333,6 +335,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
+    let queuedChatRunSessionId: string | undefined;
+    let queuedChatRunSessionKey: string | undefined;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -472,11 +476,23 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
+        queuedChatRunSessionId = idem;
+        queuedChatRunSessionKey = canonicalSessionKey;
         if (requestedBestEffortDeliver === undefined) {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+    }
+
+    if (!resolvedSessionKey && resolvedSessionId) {
+      const effectiveCfg = cfgForAgent ?? cfg;
+      const sessionResolution = resolveSessionKeyForRequest({
+        cfg: effectiveCfg,
+        sessionId: resolvedSessionId,
+      });
+      if (sessionResolution.sessionKey) {
+        resolvedSessionKey = sessionResolution.sessionKey;
+      }
     }
 
     const runId = idem;
@@ -485,17 +501,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       client?.connect?.caps,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     );
-    if (connId && wantsToolEvents) {
-      context.registerToolEventRecipient(runId, connId);
-      // Register for any other active runs *in the same session* so
-      // late-joining clients (e.g. page refresh mid-response) receive
-      // in-progress tool events without leaking cross-session data.
-      for (const [activeRunId, active] of context.chatAbortControllers) {
-        if (activeRunId !== runId && active.sessionKey === requestedSessionKey) {
-          context.registerToolEventRecipient(activeRunId, connId);
-        }
-      }
-    }
 
     const wantsDelivery = request.deliver === true;
     const explicitTo =
@@ -578,6 +583,47 @@ export const agentHandlers: GatewayRequestHandlers = {
         ),
       );
       return;
+    }
+
+    const effectiveCfg = cfgForAgent ?? cfg;
+    const effectiveAgentId = agentId
+      ? normalizeAgentId(agentId)
+      : resolvedSessionKey
+        ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+        : normalizeAgentId(resolveDefaultAgentId(effectiveCfg));
+    const modelState = await resolveGatewayAgentModelState({
+      cfg: effectiveCfg,
+      agentId: effectiveAgentId,
+      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+    });
+    if (modelState.status === "blocked") {
+      if (queuedChatRunSessionId) {
+        context.removeChatRun(queuedChatRunSessionId, idem, queuedChatRunSessionKey);
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `agent "${effectiveAgentId}" is blocked: ${modelState.reason}`,
+        ),
+      );
+      return;
+    }
+
+    if (resolvedSessionKey) {
+      registerAgentRunContext(idem, { sessionKey: resolvedSessionKey });
+    }
+    if (connId && wantsToolEvents) {
+      context.registerToolEventRecipient(runId, connId);
+      // Register for any other active runs *in the same session* so
+      // late-joining clients (e.g. page refresh mid-response) receive
+      // in-progress tool events without leaking cross-session data.
+      for (const [activeRunId, active] of context.chatAbortControllers) {
+        if (activeRunId !== runId && active.sessionKey === requestedSessionKey) {
+          context.registerToolEventRecipient(activeRunId, connId);
+        }
+      }
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);

@@ -8,8 +8,11 @@ function normalizeDarwinTmpPath(filePath: string): string {
     : filePath;
 }
 
-function canonicalizeComparableDir(dirPath: string): string {
-  const normalized = normalizeDarwinTmpPath(path.resolve(dirPath));
+function canonicalizeComparablePath(candidate: string | undefined): string | undefined {
+  if (!candidate) {
+    return candidate;
+  }
+  const normalized = normalizeDarwinTmpPath(path.resolve(candidate));
   try {
     return normalizeDarwinTmpPath(fs.realpathSync.native(normalized));
   } catch {
@@ -39,8 +42,8 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   expect(opts?.cwd).toBeTruthy();
   const cwd = String(opts?.cwd);
   const expectedTargetDir = params.expectedTargetDir;
-  expect(canonicalizeComparableDir(path.dirname(cwd))).toBe(
-    canonicalizeComparableDir(path.dirname(expectedTargetDir)),
+  expect(canonicalizeComparablePath(path.dirname(cwd))).toBe(
+    canonicalizeComparablePath(path.dirname(expectedTargetDir)),
   );
   expect(path.basename(cwd)).toMatch(/^\.openclaw-install-stage-/);
 }

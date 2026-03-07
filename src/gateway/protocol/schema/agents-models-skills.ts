@@ -16,6 +16,8 @@ export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
     name: Type.Optional(NonEmptyString),
+    status: Type.Optional(Type.Union([Type.Literal("ready"), Type.Literal("blocked")])),
+    reason: Type.Optional(NonEmptyString),
     identity: Type.Optional(
       Type.Object(
         {
