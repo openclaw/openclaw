@@ -102,6 +102,39 @@ describe("launchd runtime parsing", () => {
       lastExitReason: "exited",
     });
   });
+
+  it("does not set pid when pid = 0", () => {
+    const output = ["state = running", "pid = 0"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.pid).toBeUndefined();
+    expect(info.state).toBe("running");
+  });
+
+  it("sets pid for positive values", () => {
+    const output = ["state = running", "pid = 1234"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.pid).toBe(1234);
+  });
+
+  it("does not set pid for negative values", () => {
+    const output = ["state = waiting", "pid = -1"].join("\n");
+    const info = parseLaunchctlPrint(output);
+    expect(info.pid).toBeUndefined();
+    expect(info.state).toBe("waiting");
+  });
+
+  it("rejects pid and exit status values with junk suffixes", () => {
+    const output = [
+      "state = waiting",
+      "pid = 123abc",
+      "last exit status = 7ms",
+      "last exit reason = exited",
+    ].join("\n");
+    expect(parseLaunchctlPrint(output)).toEqual({
+      state: "waiting",
+      lastExitReason: "exited",
+    });
+  });
 });
 
 describe("launchctl list detection", () => {

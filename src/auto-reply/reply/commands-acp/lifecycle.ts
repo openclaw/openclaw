@@ -15,6 +15,7 @@ import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
+import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -37,7 +38,7 @@ import type { CommandHandlerResult, HandleCommandsParams } from "../commands-typ
 import {
   resolveAcpCommandAccountId,
   resolveAcpCommandBindingContext,
-  resolveAcpCommandThreadId,
+  resolveAcpCommandConversationId,
 } from "./context.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
@@ -123,25 +124,27 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const currentThreadId = bindingContext.threadId ?? "";
-
-  if (threadMode === "here" && !currentThreadId) {
+  const currentConversationId = bindingContext.conversationId?.trim() || "";
+  const requiresThreadIdForHere = channel !== "telegram";
+  if (
+    threadMode === "here" &&
+    ((requiresThreadIdForHere && !currentThreadId) ||
+      (!requiresThreadIdForHere && !currentConversationId))
+  ) {
     return {
       ok: false,
       error: `--thread here requires running /acp spawn inside an active ${channel} thread/conversation.`,
     };
   }
 
-  const threadId = currentThreadId || undefined;
-  const placement = threadId ? "current" : "child";
+  const placement = channel === "telegram" ? "current" : currentThreadId ? "current" : "child";
   if (!capabilities.placements.includes(placement)) {
     return {
       ok: false,
       error: `Thread bindings do not support ${placement} placement for ${channel}.`,
     };
   }
-  const channelId = placement === "child" ? bindingContext.conversationId : undefined;
-
-  if (placement === "child" && !channelId) {
+  if (!currentConversationId) {
     return {
       ok: false,
       error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
@@ -149,11 +152,11 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = commandParams.command.senderId?.trim() || "";
-  if (threadId) {
+  if (placement === "current") {
     const existingBinding = bindingService.resolveByConversation({
       channel: spawnPolicy.channel,
       accountId: spawnPolicy.accountId,
-      conversationId: threadId,
+      conversationId: currentConversationId,
     });
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
@@ -162,19 +165,13 @@ async function bindSpawnedAcpSessionToThread(params: {
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
       return {
         ok: false,
-        error: `Only ${boundBy} can rebind this thread.`,
+        error: `Only ${boundBy} can rebind this ${channel === "telegram" ? "conversation" : "thread"}.`,
       };
     }
   }
 
   const label = params.label || params.agentId;
-  const conversationId = threadId || channelId;
-  if (!conversationId) {
-    return {
-      ok: false,
-      error: `Could not resolve a ${channel} conversation for ACP thread spawn.`,
-    };
-  }
+  const conversationId = currentConversationId;
 
   try {
     const binding = await bindingService.bind({
@@ -257,6 +254,13 @@ export async function handleAcpSpawnAction(
   }
 
   const spawn = parsed.value;
+  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
+    cfg: params.cfg,
+    requesterSessionKey: params.sessionKey,
+  });
+  if (runtimePolicyError) {
+    return stopWithText(`⚠️ ${runtimePolicyError}`);
+  }
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
     return stopWithText(
@@ -344,12 +348,13 @@ export async function handleAcpSpawnAction(
     `✅ Spawned ACP session ${sessionKey} (${spawn.mode}, backend ${initializedBackend}).`,
   ];
   if (binding) {
-    const currentThreadId = resolveAcpCommandThreadId(params) ?? "";
+    const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
-    if (currentThreadId && boundConversationId === currentThreadId) {
-      parts.push(`Bound this thread to ${sessionKey}.`);
+    const placementLabel = binding.conversation.channel === "telegram" ? "conversation" : "thread";
+    if (currentConversationId && boundConversationId === currentConversationId) {
+      parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
     } else {
-      parts.push(`Created thread ${boundConversationId} and bound it to ${sessionKey}.`);
+      parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
     }
   } else {
     parts.push("Session is unbound (use /focus <session-key> to bind this thread/conversation).");
@@ -358,6 +363,19 @@ export async function handleAcpSpawnAction(
   const dispatchNote = resolveAcpDispatchPolicyMessage(params.cfg);
   if (dispatchNote) {
     parts.push(`ℹ️ ${dispatchNote}`);
+  }
+
+  const shouldPinBindingNotice =
+    binding?.conversation.channel === "telegram" &&
+    binding.conversation.conversationId.includes(":topic:");
+  if (shouldPinBindingNotice) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: parts.join(" "),
+        channelData: { telegram: { pin: true } },
+      },
+    };
   }
 
   return stopWithText(parts.join(" "));

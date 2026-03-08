@@ -61,10 +61,10 @@ done
 
 last_commit_error=''
 
-run_git_commit() {
+run_git_command() {
   local stderr_log
   stderr_log=$(mktemp)
-  if git commit -m "$commit_message" -- "${files[@]}" 2> >(tee "$stderr_log" >&2); then
+  if "$@" 2> >(tee "$stderr_log" >&2); then
     rm -f "$stderr_log"
     last_commit_error=''
     return 0
@@ -72,6 +72,59 @@ run_git_commit() {
 
   last_commit_error=$(cat "$stderr_log")
   rm -f "$stderr_log"
+  return 1
+}
+
+is_git_lock_error() {
+  printf '%s\n' "$last_commit_error" | grep -Eq \
+    "Another git process seems to be running|Unable to create '.*\\.git/[^']+\\.lock'"
+}
+
+extract_git_lock_path() {
+  printf '%s\n' "$last_commit_error" |
+    sed -n "s/.*'\(.*\.git\/[^']*\.lock\)'.*/\1/p" |
+    head -n 1
+}
+
+run_git_with_lock_retry() {
+  local label=$1
+  shift
+
+  local deadline=$((SECONDS + 5))
+  local announced_retry=false
+
+  while true; do
+    if run_git_command "$@"; then
+      return 0
+    fi
+
+    if ! is_git_lock_error; then
+      return 1
+    fi
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      break
+    fi
+
+    if [ "$announced_retry" = false ]; then
+      printf 'Git lock during %s; retrying for up to 5 seconds...\n' "$label" >&2
+      announced_retry=true
+    fi
+
+    sleep 0.5
+  done
+
+  if [ "$force_delete_lock" = true ]; then
+    local lock_path
+    lock_path=$(extract_git_lock_path)
+    if [ -n "$lock_path" ] && [ -e "$lock_path" ]; then
+      rm -f "$lock_path"
+      printf 'Removed stale git lock: %s\n' "$lock_path" >&2
+      run_git_command "$@"
+      return $?
+    fi
+  fi
+
   return 1
 }
 
@@ -84,8 +137,8 @@ for file in "${files[@]}"; do
   fi
 done
 
-git restore --staged :/
-git add --force -- "${files[@]}"
+run_git_with_lock_retry "unstaging files" git restore --staged :/
+run_git_with_lock_retry "staging files" git add --force -- "${files[@]}"
 
 if git diff --staged --quiet; then
   printf 'Warning: no staged changes detected for: %s\n' "${files[*]}" >&2
@@ -93,21 +146,8 @@ if git diff --staged --quiet; then
 fi
 
 committed=false
-if run_git_commit; then
+if run_git_with_lock_retry "commit" git commit -m "$commit_message" -- "${files[@]}"; then
   committed=true
-elif [ "$force_delete_lock" = true ]; then
-  lock_path=$(
-    printf '%s\n' "$last_commit_error" |
-      awk -F"'" '/Unable to create .*\.git\/index\.lock/ { print $2; exit }'
-  )
-
-  if [ -n "$lock_path" ] && [ -e "$lock_path" ]; then
-    rm -f "$lock_path"
-    printf 'Removed stale git lock: %s\n' "$lock_path" >&2
-    if run_git_commit; then
-      committed=true
-    fi
-  fi
 fi
 
 if [ "$committed" = false ]; then

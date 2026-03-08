@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
   {
@@ -22,9 +22,17 @@ const TalkProviderConfigSchema = Type.Object(
     voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
     modelId: Type.Optional(Type.String()),
     outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(Type.String()),
+    apiKey: Type.Optional(SecretInputSchema),
   },
   { additionalProperties: true },
+);
+
+const ResolvedTalkConfigSchema = Type.Object(
+  {
+    provider: Type.String(),
+    config: TalkProviderConfigSchema,
+  },
+  { additionalProperties: false },
 );
 
 export const TalkConfigResultSchema = Type.Object(
@@ -36,12 +44,14 @@ export const TalkConfigResultSchema = Type.Object(
             {
               provider: Type.Optional(Type.String()),
               providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
+              resolved: Type.Optional(ResolvedTalkConfigSchema),
               voiceId: Type.Optional(Type.String()),
               voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
               modelId: Type.Optional(Type.String()),
               outputFormat: Type.Optional(Type.String()),
-              apiKey: Type.Optional(Type.String()),
+              apiKey: Type.Optional(SecretInputSchema),
               interruptOnSpeech: Type.Optional(Type.Boolean()),
+              silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
             },
             { additionalProperties: false },
           ),

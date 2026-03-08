@@ -1,40 +1,37 @@
 ---
-summary: "Perplexity Search API setup for web_search"
+summary: "Perplexity Search API and Sonar/OpenRouter compatibility for web_search"
 read_when:
   - You want to use Perplexity Search for web search
-  - You need PERPLEXITY_API_KEY setup
+  - You need PERPLEXITY_API_KEY or OPENROUTER_API_KEY setup
 title: "Perplexity Search"
 ---
 
 # Perplexity Search API
 
-OpenClaw uses Perplexity Search API for the `web_search` tool when `provider: "perplexity"` is set.
-Perplexity Search returns structured results (title, URL, snippet) for fast research.
+OpenClaw supports Perplexity Search API as a `web_search` provider.
+It returns structured results with `title`, `url`, and `snippet` fields.
+
+For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups.
+If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `tools.web.search.perplexity.apiKey`, or set `tools.web.search.perplexity.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
 
 ## Getting a Perplexity API key
 
 1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
 2. Generate an API key in the dashboard
-3. Store the key in config (recommended) or set `PERPLEXITY_API_KEY` in the Gateway environment.
+3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
-## Config example
+## OpenRouter compatibility
 
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...",
-        },
-      },
-    },
-  },
-}
-```
+If you were already using OpenRouter for Perplexity Sonar, keep `provider: "perplexity"` and set `OPENROUTER_API_KEY` in the Gateway environment, or store an `sk-or-...` key in `tools.web.search.perplexity.apiKey`.
 
-## Switching from Brave
+Optional legacy controls:
+
+- `tools.web.search.perplexity.baseUrl`
+- `tools.web.search.perplexity.model`
+
+## Config examples
+
+### Native Perplexity Search API
 
 ```json5
 {
@@ -51,16 +48,37 @@ Perplexity Search returns structured results (title, URL, snippet) for fast rese
 }
 ```
 
-## Where to set the key (recommended)
+### OpenRouter / Sonar compatibility
 
-**Recommended:** run `openclaw configure --section web`. It stores the key in
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "perplexity",
+        perplexity: {
+          apiKey: "sk-or-v1-...",
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
+}
+```
+
+## Where to set the key
+
+**Via config:** run `openclaw configure --section web`. It stores the key in
 `~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
 
-**Environment alternative:** set `PERPLEXITY_API_KEY` in the Gateway process
-environment. For a gateway install, put it in `~/.openclaw/.env` (or your
-service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
+**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+in the Gateway process environment. For a gateway install, put it in
+`~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Tool parameters
+
+These parameters apply to the native Perplexity Search API path.
 
 | Parameter             | Description                                          |
 | --------------------- | ---------------------------------------------------- |
@@ -74,6 +92,9 @@ service environment). See [Env vars](/help/faq#how-does-openclaw-load-environmen
 | `domain_filter`       | Domain allowlist/denylist array (max 20)             |
 | `max_tokens`          | Total content budget (default: 25000, max: 1000000)  |
 | `max_tokens_per_page` | Per-page token limit (default: 2048)                 |
+
+For the legacy Sonar/OpenRouter compatibility path, only `query` and `freshness` are supported.
+Search API-only filters such as `country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return explicit errors.
 
 **Examples:**
 
@@ -126,7 +147,8 @@ await web_search({
 
 ## Notes
 
-- Perplexity Search API returns structured web search results (title, URL, snippet)
+- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
+- OpenRouter or explicit `baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
 
 See [Web tools](/tools/web) for the full web_search configuration.

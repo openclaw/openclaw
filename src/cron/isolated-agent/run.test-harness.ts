@@ -40,6 +40,11 @@ export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
+export const countActiveDescendantRunsMock = createMock();
+export const listDescendantRunsForRequesterMock = createMock();
+export const pickLastNonEmptyTextFromPayloadsMock = createMock();
+export const resolveCronDeliveryPlanMock = createMock();
+export const resolveDeliveryTargetMock = createMock();
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -110,6 +115,11 @@ vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock("../../agents/subagent-registry.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
+}));
+
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -169,22 +179,17 @@ vi.mock("../../security/external-content.js", () => ({
 }));
 
 vi.mock("../delivery.js", () => ({
-  resolveCronDeliveryPlan: vi.fn().mockReturnValue({ requested: false }),
+  resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
 }));
 
 vi.mock("./delivery-target.js", () => ({
-  resolveDeliveryTarget: vi.fn().mockResolvedValue({
-    channel: "discord",
-    to: undefined,
-    accountId: undefined,
-    error: undefined,
-  }),
+  resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: vi.fn().mockReturnValue(false),
   pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
-  pickLastNonEmptyTextFromPayloads: vi.fn().mockReturnValue("test output"),
+  pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
@@ -271,6 +276,22 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
 
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+
+  countActiveDescendantRunsMock.mockReset();
+  countActiveDescendantRunsMock.mockReturnValue(0);
+  listDescendantRunsForRequesterMock.mockReset();
+  listDescendantRunsForRequesterMock.mockReturnValue([]);
+  pickLastNonEmptyTextFromPayloadsMock.mockReset();
+  pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
+  resolveCronDeliveryPlanMock.mockReset();
+  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+  resolveDeliveryTargetMock.mockReset();
+  resolveDeliveryTargetMock.mockResolvedValue({
+    channel: "discord",
+    to: undefined,
+    accountId: undefined,
+    error: undefined,
+  });
 
   logWarnMock.mockReset();
 }
