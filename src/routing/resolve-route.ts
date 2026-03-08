@@ -577,8 +577,11 @@ function peerKindMatches(bindingKind: ChatType, scopeKind: ChatType): boolean {
   if (bindingKind === scopeKind) {
     return true;
   }
-  const both = new Set([bindingKind, scopeKind]);
-  return both.has("group") && both.has("channel");
+  // "group" and "channel" are treated as interchangeable peer kinds.
+  return (
+    (bindingKind === "group" && scopeKind === "channel") ||
+    (bindingKind === "channel" && scopeKind === "group")
+  );
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {

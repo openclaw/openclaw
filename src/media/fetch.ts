@@ -35,15 +35,19 @@ type FetchMediaOptions = {
   lookupFn?: LookupFn;
 };
 
+const STRIP_QUOTES_RE = /^["']|["']$/g;
+const CONTENT_DISPOSITION_STAR_RE = /filename\*\s*=\s*([^;]+)/i;
+const CONTENT_DISPOSITION_RE = /filename\s*=\s*([^;]+)/i;
+
 function stripQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
+  return value.replace(STRIP_QUOTES_RE, "");
 }
 
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
   }
-  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
+  const starMatch = CONTENT_DISPOSITION_STAR_RE.exec(header);
   if (starMatch?.[1]) {
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
@@ -53,7 +57,7 @@ function parseContentDispositionFileName(header?: string | null): string | undef
       return path.basename(encoded);
     }
   }
-  const match = /filename\s*=\s*([^;]+)/i.exec(header);
+  const match = CONTENT_DISPOSITION_RE.exec(header);
   if (match?.[1]) {
     return path.basename(stripQuotes(match[1].trim()));
   }
