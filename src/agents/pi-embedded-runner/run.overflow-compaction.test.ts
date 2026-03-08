@@ -240,6 +240,32 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.payloads).toBeUndefined();
   });
 
+  it("skips compaction notice when assistant intentionally replied NO_REPLY", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 150000,
+      }),
+    );
+    // Retry: assistant intentionally said NO_REPLY (heartbeat/selective-reply)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        assistantTexts: ["NO_REPLY"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should NOT return compaction notice — assistant intentionally stayed silent
+    expect(result.payloads).toBeUndefined();
+  });
+
   it("returns retry_limit when repeated retries never converge", async () => {
     mockedRunEmbeddedAttempt.mockClear();
     mockedCompactDirect.mockClear();

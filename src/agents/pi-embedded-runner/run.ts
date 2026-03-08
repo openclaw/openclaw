@@ -1441,19 +1441,28 @@ export async function runEmbeddedPiAgent(
 
           // Context compaction can leave the retry without any assistant payloads.
           // Emit an explicit notice so the user knows compaction occurred instead
-          // of seeing complete silence. Skip when the run was aborted, timed out
-          // (handled above), messaging tools already delivered text or media, or
-          // a client tool call is pending.
+          // of seeing complete silence. Skip when:
+          // - the run was aborted or timed out (handled above)
+          // - messaging tools already delivered text or media
+          // - a client tool call is pending
+          // - the assistant intentionally produced a silent reply (NO_REPLY)
+          //   which buildEmbeddedRunPayloads filters out on purpose
           const messagingToolDeliveredContent =
             attempt.didSendViaMessagingTool ||
             (attempt.messagingToolSentMediaUrls?.length ?? 0) > 0;
+          // Inline NO_REPLY check to avoid importing from auto-reply/tokens.ts
+          // (which pulls in escapeRegExp from utils.js, breaking mocked test suites).
+          const assistantIntentionallySilent = attempt.assistantTexts.some(
+            (t) => t.trim().toUpperCase() === "NO_REPLY",
+          );
           if (
             autoCompactionCount > 0 &&
             payloads.length === 0 &&
             !aborted &&
             !timedOut &&
             !messagingToolDeliveredContent &&
-            !attempt.clientToolCall
+            !attempt.clientToolCall &&
+            !assistantIntentionallySilent
           ) {
             return {
               payloads: [
