@@ -1,69 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const hoisted = vi.hoisted(() => {
-  const queueEmbeddedPiMessageMock = vi.fn();
-  return { queueEmbeddedPiMessageMock };
-});
-
-vi.mock("../pi-embedded.js", () => ({
-  queueEmbeddedPiMessage: (...args: unknown[]) => hoisted.queueEmbeddedPiMessageMock(...args),
-}));
-
-const { createSessionsYieldTool } = await import("./sessions-yield-tool.js");
+import { describe, expect, it, vi } from "vitest";
+import { createSessionsYieldTool } from "./sessions-yield-tool.js";
 
 describe("sessions_yield tool", () => {
-  beforeEach(() => {
-    hoisted.queueEmbeddedPiMessageMock.mockReset();
-  });
-
   it("returns error when no sessionId is provided", async () => {
-    const tool = createSessionsYieldTool();
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({ onYield });
     const result = await tool.execute("call-1", {});
     expect(result.details).toMatchObject({
       status: "error",
       error: "No session context",
     });
-    expect(hoisted.queueEmbeddedPiMessageMock).not.toHaveBeenCalled();
+    expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("returns error when session is not active", async () => {
-    hoisted.queueEmbeddedPiMessageMock.mockReturnValue(false);
-    const tool = createSessionsYieldTool({ sessionId: "test-session" });
+  it("invokes onYield callback with default message", async () => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
     const result = await tool.execute("call-1", {});
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Session not active, not streaming, or compacting",
-    });
+    expect(result.details).toMatchObject({ status: "yielded", message: "Turn yielded." });
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.");
   });
 
-  it("yields successfully with default message", async () => {
-    hoisted.queueEmbeddedPiMessageMock.mockReturnValue(true);
-    const tool = createSessionsYieldTool({ sessionId: "test-session" });
-    const result = await tool.execute("call-1", {});
-    expect(result.details).toMatchObject({ status: "yielded" });
-    expect(hoisted.queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
-      "test-session",
-      expect.stringContaining("Turn yielded."),
-    );
-  });
-
-  it("yields with custom message", async () => {
-    hoisted.queueEmbeddedPiMessageMock.mockReturnValue(true);
-    const tool = createSessionsYieldTool({ sessionId: "test-session" });
+  it("passes custom message to onYield callback", async () => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
     const result = await tool.execute("call-1", { message: "Waiting for fact-checker" });
-    expect(result.details).toMatchObject({ status: "yielded" });
-    expect(hoisted.queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
-      "test-session",
-      expect.stringContaining("Waiting for fact-checker"),
-    );
+    expect(result.details).toMatchObject({
+      status: "yielded",
+      message: "Waiting for fact-checker",
+    });
+    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
   });
 
-  it("includes system directive in steer text", async () => {
-    hoisted.queueEmbeddedPiMessageMock.mockReturnValue(true);
+  it("succeeds without onYield callback", async () => {
     const tool = createSessionsYieldTool({ sessionId: "test-session" });
-    await tool.execute("call-1", { message: "Waiting" });
-    const steerText = hoisted.queueEmbeddedPiMessageMock.mock.calls[0][1];
-    expect(steerText).toContain("[SYSTEM]");
-    expect(steerText).toContain("Do NOT call any tools");
+    const result = await tool.execute("call-1", {});
+    expect(result.details).toMatchObject({ status: "yielded", message: "Turn yielded." });
   });
 });

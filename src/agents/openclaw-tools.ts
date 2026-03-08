@@ -78,6 +78,8 @@ export function createOpenClawTools(
      * subagents inherit the real workspace path instead of the sandbox copy.
      */
     spawnWorkspaceDir?: string;
+    /** Callback invoked when sessions_yield tool is called. */
+    onYield?: (message: string) => void;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
@@ -184,6 +186,7 @@ export function createOpenClawTools(
     }),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      onYield: options?.onYield,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
