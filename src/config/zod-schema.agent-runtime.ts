@@ -761,9 +761,27 @@ export const AgentEntrySchema = z
   })
   .strict();
 
+const SsrfPolicySchema = z
+  .object({
+    allowPrivateNetwork: z.boolean().optional(),
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+    hostnameAllowlist: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolsImageSchema = z
+  .object({
+    ssrfPolicy: SsrfPolicySchema,
+  })
+  .strict()
+  .optional();
+
 export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    image: ToolsImageSchema,
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,

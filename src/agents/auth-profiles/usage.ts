@@ -51,12 +51,17 @@ export function isProfileInCooldown(
   store: AuthProfileStore,
   profileId: string,
   modelKey?: string,
+  cfg?: OpenClawConfig,
 ): boolean {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return false;
+  }
+
   // Get config to check if model-level cooldown is enabled
   const providerKey = store.profiles[profileId]?.provider
     ? normalizeProviderId(store.profiles[profileId].provider)
     : "default";
-  const cfgResolved = resolveAuthCooldownConfig({ cfg: undefined, providerId: providerKey });
+  const cfgResolved = resolveAuthCooldownConfig({ cfg, providerId: providerKey });
   const modelLevelEnabled = cfgResolved.modelLevelEnabled;
 
   // Use model-level key only if config enabled AND modelKey provided
@@ -273,14 +278,15 @@ export async function markAuthProfileUsed(params: {
   profileId: string;
   modelKey?: string;
   agentDir?: string;
+  cfg?: OpenClawConfig;
 }): Promise<void> {
-  const { store, profileId, modelKey, agentDir } = params;
+  const { store, profileId, modelKey, agentDir, cfg } = params;
 
   // Get config to check if model-level cooldown is enabled
   const providerKey = store.profiles[profileId]?.provider
     ? normalizeProviderId(store.profiles[profileId].provider)
     : "default";
-  const cfgResolved = resolveAuthCooldownConfig({ cfg: undefined, providerId: providerKey });
+  const cfgResolved = resolveAuthCooldownConfig({ cfg, providerId: providerKey });
   const modelLevelEnabled = cfgResolved.modelLevelEnabled;
 
   // Use model-level key only if config enabled AND modelKey provided

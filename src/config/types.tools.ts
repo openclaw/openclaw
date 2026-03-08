@@ -21,6 +21,24 @@ export type MediaUnderstandingScopeConfig = {
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
+export type ImageSsrFPolicyConfig = {
+  /**
+   * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
+   * Hostnames listed here skip private IP checks even if they resolve to private IPs.
+   */
+  allowedHostnames?: string[];
+  /**
+   * Hostname allowlist patterns for image tool fetches.
+   * Legacy alias for allowedHostnames.
+   */
+  hostnameAllowlist?: string[];
+};
+
+export type ImageToolsConfig = {
+  /** SSRF policy for image tool URL fetches. */
+  ssrfPolicy?: ImageSsrFPolicyConfig;
+};
+
 export type MediaUnderstandingAttachmentsConfig = {
   /** Select the first matching attachment or process multiple. */
   mode?: "first" | "all";
@@ -538,6 +556,8 @@ export type ToolsConfig = {
       };
     };
   };
+  /** Image tool configuration. */
+  image?: ImageToolsConfig;
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */

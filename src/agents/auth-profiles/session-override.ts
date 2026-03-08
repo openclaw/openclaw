@@ -86,7 +86,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const pickFirstAvailable = () =>
-    order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
+    order.find((profileId) => !isProfileInCooldown(store, profileId, undefined, cfg)) ?? order[0];
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
@@ -94,7 +94,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) {
+      if (!isProfileInCooldown(store, candidate, undefined, cfg)) {
         return candidate;
       }
     }
@@ -123,7 +123,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
-  } else if (!current || isProfileInCooldown(store, current)) {
+  } else if (!current || isProfileInCooldown(store, current, undefined, cfg)) {
     next = pickFirstAvailable();
   }
 

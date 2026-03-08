@@ -296,6 +296,14 @@ export const FIELD_HELP: Record<string, string> = {
     "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
   tools:
     "Global tool access policy and capability configuration across web, exec, media, messaging, and elevated surfaces. Use this section to constrain risky capabilities before broad rollout.",
+  "tools.image":
+    "Image tool SSRF and network security controls for fetching images from remote URLs.",
+  "tools.image.ssrfPolicy":
+    "Server-side request forgery guardrail settings for image tool fetches that could reach internal hosts. Use this to allowlist specific private-network hostnames.",
+  "tools.image.ssrfPolicy.allowedHostnames":
+    "Explicit hostname allowlist exceptions for SSRF policy checks on image tool requests. Hostnames listed here skip private IP checks even if they resolve to private IPs.",
+  "tools.image.ssrfPolicy.hostnameAllowlist":
+    "Legacy/alternate hostname allowlist field for image tool SSRF policy.",
   "tools.allow":
     "Absolute tool allowlist that replaces profile-derived defaults for strict environments. Use this only when you intentionally run a tightly curated subset of tool capabilities.",
   "tools.deny":
