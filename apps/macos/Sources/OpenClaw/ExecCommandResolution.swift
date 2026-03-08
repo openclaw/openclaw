@@ -71,14 +71,16 @@ struct ExecCommandResolution: Sendable {
         let resolvedPath: String? = {
             if hasPathSeparator {
                 if expanded.hasPrefix("/") {
-                    return expanded
+                    return self.canonicalizePath(expanded)
                 }
                 let base = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let root = (base?.isEmpty == false) ? base! : FileManager().currentDirectoryPath
-                return URL(fileURLWithPath: root).appendingPathComponent(expanded).path
+                let absolutePath = URL(fileURLWithPath: root).appendingPathComponent(expanded).path
+                return self.canonicalizePath(absolutePath)
             }
             let searchPaths = self.searchPaths(from: env)
-            return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
+            let found = CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
+            return found.flatMap { self.canonicalizePath($0) }
         }()
         let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
         return ExecCommandResolution(
@@ -86,6 +88,32 @@ struct ExecCommandResolution: Sendable {
             resolvedPath: resolvedPath,
             executableName: name,
             cwd: cwd)
+    }
+
+    private static func canonicalizePath(_ path: String) -> String? {
+        var currentPath = path
+        while true {
+            do {
+                let destination = try FileManager.default.destinationOfSymbolicLink(atPath: currentPath)
+                let resolved: String
+                if destination.hasPrefix("/") {
+                    resolved = destination
+                } else {
+                    resolved = URL(fileURLWithPath: currentPath)
+                        .deletingLastPathComponent()
+                        .appendingPathComponent(destination)
+                        .path
+                }
+                currentPath = resolved
+            } catch {
+                // Not a symlink - verify the file exists
+                if FileManager.default.fileExists(atPath: currentPath) {
+                    return currentPath.hasPrefix("/") ? currentPath : nil
+                }
+                // File doesn't exist (broken symlink or invalid path) - fail closed
+                return nil
+            }
+        }
     }
 
     private static func parseFirstToken(_ command: String) -> String? {
