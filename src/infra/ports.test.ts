@@ -112,6 +112,25 @@ describeUnix("inspectPortUsage", () => {
     }
   });
 
+  it("does not report lsof errors when ss fallback succeeds with no listeners", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(6553);
+    expect(result.status).toBe("free");
+    expect(result.errors).toBeUndefined();
+  });
   it("falls back to ss when lsof is unavailable", async () => {
     const server = net.createServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
