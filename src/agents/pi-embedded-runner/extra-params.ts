@@ -69,6 +69,10 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
 };
+type QwenPayloadOverrides = {
+  topP?: number;
+  enableSearch?: boolean;
+};
 
 /**
  * Resolve cacheRetention from extraParams, supporting both new `cacheRetention`
@@ -193,6 +197,63 @@ function createStreamFnWithExtraParams(
   };
 
   return wrappedStreamFn;
+}
+
+function resolveQwenPayloadOverrides(
+  extraParams: Record<string, unknown> | undefined,
+): QwenPayloadOverrides | undefined {
+  if (!extraParams) {
+    return undefined;
+  }
+  let topP: number | undefined;
+  const topPCandidate = extraParams.top_p ?? extraParams.topP;
+  if (typeof topPCandidate === "number" && Number.isFinite(topPCandidate)) {
+    if (topPCandidate >= 0 && topPCandidate <= 1) {
+      topP = topPCandidate;
+    } else {
+      log.warn(`ignoring invalid top_p param: ${topPCandidate}`);
+    }
+  } else if (topPCandidate !== undefined) {
+    log.warn(`ignoring non-numeric top_p param: ${typeof topPCandidate}`);
+  }
+
+  let enableSearch: boolean | undefined;
+  const enableSearchCandidate = extraParams.enable_search ?? extraParams.enableSearch;
+  if (typeof enableSearchCandidate === "boolean") {
+    enableSearch = enableSearchCandidate;
+  } else if (enableSearchCandidate !== undefined) {
+    log.warn(`ignoring non-boolean enable_search param: ${typeof enableSearchCandidate}`);
+  }
+
+  if (topP === undefined && enableSearch === undefined) {
+    return undefined;
+  }
+  return { topP, enableSearch };
+}
+
+function createQwenPayloadWrapper(
+  baseStreamFn: StreamFn | undefined,
+  overrides: QwenPayloadOverrides,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (overrides.topP !== undefined && payloadObj.top_p === undefined) {
+            payloadObj.top_p = overrides.topP;
+          }
+          if (overrides.enableSearch !== undefined && payloadObj.enable_search === undefined) {
+            payloadObj.enable_search = overrides.enableSearch;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
 }
 
 function isAnthropicBedrockModel(modelId: string): boolean {
@@ -1206,6 +1267,14 @@ export function applyExtraParamsToAgent(
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
+  }
+
+  if (provider === "qwen-api") {
+    const qwenPayloadOverrides = resolveQwenPayloadOverrides(merged);
+    if (qwenPayloadOverrides) {
+      log.debug(`applying Qwen payload overrides for ${provider}/${modelId}`);
+      agent.streamFn = createQwenPayloadWrapper(agent.streamFn, qwenPayloadOverrides);
+    }
   }
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
