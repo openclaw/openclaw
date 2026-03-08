@@ -52,6 +52,7 @@ const service = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   resolveGatewayPort: resolveGatewayPortMock,
   writeConfigFile: writeConfigFileMock,

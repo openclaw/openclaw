@@ -5,6 +5,7 @@ export {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
+  readBestEffortConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
