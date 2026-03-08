@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  isAnthropicProviderFamily,
+  isOpenAiProviderFamily,
   requiresOpenAiCompatibleAnthropicToolPayload,
   resolveProviderCapabilities,
   resolveTranscriptToolCallIdMode,
-  sanitizesGeminiThoughtSignatures,
+  shouldDropThinkingBlocksForModel,
+  shouldSanitizeGeminiThoughtSignaturesForModel,
   supportsOpenAiCompatTurnValidation,
 } from "./provider-capabilities.js";
 
@@ -12,10 +15,14 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
+      providerFamily: "anthropic",
       preserveAnthropicThinkingSignatures: true,
       openAiCompatTurnValidation: true,
       geminiThoughtSignatureSanitization: false,
       transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: [],
     });
   });
 
@@ -26,10 +33,14 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
       anthropicToolSchemaMode: "openai-functions",
       anthropicToolChoiceMode: "openai-string-modes",
+      providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
       geminiThoughtSignatureSanitization: false,
       transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: [],
     });
   });
 
@@ -40,14 +51,35 @@ describe("resolveProviderCapabilities", () => {
   });
 
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {
-    expect(sanitizesGeminiThoughtSignatures("openrouter")).toBe(true);
-    expect(sanitizesGeminiThoughtSignatures("kilocode")).toBe(true);
-    expect(resolveTranscriptToolCallIdMode("mistral")).toBe("strict9");
+    expect(
+      shouldSanitizeGeminiThoughtSignaturesForModel({
+        provider: "openrouter",
+        modelId: "google/gemini-2.5-pro-preview",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSanitizeGeminiThoughtSignaturesForModel({
+        provider: "kilocode",
+        modelId: "gemini-2.0-flash",
+      }),
+    ).toBe(true);
+    expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
   it("treats kimi aliases as anthropic tool payload compatibility providers", () => {
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
+  });
+
+  it("tracks provider families and model-specific transcript quirks in the registry", () => {
+    expect(isOpenAiProviderFamily("openai")).toBe(true);
+    expect(isAnthropicProviderFamily("amazon-bedrock")).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "github-copilot",
+        modelId: "claude-3.7-sonnet",
+      }),
+    ).toBe(true);
   });
 });

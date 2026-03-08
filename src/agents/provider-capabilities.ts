@@ -3,22 +3,36 @@ import { normalizeProviderId } from "./model-selection.js";
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
   anthropicToolChoiceMode: "native" | "openai-string-modes";
+  providerFamily: "default" | "openai" | "anthropic";
   preserveAnthropicThinkingSignatures: boolean;
   openAiCompatTurnValidation: boolean;
   geminiThoughtSignatureSanitization: boolean;
   transcriptToolCallIdMode: "default" | "strict9";
+  transcriptToolCallIdModelHints: string[];
+  geminiThoughtSignatureModelHints: string[];
+  dropThinkingBlockModelHints: string[];
 };
 
 const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   anthropicToolSchemaMode: "native",
   anthropicToolChoiceMode: "native",
+  providerFamily: "default",
   preserveAnthropicThinkingSignatures: true,
   openAiCompatTurnValidation: true,
   geminiThoughtSignatureSanitization: false,
   transcriptToolCallIdMode: "default",
+  transcriptToolCallIdModelHints: [],
+  geminiThoughtSignatureModelHints: [],
+  dropThinkingBlockModelHints: [],
 };
 
 const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  anthropic: {
+    providerFamily: "anthropic",
+  },
+  "amazon-bedrock": {
+    providerFamily: "anthropic",
+  },
   "kimi-coding": {
     anthropicToolSchemaMode: "openai-functions",
     anthropicToolChoiceMode: "openai-string-modes",
@@ -26,17 +40,38 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
+    transcriptToolCallIdModelHints: [
+      "mistral",
+      "mixtral",
+      "codestral",
+      "pixtral",
+      "devstral",
+      "ministral",
+      "mistralai",
+    ],
+  },
+  openai: {
+    providerFamily: "openai",
+  },
+  "openai-codex": {
+    providerFamily: "openai",
   },
   openrouter: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
   },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
   },
   kilocode: {
     geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
+  },
+  "github-copilot": {
+    dropThinkingBlockModelHints: ["claude"],
   },
 };
 
@@ -76,7 +111,51 @@ export function sanitizesGeminiThoughtSignatures(provider?: string | null): bool
   return resolveProviderCapabilities(provider).geminiThoughtSignatureSanitization;
 }
 
-export function resolveTranscriptToolCallIdMode(provider?: string | null): "strict9" | undefined {
-  const mode = resolveProviderCapabilities(provider).transcriptToolCallIdMode;
+function modelIncludesAnyHint(modelId: string | null | undefined, hints: string[]): boolean {
+  const normalized = (modelId ?? "").toLowerCase();
+  return Boolean(normalized) && hints.some((hint) => normalized.includes(hint));
+}
+
+export function isOpenAiProviderFamily(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).providerFamily === "openai";
+}
+
+export function isAnthropicProviderFamily(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).providerFamily === "anthropic";
+}
+
+export function shouldDropThinkingBlocksForModel(params: {
+  provider?: string | null;
+  modelId?: string | null;
+}): boolean {
+  return modelIncludesAnyHint(
+    params.modelId,
+    resolveProviderCapabilities(params.provider).dropThinkingBlockModelHints,
+  );
+}
+
+export function shouldSanitizeGeminiThoughtSignaturesForModel(params: {
+  provider?: string | null;
+  modelId?: string | null;
+}): boolean {
+  const capabilities = resolveProviderCapabilities(params.provider);
+  return (
+    capabilities.geminiThoughtSignatureSanitization &&
+    modelIncludesAnyHint(params.modelId, capabilities.geminiThoughtSignatureModelHints)
+  );
+}
+
+export function resolveTranscriptToolCallIdMode(
+  provider?: string | null,
+  modelId?: string | null,
+): "strict9" | undefined {
+  const capabilities = resolveProviderCapabilities(provider);
+  const mode = capabilities.transcriptToolCallIdMode;
+  if (mode === "strict9") {
+    return mode;
+  }
+  if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
+    return "strict9";
+  }
   return mode === "strict9" ? mode : undefined;
 }
