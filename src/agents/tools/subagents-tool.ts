@@ -664,7 +664,11 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           // Also roll back the steer rate-limit entry so callers can retry
           // immediately after a dispatch failure instead of waiting for a
           // successful-steer cooldown window.
-          steerRateLimit.delete(rateKey);
+          // Guard against overlap: if a newer steer already refreshed this key,
+          // keep the newer timestamp instead of deleting it.
+          if (steerRateLimit.get(rateKey) === now) {
+            steerRateLimit.delete(rateKey);
+          }
           const error = err instanceof Error ? err.message : String(err);
           return jsonResult({
             status: "error",

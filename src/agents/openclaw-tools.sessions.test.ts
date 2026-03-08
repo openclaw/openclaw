@@ -1133,6 +1133,93 @@ describe("sessions tools", () => {
     }
   });
 
+  it("subagents steer failure does not clear a newer cooldown timestamp", async () => {
+    resetSubagentRegistryForTests();
+    let firstAgentReject: ((error: Error) => void) | undefined;
+    let agentCallCount = 0;
+    callGatewayMock.mockImplementation((opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        if (agentCallCount === 1) {
+          return new Promise((_, reject) => {
+            firstAgentReject = reject;
+          });
+        }
+        return Promise.resolve({ runId: `run-steer-overlap-${agentCallCount}` });
+      }
+      return Promise.resolve({});
+    });
+    addSubagentRunForTests({
+      runId: "run-steer-overlap",
+      childSessionKey: "agent:main:subagent:steer-overlap",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "overlap steer",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const loadSessionStoreSpy = vi
+      .spyOn(sessionsModule, "loadSessionStore")
+      .mockImplementation(() => ({
+        "agent:main:subagent:steer-overlap": {
+          sessionId: "child-session-steer-overlap",
+          updatedAt: Date.now(),
+        },
+      }));
+
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+      }).find((candidate) => candidate.name === "subagents");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing subagents tool");
+      }
+
+      nowSpy.mockReturnValue(1_000);
+      const firstSteerPromise = tool.execute("call-subagents-steer-overlap-1", {
+        action: "steer",
+        target: "1",
+        message: "first steer",
+      });
+
+      // Let the first steer set its rate-limit timestamp and reach the pending dispatch.
+      await Promise.resolve();
+
+      nowSpy.mockReturnValue(3_501);
+      const secondSteer = await tool.execute("call-subagents-steer-overlap-2", {
+        action: "steer",
+        target: "1",
+        message: "second steer",
+      });
+      const secondDetails = secondSteer.details as { status?: string };
+      expect(secondDetails.status).toBe("accepted");
+
+      // First steer fails late and must not clear the newer (second steer) cooldown timestamp.
+      firstAgentReject?.(new Error("first steer failed late"));
+      const firstSteer = await firstSteerPromise;
+      const firstDetails = firstSteer.details as { status?: string; error?: string };
+      expect(firstDetails.status).toBe("error");
+      expect(firstDetails.error).toContain("first steer failed late");
+
+      nowSpy.mockReturnValue(3_600);
+      const thirdSteer = await tool.execute("call-subagents-steer-overlap-3", {
+        action: "steer",
+        target: "1",
+        message: "third steer should still be cooldown limited",
+      });
+      const thirdDetails = thirdSteer.details as { status?: string };
+      expect(thirdDetails.status).toBe("rate_limited");
+    } finally {
+      nowSpy.mockRestore();
+      loadSessionStoreSpy.mockRestore();
+    }
+  });
+
   it("subagents numeric targets follow active-first list ordering", async () => {
     resetSubagentRegistryForTests();
     addSubagentRunForTests({
