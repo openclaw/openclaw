@@ -23,7 +23,7 @@ export async function readServiceStatusSummary(
     ]);
     const managedByOpenClaw = command != null;
     const externallyManaged = !managedByOpenClaw && runtime?.status === "running";
-    const installed = managedByOpenClaw || loaded || externallyManaged;
+const installed = managedByOpenClaw || externallyManaged;
     const loadedText = externallyManaged
       ? "running (externally managed)"
       : loaded
