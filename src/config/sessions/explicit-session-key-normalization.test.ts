@@ -39,6 +39,19 @@ describe("normalizeExplicitSessionKey", () => {
     ).toBe("discord:direct:123456");
   });
 
+  it("uses Provider when Surface is absent", () => {
+    expect(
+      normalizeExplicitSessionKey(
+        "agent:fina:discord:dm:123456",
+        makeCtx({
+          Provider: "Discord",
+          ChatType: "direct",
+          SenderId: "123456",
+        }),
+      ),
+    ).toBe("agent:fina:discord:direct:123456");
+  });
+
   it("lowercases and passes through unknown providers unchanged", () => {
     expect(
       normalizeExplicitSessionKey(
