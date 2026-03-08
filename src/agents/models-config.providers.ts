@@ -991,6 +991,8 @@ function buildOpenAICodexProvider(): ProviderConfig {
   return {
     baseUrl: OPENAI_CODEX_BASE_URL,
     api: "openai-codex-responses",
+    // Like Copilot, Codex resolves OAuth credentials from auth-profiles at
+    // runtime, so the snapshot only needs the canonical API surface.
     models: [],
   };
 }
