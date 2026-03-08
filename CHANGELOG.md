@@ -335,6 +335,7 @@ Docs: https://docs.openclaw.ai
 - Agents/parallel tool-call compatibility: honor `parallel_tool_calls` / `parallelToolCalls` extra params only for `openai-completions` and `openai-responses` payloads, preserve higher-precedence alias overrides across config and runtime layers, and ignore invalid non-boolean values so single-tool-call providers like NVIDIA-hosted Kimi stop failing on forced parallel tool-call payloads. (#37048) Thanks @vincentkoc.
 - Config/invalid-load fail-closed: stop converting `INVALID_CONFIG` into an empty runtime config, keep valid settings available only through explicit best-effort diagnostic reads, and route read-only CLI diagnostics through that path so unknown keys no longer silently drop security-sensitive config. (#28140) Thanks @bobsahur-robot and @vincentkoc.
 - Agents/codex-cli sandbox defaults: switch the built-in Codex backend from `read-only` to `workspace-write` so spawned coding runs can edit files out of the box. Landed from contributor PR #39336 by @0xtangping. Thanks @0xtangping.
+- Gateway/health-monitor restart reason labeling: report `disconnected` instead of `stuck` for clean channel disconnect restarts, so operator logs distinguish socket drops from genuinely stuck channels. (#36436) Thanks @Sid-Qin.
 
 ## 2026.3.2
 
