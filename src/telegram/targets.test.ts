@@ -101,6 +101,8 @@ describe("normalizeTelegramChatId", () => {
 describe("normalizeTelegramLookupTarget", () => {
   it("normalizes legacy t.me and username targets", () => {
     expect(normalizeTelegramLookupTarget("telegram:https://t.me/MyChannel")).toBe("@MyChannel");
+    expect(normalizeTelegramLookupTarget("https://t.me/MyChannel/")).toBe("@MyChannel");
+    expect(normalizeTelegramLookupTarget("https://t.me/MyChannel/123")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
@@ -115,6 +117,8 @@ describe("normalizeTelegramLookupTarget", () => {
     expect(normalizeTelegramLookupTarget("@bad-handle")).toBeUndefined();
     expect(normalizeTelegramLookupTarget("bad-handle")).toBeUndefined();
     expect(normalizeTelegramLookupTarget("ab")).toBeUndefined();
+    expect(normalizeTelegramLookupTarget("t.me/ab")).toBeUndefined();
+    expect(normalizeTelegramLookupTarget("https://t.me/c/123/456")).toBeUndefined();
   });
 });
 
