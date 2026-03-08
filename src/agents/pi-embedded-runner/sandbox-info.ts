@@ -16,7 +16,8 @@ export function buildEmbeddedSandboxInfo(
     containerWorkspaceDir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
     agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
-    browserBridgeUrl: sandbox.browser?.bridgeUrl,
+    // Embedded sandbox consumers need the container-reachable bridge URL when it differs.
+    browserBridgeUrl: sandbox.browser?.advertisedBridgeUrl ?? sandbox.browser?.bridgeUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
     hostBrowserAllowed: sandbox.browserAllowHostControl,
     ...(elevatedAllowed

@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
-import { ensureSandboxBrowser } from "./browser.js";
+import {
+  applySandboxBridgeAccessToDockerConfig,
+  ensureSandboxBrowser,
+  resolveSandboxBrowserCdpTarget,
+  isDockerizedSandboxGatewayRuntime,
+  resolveSandboxBrowserCdpHost,
+  resolveSandboxBridgeAccess,
+} from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
@@ -124,6 +131,7 @@ describe("ensureSandboxBrowser create args", () => {
       server: {} as never,
       port: 19000,
       baseUrl: "http://127.0.0.1:19000",
+      advertisedBaseUrl: "http://host.docker.internal:19000",
       state: {
         server: null,
         port: 19000,
@@ -152,8 +160,17 @@ describe("ensureSandboxBrowser create args", () => {
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
     expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
+    expect(result?.bridgeUrl).toBe("http://127.0.0.1:19000");
+    expect(result?.advertisedBridgeUrl).toBe("http://host.docker.internal:19000");
     expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
     expect(result?.noVncUrl).not.toContain("password=");
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "0.0.0.0",
+        advertisedHost: "host.docker.internal",
+        allowNonLoopbackHost: true,
+      }),
+    );
   });
 
   it("does not inject noVNC password env when noVNC is disabled", async () => {
@@ -205,5 +222,192 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("/tmp/workspace:/workspace");
     expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
+  });
+
+  it("adds host-gateway alias for linux sandbox containers", () => {
+    const resolved = applySandboxBridgeAccessToDockerConfig({
+      cfg: buildConfig(false),
+      platform: "linux",
+    });
+
+    expect(resolved.docker.extraHosts).toContain("host.docker.internal:host-gateway");
+  });
+
+  it("does not duplicate host-gateway alias when already configured", () => {
+    const cfg = buildConfig(false);
+    cfg.docker.extraHosts = ["host.docker.internal:host-gateway"];
+
+    const resolved = applySandboxBridgeAccessToDockerConfig({
+      cfg,
+      platform: "linux",
+    });
+
+    expect(resolved.docker.extraHosts).toEqual(["host.docker.internal:host-gateway"]);
+  });
+
+  it("honors explicit bridgeHost override", () => {
+    const access = resolveSandboxBridgeAccess({
+      browserHost: "gateway.internal",
+      dockerExtraHosts: [],
+      platform: "linux",
+    });
+
+    expect(access).toEqual({
+      listenHost: "0.0.0.0",
+      advertisedHost: "gateway.internal",
+    });
+  });
+
+  it("defaults sandbox browser CDP host to loopback outside Dockerized gateway runtimes", async () => {
+    await expect(resolveSandboxBrowserCdpHost({ dockerizedGatewayRuntime: false })).resolves.toBe(
+      "127.0.0.1",
+    );
+  });
+
+  it("uses the mapped CDP port for non-Dockerized gateway runtimes", async () => {
+    await expect(
+      resolveSandboxBrowserCdpTarget({
+        dockerizedGatewayRuntime: false,
+        mappedCdpPort: 49100,
+        internalCdpPort: 9222,
+      }),
+    ).resolves.toEqual({
+      host: "127.0.0.1",
+      port: 49100,
+    });
+  });
+
+  it("falls back to the Docker host alias when no direct gateway network path is available", async () => {
+    await expect(resolveSandboxBrowserCdpHost({ dockerizedGatewayRuntime: true })).resolves.toBe(
+      "host.docker.internal",
+    );
+  });
+
+  it("falls back to the mapped CDP port when only the Docker host alias is available", async () => {
+    await expect(
+      resolveSandboxBrowserCdpTarget({
+        dockerizedGatewayRuntime: true,
+        mappedCdpPort: 49100,
+        internalCdpPort: 9222,
+      }),
+    ).resolves.toEqual({
+      host: "host.docker.internal",
+      port: 49100,
+    });
+  });
+
+  it("detects Dockerized gateway runtime only when both dockerenv and docker.sock exist", () => {
+    const paths = new Set(["/.dockerenv", "/var/run/docker.sock"]);
+    expect(
+      isDockerizedSandboxGatewayRuntime({
+        existsSync: (path) => paths.has(path),
+      }),
+    ).toBe(true);
+    expect(
+      isDockerizedSandboxGatewayRuntime({
+        existsSync: (path) => path === "/.dockerenv",
+      }),
+    ).toBe(false);
+  });
+
+  it("passes an explicit sandbox browser cdpHost into the bridge config", async () => {
+    const cfg = buildConfig(false);
+    cfg.browser.cdpHost = "gateway-host.internal";
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolved: expect.objectContaining({
+          cdpHost: "gateway-host.internal",
+          cdpIsLoopback: false,
+          profiles: {
+            openclaw: expect.objectContaining({
+              cdpPort: 49100,
+            }),
+          },
+        }),
+      }),
+    );
+  });
+
+  it("uses the browser container IP on the shared gateway network for Dockerized runtimes", async () => {
+    const originalHostname = process.env.HOSTNAME;
+    try {
+      process.env.HOSTNAME = "gateway-container";
+      let browserInspectCount = 0;
+      dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+        if (args[0] === "inspect" && args[1] === "gateway-container") {
+          return {
+            stdout: JSON.stringify([
+              {
+                NetworkSettings: {
+                  Networks: {
+                    openclaw_default: { IPAddress: "172.18.0.2" },
+                  },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (args[0] === "inspect" && args[1] === "sandbox-browser") {
+          browserInspectCount += 1;
+          return {
+            stdout: JSON.stringify([
+              {
+                NetworkSettings: {
+                  Networks:
+                    browserInspectCount === 1
+                      ? {}
+                      : {
+                          openclaw_default: { IPAddress: "172.18.0.3" },
+                        },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (args[0] === "network" && args[1] === "connect") {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (args[0] === "image" && args[1] === "inspect") {
+          return { stdout: "[]", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      });
+
+      await expect(
+        resolveSandboxBrowserCdpHost({
+          containerName: "sandbox-browser",
+          dockerizedGatewayRuntime: true,
+        }),
+      ).resolves.toBe("172.18.0.3");
+      await expect(
+        resolveSandboxBrowserCdpTarget({
+          containerName: "sandbox-browser",
+          dockerizedGatewayRuntime: true,
+          mappedCdpPort: 49100,
+          internalCdpPort: 9222,
+        }),
+      ).resolves.toEqual({
+        host: "172.18.0.3",
+        port: 9222,
+      });
+      expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+        ["network", "connect", "--alias", "sandbox-browser", "openclaw_default", "sandbox-browser"],
+        { allowFailure: true },
+      );
+    } finally {
+      process.env.HOSTNAME = originalHostname;
+    }
   });
 });

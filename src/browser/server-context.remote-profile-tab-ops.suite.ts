@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
+import * as cdpModule from "./cdp.js";
 import * as chromeModule from "./chrome.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -97,6 +98,43 @@ describe("browser server-context remote profile tab operations", () => {
       targetId: "T1",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses CDP tab creation for attachOnly remote profiles", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      { targetId: "T2", title: "Tab 2", url: "about:blank", type: "page" },
+    ]);
+    const createPageViaPlaywright = vi.fn(async () => ({
+      targetId: "UNEXPECTED",
+      title: "",
+      url: "about:blank",
+      type: "page",
+    }));
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "T2" });
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const { state } = createRemoteRouteHarness();
+    state.resolved.profiles.remote = {
+      ...state.resolved.profiles.remote,
+      attachOnly: true,
+    };
+    const remote = createBrowserRouteContext({ getState: () => state }).forProfile("remote");
+
+    const opened = await remote.openTab("about:blank");
+    expect(opened.targetId).toBe("T2");
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("T2");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "https://browserless.example/chrome?token=abc",
+      url: "about:blank",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
   });
 
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {

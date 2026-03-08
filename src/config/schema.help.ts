@@ -364,6 +364,14 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.sandbox.browser.network":
     "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
   "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.defaults.sandbox.browser.bridgeHost":
+    "Optional hostname or IP that sandbox containers should use to reach the host-side browser bridge. Leave unset to use the Docker host alias automatically.",
+  "agents.list[].sandbox.browser.bridgeHost":
+    "Per-agent override for the sandbox browser bridge hostname advertised into sandbox containers.",
+  "agents.defaults.sandbox.browser.cdpHost":
+    "Optional hostname or IP that the gateway process should use to reach the sandbox browser CDP via Docker-published ports. Leave unset to use loopback on host gateways and the Docker host alias automatically for Dockerized gateways.",
+  "agents.list[].sandbox.browser.cdpHost":
+    "Per-agent override for the hostname or IP that the gateway process should use for sandbox browser CDP access.",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

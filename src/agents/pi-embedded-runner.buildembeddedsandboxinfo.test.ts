@@ -29,6 +29,7 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
     browserAllowHostControl: true,
     browser: {
       bridgeUrl: "http://localhost:9222",
+      advertisedBridgeUrl: "http://host.docker.internal:9222",
       noVncUrl: "http://localhost:6080",
       containerName: "openclaw-sbx-browser-test",
     },
@@ -50,7 +51,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       containerWorkspaceDir: "/workspace",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
-      browserBridgeUrl: "http://localhost:9222",
+      browserBridgeUrl: "http://host.docker.internal:9222",
       browserNoVncUrl: "http://localhost:6080",
       hostBrowserAllowed: true,
     });

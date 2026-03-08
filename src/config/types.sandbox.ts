@@ -65,6 +65,14 @@ export type SandboxBrowserSettings = {
   containerPrefix?: string;
   /** Docker network for sandbox browser containers (default: openclaw-sandbox-browser). */
   network?: string;
+  /** Hostname or IP that sandbox containers should use to reach the host-side browser bridge. */
+  bridgeHost?: string;
+  /**
+   * Hostname or IP that the gateway process should use to reach the sandbox browser CDP
+   * via the published Docker port. Leave unset to use loopback on bare-metal gateways and
+   * the Docker host alias automatically for Dockerized gateways.
+   */
+  cdpHost?: string;
   cdpPort?: number;
   /** Optional CIDR allowlist for CDP ingress at the container edge (for example: 172.21.0.1/32). */
   cdpSourceRange?: string;

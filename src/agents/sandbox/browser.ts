@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
@@ -7,6 +8,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "../../browser/constants.js";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import { isLoopbackHost } from "../../gateway/net.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
@@ -37,10 +39,91 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
+const SANDBOX_BRIDGE_CONTAINER_HOST = "host.docker.internal";
+const SANDBOX_BRIDGE_HOST_GATEWAY = `${SANDBOX_BRIDGE_CONTAINER_HOST}:host-gateway`;
+const DOCKER_ENV_MARKER = "/.dockerenv";
+const DOCKER_SOCKET_PATH = "/var/run/docker.sock";
 
-async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
+type SandboxBridgeAccess = {
+  listenHost: string;
+  advertisedHost: string;
+  requiredExtraHost?: string;
+};
+
+type DockerNetworkMap = Record<
+  string,
+  {
+    IPAddress?: string;
+  }
+>;
+
+function uniqueExtraHosts(extraHosts: string[] | undefined, entry: string): string[] {
+  const merged = [...(extraHosts ?? [])];
+  if (!merged.includes(entry)) {
+    merged.push(entry);
+  }
+  return merged;
+}
+
+export function resolveSandboxBridgeAccess(params: {
+  browserHost?: string;
+  dockerExtraHosts?: string[];
+  platform?: NodeJS.Platform;
+}): SandboxBridgeAccess {
+  const configuredHost = params.browserHost?.trim();
+  if (configuredHost) {
+    return {
+      listenHost: "0.0.0.0",
+      advertisedHost: configuredHost,
+    };
+  }
+  if (params.platform === "linux") {
+    const hasHostGatewayAlias = (params.dockerExtraHosts ?? []).some(
+      (entry) => entry.trim() === SANDBOX_BRIDGE_HOST_GATEWAY,
+    );
+    return {
+      listenHost: "0.0.0.0",
+      advertisedHost: SANDBOX_BRIDGE_CONTAINER_HOST,
+      requiredExtraHost: hasHostGatewayAlias ? undefined : SANDBOX_BRIDGE_HOST_GATEWAY,
+    };
+  }
+  return {
+    listenHost: "0.0.0.0",
+    advertisedHost: SANDBOX_BRIDGE_CONTAINER_HOST,
+  };
+}
+
+export function applySandboxBridgeAccessToDockerConfig(params: {
+  cfg: SandboxConfig;
+  platform?: NodeJS.Platform;
+}): SandboxConfig {
+  if (!params.cfg.browser.enabled) {
+    return params.cfg;
+  }
+  const access = resolveSandboxBridgeAccess({
+    browserHost: params.cfg.browser.bridgeHost,
+    dockerExtraHosts: params.cfg.docker.extraHosts,
+    platform: params.platform ?? process.platform,
+  });
+  if (!access.requiredExtraHost) {
+    return params.cfg;
+  }
+  return {
+    ...params.cfg,
+    docker: {
+      ...params.cfg.docker,
+      extraHosts: uniqueExtraHosts(params.cfg.docker.extraHosts, access.requiredExtraHost),
+    },
+  };
+}
+
+async function waitForSandboxCdp(params: {
+  cdpHost: string;
+  cdpPort: number;
+  timeoutMs: number;
+}): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
-  const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
+  const url = `http://${params.cdpHost}:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
     try {
       const ctrl = new AbortController();
@@ -61,13 +144,164 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
   return false;
 }
 
+export function isDockerizedSandboxGatewayRuntime(params?: {
+  existsSync?: (path: string) => boolean;
+}): boolean {
+  const existsSync = params?.existsSync ?? fs.existsSync;
+  return existsSync(DOCKER_ENV_MARKER) && existsSync(DOCKER_SOCKET_PATH);
+}
+
+type ResolvedSandboxBrowserCdpTarget = {
+  host: string;
+  port: number;
+};
+
+async function inspectDockerNetworks(containerName: string): Promise<DockerNetworkMap> {
+  const result = await execDocker(["inspect", containerName], { allowFailure: true });
+  if (result.code !== 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as Array<{
+      NetworkSettings?: { Networks?: DockerNetworkMap };
+    }>;
+    return parsed[0]?.NetworkSettings?.Networks ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function pickDockerGatewayNetworkName(networks: DockerNetworkMap): string | null {
+  for (const name of Object.keys(networks)) {
+    const normalized = name.trim().toLowerCase();
+    if (!normalized || normalized === "host" || normalized === "none") {
+      continue;
+    }
+    return name;
+  }
+  return null;
+}
+
+async function resolveDockerizedGatewayNetworkName(): Promise<string | null> {
+  const gatewayContainerName = process.env.HOSTNAME?.trim();
+  if (!gatewayContainerName) {
+    return null;
+  }
+  return pickDockerGatewayNetworkName(await inspectDockerNetworks(gatewayContainerName));
+}
+
+async function ensureContainerNetworkIp(params: {
+  containerName: string;
+  network: string;
+  alias?: string;
+}): Promise<string | null> {
+  const currentNetworks = await inspectDockerNetworks(params.containerName);
+  const existingIp = currentNetworks[params.network]?.IPAddress?.trim();
+  if (existingIp) {
+    return existingIp;
+  }
+
+  const connectArgs = ["network", "connect"];
+  const alias = params.alias?.trim();
+  if (alias) {
+    connectArgs.push("--alias", alias);
+  }
+  connectArgs.push(params.network, params.containerName);
+  const connectResult = await execDocker(connectArgs, { allowFailure: true });
+  if (connectResult.code !== 0) {
+    const detail = [connectResult.stderr.trim(), connectResult.stdout.trim()]
+      .filter(Boolean)
+      .join(" ");
+    if (!/already exists|already connected/i.test(detail)) {
+      throw new Error(
+        `Failed to connect sandbox browser ${params.containerName} to Docker network ${params.network}: ${detail || `exit ${connectResult.code}`}`,
+      );
+    }
+  }
+
+  const updatedNetworks = await inspectDockerNetworks(params.containerName);
+  const updatedIp = updatedNetworks[params.network]?.IPAddress?.trim();
+  return updatedIp || null;
+}
+
+export async function resolveSandboxBrowserCdpHost(params: {
+  containerName?: string;
+  cdpHost?: string;
+  dockerizedGatewayRuntime?: boolean;
+}): Promise<string> {
+  const configuredHost = params.cdpHost?.trim();
+  if (configuredHost) {
+    return configuredHost;
+  }
+  if (!params.dockerizedGatewayRuntime) {
+    return "127.0.0.1";
+  }
+  if (params.containerName) {
+    const gatewayNetwork = await resolveDockerizedGatewayNetworkName();
+    if (gatewayNetwork) {
+      const networkIp = await ensureContainerNetworkIp({
+        containerName: params.containerName,
+        network: gatewayNetwork,
+        alias: params.containerName,
+      });
+      if (networkIp) {
+        return networkIp;
+      }
+    }
+  }
+  return SANDBOX_BRIDGE_CONTAINER_HOST;
+}
+
+export async function resolveSandboxBrowserCdpTarget(params: {
+  containerName?: string;
+  cdpHost?: string;
+  dockerizedGatewayRuntime?: boolean;
+  mappedCdpPort: number;
+  internalCdpPort: number;
+}): Promise<ResolvedSandboxBrowserCdpTarget> {
+  const configuredHost = params.cdpHost?.trim();
+  if (configuredHost) {
+    return {
+      host: configuredHost,
+      port: params.mappedCdpPort,
+    };
+  }
+  if (!params.dockerizedGatewayRuntime) {
+    return {
+      host: "127.0.0.1",
+      port: params.mappedCdpPort,
+    };
+  }
+  if (params.containerName) {
+    const gatewayNetwork = await resolveDockerizedGatewayNetworkName();
+    if (gatewayNetwork) {
+      const networkIp = await ensureContainerNetworkIp({
+        containerName: params.containerName,
+        network: gatewayNetwork,
+        alias: params.containerName,
+      });
+      if (networkIp) {
+        return {
+          host: networkIp,
+          port: params.internalCdpPort,
+        };
+      }
+    }
+  }
+  return {
+    host: SANDBOX_BRIDGE_CONTAINER_HOST,
+    port: params.mappedCdpPort,
+  };
+}
+
 function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
+  cdpHost: string;
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
 }): ResolvedBrowserConfig {
-  const cdpHost = "127.0.0.1";
+  const cdpHost = params.cdpHost;
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
   return {
     enabled: true,
@@ -75,7 +309,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     controlPort: params.controlPort,
     cdpProtocol: "http",
     cdpHost,
-    cdpIsLoopback: true,
+    cdpIsLoopback: isLoopbackHost(cdpHost),
     cdpPortRangeStart: cdpPortRange.start,
     cdpPortRangeEnd: cdpPortRange.end,
     remoteCdpTimeoutMs: 1500,
@@ -276,6 +510,13 @@ export async function ensureSandboxBrowser(params: {
   if (!mappedCdp) {
     throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
   }
+  const sandboxCdpTarget = await resolveSandboxBrowserCdpTarget({
+    containerName,
+    cdpHost: params.cfg.browser.cdpHost,
+    dockerizedGatewayRuntime: isDockerizedSandboxGatewayRuntime(),
+    mappedCdpPort: mappedCdp,
+    internalCdpPort: params.cfg.browser.cdpPort,
+  });
 
   const mappedNoVnc = noVncEnabled
     ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
@@ -304,7 +545,10 @@ export async function ensureSandboxBrowser(params: {
   }
 
   const shouldReuse =
-    existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+    existing &&
+    existing.containerName === containerName &&
+    existingProfile?.cdpPort === sandboxCdpTarget.port &&
+    existing.bridge.state.resolved.cdpHost === sandboxCdpTarget.host;
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -329,6 +573,12 @@ export async function ensureSandboxBrowser(params: {
       return bridge;
     }
 
+    const bridgeAccess = resolveSandboxBridgeAccess({
+      browserHost: params.cfg.browser.bridgeHost,
+      dockerExtraHosts: params.cfg.docker.extraHosts,
+      platform: process.platform,
+    });
+
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
           const state = await dockerContainerState(containerName);
@@ -336,12 +586,13 @@ export async function ensureSandboxBrowser(params: {
             await execDocker(["start", containerName]);
           }
           const ok = await waitForSandboxCdp({
-            cdpPort: mappedCdp,
+            cdpHost: sandboxCdpTarget.host,
+            cdpPort: sandboxCdpTarget.port,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
           if (!ok) {
             throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
+              `Sandbox browser CDP did not become reachable on ${sandboxCdpTarget.host}:${sandboxCdpTarget.port} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
             );
           }
         }
@@ -350,10 +601,14 @@ export async function ensureSandboxBrowser(params: {
     return await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
-        cdpPort: mappedCdp,
+        cdpHost: sandboxCdpTarget.host,
+        cdpPort: sandboxCdpTarget.port,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      host: bridgeAccess.listenHost,
+      advertisedHost: bridgeAccess.advertisedHost,
+      allowNonLoopbackHost: bridgeAccess.listenHost !== "127.0.0.1",
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
       onEnsureAttachTarget,
@@ -394,7 +649,12 @@ export async function ensureSandboxBrowser(params: {
       : undefined;
 
   return {
+    // Keep the host-local bridge URL for host-side browser tool calls so loopback auth still applies.
     bridgeUrl: resolvedBridge.baseUrl,
+    advertisedBridgeUrl:
+      resolvedBridge.advertisedBaseUrl === resolvedBridge.baseUrl
+        ? undefined
+        : resolvedBridge.advertisedBaseUrl,
     noVncUrl,
     containerName,
   };

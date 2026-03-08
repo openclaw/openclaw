@@ -209,6 +209,8 @@ export const SandboxBrowserSchema = z
     image: z.string().optional(),
     containerPrefix: z.string().optional(),
     network: z.string().optional(),
+    bridgeHost: z.string().optional(),
+    cdpHost: z.string().optional(),
     cdpPort: z.number().int().positive().optional(),
     cdpSourceRange: z.string().optional(),
     vncPort: z.number().int().positive().optional(),

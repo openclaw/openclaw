@@ -82,6 +82,31 @@ describe("startBrowserBridgeServer auth", () => {
     ).rejects.toThrow(/requires auth/i);
   });
 
+  it("allows sandbox bridge servers to bind non-loopback when explicitly enabled", async () => {
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      host: "0.0.0.0",
+      advertisedHost: "host.docker.internal",
+      allowNonLoopbackHost: true,
+      authToken: "secret-token",
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    expect(bridge.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(bridge.advertisedBaseUrl).toMatch(/^http:\/\/host\.docker\.internal:\d+$/);
+  });
+
+  it("requires advertisedHost when non-loopback bind is enabled", async () => {
+    await expect(
+      startBrowserBridgeServer({
+        resolved: buildResolvedConfig(),
+        host: "0.0.0.0",
+        allowNonLoopbackHost: true,
+        authToken: "secret-token",
+      }),
+    ).rejects.toThrow(/advertisedHost is required/i);
+  });
+
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
