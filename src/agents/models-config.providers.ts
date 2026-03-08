@@ -51,7 +51,12 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
-import { discoverNovitaModels, NOVITA_BASE_URL } from "./novita-models.js";
+import {
+  buildNovitaModelDefinition,
+  discoverNovitaModels,
+  NOVITA_BASE_URL,
+  NOVITA_MODEL_CATALOG,
+} from "./novita-models.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
   buildSyntheticModelDefinition,
