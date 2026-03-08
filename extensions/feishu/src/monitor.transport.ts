@@ -159,6 +159,7 @@ export async function monitorWebhook({
 
     server.on("error", (err) => {
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      cleanup();
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     });

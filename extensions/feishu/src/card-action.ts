@@ -17,6 +17,8 @@ export type FeishuCardActionEvent = {
     open_id: string;
     user_id: string;
     chat_id: string;
+    /** Present in card action callback v2; "group" or "p2p" */
+    chat_type?: "group" | "p2p";
   };
 };
 
@@ -58,7 +60,14 @@ export async function handleFeishuCardAction(params: {
     message: {
       message_id: `card-action-${event.token}`,
       chat_id: event.context.chat_id || event.operator.open_id,
-      chat_type: event.context.chat_id ? "group" : "p2p",
+      // Use explicit chat_type from callback when available; fall back to
+      // comparing chat_id with operator open_id (p2p chats use the user's
+      // open_id as implicit chat target, groups always have a distinct chat_id).
+      chat_type:
+        event.context.chat_type ??
+        (event.context.chat_id && event.context.chat_id !== event.operator.open_id
+          ? "group"
+          : "p2p"),
       message_type: "text",
       content: JSON.stringify({ text: content }),
     },
