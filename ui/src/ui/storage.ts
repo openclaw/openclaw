@@ -87,8 +87,14 @@ export function loadSettings(): UiSettings {
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navGroupsCollapsed:
-        typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
-          ? parsed.navGroupsCollapsed
+        typeof parsed.navGroupsCollapsed === "object" &&
+        parsed.navGroupsCollapsed !== null &&
+        !Array.isArray(parsed.navGroupsCollapsed)
+          ? Object.fromEntries(
+              Object.entries(parsed.navGroupsCollapsed).filter(
+                ([, value]) => typeof value === "boolean",
+              ),
+            )
           : defaults.navGroupsCollapsed,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
