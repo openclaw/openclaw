@@ -13,6 +13,7 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
@@ -590,6 +591,64 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config writes are disabled");
   });
+
+  it("blocks /config set from gateway clients without operator.admin", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+    } as OpenClawConfig;
+    const params = buildParams('/config set messages.ackReaction=":)"', cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    });
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("requires operator.admin");
+  });
+
+  it("keeps /config show available to gateway operator.write clients", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: { messages: { ackreaction: ":)" } },
+    });
+    const params = buildParams("/config show messages.ackReaction", cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    });
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config messages.ackreaction");
+  });
+
+  it("keeps /config set working for gateway operator.admin clients", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: { messages: { ackReaction: ":)" } },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    const params = buildParams('/config set messages.ackReaction=":D"', cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write", "operator.admin"],
+    });
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(writeConfigFileMock).toHaveBeenCalledOnce();
+    expect(result.reply?.text).toContain("Config updated");
+  });
 });
 
 describe("handleCommands bash alias", () => {
@@ -704,8 +763,72 @@ describe("handleCommands /allowlist", () => {
     expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
       channel: "telegram",
       entry: "789",
+      accountId: "default",
     });
     expect(result.reply?.text).toContain("DM allowlist added");
+  });
+
+  it("writes store entries to the selected account scope", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+      changed: true,
+      allowFrom: ["123", "789"],
+    });
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm --account work 789", cfg, {
+      AccountId: "work",
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      entry: "789",
+      accountId: "work",
+    });
+  });
+
+  it("removes default-account entries from scoped and legacy pairing stores", async () => {
+    removeChannelAllowFromStoreEntryMock
+      .mockResolvedValueOnce({
+        changed: true,
+        allowFrom: [],
+      })
+      .mockResolvedValueOnce({
+        changed: true,
+        allowFrom: [],
+      });
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist remove dm --store 789", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(removeChannelAllowFromStoreEntryMock).toHaveBeenNthCalledWith(1, {
+      channel: "telegram",
+      entry: "789",
+      accountId: "default",
+    });
+    expect(removeChannelAllowFromStoreEntryMock).toHaveBeenNthCalledWith(2, {
+      channel: "telegram",
+      entry: "789",
+    });
   });
 
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {
@@ -907,6 +1030,28 @@ describe("/models command", () => {
     expect(result.reply?.text).toContain("localai/ultra-chat");
     expect(result.reply?.text).not.toContain("Unknown provider");
   });
+
+  it("threads the routed agent through /models replies", async () => {
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as unknown as OpenClawConfig;
+    const params = buildPolicyParams("/models", scopedCfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
+
+    const result = await handleCommands({
+      ...params,
+      agentId: "support",
+      sessionKey: "agent:support:main",
+    });
+
+    expect(result.reply?.text).toContain("localai");
+  });
 });
 
 describe("handleCommands plugin commands", () => {
@@ -993,6 +1138,9 @@ describe("handleCommands hooks", () => {
         type: "command",
         action: "new",
         sessionKey: "agent:main:telegram:direct:123",
+        context: expect.objectContaining({
+          workspaceDir: testWorkspaceDir,
+        }),
       }),
     );
     spy.mockRestore();

@@ -3,6 +3,13 @@ import { withEnv } from "../../test-utils/env.js";
 import { __testing } from "./web-search.js";
 
 const {
+  inferPerplexityBaseUrlFromApiKey,
+  resolvePerplexityBaseUrl,
+  resolvePerplexityModel,
+  resolvePerplexityTransport,
+  isDirectPerplexityBaseUrl,
+  resolvePerplexityRequestModel,
+  resolvePerplexityApiKey,
   normalizeBraveLanguageParams,
   normalizeFreshness,
   normalizeToIsoDate,
@@ -15,7 +22,87 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveBraveMode,
 } = __testing;
+
+const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
+const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+
+describe("web_search perplexity compatibility routing", () => {
+  it("detects API key prefixes", () => {
+    expect(inferPerplexityBaseUrlFromApiKey("pplx-123")).toBe("direct");
+    expect(inferPerplexityBaseUrlFromApiKey("sk-or-v1-123")).toBe("openrouter");
+    expect(inferPerplexityBaseUrlFromApiKey("unknown-key")).toBeUndefined();
+  });
+
+  it("prefers explicit baseUrl over key-based defaults", () => {
+    expect(resolvePerplexityBaseUrl({ baseUrl: "https://example.com" }, "config", "pplx-123")).toBe(
+      "https://example.com",
+    );
+  });
+
+  it("resolves OpenRouter env auth and transport", () => {
+    withEnv({ PERPLEXITY_API_KEY: undefined, OPENROUTER_API_KEY: "sk-or-v1-test" }, () => {
+      expect(resolvePerplexityApiKey(undefined)).toEqual({
+        apiKey: "sk-or-v1-test",
+        source: "openrouter_env",
+      });
+      expect(resolvePerplexityTransport(undefined)).toMatchObject({
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "perplexity/sonar-pro",
+        transport: "chat_completions",
+      });
+    });
+  });
+
+  it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
+    withEnv({ PERPLEXITY_API_KEY: "pplx-test", OPENROUTER_API_KEY: undefined }, () => {
+      expect(resolvePerplexityTransport(undefined)).toMatchObject({
+        baseUrl: "https://api.perplexity.ai",
+        model: "perplexity/sonar-pro",
+        transport: "search_api",
+      });
+    });
+  });
+
+  it("switches direct Perplexity to chat completions when model override is configured", () => {
+    expect(resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
+      "perplexity/sonar-reasoning-pro",
+    );
+    expect(
+      resolvePerplexityTransport({
+        apiKey: "pplx-test",
+        model: "perplexity/sonar-reasoning-pro",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      model: "perplexity/sonar-reasoning-pro",
+      transport: "chat_completions",
+    });
+  });
+
+  it("treats unrecognized configured keys as direct Perplexity by default", () => {
+    expect(
+      resolvePerplexityTransport({
+        apiKey: "enterprise-perplexity-test",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      transport: "search_api",
+    });
+  });
+
+  it("normalizes direct Perplexity models for chat completions", () => {
+    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
+    expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
+    expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
+      "sonar-pro",
+    );
+    expect(
+      resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
+    ).toBe("perplexity/sonar-pro");
+  });
+});
 
 describe("web_search brave language param normalization", () => {
   it("normalizes and auto-corrects swapped Brave language params", () => {
@@ -102,7 +189,7 @@ describe("web_search date normalization", () => {
 
 describe("web_search grok config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key"); // pragma: allowlist secret
   });
 
   it("returns undefined when no apiKey is available", () => {
@@ -221,15 +308,17 @@ describe("web_search grok response parsing", () => {
 
 describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
+    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key"); // pragma: allowlist secret
   });
 
   it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    withEnv({ KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("kimi-env");
+    const kimiEnvValue = "kimi-env"; // pragma: allowlist secret
+    const moonshotEnvValue = "moonshot-env"; // pragma: allowlist secret
+    withEnv({ [kimiApiKeyEnv]: kimiEnvValue, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(kimiEnvValue);
     });
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("moonshot-env");
+    withEnv({ [kimiApiKeyEnv]: undefined, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(moonshotEnvValue);
     });
   });
 
@@ -269,5 +358,27 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("resolveBraveMode", () => {
+  it("defaults to 'web' when no config is provided", () => {
+    expect(resolveBraveMode({})).toBe("web");
+  });
+
+  it("defaults to 'web' when mode is undefined", () => {
+    expect(resolveBraveMode({ mode: undefined })).toBe("web");
+  });
+
+  it("returns 'llm-context' when configured", () => {
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+  });
+
+  it("returns 'web' when mode is explicitly 'web'", () => {
+    expect(resolveBraveMode({ mode: "web" })).toBe("web");
+  });
+
+  it("falls back to 'web' for unrecognized mode values", () => {
+    expect(resolveBraveMode({ mode: "invalid" })).toBe("web");
   });
 });

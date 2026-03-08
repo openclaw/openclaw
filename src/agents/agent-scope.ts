@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -268,6 +269,62 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   }
   const stateDir = resolveStateDir(process.env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
+}
+
+function normalizePathForComparison(input: string): string {
+  const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
+  let normalized = resolved;
+  // Prefer realpath when available to normalize aliases/symlinks (for example /tmp -> /private/tmp)
+  // and canonical path case without forcing case-folding on case-sensitive macOS volumes.
+  try {
+    normalized = fs.realpathSync.native(resolved);
+  } catch {
+    // Keep lexical path for non-existent directories.
+  }
+  if (process.platform === "win32") {
+    return normalized.toLowerCase();
+  }
+  return normalized;
+}
+
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export function resolveAgentIdsByWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string[] {
+  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  const ids = listAgentIds(cfg);
+  const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
+
+  for (let index = 0; index < ids.length; index += 1) {
+    const id = ids[index];
+    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    if (!isPathWithinRoot(normalizedWorkspacePath, workspaceDir)) {
+      continue;
+    }
+    matches.push({ id, workspaceDir, order: index });
+  }
+
+  matches.sort((left, right) => {
+    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
+    if (workspaceLengthDelta !== 0) {
+      return workspaceLengthDelta;
+    }
+    return left.order - right.order;
+  });
+
+  return matches.map((entry) => entry.id);
+}
+
+export function resolveAgentIdByWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string | undefined {
+  return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
 }
 
 export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {

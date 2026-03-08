@@ -122,7 +122,7 @@ const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
 const CONTEXT_OVERFLOW_HINT_RE =
   /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|prompt.*(too (?:large|long)|exceed|over|limit|max(?:imum)?)|(?:request|input).*(?:context|window|length|token).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
 const RATE_LIMIT_HINT_RE =
-  /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b/i;
+  /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -208,6 +208,100 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 
+type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
+
+const BILLING_402_HINTS = [
+  "insufficient credits",
+  "insufficient quota",
+  "credit balance",
+  "insufficient balance",
+  "plans & billing",
+  "add more credits",
+  "top up",
+] as const;
+const BILLING_402_PLAN_HINTS = [
+  "upgrade your plan",
+  "upgrade plan",
+  "current plan",
+  "subscription",
+] as const;
+
+const PERIODIC_402_HINTS = ["daily", "weekly", "monthly"] as const;
+const RETRYABLE_402_RETRY_HINTS = ["try again", "retry", "temporary", "cooldown"] as const;
+const RETRYABLE_402_LIMIT_HINTS = ["usage limit", "rate limit", "organization usage"] as const;
+const RETRYABLE_402_SCOPED_HINTS = ["organization", "workspace"] as const;
+const RETRYABLE_402_SCOPED_RESULT_HINTS = [
+  "billing period",
+  "exceeded",
+  "reached",
+  "exhausted",
+] as const;
+const RAW_402_MARKER_RE =
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b/i;
+const LEADING_402_WRAPPER_RE =
+  /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
+
+function includesAnyHint(text: string, hints: readonly string[]): boolean {
+  return hints.some((hint) => text.includes(hint));
+}
+
+function hasExplicit402BillingSignal(text: string): boolean {
+  return (
+    includesAnyHint(text, BILLING_402_HINTS) ||
+    (includesAnyHint(text, BILLING_402_PLAN_HINTS) && text.includes("limit")) ||
+    text.includes("billing hard limit") ||
+    text.includes("hard limit reached") ||
+    (text.includes("maximum allowed") && text.includes("limit"))
+  );
+}
+
+function hasRetryable402TransientSignal(text: string): boolean {
+  const hasPeriodicHint = includesAnyHint(text, PERIODIC_402_HINTS);
+  const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
+  const hasScopedHint = includesAnyHint(text, RETRYABLE_402_SCOPED_HINTS);
+  return (
+    (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
+      includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
+    (hasPeriodicHint && (text.includes("usage limit") || hasSpendLimit)) ||
+    (hasPeriodicHint && text.includes("limit") && text.includes("reset")) ||
+    (hasScopedHint &&
+      text.includes("limit") &&
+      (hasSpendLimit || includesAnyHint(text, RETRYABLE_402_SCOPED_RESULT_HINTS)))
+  );
+}
+
+function normalize402Message(raw: string): string {
+  return raw.trim().toLowerCase().replace(LEADING_402_WRAPPER_RE, "").trim();
+}
+
+function classify402Message(message: string): PaymentRequiredFailoverReason {
+  const normalized = normalize402Message(message);
+  if (!normalized) {
+    return "billing";
+  }
+
+  if (hasExplicit402BillingSignal(normalized)) {
+    return "billing";
+  }
+
+  if (isRateLimitErrorMessage(normalized)) {
+    return "rate_limit";
+  }
+
+  if (hasRetryable402TransientSignal(normalized)) {
+    return "rate_limit";
+  }
+
+  return "billing";
+}
+
+function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailoverReason | null {
+  if (!RAW_402_MARKER_RE.test(raw)) {
+    return null;
+  }
+  return classify402Message(raw);
+}
+
 function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
   const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
   if (!match) {
@@ -261,25 +355,7 @@ export function classifyFailoverReasonFromHttpStatus(
   }
 
   if (status === 402) {
-    // Some providers (e.g. Anthropic Claude Max plan) surface temporary
-    // usage/rate-limit failures as HTTP 402. Use a narrow matcher for
-    // temporary limits to avoid misclassifying billing failures (#30484).
-    if (message) {
-      const lower = message.toLowerCase();
-      // Temporary usage limit signals: retry language + usage/limit terminology
-      const hasTemporarySignal =
-        (lower.includes("try again") ||
-          lower.includes("retry") ||
-          lower.includes("temporary") ||
-          lower.includes("cooldown")) &&
-        (lower.includes("usage limit") ||
-          lower.includes("rate limit") ||
-          lower.includes("organization usage"));
-      if (hasTemporarySignal) {
-        return "rate_limit";
-      }
-    }
-    return "billing";
+    return message ? classify402Message(message) : "billing";
   }
   if (status === 429) {
     return "rate_limit";
@@ -857,6 +933,10 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
+  }
+  const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
+  if (reasonFrom402Text) {
+    return reasonFrom402Text;
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return isBillingErrorMessage(raw) ? "billing" : "rate_limit";

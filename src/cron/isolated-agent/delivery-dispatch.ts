@@ -318,8 +318,16 @@ export async function dispatchCronDelivery(
     }
     if (activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
-      // update to the main requester.
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      // update to the main requester. Mark deliveryAttempted so the timer does
+      // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
     }
     if (
       hadDescendants &&
@@ -329,8 +337,16 @@ export async function dispatchCronDelivery(
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent
-      // text like "on it, pulling everything together".
-      return params.withRunSession({ status: "ok", summary, outputText, ...params.telemetry });
+      // text like "on it, pulling everything together". Mark deliveryAttempted
+      // so the timer does not fire a redundant enqueueSystemEvent fallback.
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       return params.withRunSession({

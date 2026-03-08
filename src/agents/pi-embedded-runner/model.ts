@@ -5,6 +5,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
+import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -19,8 +20,28 @@ type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
-  headers?: Record<string, string>;
+  headers?: unknown;
 };
+
+function sanitizeModelHeaders(
+  headers: unknown,
+  opts?: { stripSecretRefMarkers?: boolean },
+): Record<string, string> | undefined {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (typeof headerValue !== "string") {
+      continue;
+    }
+    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+      continue;
+    }
+    next[headerName] = headerValue;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
 
 export { buildModelAliasLines };
 
@@ -46,16 +67,23 @@ function applyConfiguredProviderOverrides(params: {
 }): Model<Api> {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
-    return discoveredModel;
+    return {
+      ...discoveredModel,
+      // Discovered models originate from models.json and may contain persistence markers.
+      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
+    };
   }
   const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
-  if (
-    !configuredModel &&
-    !providerConfig.baseUrl &&
-    !providerConfig.api &&
-    !providerConfig.headers
-  ) {
-    return discoveredModel;
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
+    return {
+      ...discoveredModel,
+      headers: discoveredHeaders,
+    };
   }
   return {
     ...discoveredModel,
@@ -67,13 +95,13 @@ function applyConfiguredProviderOverrides(params: {
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
     headers:
-      providerConfig.headers || configuredModel?.headers
+      discoveredHeaders || providerHeaders || configuredHeaders
         ? {
-            ...discoveredModel.headers,
-            ...providerConfig.headers,
-            ...configuredModel?.headers,
+            ...discoveredHeaders,
+            ...providerHeaders,
+            ...configuredHeaders,
           }
-        : discoveredModel.headers,
+        : undefined,
     compat: configuredModel?.compat ?? discoveredModel.compat,
   };
 }
@@ -86,15 +114,22 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
+    const providerHeaders = sanitizeModelHeaders(entry?.headers);
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
-      headers:
-        entry?.headers || (model as InlineModelEntry).headers
-          ? { ...entry?.headers, ...(model as InlineModelEntry).headers }
-          : undefined,
+      headers: (() => {
+        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers);
+        if (!providerHeaders && !modelHeaders) {
+          return undefined;
+        }
+        return {
+          ...providerHeaders,
+          ...modelHeaders,
+        };
+      })(),
     }));
   });
 }
@@ -125,7 +160,7 @@ export function resolveModelWithRegistry(params: {
   const inlineMatch = inlineModels.find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
-  if (inlineMatch) {
+  if (inlineMatch?.api) {
     return normalizeModelCompat(inlineMatch as Model<Api>);
   }
 
@@ -161,6 +196,8 @@ export function resolveModelWithRegistry(params: {
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
   if (providerConfig || modelId.startsWith("mock-")) {
     return normalizeModelCompat({
       id: modelId,
@@ -180,9 +217,7 @@ export function resolveModelWithRegistry(params: {
         providerConfig?.models?.[0]?.maxTokens ??
         DEFAULT_CONTEXT_TOKENS,
       headers:
-        providerConfig?.headers || configuredModel?.headers
-          ? { ...providerConfig?.headers, ...configuredModel?.headers }
-          : undefined,
+        providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
     } as Model<Api>);
   }
 

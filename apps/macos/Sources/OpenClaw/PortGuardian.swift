@@ -15,7 +15,7 @@ actor PortGuardian {
         let timestamp: TimeInterval
     }
 
-    struct Descriptor: Sendable {
+    struct Descriptor {
         let pid: Int32
         let command: String
         let executablePath: String?
