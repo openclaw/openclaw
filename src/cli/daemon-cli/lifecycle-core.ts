@@ -28,6 +28,18 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
+type NotLoadedActionResult = {
+  result: "stopped" | "restarted";
+  message?: string;
+  warnings?: string[];
+};
+
+type NotLoadedActionContext = {
+  json: boolean;
+  stdout: Writable;
+  fail: (message: string, hints?: string[]) => void;
+};
+
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (process.platform !== "linux") {
     return hints;
@@ -200,6 +212,7 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
+  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "stop", json });
@@ -213,6 +226,25 @@ export async function runServiceStop(params: {
     return;
   }
   if (!loaded) {
+    try {
+      const handled = await params.onNotLoaded?.({ json, stdout, fail });
+      if (handled) {
+        emit({
+          ok: true,
+          result: handled.result,
+          message: handled.message,
+          warnings: handled.warnings,
+          service: buildDaemonServiceSnapshot(params.service, false),
+        });
+        if (!json && handled.message) {
+          defaultRuntime.log(handled.message);
+        }
+        return;
+      }
+    } catch (err) {
+      fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+      return;
+    }
     emit({
       ok: true,
       result: "not-loaded",
@@ -251,9 +283,12 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
+  const warnings: string[] = [];
+  let handledNotLoaded: NotLoadedActionResult | null = null;
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -264,19 +299,29 @@ export async function runServiceRestart(params: {
     return false;
   }
   if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return false;
+    try {
+      handledNotLoaded = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
+    } catch (err) {
+      fail(`${params.serviceNoun} restart failed: ${String(err)}`);
+      return false;
+    }
+    if (!handledNotLoaded) {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return false;
+    }
+    if (handledNotLoaded.warnings?.length) {
+      warnings.push(...handledNotLoaded.warnings);
+    }
   }
 
-  const warnings: string[] = [];
-  if (params.checkTokenDrift) {
+  if (loaded && params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
     try {
       const command = await params.service.readCommand(process.env);
@@ -309,22 +354,30 @@ export async function runServiceRestart(params: {
   }
 
   try {
-    await params.service.restart({ env: process.env, stdout });
+    if (loaded) {
+      await params.service.restart({ env: process.env, stdout });
+    }
     if (params.postRestartCheck) {
       await params.postRestartCheck({ json, stdout, warnings, fail });
     }
-    let restarted = true;
-    try {
-      restarted = await params.service.isLoaded({ env: process.env });
-    } catch {
-      restarted = true;
+    let restarted = loaded;
+    if (loaded) {
+      try {
+        restarted = await params.service.isLoaded({ env: process.env });
+      } catch {
+        restarted = true;
+      }
     }
     emit({
       ok: true,
       result: "restarted",
+      message: handledNotLoaded?.message,
       service: buildDaemonServiceSnapshot(params.service, restarted),
       warnings: warnings.length ? warnings : undefined,
     });
+    if (!json && handledNotLoaded?.message) {
+      defaultRuntime.log(handledNotLoaded.message);
+    }
     return true;
   } catch (err) {
     const hints = params.renderStartHints();
