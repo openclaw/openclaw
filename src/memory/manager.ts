@@ -558,10 +558,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       );
       for (const additionalPath of additionalPaths) {
         try {
-          const stat = await fs.lstat(additionalPath);
-          if (stat.isSymbolicLink()) {
-            continue;
-          }
+          const stat = await fs.stat(additionalPath);
           if (stat.isDirectory()) {
             if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
               allowedAdditional = true;
