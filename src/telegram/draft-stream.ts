@@ -27,13 +27,53 @@ function allocateTelegramDraftId(): number {
   return nextDraftId;
 }
 
+type SendMessageDraftPayload = {
+  chat_id: number;
+  draft_id: number;
+  text: string;
+  message_thread_id?: number;
+  parse_mode?: string;
+  entities?: unknown[];
+};
+
+type GrammyRawApiProxy = {
+  sendMessageDraft: (payload: SendMessageDraftPayload) => Promise<boolean>;
+};
+
 function resolveSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft | undefined {
-  const sendMessageDraft = (api as Bot["api"] & { sendMessageDraft?: TelegramSendMessageDraft })
+  // First check if Grammy has native sendMessageDraft method
+  const nativeMethod = (api as Bot["api"] & { sendMessageDraft?: TelegramSendMessageDraft })
     .sendMessageDraft;
-  if (typeof sendMessageDraft !== "function") {
+  if (typeof nativeMethod === "function") {
+    return nativeMethod.bind(api as object);
+  }
+
+  // Fall back to raw API call for Bot API 9.3+ (sendMessageDraft)
+  // Grammy exposes `api.raw` as a Proxy that forwards any method call to the Bot API.
+  // This allows using new Bot API methods before Grammy adds typed wrappers.
+  // Guard: ensure rawApi exists and sendMessageDraft is callable (may not be if Grammy's
+  // raw API is a typed interface rather than a Proxy in some edge configurations).
+  const rawApi = (api as Bot["api"] & { raw?: GrammyRawApiProxy }).raw;
+  if (!rawApi || typeof rawApi.sendMessageDraft !== "function") {
     return undefined;
   }
-  return sendMessageDraft.bind(api as object);
+
+  return async (
+    chatId: number,
+    draftId: number,
+    text: string,
+    params?: { message_thread_id?: number; parse_mode?: "HTML" },
+  ): Promise<unknown> => {
+    return rawApi.sendMessageDraft({
+      chat_id: chatId,
+      draft_id: draftId,
+      text,
+      ...(params?.message_thread_id != null
+        ? { message_thread_id: params.message_thread_id }
+        : {}),
+      ...(params?.parse_mode ? { parse_mode: params.parse_mode } : {}),
+    });
+  };
 }
 
 function shouldFallbackFromDraftTransport(err: unknown): boolean {
