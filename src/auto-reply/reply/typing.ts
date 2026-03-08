@@ -80,6 +80,11 @@ export function createTypingController(params: {
     if (sealed) {
       return;
     }
+    // Don't refresh TTL after run is complete - this prevents late callbacks
+    // from extending the TTL indefinitely.
+    if (runComplete) {
+      return;
+    }
     if (!typingIntervalMs || typingIntervalMs <= 0) {
       return;
     }
@@ -90,7 +95,10 @@ export function createTypingController(params: {
       clearTimeout(typingTtlTimer);
     }
     typingTtlTimer = setTimeout(() => {
-      if (!typingLoop.isRunning()) {
+      // TTL is a safety net: if we're still active (typing indicator showing),
+      // force cleanup regardless of loop state. This handles cases where
+      // markRunComplete/markDispatchIdle weren't called or loop state is inconsistent.
+      if (!active) {
         return;
       }
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
