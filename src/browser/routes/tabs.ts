@@ -1,6 +1,8 @@
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+// 安全修复：导入输入验证辅助函数
+import { validateSafeUrl, sanitizeStringInput, validateNumber } from "../security/input-validation.js";
 
 function resolveTabsProfileContext(
   req: BrowserRequest,
@@ -112,9 +114,15 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   });
 
   app.post("/tabs/open", async (req, res) => {
-    const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
-    if (!url) {
+    const urlInput = toStringOrEmpty((req.body as { url?: unknown })?.url);
+    if (!urlInput) {
       return jsonError(res, 400, "url is required");
+    }
+    
+    // 安全修复：验证URL安全性
+    const url = validateSafeUrl(urlInput);
+    if (!url) {
+      return jsonError(res, 400, "Invalid or unsafe URL provided");
     }
 
     await withTabsProfileRoute({
