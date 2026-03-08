@@ -104,7 +104,6 @@ load_teams_from_legacy_defaults_key() {
 load_teams_from_xcode_managed_profiles() {
   local profiles_dir="${HOME}/Library/MobileDevice/Provisioning Profiles"
   [[ -d "$profiles_dir" ]] || return 0
-  [[ -n "$python_cmd" ]] || return 0
 
   while IFS= read -r team; do
     [[ -z "$team" ]] && continue
@@ -112,8 +111,9 @@ load_teams_from_xcode_managed_profiles() {
   done < <(
     for p in "${profiles_dir}"/*.mobileprovision; do
       [[ -f "$p" ]] || continue
-      security cms -D -i "$p" 2>/dev/null \
-        | "$python_cmd" -c '
+      if [[ -n "$python_cmd" ]]; then
+        security cms -D -i "$p" 2>/dev/null \
+          | "$python_cmd" -c '
 import plistlib, sys
 try:
     raw = sys.stdin.buffer.read()
@@ -125,6 +125,24 @@ try:
 except Exception:
     pass
 ' 2>/dev/null
+      else
+        # Bash-only fallback for hosts without Python (keeps script usable on minimal installs).
+        # Extract TeamIdentifier array string values from the decoded provisioning profile plist.
+        security cms -D -i "$p" 2>/dev/null \
+          | awk '
+              /<key>TeamIdentifier<\/key>/ { in_team=1; next }
+              in_team && /<key>/ { in_team=0 }
+              in_team && match($0, /<string>[A-Z0-9]{10}<\/string>/) {
+                line=$0
+                while (match(line, /<string>[A-Z0-9]{10}<\/string>/)) {
+                  s=substr(line, RSTART, RLENGTH)
+                  gsub(/<string>|<\/string>/, "", s)
+                  print s
+                  line=substr(line, RSTART+RLENGTH)
+                }
+              }
+            ' 2>/dev/null || true
+      fi
     done | sort -u
   )
 }

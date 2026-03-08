@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -68,12 +68,47 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   return { rootDir, scriptPath, logPath, binDir };
 }
 
+function resolveBashCommand(): string {
+  if (process.platform !== "win32") {
+    return "bash";
+  }
+
+  // Prefer Git Bash over WSL's bash.exe shim (which can fail in non-WSL contexts).
+  const probe = spawnSync("where.exe", ["bash"], { encoding: "utf8" });
+  const candidates = (probe.stdout ?? "")
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const gitBash = candidates.find((p) => /\\Git\\usr\\bin\\bash\.exe$/i.test(p));
+  if (gitBash) {
+    return gitBash;
+  }
+  const nonWsl = candidates.find((p) => !/\\Windows\\System32\\bash\.exe$/i.test(p));
+  return nonWsl ?? "bash";
+}
+
+function bashQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function toBashPath(nativePath: string): string {
+  if (process.platform !== "win32") {
+    return nativePath;
+  }
+  const normalized = nativePath.replace(/\\/g, "/");
+  const driveMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (driveMatch) {
+    return `/${driveMatch[1]!.toLowerCase()}/${driveMatch[2]}`;
+  }
+  return normalized;
+}
+
 function createEnv(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
     HOME: process.env.HOME ?? sandbox.rootDir,
     LANG: process.env.LANG,
     LC_ALL: process.env.LC_ALL,
@@ -105,7 +140,16 @@ function runDockerSetup(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
 ) {
-  return spawnSync("bash", [sandbox.scriptPath], {
+  const bash = resolveBashCommand();
+  const nodeDir = dirname(process.execPath);
+  const nodeDirBash = toBashPath(nodeDir);
+  const cmd = [
+    // Ensure the script can find the repo's docker stub and the host node binary.
+    `export PATH=${bashQuote(toBashPath(sandbox.binDir))}:${bashQuote(nodeDirBash)}:$PATH`,
+    `"$BASH" ${bashQuote(toBashPath(sandbox.scriptPath))}`,
+  ].join("; ");
+
+  return spawnSync(bash, ["-lc", cmd], {
     cwd: sandbox.rootDir,
     env: createEnv(sandbox, overrides),
     encoding: "utf8",

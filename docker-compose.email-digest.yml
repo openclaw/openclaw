@@ -1,0 +1,91 @@
+# Email Intelligence Digest — Docker Compose
+#
+# One-command start (after running ./scripts/email-digest-setup.sh):
+#   docker compose -f docker-compose.email-digest.yml up -d
+#
+# View logs:
+#   docker compose -f docker-compose.email-digest.yml logs -f
+#
+# Open dashboard:
+#   http://localhost:18789/digest
+#
+# Run digest manually:
+#   docker compose -f docker-compose.email-digest.yml exec gateway \
+#     node openclaw.mjs agent --message "Run the email-digest skill"
+
+services:
+  gateway:
+    image: openclaw:email-digest
+    container_name: openclaw-email-digest
+    init: true
+    restart: unless-stopped
+
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+
+      # ── OpenClaw auth ────────────────────────────────────────────────────────
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+
+      # ── AI model API keys (add whichever you use) ────────────────────────────
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+      # ── Claude provider session keys (alternative to API key) ───────────────
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+
+      # ── gog: default Gmail account ───────────────────────────────────────────
+      GOG_ACCOUNT: ${GOG_ACCOUNT:-}
+
+      # ── Delivery targets (used by the email-digest cron job) ─────────────────
+      DIGEST_SLACK_CHANNEL: ${DIGEST_SLACK_CHANNEL:-}
+      DIGEST_WHATSAPP_NUMBER: ${DIGEST_WHATSAPP_NUMBER:-}
+      DIGEST_TELEGRAM_CHAT: ${DIGEST_TELEGRAM_CHAT:-}
+
+      # ── Slack Bot Token (for direct Slack API notifications) ─────────────────
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+
+      # ── Email auto-reply settings ────────────────────────────────────────────
+      EMAIL_AUTOREPLY_ENABLED: ${EMAIL_AUTOREPLY_ENABLED:-false}
+      EMAIL_AUTOREPLY_FROM: ${EMAIL_AUTOREPLY_FROM:-}
+
+    volumes:
+      # OpenClaw config + sessions (persistent)
+      - ${OPENCLAW_CONFIG_DIR:-~/.openclaw}:/home/node/.openclaw
+
+      # Agent workspace (persistent)
+      - ${OPENCLAW_WORKSPACE_DIR:-~/.openclaw/workspace}:/home/node/.openclaw/workspace
+
+      # gog Google OAuth credentials (read-only from host)
+      # On macOS: ~/.config/gog   |   On Linux: ~/.config/gog
+      - ${GOG_CONFIG_DIR:-~/.config/gog}:/home/node/.config/gog:ro
+
+      # Digest JSON output — shared with dashboard reader
+      # (also lives inside ~/.openclaw/digests, but explicit mount for clarity)
+      - ${DIGEST_DIR:-~/.openclaw/digests}:/home/node/.openclaw/digests
+
+    ports:
+      # Gateway WebSocket + HTTP (dashboard at :18789/digest)
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      # Bridge port
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+
+    command:
+      - node
+      - openclaw.mjs
+      - gateway
+      - --bind
+      - lan
+      - --port
+      - "18789"
+      - --allow-unconfigured
+
+    # Health check: poll the gateway HTTP endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
