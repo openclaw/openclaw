@@ -565,9 +565,19 @@ actor MacNodeRuntime {
             cwd: resolvedCwd,
             env: [:]).first
 
-        // Build argv: pin the executable to its resolved path if available
+        // Build argv: pin the executable to its resolved path if available.
+        // Only replace command.first if the resolved path corresponds to the
+        // actual first executable (not a nested command from a shell wrapper).
+        // For shell wrappers like /bin/sh -lc "echo hello", resolution resolves
+        // the inner command (echo), not the shell binary itself.
         let argv: [String]
-        if let resolvedPath = resolution?.resolvedPath, resolvedPath != command.first {
+        if let resolvedPath = resolution?.resolvedPath,
+           let firstResolved = ExecCommandResolution.resolve(
+               command: [command.first!],
+               cwd: resolvedCwd,
+               env: [:])?.resolvedPath,
+           resolvedPath == firstResolved
+        {
             argv = [resolvedPath] + command.dropFirst()
         } else {
             argv = command
