@@ -9,6 +9,7 @@ import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
+  cfg?: CoreConfig;
   accountId?: string;
   replyTo?: string;
   target?: string;
@@ -38,7 +39,12 @@ export async function sendMessageIrc(
   opts: SendIrcOptions = {},
 ): Promise<SendIrcResult> {
   const runtime = getIrcRuntime();
-  const cfg = runtime.config.loadConfig() as CoreConfig;
+  // Use caller-provided config snapshot when available (e.g. staged mutations,
+  // alternate account snapshots). Fall back to loading from runtime only when
+  // no cfg is supplied so that callers like the outbound channel path (which
+  // always passes cfg explicitly) get deterministic behaviour without a
+  // config reload race.
+  const cfg = opts.cfg ?? (runtime.config.loadConfig() as CoreConfig);
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
