@@ -261,6 +261,8 @@ jobs:
             };
 
             const triggerLabel = "trigger-response";
+            const activePrLimitLabel = "r: too-many-prs";
+            const activePrLimitOverrideLabel = "r: too-many-prs-override";
             const target = context.payload.issue ?? context.payload.pull_request;
             if (!target) {
               return;
@@ -446,6 +448,10 @@ jobs:
                 state_reason: "not_planned",
               });
               return;
+            }
+
+            if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
+              labelSet.delete(activePrLimitLabel);
             }
 
             const rule = rules.find((item) => labelSet.has(item.label));
