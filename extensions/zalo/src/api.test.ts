@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { deleteWebhook, getWebhookInfo } from "./api.js";
+import { deleteWebhook, getWebhookInfo, type ZaloFetch } from "./api.js";
 
 describe("Zalo API request methods", () => {
   it("uses POST for getWebhookInfo", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: {} })));
+    const fetcher = vi.fn<ZaloFetch>(
+      async () => new Response(JSON.stringify({ ok: true, result: {} })),
+    );
 
     await getWebhookInfo("test-token", fetcher);
 
@@ -14,7 +16,9 @@ describe("Zalo API request methods", () => {
   });
 
   it("keeps POST for deleteWebhook", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: {} })));
+    const fetcher = vi.fn<ZaloFetch>(
+      async () => new Response(JSON.stringify({ ok: true, result: {} })),
+    );
 
     await deleteWebhook("test-token", fetcher);
 

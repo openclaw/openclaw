@@ -1,10 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const getWebhookInfoMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 const deleteWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 const getUpdatesMock = vi.fn(() => new Promise(() => {}));
+const setWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 
 vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api.js")>();
@@ -13,6 +16,7 @@ vi.mock("./api.js", async (importOriginal) => {
     deleteWebhook: deleteWebhookMock,
     getWebhookInfo: getWebhookInfoMock,
     getUpdates: getUpdatesMock,
+    setWebhook: setWebhookMock,
   };
 });
 
@@ -24,9 +28,14 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+async function waitForPollingLoopStart(): Promise<void> {
+  await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
+}
+
 describe("monitorZaloProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("stays alive in polling mode until abort", async () => {
@@ -53,8 +62,7 @@ describe("monitorZaloProvider lifecycle", () => {
       settled = true;
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForPollingLoopStart();
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
@@ -96,8 +104,7 @@ describe("monitorZaloProvider lifecycle", () => {
       abortSignal: abort.signal,
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForPollingLoopStart();
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
@@ -133,8 +140,7 @@ describe("monitorZaloProvider lifecycle", () => {
       abortSignal: abort.signal,
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForPollingLoopStart();
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
@@ -145,5 +151,62 @@ describe("monitorZaloProvider lifecycle", () => {
 
     abort.abort();
     await run;
+  });
+
+  it("waits for webhook deletion before finishing webhook shutdown", async () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+
+    let resolveDeleteWebhook: (() => void) | undefined;
+    deleteWebhookMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDeleteWebhook = () => resolve({ ok: true, result: { url: "" } });
+        }),
+    );
+
+    const { monitorZaloProvider } = await import("./monitor.js");
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn<(message: string) => void>(),
+      error: vi.fn<(message: string) => void>(),
+    };
+    const account = {
+      accountId: "default",
+      config: {},
+    } as unknown as ResolvedZaloAccount;
+    const config = {} as OpenClawConfig;
+
+    let settled = false;
+    const run = monitorZaloProvider({
+      token: "test-token",
+      account,
+      config,
+      runtime,
+      abortSignal: abort.signal,
+      useWebhook: true,
+      webhookUrl: "https://example.com/hooks/zalo",
+      webhookSecret: "supersecret",
+    }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(setWebhookMock).toHaveBeenCalledTimes(1));
+    expect(registry.httpRoutes).toHaveLength(1);
+
+    abort.abort();
+
+    await vi.waitFor(() => expect(deleteWebhookMock).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+    expect(registry.httpRoutes).toHaveLength(1);
+
+    resolveDeleteWebhook?.();
+    await run;
+
+    expect(settled).toBe(true);
+    expect(registry.httpRoutes).toHaveLength(0);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Zalo provider stopped mode=webhook"),
+    );
   });
 });

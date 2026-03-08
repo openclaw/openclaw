@@ -19,6 +19,7 @@ import {
   resolveWebhookPath,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/zalo";
+import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -92,19 +93,6 @@ function describeWebhookTarget(rawUrl: string): string {
 function normalizeWebhookUrl(url: string | undefined): string | undefined {
   const trimmed = url?.trim();
   return trimmed ? trimmed : undefined;
-}
-
-async function waitForAbort(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: string): void {
@@ -676,6 +664,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   let stopped = false;
   const stopHandlers: Array<() => void> = [];
+  let cleanupWebhook: (() => Promise<void>) | undefined;
 
   const stop = () => {
     if (stopped) {
@@ -712,6 +701,23 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         `[${account.accountId}] Zalo configuring webhook path=${path} target=${describeWebhookTarget(webhookUrl)}`,
       );
       await setWebhook(token, { url: webhookUrl, secret_token: webhookSecret }, fetcher);
+      let webhookCleanupPromise: Promise<void> | undefined;
+      cleanupWebhook = async () => {
+        if (!webhookCleanupPromise) {
+          webhookCleanupPromise = (async () => {
+            runtime.log?.(`[${account.accountId}] Zalo stopping; deleting webhook`);
+            try {
+              await deleteWebhook(token, fetcher);
+              runtime.log?.(`[${account.accountId}] Zalo webhook deleted`);
+            } catch (err) {
+              runtime.error?.(
+                `[${account.accountId}] Zalo webhook delete failed: ${formatZaloError(err)}`,
+              );
+            }
+          })();
+        }
+        await webhookCleanupPromise;
+      };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
 
       const unregister = registerZaloWebhookTarget({
@@ -727,23 +733,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         fetcher,
       });
       stopHandlers.push(unregister);
-      abortSignal.addEventListener(
-        "abort",
-        () => {
-          runtime.log?.(`[${account.accountId}] Zalo abort received; deleting webhook`);
-          void deleteWebhook(token, fetcher)
-            .then(() => {
-              runtime.log?.(`[${account.accountId}] Zalo webhook deleted`);
-            })
-            .catch((err) => {
-              runtime.error?.(
-                `[${account.accountId}] Zalo webhook delete failed: ${formatZaloError(err)}`,
-              );
-            });
-        },
-        { once: true },
-      );
-      await waitForAbort(abortSignal);
+      await waitForAbortSignal(abortSignal);
       return;
     }
 
@@ -791,13 +781,14 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       fetcher,
     });
 
-    await waitForAbort(abortSignal);
+    await waitForAbortSignal(abortSignal);
   } catch (err) {
     runtime.error?.(
       `[${account.accountId}] Zalo provider startup failed mode=${mode}: ${formatZaloError(err)}`,
     );
     throw err;
   } finally {
+    await cleanupWebhook?.();
     stop();
     runtime.log?.(`[${account.accountId}] Zalo provider stopped mode=${mode}`);
   }
