@@ -8,6 +8,7 @@ export const pt_BR: TranslationMap = {
     offline: "Offline",
     connect: "Conectar",
     refresh: "Atualizar",
+    refreshing: "Atualizando…",
     enabled: "Ativado",
     disabled: "Desativado",
     na: "n/a",
