@@ -94,6 +94,20 @@ export type MSTeamsSendRetryEvent = {
   classification: ReturnType<typeof classifyMSTeamsSendError>;
 };
 
+const REASONING_PREFIX = "Reasoning:\n";
+const THINKING_TAG_RE = /^\s*<\s*(?:think(?:ing)?|thought|antthinking)\b/i;
+
+function isReasoningOnlyText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith(REASONING_PREFIX)) {
+    return true;
+  }
+  return THINKING_TAG_RE.test(trimmed);
+}
+
 function normalizeConversationId(rawId: string): string {
   return rawId.split(";")[0] ?? rawId;
 }
@@ -217,12 +231,18 @@ export function renderReplyPayloadsToMessages(
 
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const hasMedia = mediaList.length > 0;
+    const textSource = payload.text ?? "";
+    const suppressReasoningText = payload.isReasoning === true || isReasoningOnlyText(textSource);
     const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
-      payload.text ?? "",
+      suppressReasoningText ? "" : textSource,
       tableMode,
     );
 
     if (!text && mediaList.length === 0) {
+      continue;
+    }
+    if (suppressReasoningText && !hasMedia) {
       continue;
     }
 

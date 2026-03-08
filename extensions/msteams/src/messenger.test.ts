@@ -136,6 +136,27 @@ describe("msteams messenger", () => {
       });
       expect(messages.length).toBeGreaterThan(1);
     });
+
+    it("skips reasoning-only text payloads", () => {
+      const messages = renderReplyPayloadsToMessages(
+        [{ text: "Reasoning:\n_Thinking through options..._" }],
+        { textChunkLimit: 4000, tableMode: "code" },
+      );
+      expect(messages).toEqual([]);
+    });
+
+    it("strips reasoning text while preserving media payloads", () => {
+      const messages = renderReplyPayloadsToMessages(
+        [
+          {
+            text: "Reasoning:\n_Thinking through options..._",
+            mediaUrl: "https://example.com/voice.opus",
+          },
+        ],
+        { textChunkLimit: 4000, tableMode: "code" },
+      );
+      expect(messages).toEqual([{ mediaUrl: "https://example.com/voice.opus" }]);
+    });
   });
 
   describe("sendMSTeamsMessages", () => {
