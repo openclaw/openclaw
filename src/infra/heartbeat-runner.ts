@@ -481,14 +481,6 @@ type HeartbeatReasonFlags = {
   isWakeReason: boolean;
 };
 
-function shouldCarryEventSessionThreadId(heartbeat?: HeartbeatConfig): boolean {
-  const target = typeof heartbeat?.target === "string" ? heartbeat.target.trim().toLowerCase() : "";
-  if (target.length === 0 || target === "last") {
-    return true;
-  }
-  return false;
-}
-
 function resolveTelegramGroupChatIdFromSessionKey(sessionKey: string): string | undefined {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -526,6 +518,29 @@ function shouldCarryEventThreadForTelegramTarget(params: {
     return false;
   }
   return parsedExplicit.chatId.trim() === sourceChatId;
+}
+
+function shouldCarryEventThreadForLastTelegramTarget(params: {
+  heartbeat?: HeartbeatConfig;
+  sessionKey: string;
+  entry?: { lastChannel?: string; lastTo?: string | null };
+}): boolean {
+  const target =
+    typeof params.heartbeat?.target === "string"
+      ? params.heartbeat.target.trim().toLowerCase()
+      : "";
+  if (target !== "last") {
+    return false;
+  }
+  if (params.entry?.lastChannel?.trim().toLowerCase() !== "telegram") {
+    return false;
+  }
+  const sourceChatId = resolveTelegramGroupChatIdFromSessionKey(params.sessionKey);
+  if (!sourceChatId) {
+    return false;
+  }
+  const lastTo = typeof params.entry?.lastTo === "string" ? params.entry.lastTo.trim() : "";
+  return lastTo === sourceChatId;
 }
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
@@ -714,8 +729,8 @@ export async function runHeartbeatOnce(opts: {
   const previousUpdatedAt = entry?.updatedAt;
   const explicitThreadId =
     isEventDrivenReason &&
-    (shouldCarryEventSessionThreadId(heartbeat) ||
-      shouldCarryEventThreadForTelegramTarget({ heartbeat, sessionKey }))
+    (shouldCarryEventThreadForTelegramTarget({ heartbeat, sessionKey }) ||
+      shouldCarryEventThreadForLastTelegramTarget({ heartbeat, sessionKey, entry }))
       ? parseSessionThreadInfo(sessionKey).threadId
       : undefined;
   const delivery = resolveHeartbeatDeliveryTarget({

@@ -831,25 +831,48 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("keeps approvals pending when no approver clients and no forwarding targets", async () => {
+  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
     const expireSpy = vi.spyOn(manager, "expire");
-    const resolveRespond = vi.fn();
 
-    const requestPromise = requestExecApproval({
+    await requestExecApproval({
       handlers,
       respond,
       context,
       params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
     });
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-no-approver", decision: null }),
+      undefined,
+    );
+  });
+
+  it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
+    const resolveRespond = vi.fn();
+    forwarder.handleRequested.mockResolvedValueOnce(true);
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
+    });
     await drainApprovalRequestTicks();
+
     expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     expect(expireSpy).not.toHaveBeenCalled();
 
     await resolveExecApproval({
       handlers,
-      id: "approval-no-approver",
+      id: "approval-forwarded",
       respond: resolveRespond,
       context,
     });
@@ -858,7 +881,7 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ id: "approval-no-approver", decision: "allow-once" }),
+      expect.objectContaining({ id: "approval-forwarded", decision: "allow-once" }),
       undefined,
     );
   });
