@@ -22,6 +22,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
+const AUTHORITATIVE_IMPLICIT_BASEURL_PROVIDERS = new Set(["openai-codex"]);
 
 function isPositiveFiniteTokenLimit(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -198,6 +199,7 @@ function mergeWithExistingProviderSecrets(params: {
       preserved.apiKey = existing.apiKey;
     }
     if (
+      !AUTHORITATIVE_IMPLICIT_BASEURL_PROVIDERS.has(key) &&
       !explicitBaseUrlProviders.has(key) &&
       typeof existing.baseUrl === "string" &&
       existing.baseUrl
