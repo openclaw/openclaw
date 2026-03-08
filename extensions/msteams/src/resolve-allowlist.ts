@@ -1,3 +1,4 @@
+import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/compat";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   listChannelsForTeam,
@@ -105,61 +106,55 @@ export async function resolveMSTeamsChannelAllowlist(params: {
   entries: string[];
 }): Promise<MSTeamsChannelResolution[]> {
   const token = await resolveGraphToken(params.cfg);
-  const results: MSTeamsChannelResolution[] = [];
-
-  for (const input of params.entries) {
-    const { team, channel } = parseMSTeamsTeamChannelInput(input);
-    if (!team) {
-      results.push({ input, resolved: false });
-      continue;
-    }
-    const teams = /^[0-9a-fA-F-]{16,}$/.test(team)
-      ? [{ id: team, displayName: team }]
-      : await listTeamsByName(token, team);
-    if (teams.length === 0) {
-      results.push({ input, resolved: false, note: "team not found" });
-      continue;
-    }
-    const teamMatch = teams[0];
-    const teamId = teamMatch.id?.trim();
-    const teamName = teamMatch.displayName?.trim() || team;
-    if (!teamId) {
-      results.push({ input, resolved: false, note: "team id missing" });
-      continue;
-    }
-    if (!channel) {
-      results.push({
+  return await mapAllowlistResolutionInputs({
+    inputs: params.entries,
+    mapInput: async (input): Promise<MSTeamsChannelResolution> => {
+      const { team, channel } = parseMSTeamsTeamChannelInput(input);
+      if (!team) {
+        return { input, resolved: false };
+      }
+      const teams = /^[0-9a-fA-F-]{16,}$/.test(team)
+        ? [{ id: team, displayName: team }]
+        : await listTeamsByName(token, team);
+      if (teams.length === 0) {
+        return { input, resolved: false, note: "team not found" };
+      }
+      const teamMatch = teams[0];
+      const teamId = teamMatch.id?.trim();
+      const teamName = teamMatch.displayName?.trim() || team;
+      if (!teamId) {
+        return { input, resolved: false, note: "team id missing" };
+      }
+      if (!channel) {
+        return {
+          input,
+          resolved: true,
+          teamId,
+          teamName,
+          note: teams.length > 1 ? "multiple teams; chose first" : undefined,
+        };
+      }
+      const channels = await listChannelsForTeam(token, teamId);
+      const channelMatch =
+        channels.find((item) => item.id === channel) ??
+        channels.find((item) => item.displayName?.toLowerCase() === channel.toLowerCase()) ??
+        channels.find((item) =>
+          item.displayName?.toLowerCase().includes(channel.toLowerCase() ?? ""),
+        );
+      if (!channelMatch?.id) {
+        return { input, resolved: false, note: "channel not found" };
+      }
+      return {
         input,
         resolved: true,
         teamId,
         teamName,
-        note: teams.length > 1 ? "multiple teams; chose first" : undefined,
-      });
-      continue;
-    }
-    const channels = await listChannelsForTeam(token, teamId);
-    const channelMatch =
-      channels.find((item) => item.id === channel) ??
-      channels.find((item) => item.displayName?.toLowerCase() === channel.toLowerCase()) ??
-      channels.find((item) =>
-        item.displayName?.toLowerCase().includes(channel.toLowerCase() ?? ""),
-      );
-    if (!channelMatch?.id) {
-      results.push({ input, resolved: false, note: "channel not found" });
-      continue;
-    }
-    results.push({
-      input,
-      resolved: true,
-      teamId,
-      teamName,
-      channelId: channelMatch.id,
-      channelName: channelMatch.displayName ?? channel,
-      note: channels.length > 1 ? "multiple channels; chose first" : undefined,
-    });
-  }
-
-  return results;
+        channelId: channelMatch.id,
+        channelName: channelMatch.displayName ?? channel,
+        note: channels.length > 1 ? "multiple channels; chose first" : undefined,
+      };
+    },
+  });
 }
 
 export async function resolveMSTeamsUserAllowlist(params: {
@@ -167,32 +162,28 @@ export async function resolveMSTeamsUserAllowlist(params: {
   entries: string[];
 }): Promise<MSTeamsUserResolution[]> {
   const token = await resolveGraphToken(params.cfg);
-  const results: MSTeamsUserResolution[] = [];
-
-  for (const input of params.entries) {
-    const query = normalizeQuery(normalizeMSTeamsUserInput(input));
-    if (!query) {
-      results.push({ input, resolved: false });
-      continue;
-    }
-    if (/^[0-9a-fA-F-]{16,}$/.test(query)) {
-      results.push({ input, resolved: true, id: query });
-      continue;
-    }
-    const users = await searchGraphUsers({ token, query, top: 10 });
-    const match = users[0];
-    if (!match?.id) {
-      results.push({ input, resolved: false });
-      continue;
-    }
-    results.push({
-      input,
-      resolved: true,
-      id: match.id,
-      name: match.displayName ?? undefined,
-      note: users.length > 1 ? "multiple matches; chose first" : undefined,
-    });
-  }
-
-  return results;
+  return await mapAllowlistResolutionInputs({
+    inputs: params.entries,
+    mapInput: async (input): Promise<MSTeamsUserResolution> => {
+      const query = normalizeQuery(normalizeMSTeamsUserInput(input));
+      if (!query) {
+        return { input, resolved: false };
+      }
+      if (/^[0-9a-fA-F-]{16,}$/.test(query)) {
+        return { input, resolved: true, id: query };
+      }
+      const users = await searchGraphUsers({ token, query, top: 10 });
+      const match = users[0];
+      if (!match?.id) {
+        return { input, resolved: false };
+      }
+      return {
+        input,
+        resolved: true,
+        id: match.id,
+        name: match.displayName ?? undefined,
+        note: users.length > 1 ? "multiple matches; chose first" : undefined,
+      };
+    },
+  });
 }

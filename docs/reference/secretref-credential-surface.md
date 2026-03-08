@@ -23,6 +23,7 @@ Scope intent:
 [//]: # "secretref-supported-list-start"
 
 - `models.providers.*.apiKey`
+- `models.providers.*.headers.*`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
@@ -36,6 +37,7 @@ Scope intent:
 - `tools.web.search.kimi.apiKey`
 - `tools.web.search.perplexity.apiKey`
 - `gateway.auth.password`
+- `gateway.auth.token`
 - `gateway.remote.token`
 - `gateway.remote.password`
 - `cron.webhookToken`
@@ -97,6 +99,7 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
 - For web search:
   - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
   - In auto mode (`tools.web.search.provider` unset), `tools.web.search.apiKey` and provider-specific keys are active.
@@ -107,7 +110,6 @@ Out-of-scope credentials include:
 
 [//]: # "secretref-unsupported-list-start"
 
-- `gateway.auth.token`
 - `commands.ownerDisplaySecret`
 - `channels.matrix.accessToken`
 - `channels.matrix.accounts.*.accessToken`

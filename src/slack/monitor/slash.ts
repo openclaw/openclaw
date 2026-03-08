@@ -5,6 +5,7 @@ import {
 } from "../../auto-reply/commands-registry.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
 import { chunkItems } from "../../utils/chunk-items.js";
@@ -546,6 +547,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         channelConfig,
       });
 
+      const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
+        agentId: route.agentId,
+        sessionPrefix: slashCommand.sessionPrefix,
+        userId: command.user_id,
+        targetSessionKey: route.sessionKey,
+        lowercaseSessionKey: true,
+      });
       const ctxPayload = finalizeInboundContext({
         Body: prompt,
         BodyForAgent: prompt,
@@ -580,9 +588,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         WasMentioned: true,
         MessageSid: command.trigger_id,
         Timestamp: Date.now(),
-        SessionKey:
-          `agent:${route.agentId}:${slashCommand.sessionPrefix}:${command.user_id}`.toLowerCase(),
-        CommandTargetSessionKey: route.sessionKey,
+        SessionKey: sessionKey,
+        CommandTargetSessionKey: commandTargetSessionKey,
         AccountId: route.accountId,
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
