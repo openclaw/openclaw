@@ -1087,7 +1087,8 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
 
 /**
  * Normalizes freshness shortcut to the provider's expected format.
- * Accepts both Brave format (pd/pw/pm/py) and Perplexity format (day/week/month/year).
+ * Accepts both Brave format (pd/pw/pm/py) and natural format (day/week/month/year).
+ * Perplexity and Serper keep natural values; Brave uses shortcuts.
  * For Brave, also accepts date ranges (YYYY-MM-DDtoYYYY-MM-DD).
  */
 function normalizeFreshness(
@@ -1109,7 +1110,7 @@ function normalizeFreshness(
   }
 
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "serper" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
   // Brave date range support
