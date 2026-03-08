@@ -744,4 +744,24 @@ describe("monitorDiscordProvider", () => {
     expect(connectedTrue).toBeDefined();
     expect(connectedFalse).toBeDefined();
   });
+
+  it("marks the provider connected after login even if gateway.isConnected is false", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const setStatus = vi.fn();
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? { isConnected: false } : undefined,
+    );
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      setStatus,
+    });
+
+    expect(
+      setStatus.mock.calls.some(
+        (call) => call[0]?.connected === true && typeof call[0]?.lastConnectedAt === "number",
+      ),
+    ).toBe(true);
+  });
 });

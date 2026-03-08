@@ -50,6 +50,14 @@ export function getHealthCache(): HealthSummary | null {
   return healthCache;
 }
 
+export function setHealthCache(snap: HealthSummary) {
+  healthCache = snap;
+  healthVersion += 1;
+  if (broadcastHealthUpdate) {
+    broadcastHealthUpdate(snap);
+  }
+}
+
 export function getHealthVersion(): number {
   return healthVersion;
 }
@@ -71,11 +79,7 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot({ probe: opts?.probe });
-      healthCache = snap;
-      healthVersion += 1;
-      if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
-      }
+      setHealthCache(snap);
       return snap;
     })().finally(() => {
       healthRefresh = null;

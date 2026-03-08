@@ -749,9 +749,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
-    if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.(createConnectedChannelStatusPatch());
-    }
+    opts.setStatus?.(createConnectedChannelStatusPatch());
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({

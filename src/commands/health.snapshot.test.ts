@@ -86,7 +86,7 @@ async function runSuccessfulTelegramProbe(
   const calls: string[] = [];
   stubTelegramFetchOk(calls);
 
-  const snap = await getHealthSnapshot({ timeoutMs: 25 });
+  const snap = await getHealthSnapshot({ timeoutMs: 25, probe: true });
   const telegram = snap.channels.telegram as {
     configured?: boolean;
     probe?: {
@@ -156,6 +156,57 @@ describe("getHealthSnapshot", () => {
     expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
   });
 
+  it("does not probe by default and still preserves runtime-backed channel fields", async () => {
+    testConfig = {
+      channels: { telegram: { botToken: "t-1" } },
+    };
+    testStore = {};
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            running: true,
+            lastStartAt: 123,
+            lastStopAt: null,
+            lastError: null,
+          },
+        },
+        channelAccounts: {
+          telegram: {
+            default: {
+              accountId: "default",
+              running: true,
+              lastStartAt: 123,
+              lastStopAt: null,
+              lastError: null,
+            },
+          },
+        },
+      },
+    });
+
+    const telegram = snap.channels.telegram as {
+      configured?: boolean;
+      running?: boolean;
+      tokenSource?: string;
+      probe?: unknown;
+      lastStartAt?: number | null;
+    };
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(telegram.configured).toBe(true);
+    expect(telegram.running).toBe(true);
+    expect(telegram.tokenSource).toBe("config");
+    expect(telegram.probe).toBeUndefined();
+    expect(telegram.lastStartAt).toBe(123);
+  });
+
   it("treats telegram.tokenFile as configured", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -190,7 +241,7 @@ describe("getHealthSnapshot", () => {
       }),
     );
 
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
+    const snap = await getHealthSnapshot({ timeoutMs: 25, probe: true });
     const telegram = snap.channels.telegram as {
       configured?: boolean;
       probe?: { ok?: boolean; status?: number; error?: string };
@@ -213,7 +264,7 @@ describe("getHealthSnapshot", () => {
       }),
     );
 
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
+    const snap = await getHealthSnapshot({ timeoutMs: 25, probe: true });
     const telegram = snap.channels.telegram as {
       configured?: boolean;
       probe?: { ok?: boolean; error?: string };
