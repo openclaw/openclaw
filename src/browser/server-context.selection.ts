@@ -30,15 +30,28 @@ export function createProfileSelectionOps({
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
     const profileState = getProfileState();
-    const tabs1 = await listTabs();
+    let tabs1 = await listTabs();
     if (tabs1.length === 0) {
       if (profile.driver === "extension") {
-        throw new Error(
-          `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
-            "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
-        );
+        // Chrome extension relay can briefly drop its WebSocket connection (MV3 service worker
+        // lifecycle, relay restart). If we previously had a target selected, wait briefly for
+        // the extension to reconnect and re-announce its attached tabs before failing.
+        if (profileState.lastTargetId?.trim()) {
+          const deadlineAt = Date.now() + 3_000;
+          while (tabs1.length === 0 && Date.now() < deadlineAt) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            tabs1 = await listTabs();
+          }
+        }
+        if (tabs1.length === 0) {
+          throw new Error(
+            `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
+              "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
+          );
+        }
+      } else {
+        await openTab("about:blank");
       }
-      await openTab("about:blank");
     }
 
     const tabs = await listTabs();
