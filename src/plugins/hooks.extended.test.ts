@@ -119,35 +119,31 @@ describe("before_response_emit hook", () => {
     expect(result).toBeUndefined();
   });
 
-  it("first-writer-wins: higher-priority content sticks even when lower-priority sets allContent", async () => {
-    // Handler A (priority 10, runs first) sets content. Handler B (priority 50, runs second)
-    // sets allContent. A's content wins for the content field. B's allContent wins for the
-    // allContent field. These are independent first-writer-wins fields in the merge.
-    // Note: applyBeforeResponseEmitHook checks allContent first, then content — so when
-    // both are present in the merged result, allContent takes precedence at the application layer.
+  it("first-writer-wins: higher-priority content blocks lower-priority allContent", async () => {
+    // Handler A (priority 50, runs first) sets content. Handler B (priority 10, runs second)
+    // sets allContent. The merge treats content and allContent as mutually exclusive:
+    // whichever field is set first blocks the other from being set by later handlers.
     const hooks = [
       {
         hookName: "before_response_emit" as const,
         pluginId: "a",
         source: "test" as const,
-        priority: 10,
+        priority: 50,
         handler: vi.fn().mockReturnValue({ content: "redacted by A" }),
       },
       {
         hookName: "before_response_emit" as const,
         pluginId: "b",
         source: "test" as const,
-        priority: 50,
+        priority: 10,
         handler: vi.fn().mockReturnValue({ allContent: ["replaced by B"] }),
       },
     ];
     const runner = createHookRunner(makeRegistry(hooks));
     const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
-    // The merge function treats content and allContent as mutually exclusive —
-    // when allContent is set by any handler, content is dropped to undefined.
-    // This prevents conflicting modifications.
-    expect(result?.content).toBeUndefined();
-    expect(result?.allContent).toEqual(["replaced by B"]);
+    // A ran first and set content — B's allContent is blocked (mutual exclusion).
+    expect(result?.content).toBe("redacted by A");
+    expect(result?.allContent).toBeUndefined();
   });
 
   it("first-writer-wins: higher-priority allContent is not overridden by lower-priority allContent", async () => {
