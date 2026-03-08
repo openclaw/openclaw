@@ -508,6 +508,49 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    workflow: z
+      .object({
+        enabled: z.boolean().optional(),
+        storeDir: z.string().optional(),
+        historyLimit: z.number().int().positive().optional(),
+        discordReport: z
+          .object({
+            enabled: z.boolean().optional(),
+            channel: z.string().optional(),
+            accountId: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        sandbox: z
+          .object({
+            enabled: z.boolean().optional(),
+            docker: z
+              .object({
+                image: z.string().optional(),
+                containerPrefix: z.string().optional(),
+                workdir: z.string().optional(),
+                readOnlyRoot: z.boolean().optional(),
+                tmpfs: z.array(z.string()).optional(),
+                network: z.string().optional(),
+                user: z.string().optional(),
+                capDrop: z.array(z.string()).optional(),
+                env: z.record(z.string(), z.string()).optional(),
+                setupCommand: z.string().optional(),
+                pidsLimit: z.number().int().nonnegative().optional(),
+                memory: z.union([z.string(), z.number()]).optional(),
+                memorySwap: z.union([z.string(), z.number()]).optional(),
+                cpus: z.number().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            autoCleanup: z.boolean().optional(),
+            cleanupIdleMinutes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     hooks: z
       .object({
         enabled: z.boolean().optional(),

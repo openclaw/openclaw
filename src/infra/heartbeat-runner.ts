@@ -41,6 +41,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
+import { appendWorkflowStatusToPrompt } from "../workflow/heartbeat.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -690,8 +691,10 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
   });
+  // Append workflow status to the prompt if there's an active plan
+  const promptWithWorkflow = await appendWorkflowStatusToPrompt({ agentId, sessionKey }, prompt);
   const ctx = {
-    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
+    Body: appendCronStyleCurrentTimeLine(promptWithWorkflow, cfg, startedAt),
     From: sender,
     To: sender,
     OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,

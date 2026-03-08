@@ -40,6 +40,7 @@ import {
   applySettings as applySettingsInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
+  loadWorkflow as loadWorkflowInternal,
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   onPopState as onPopStateInternal,
@@ -341,6 +342,18 @@ export class OpenClawApp extends LitElement {
   @state() cronModelSuggestions: string[] = [];
   @state() cronBusy = false;
 
+  @state() workflowLoading = false;
+  @state() workflowError: string | null = null;
+  @state() workflowActivePlans: import("./views/workflow.js").WorkflowPlan[] = [];
+  @state() workflowHistoryPlans: import("./views/workflow.js").WorkflowPlan[] = [];
+  @state() workflowHistoryTotal = 0;
+  @state() workflowHistoryOffset = 0;
+  @state() workflowHistoryLimit = 20;
+  @state() workflowSelectedPlanId: string | null = null;
+  @state() workflowSelectedPlan: import("./views/workflow.js").WorkflowPlan | null = null;
+  @state() workflowScope: "active" | "history" | "all" = "active";
+  @state() workflowViewMode: "list" | "graph" = "list";
+
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 
   @state() skillsLoading = false;
@@ -480,6 +493,38 @@ export class OpenClawApp extends LitElement {
 
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+  }
+
+  async handleWorkflowLoad() {
+    await loadWorkflowInternal(this as unknown as Parameters<typeof loadWorkflowInternal>[0]);
+  }
+
+  handleWorkflowScopeChange(scope: "active" | "history" | "all") {
+    this.workflowScope = scope;
+    void this.handleWorkflowLoad();
+  }
+
+  async handleWorkflowSelectPlan(planId: string, scope: "active" | "history") {
+    const { loadWorkflowPlan } = await import("./controllers/workflow.ts");
+    await loadWorkflowPlan(
+      this as unknown as Parameters<typeof loadWorkflowPlan>[0],
+      planId,
+      scope,
+    );
+  }
+
+  handleWorkflowClosePlanDetail() {
+    this.workflowSelectedPlanId = null;
+    this.workflowSelectedPlan = null;
+  }
+
+  async handleWorkflowLoadMoreHistory() {
+    const { loadMoreWorkflowHistory } = await import("./controllers/workflow.ts");
+    await loadMoreWorkflowHistory(this as unknown as Parameters<typeof loadMoreWorkflowHistory>[0]);
+  }
+
+  handleWorkflowViewModeChange(mode: "list" | "graph") {
+    this.workflowViewMode = mode;
   }
 
   async handleAbortChat() {

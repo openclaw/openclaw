@@ -27,6 +27,7 @@ import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { WorkflowConfig } from "./types.workflow.js";
 
 export type OpenClawConfig = {
   meta?: {
@@ -120,6 +121,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  workflow?: WorkflowConfig;
 };
 
 export type ConfigValidationIssue = {
