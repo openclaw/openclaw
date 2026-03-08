@@ -362,7 +362,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.7/OpenClaw-2026.3.7.zip" length="23263833" type="application/octet-stream" sparkle:edSignature="SO0zedZMzrvSDltLkuaSVQTWFPPPe1iu/enS4TGGb5EGckhqRCmNJWMKNID5lKwFC8vefTbfG9JTlSrZedP4Bg=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.7/OpenClaw-2026.3.7.zip" length="23263833" type="application/octet-stream" sparkle:edSignature="SO0zedZMzrvSDltLkuaSVQTWFPPPe1iu/enS4TGGb5EGckhqRCmNJWMKNID5lKwFC8vefTbfG9JTlSrZedP4Bg=="/> <!-- pragma: allowlist secret -->
         </item>
         <item>
             <title>2026.3.2</title>
@@ -581,8 +581,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.2/OpenClaw-2026.3.2.zip" length="23181513" type="application/octet-stream" sparkle:edSignature="THMgkcoMgz2vv5zse3Po3K7l3Or2RhBKurXZIi8iYVXN76yJy1YXAY6kXi6ovD+dbYn68JKYDIKA1Ya78bO7BQ=="/>
-            <!-- pragma: allowlist secret -->
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.2/OpenClaw-2026.3.2.zip" length="23181513" type="application/octet-stream" sparkle:edSignature="THMgkcoMgz2vv5zse3Po3K7l3Or2RhBKurXZIi8iYVXN76yJy1YXAY6kXi6ovD+dbYn68JKYDIKA1Ya78bO7BQ=="/> <!-- pragma: allowlist secret -->
         </item>
         <item>
             <title>2026.3.1</title>
@@ -720,8 +719,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.1/OpenClaw-2026.3.1.zip" length="12804155" type="application/octet-stream" sparkle:edSignature="TF1otD4Vk3pG0iViX7mvix5DQEgAsk4JkSFvH7opjf9aawV16f29SUa2wRmiCFU6HEgyNgnGI/078O+A27eXCA=="/>
-            <!-- pragma: allowlist secret -->
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.1/OpenClaw-2026.3.1.zip" length="12804155" type="application/octet-stream" sparkle:edSignature="TF1otD4Vk3pG0iViX7mvix5DQEgAsk4JkSFvH7opjf9aawV16f29SUa2wRmiCFU6HEgyNgnGI/078O+A27eXCA=="/> <!-- pragma: allowlist secret -->
         </item>
     </channel>
 </rss>
