@@ -433,7 +433,7 @@ describe("createOllamaStreamFn", () => {
             Authorization: "Bearer proxy-token",
           },
           options: {
-            apiKey: "ollama-local",
+            apiKey: "ollama-local", // pragma: allowlist secret
             headers: {
               Authorization: "Bearer proxy-token",
             },
@@ -471,7 +471,7 @@ describe("createOllamaStreamFn", () => {
               messages: [{ role: "user", content: "hello" }],
             } as never,
             {
-              apiKey: "real-token",
+              apiKey: "real-token", // pragma: allowlist secret
             } as never,
           ),
         );
@@ -621,7 +621,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               messages: [{ role: "user", content: "hello" }],
             } as never,
             {
-              apiKey: "ollama-local",
+              apiKey: "ollama-local", // pragma: allowlist secret
             } as never,
           ),
         );
