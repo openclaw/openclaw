@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { getSourceLabel, getSourceSlug } from "../app-render.helpers.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
@@ -112,6 +113,7 @@ export function renderMessageGroup(
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
+    sessionKey?: string;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -129,9 +131,12 @@ export function renderMessageGroup(
     hour: "numeric",
     minute: "2-digit",
   });
+  const sourceLabel = opts.sessionKey ? getSourceLabel(opts.sessionKey) : null;
+  const sourceSlug = opts.sessionKey ? getSourceSlug(opts.sessionKey) : null;
+  const sourceClass = sourceSlug != null ? ` chat-group--source-${sourceSlug}` : "";
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass}${sourceClass}">
       ${renderAvatar(group.role, {
         name: assistantName,
         avatar: opts.assistantAvatar ?? null,
@@ -149,6 +154,11 @@ export function renderMessageGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
+          ${
+            sourceLabel != null
+              ? html`<span class="chat-group-source" title="消息来源">${sourceLabel}</span>`
+              : nothing
+          }
           <span class="chat-group-timestamp">${timestamp}</span>
         </div>
       </div>

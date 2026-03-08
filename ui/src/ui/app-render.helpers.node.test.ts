@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  getSourceLabel,
+  getSourceSlug,
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
@@ -60,6 +62,13 @@ describe("parseSessionKey", () => {
     });
   });
 
+  it("identifies direct chat with feishu", () => {
+    expect(parseSessionKey("agent:main:feishu:direct:ou_xxx")).toEqual({
+      prefix: "",
+      fallbackName: "飞书 · ou_xxx",
+    });
+  });
+
   it("identifies group chat with known channel", () => {
     expect(parseSessionKey("agent:main:discord:group:guild-chan")).toEqual({
       prefix: "",
@@ -97,6 +106,38 @@ describe("parseSessionKey", () => {
       prefix: "",
       fallbackName: "something-unknown",
     });
+  });
+});
+
+/* ================================================================
+ *  getSourceLabel / getSourceSlug – message source labels
+ * ================================================================ */
+
+describe("getSourceLabel", () => {
+  it("returns Dashboard for main session", () => {
+    expect(getSourceLabel("main")).toBe("Dashboard");
+    expect(getSourceLabel("agent:main:main")).toBe("Dashboard");
+  });
+
+  it("returns channel label for known channels", () => {
+    expect(getSourceLabel("agent:main:feishu:direct:ou_xxx")).toBe("飞书");
+    expect(getSourceLabel("agent:main:telegram:direct:user123")).toBe("Telegram");
+  });
+
+  it("returns capitalized channel for unknown channels", () => {
+    expect(getSourceLabel("agent:main:mychannel:direct:user1")).toBe("Mychannel");
+  });
+});
+
+describe("getSourceSlug", () => {
+  it("returns dashboard for main session", () => {
+    expect(getSourceSlug("main")).toBe("dashboard");
+    expect(getSourceSlug("agent:main:main")).toBe("dashboard");
+  });
+
+  it("returns channel slug for known channels", () => {
+    expect(getSourceSlug("agent:main:feishu:direct:ou_xxx")).toBe("feishu");
+    expect(getSourceSlug("agent:main:telegram:group:guild")).toBe("telegram");
   });
 });
 

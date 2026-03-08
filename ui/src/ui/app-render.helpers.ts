@@ -321,6 +321,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   matrix: "Matrix",
   email: "Email",
   sms: "SMS",
+  feishu: "飞书",
 };
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
@@ -385,6 +386,39 @@ export function parseSessionKey(key: string): SessionKeyInfo {
 
   // ── Unknown — return key as-is ───────────────────
   return { prefix: "", fallbackName: key };
+}
+
+/**
+ * Human-readable source label for a session (e.g. "Dashboard", "飞书", "Telegram").
+ * Used on message bubbles to show where the conversation comes from.
+ */
+export function getSourceLabel(sessionKey: string): string {
+  if (!sessionKey || sessionKey === "main" || sessionKey === "agent:main:main") {
+    return "Dashboard";
+  }
+  const directMatch = sessionKey.match(/^agent:[^:]+:([^:]+):direct:/);
+  const groupMatch = sessionKey.match(/^agent:[^:]+:([^:]+):group:/);
+  const channel = directMatch?.[1] ?? groupMatch?.[1];
+  if (channel && channel !== "main") {
+    return CHANNEL_LABELS[channel] ?? capitalize(channel);
+  }
+  return "Dashboard";
+}
+
+/**
+ * CSS-safe slug for the session source (e.g. "dashboard", "feishu").
+ */
+export function getSourceSlug(sessionKey: string): string {
+  if (!sessionKey || sessionKey === "main" || sessionKey === "agent:main:main") {
+    return "dashboard";
+  }
+  const directMatch = sessionKey.match(/^agent:[^:]+:([^:]+):direct:/);
+  const groupMatch = sessionKey.match(/^agent:[^:]+:([^:]+):group:/);
+  const channel = directMatch?.[1] ?? groupMatch?.[1];
+  if (channel && channel !== "main") {
+    return channel.toLowerCase();
+  }
+  return "dashboard";
 }
 
 export function resolveSessionDisplayName(
