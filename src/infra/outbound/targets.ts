@@ -252,6 +252,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
     const normalized = normalizeDeliverableOutboundChannel(rawTarget);
     if (normalized) {
       target = normalized;
+    } else {
+      const resolvedPlugin = resolveOutboundChannelPlugin({
+        channel: rawTarget,
+        cfg,
+      });
+      if (resolvedPlugin) {
+        target = rawTarget.toLowerCase() as HeartbeatTarget;
+      }
     }
   }
 
