@@ -34,8 +34,11 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
     : undefined;
 }
 
-function parseParentTimeoutMs(opts: BrowserParentOpts): number | undefined {
-  if (opts.timeoutSource === "default") {
+function parseParentTimeoutMs(
+  opts: BrowserParentOpts,
+  params?: { includeDefault?: boolean },
+): number | undefined {
+  if (!params?.includeDefault && opts.timeoutSource === "default") {
     return undefined;
   }
   return typeof opts.timeout === "string"
@@ -62,7 +65,8 @@ export async function callBrowserRequest<T>(
   const resolvedTimeout = resolveBrowserRequestTimeoutMs(opts, {
     explicitMs: extra?.timeoutMs,
   });
-  const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
+  const requestTimeout = resolvedTimeout ?? parseParentTimeoutMs(opts, { includeDefault: true });
+  const timeout = typeof requestTimeout === "number" ? String(requestTimeout) : opts.timeout;
   const payload = await callGatewayFromCli(
     "browser.request",
     { ...opts, timeout },
@@ -71,7 +75,7 @@ export async function callBrowserRequest<T>(
       path: params.path,
       query: normalizeQuery(params.query),
       body: params.body,
-      timeoutMs: resolvedTimeout,
+      timeoutMs: requestTimeout,
     },
     { progress: extra?.progress },
   );

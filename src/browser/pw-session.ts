@@ -582,7 +582,7 @@ function cdpSocketNeedsAttach(wsUrl: string): boolean {
 async function tryTerminateExecutionViaCdp(opts: {
   cdpUrl: string;
   targetId: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
   const listUrl = appendCdpPath(cdpHttpBase, "/json/list");
 
@@ -593,16 +593,17 @@ async function tryTerminateExecutionViaCdp(opts: {
     }>
   >(listUrl, 2000).catch(() => null);
   if (!pages || pages.length === 0) {
-    return;
+    return false;
   }
 
   const target = pages.find((p) => String(p.id ?? "").trim() === opts.targetId);
   const wsUrlRaw = String(target?.webSocketDebuggerUrl ?? "").trim();
   if (!wsUrlRaw) {
-    return;
+    return false;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
+  let terminated = false;
 
   const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -633,6 +634,7 @@ async function tryTerminateExecutionViaCdp(opts: {
           }
         }
         await runWithTimeout(send("Runtime.terminateExecution", undefined, sessionId), 1500);
+        terminated = true;
         if (sessionId) {
           // Best-effort cleanup; not required for termination to take effect.
           void send("Target.detachFromTarget", { sessionId }).catch(() => {});
@@ -643,6 +645,8 @@ async function tryTerminateExecutionViaCdp(opts: {
     },
     { handshakeTimeoutMs: 2000 },
   ).catch(() => {});
+
+  return terminated;
 }
 
 /**
@@ -679,9 +683,12 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   // consider disconnecting Playwright's shared CDP connection.
   const targetId = opts.targetId?.trim() || "";
   if (targetId) {
-    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+    const terminated = await tryTerminateExecutionViaCdp({
+      cdpUrl: normalized,
+      targetId,
+    }).catch(() => false);
     const pages = await getAllPages(cur.browser).catch(() => []);
-    if (pages.length > 1) {
+    if (pages.length > 1 && terminated) {
       return;
     }
   }
