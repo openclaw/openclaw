@@ -28,9 +28,6 @@ export function validateAnthropicSetupToken(raw: string): string | undefined {
   if (!trimmed) {
     return "Required";
   }
-  if (!trimmed.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
-    return `Expected token starting with ${ANTHROPIC_SETUP_TOKEN_PREFIX}`;
-  }
   if (trimmed.length < ANTHROPIC_SETUP_TOKEN_MIN_LENGTH) {
     return "Token looks too short; paste the full setup-token";
   }
