@@ -119,13 +119,25 @@ export async function createChildAdapter(params: {
     });
   };
 
-  const wait = async () =>
-    await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
-        resolve({ code, signal });
-      });
-    });
+  const wait = async () => {
+    const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => {
+          resolve({ code, signal });
+        });
+      },
+    );
+    // Yield to the event loop so that any stdout/stderr data events still
+    // queued in the I/O phase are delivered before we return.  This closes a
+    // race where block-buffered child output (e.g. bun on a pipe inside
+    // Docker) is flushed at exit and the data callback fires in the same
+    // libuv poll cycle as the 'close' event — the promise microtask chain
+    // can otherwise snapshot session.aggregated before the data callback
+    // runs, losing the output.  See openclaw/openclaw#30711.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return result;
+  };
 
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;

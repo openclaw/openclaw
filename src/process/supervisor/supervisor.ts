@@ -206,6 +206,11 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         settled = true;
         clearTimers();
+        // Yield once more before disposing listeners.  adapter.wait()
+        // already yields via setImmediate, but an extra tick here ensures
+        // that any data callbacks enqueued between the adapter yield and
+        // this point are flushed before we snapshot stdout/stderr.
+        await new Promise<void>((resolve) => setImmediate(resolve));
         adapter.dispose();
         active.delete(runId);
 
