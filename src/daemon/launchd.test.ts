@@ -1,3 +1,4 @@
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,10 +8,12 @@ import {
 import {
   installLaunchAgent,
   isLaunchAgentListed,
+  isLaunchAgentLoaded,
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -18,10 +21,27 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
+  killError: "",
+  loadedTargets: new Set<string>(),
   dirs: new Set<string>(),
   files: new Map<string, string>(),
 }));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
+
+function resolveGuiDomain(): string {
+  return typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+}
+
+function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+  return {
+    HOME: "/Users/test",
+    OPENCLAW_PROFILE: "default",
+  };
+}
+
+function resolveDefaultServiceTarget(): string {
+  return `${resolveGuiDomain()}/ai.openclaw.gateway`;
+}
 
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   if (file === "launchctl") {
@@ -42,10 +62,44 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
-      return { stdout: state.printOutput, stderr: "", code: 0 };
+      const target = call[1] ?? "";
+      if (state.loadedTargets.has(target)) {
+        return { stdout: "state = running\npid = 4242\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "Could not find service", code: 1 };
     }
-    if (call[0] === "bootstrap" && state.bootstrapError) {
-      return { stdout: "", stderr: state.bootstrapError, code: 1 };
+    if (call[0] === "bootstrap") {
+      if (state.bootstrapError) {
+        return { stdout: "", stderr: state.bootstrapError, code: 1 };
+      }
+      const domain = call[1] ?? "";
+      const plistPath = call[2] ?? "";
+      if (domain && plistPath) {
+        const label = path.posix.basename(plistPath, ".plist");
+        state.loadedTargets.add(`${domain}/${label}`);
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "bootout") {
+      const domain = call[1] ?? "";
+      const target =
+        call[2] && call[2].endsWith(".plist")
+          ? `${domain}/${path.posix.basename(call[2], ".plist")}`
+          : domain;
+      if (target) {
+        state.loadedTargets.delete(target);
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "kickstart") {
+      const target = call.at(-1);
+      if (target) {
+        state.loadedTargets.add(target);
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "kill" && state.killError) {
+      return { stdout: "", stderr: state.killError, code: 1 };
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -82,6 +136,9 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
+  state.killError = "";
+  state.loadedTargets.clear();
+  state.loadedTargets.add(resolveDefaultServiceTarget());
   state.dirs.clear();
   state.files.clear();
   vi.clearAllMocks();
@@ -173,14 +230,33 @@ describe("launchd bootstrap repair", () => {
   });
 });
 
-describe("launchd install", () => {
-  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
-    return {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
-  }
+describe("launchd stop", () => {
+  it("kills the process without unloading LaunchAgent registration", async () => {
+    const env = createDefaultLaunchdEnv();
+    const serviceTarget = resolveDefaultServiceTarget();
 
+    await stopLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(state.launchctlCalls).toContainEqual(["kill", "SIGTERM", serviceTarget]);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+    await expect(isLaunchAgentLoaded({ env })).resolves.toBe(true);
+  });
+
+  it("treats missing launchd process as already stopped", async () => {
+    state.killError = "No such process";
+    await expect(
+      stopLaunchAgent({
+        env: createDefaultLaunchdEnv(),
+        stdout: new PassThrough(),
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("launchd install", () => {
   it("enables service before bootstrap (clears persisted disabled state)", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
