@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
+import { checkAndRecordCreateTime, tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -175,6 +175,9 @@ async function resolveFeishuSenderName(params: {
 }
 
 export type FeishuMessageEvent = {
+  // event_id is injected by the Lark SDK: EventDispatcher.parse() flattens the
+  // event header (containing event_id, event_type, etc.) into the callback data.
+  event_id?: string;
   sender: {
     sender_id: {
       open_id?: string;
@@ -771,10 +774,11 @@ export function buildBroadcastSessionKey(
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  _botName?: string,
+  botName?: string,
+  log?: (...args: any[]) => void,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId);
+  const mentionedBot = checkBotMentioned(event, botOpenId, botName, log);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // Strip the bot's own mention so slash commands like @Bot /help retain
   // the leading /. This applies in both p2p *and* group contexts — the
@@ -891,7 +895,42 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  // Event-level dedup: Feishu's at-least-once delivery may re-push the same
+  // event with a DIFFERENT message_id on retries (15s, 5min, 1h, 6h).
+  // The Lark SDK's EventDispatcher.parse() flattens the header (including
+  // event_id) into the callback data, so we can use it for proper dedup.
+  if (event.event_id) {
+    const eventKey = `event:${account.accountId}:${event.event_id}`;
+    if (!tryRecordMessage(eventKey)) {
+      log(`feishu: skipping duplicate message ${messageId} (event_id dedup: ${event.event_id})`);
+      return;
+    }
+  }
+
+  // Time-based dedup: Feishu retries re-deliver with new message_id/event_id
+  // but preserve the original create_time. Reject messages whose create_time
+  // is older than or equal to the last processed message for this chat+sender.
+  const createTimeRaw = event.message.create_time;
+  const createTimeParsed = createTimeRaw ? parseInt(createTimeRaw, 10) : undefined;
+  const normalizedCreateTime =
+    createTimeParsed && createTimeParsed > 0
+      ? createTimeParsed < 1_000_000_000_000
+        ? createTimeParsed * 1000
+        : createTimeParsed
+      : undefined;
+  const senderForTimeDedup =
+    event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim() || "";
+  const chatSenderTimeKey = `${account.accountId}:${event.message.chat_id}:${senderForTimeDedup}`;
+
+  if (!checkAndRecordCreateTime(chatSenderTimeKey, normalizedCreateTime)) {
+    log(
+      `feishu: skipping stale message ${messageId} ` +
+        `(create_time ${createTimeRaw} ≤ last processed for ${event.message.chat_id})`,
+    );
+    return;
+  }
+
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, log);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
