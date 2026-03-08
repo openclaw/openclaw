@@ -60,6 +60,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val gatewayToken: StateFlow<String> = runtime.gatewayToken
   val onboardingCompleted: StateFlow<Boolean> = runtime.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
+  val notificationForwardingEnabled: StateFlow<Boolean> = runtime.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    runtime.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = runtime.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    runtime.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = runtime.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = runtime.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    runtime.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = runtime.notificationForwardingSessionKey
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
   val chatSessionId: StateFlow<String?> = runtime.chatSessionId
@@ -126,6 +137,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     runtime.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    runtime.setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    runtime.setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackagesCsv(csv: String) {
+    val packages =
+      csv
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+    runtime.setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    return runtime.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    runtime.setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    runtime.setNotificationForwardingSessionKey(value)
   }
 
   fun setVoiceScreenActive(active: Boolean) {
