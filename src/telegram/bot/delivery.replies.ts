@@ -118,12 +118,17 @@ async function deliverTextReply(params: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = params.chunkText(params.replyText);
+  let sentAnyChunk = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     if (!chunk) {
       continue;
     }
-    const shouldAttachButtons = i === 0 && params.replyMarkup;
+    if (!chunk.html?.trim() && !chunk.text?.trim()) {
+      logVerbose("telegram: skipping empty chunk in deliverTextReply");
+      continue;
+    }
+    const shouldAttachButtons = !sentAnyChunk && params.replyMarkup;
     const replyToForChunk = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
@@ -144,11 +149,14 @@ async function deliverTextReply(params: {
         replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
       },
     );
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
+    if (messageId != null) {
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+      markReplyApplied(params.progress, replyToForChunk);
+      markDelivered(params.progress);
+      sentAnyChunk = true;
     }
-    markReplyApplied(params.progress, replyToForChunk);
-    markDelivered(params.progress);
   }
   return firstDeliveredMessageId;
 }
@@ -167,23 +175,37 @@ async function sendPendingFollowUpText(params: {
   progress: DeliveryProgress;
 }): Promise<void> {
   const chunks = params.chunkText(params.text);
+  let sentAnyChunk = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
+    if (!chunk.html?.trim() && !chunk.text?.trim()) {
+      logVerbose("telegram: skipping empty chunk in sendPendingFollowUpText");
+      continue;
+    }
     const replyToForFollowUp = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
       progress: params.progress,
     });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-      replyToMessageId: replyToForFollowUp,
-      thread: params.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: params.linkPreview,
-      replyMarkup: i === 0 ? params.replyMarkup : undefined,
-    });
-    markReplyApplied(params.progress, replyToForFollowUp);
-    markDelivered(params.progress);
+    const messageId = await sendTelegramText(
+      params.bot,
+      params.chatId,
+      chunk.html,
+      params.runtime,
+      {
+        replyToMessageId: replyToForFollowUp,
+        thread: params.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: params.linkPreview,
+        replyMarkup: !sentAnyChunk ? params.replyMarkup : undefined,
+      },
+    );
+    if (messageId != null) {
+      markReplyApplied(params.progress, replyToForFollowUp);
+      markDelivered(params.progress);
+      sentAnyChunk = true;
+    }
   }
 }
 
@@ -215,25 +237,29 @@ async function sendTelegramVoiceFallbackText(opts: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = opts.chunkText(opts.text);
-  let appliedReplyTo = false;
+  let sentAnyChunk = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    // Only apply reply reference, quote text, and buttons to the first chunk.
-    const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
+    if (!chunk.html?.trim() && !chunk.text?.trim()) {
+      logVerbose("telegram: skipping empty chunk in sendTelegramVoiceFallbackText");
+      continue;
+    }
+    // Only apply reply reference, quote text, and buttons to the first sent chunk.
+    const replyToForChunk = !sentAnyChunk ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,
-      replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
+      replyQuoteText: !sentAnyChunk ? opts.replyQuoteText : undefined,
       thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
-      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
+      replyMarkup: !sentAnyChunk ? opts.replyMarkup : undefined,
     });
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
-    }
-    if (replyToForChunk) {
-      appliedReplyTo = true;
+    if (messageId != null) {
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+      sentAnyChunk = true;
     }
   }
   return firstDeliveredMessageId;
