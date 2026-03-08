@@ -111,6 +111,14 @@ const laneFloorAdoptionDateKey = 20260227;
 type PackageJson = {
   name?: string;
   version?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+};
+
+type BundledPluginPackDependencyCheck = {
+  pluginId: string;
+  packageDir: string;
+  dependencies: string[];
 };
 
 function normalizePluginSyncVersion(version: string): string {
@@ -129,6 +137,71 @@ function runPackDry(): PackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return JSON.parse(raw) as PackResult[];
+}
+
+function packPath(...segments: string[]): string {
+  return segments.join("/");
+}
+
+function hasPackedDependency(params: {
+  packPaths: Set<string>;
+  pluginDir: string;
+  dependency: string;
+}): boolean {
+  const prefix = packPath(
+    "extensions",
+    params.pluginDir,
+    "node_modules",
+    ...params.dependency.split("/"),
+  );
+  return [...params.packPaths].some((entry) => entry === prefix || entry.startsWith(`${prefix}/`));
+}
+
+function loadBundledPluginPackDependencyChecks(): BundledPluginPackDependencyCheck[] {
+  const feishuPackagePath = resolve("extensions", "feishu", "package.json");
+  const feishuPackage = JSON.parse(readFileSync(feishuPackagePath, "utf8")) as PackageJson;
+  return [
+    {
+      pluginId: "feishu",
+      packageDir: "feishu",
+      dependencies: Object.keys(feishuPackage.dependencies ?? {}),
+    },
+  ];
+}
+
+export function collectBundledPluginPackDependencyErrors(params: {
+  rootPackage: PackageJson;
+  packPaths: Iterable<string>;
+  checks: BundledPluginPackDependencyCheck[];
+}): string[] {
+  const rootDependencies = new Set([
+    ...Object.keys(params.rootPackage.dependencies ?? {}),
+    ...Object.keys(params.rootPackage.optionalDependencies ?? {}),
+  ]);
+  const packPaths = new Set([...params.packPaths].map((entry) => entry.replace(/\\/g, "/")));
+  const errors: string[] = [];
+
+  for (const check of params.checks) {
+    for (const dependency of check.dependencies) {
+      if (rootDependencies.has(dependency)) {
+        continue;
+      }
+      if (
+        hasPackedDependency({
+          packPaths,
+          pluginDir: check.packageDir,
+          dependency,
+        })
+      ) {
+        continue;
+      }
+      errors.push(
+        `bundled plugin "${check.pluginId}" depends on "${dependency}" but npm pack includes neither a root install dependency nor extensions/${check.packageDir}/node_modules/${dependency}.`,
+      );
+    }
+  }
+
+  return errors;
 }
 
 function checkPluginVersions() {
@@ -317,6 +390,22 @@ function checkPluginSdkExports() {
   }
 }
 
+function checkBundledPluginPackDependencies(packPaths: Set<string>) {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+  const errors = collectBundledPluginPackDependencyErrors({
+    rootPackage,
+    packPaths,
+    checks: loadBundledPluginPackDependencyChecks(),
+  });
+  if (errors.length > 0) {
+    console.error("release-check: bundled plugin dependencies are missing from npm pack:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
 function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
@@ -325,6 +414,7 @@ function main() {
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
+  checkBundledPluginPackDependencies(paths);
 
   const missing = requiredPathGroups
     .flatMap((group) => {
