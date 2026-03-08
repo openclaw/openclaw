@@ -1,0 +1,57 @@
+import fs from "node:fs";
+import { describe, expect, it } from "vitest";
+import { validateTalkConfigResult } from "./index.js";
+
+type ExpectedSelection = {
+  provider: string;
+  normalizedPayload: boolean;
+  voiceId?: string;
+};
+
+type SelectionContractCase = {
+  id: string;
+  defaultProvider: string;
+  payloadValid: boolean;
+  expectedSelection: ExpectedSelection | null;
+  talk: Record<string, unknown>;
+};
+
+type TalkConfigContractFixture = {
+  selectionCases: SelectionContractCase[];
+};
+
+const fixturePath = new URL("../../../test-fixtures/talk-config-contract.json", import.meta.url);
+const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfigContractFixture;
+
+describe("talk.config contract fixtures", () => {
+  for (const fixture of fixtures.selectionCases) {
+    it(fixture.id, () => {
+      const payload = { config: { talk: fixture.talk } };
+      if (fixture.payloadValid) {
+        expect(validateTalkConfigResult(payload)).toBe(true);
+      } else {
+        expect((payload.config.talk as { resolved?: unknown }).resolved).toBeUndefined();
+      }
+
+      if (!fixture.expectedSelection) {
+        return;
+      }
+
+      const talk = payload.config.talk as {
+        resolved?: {
+          provider?: string;
+          config?: {
+            voiceId?: string;
+          };
+        };
+        voiceId?: string;
+      };
+      expect(talk.resolved?.provider ?? fixture.defaultProvider).toBe(
+        fixture.expectedSelection.provider,
+      );
+      expect(talk.resolved?.config?.voiceId ?? talk.voiceId).toBe(
+        fixture.expectedSelection.voiceId,
+      );
+    });
+  }
+});
