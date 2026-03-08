@@ -196,19 +196,15 @@ export type InputItem =
   | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
   | { type: "item_reference"; id: string };
 
-export type ToolChoice =
-  | "auto"
-  | "none"
-  | "required"
-  | { type: "function"; function: { name: string } };
+export type ToolChoice = "auto" | "none" | "required" | { type: "function"; name: string };
 
+/** Responses API tool format (flat, not nested under `function`). */
 export interface FunctionToolDefinition {
   type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  strict?: boolean;
 }
 
 /** Standard response.create event payload (full turn) */
