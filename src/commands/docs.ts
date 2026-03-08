@@ -44,6 +44,20 @@ async function runNodeTool(tool: string, toolArgs: string[], options: ToolRunOpt
   });
 }
 
+function getInstallInstructions(): string {
+  return `
+To enable documentation search, install mcporter:
+
+  npm install -g mcporter
+
+Or use pnpm:
+
+  pnpm add -g mcporter
+
+After installation, retry your search command.
+`.trim();
+}
+
 async function runTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
   if (hasBinary(tool)) {
     return await runCommandWithTimeout([tool, ...toolArgs], {
@@ -180,6 +194,13 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
 
   if (res.code !== 0) {
     const err = res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`;
+    // Check if mcporter is missing
+    if (err.includes("command not found") || err.includes("not found")) {
+      runtime.error("mcporter is not installed.");
+      runtime.log(getInstallInstructions());
+      runtime.exit(1);
+      return;
+    }
     runtime.error(`Docs search failed: ${err}`);
     runtime.exit(1);
     return;
