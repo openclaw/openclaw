@@ -297,7 +297,8 @@ function Main {
     } else {
         # npm method
         if (!(Ensure-Git)) {
-            Write-Host "Git is required for npm installs. Please install Git and try again." -Level warn
+            Write-Host "Git is required for npm installs. Please install Git and try again." -Level error
+            exit 1
         }
         
         if ($DryRun) {
