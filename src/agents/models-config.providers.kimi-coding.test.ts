@@ -30,6 +30,11 @@ describe("kimi-coding implicit provider (#22409)", () => {
     expect(provider.models[0].id).toBe("k2p5");
   });
 
+  it("should include User-Agent header for subscription authentication (#30099)", () => {
+    const provider = buildKimiCodingProvider();
+    expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
+  });
+
   it("should not include kimi-coding when no API key is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
