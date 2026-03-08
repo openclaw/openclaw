@@ -426,6 +426,67 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
+  it("prefers sessionKey when sessionKey, label, and agentId are all provided", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:worker:main",
+              kind: "direct",
+              sessionId: "sess-worker",
+            },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-mixed", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-mixed-target", {
+      sessionKey: "agent:worker:main",
+      label: "worker",
+      agentId: "worker",
+      message: "hello",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: "agent:worker:main",
+    });
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "sessions.resolve",
+      ),
+    ).toBe(false);
+    expect(callGatewayMock.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            method: "agent",
+            params: expect.objectContaining({
+              sessionKey: "agent:worker:main",
+              message: "hello",
+            }),
+          }),
+        ],
+      ]),
+    );
+  });
+
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsSendTool();
 

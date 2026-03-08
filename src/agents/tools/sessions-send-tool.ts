@@ -41,7 +41,7 @@ export function createSessionsSendTool(opts?: {
     label: "Session Send",
     name: "sessions_send",
     description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+      "Send a message into another session. Prefer sessionKey when available; otherwise use label to identify the target.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -60,15 +60,12 @@ export function createSessionsSendTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
 
-      const sessionKeyParam = readStringParam(params, "sessionKey");
-      const labelParam = readStringParam(params, "label")?.trim() || undefined;
-      const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Provide either sessionKey or label (not both).",
-        });
+      const sessionKeyParam = readStringParam(params, "sessionKey")?.trim() || undefined;
+      let labelParam = readStringParam(params, "label")?.trim() || undefined;
+      let labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
+      if (sessionKeyParam) {
+        labelParam = undefined;
+        labelAgentIdParam = undefined;
       }
 
       let sessionKey = sessionKeyParam;
