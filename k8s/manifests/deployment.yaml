@@ -1,0 +1,181 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw
+  labels:
+    app: openclaw
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: openclaw
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: init-config
+          image: busybox:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              cp /config/openclaw.json /home/node/.openclaw/openclaw.json
+              chmod 644 /home/node/.openclaw/openclaw.json
+              mkdir -p /home/node/.openclaw/workspace
+              mkdir -p /home/node/.openclaw/agents/default/sessions
+
+              # Copy agent workspace files on first init only (don't overwrite customizations)
+              if [ ! -f /home/node/.openclaw/workspace/AGENTS.md ]; then
+                cp /agent-workspace/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+                cp /agent-workspace/agent.json /home/node/.openclaw/workspace/agent.json
+                echo "Agent workspace initialized."
+              fi
+
+              chmod -R 775 /home/node/.openclaw
+              echo "Config initialized."
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 50m
+            limits:
+              memory: 64Mi
+              cpu: 100m
+          volumeMounts:
+            - name: openclaw-home
+              mountPath: /home/node/.openclaw
+            - name: config-template
+              mountPath: /config
+            - name: agent-workspace
+              mountPath: /agent-workspace
+      containers:
+        - name: gateway
+          image: ghcr.io/openclaw/openclaw:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - /app/dist/index.js
+            - gateway
+            - run
+            - --bind
+            - loopback
+            - --port
+            - "18789"
+            - --verbose
+          ports:
+            - name: gateway
+              containerPort: 18789
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /home/node
+            - name: OPENCLAW_CONFIG_DIR
+              value: /home/node/.openclaw
+            - name: OPENCLAW_CLI_PATH
+              value: /app/dist/index.js
+            - name: NODE_ENV
+              value: production
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: OPENCLAW_GATEWAY_TOKEN
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: GEMINI_API_KEY
+                  optional: true
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: OPENROUTER_API_KEY
+                  optional: true
+            - name: MISTRAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: MISTRAL_API_KEY
+                  optional: true
+            - name: XAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: XAI_API_KEY
+                  optional: true
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: GROQ_API_KEY
+                  optional: true
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 2Gi
+              cpu: "1"
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('http').get('http://127.0.0.1:18789/healthz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('http').get('http://127.0.0.1:18789/healthz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: openclaw-home
+              mountPath: /home/node/.openclaw
+            - name: tmp-volume
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: openclaw-home
+          persistentVolumeClaim:
+            claimName: openclaw-home-pvc
+        - name: config-template
+          configMap:
+            name: openclaw-config
+        - name: agent-workspace
+          configMap:
+            name: agent-workspace
+        - name: tmp-volume
+          emptyDir: {}

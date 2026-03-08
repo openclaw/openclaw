@@ -1,0 +1,13 @@
+# PersistentVolumeClaim for OpenClaw config, agent state, and session data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openclaw-home-pvc
+  labels:
+    app: openclaw
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

@@ -1,0 +1,36 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 18789,
+    "auth": {
+      "mode": "token",
+      "allowTailscale": false
+    },
+    "controlUi": {
+      "enabled": true,
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace",
+      "model": {
+        "primary": "${DEFAULT_AGENT_MODEL}"
+      }
+    },
+    "list": [
+      {
+        "id": "default",
+        "name": "${AGENT_DISPLAY_NAME}",
+        "workspace": "~/.openclaw/workspace"
+      }
+    ]
+  },
+  "cron": { "enabled": false }
+}

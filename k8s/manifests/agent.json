@@ -1,0 +1,6 @@
+{
+  "name": "default",
+  "description": "OpenClaw AI assistant running on Kubernetes",
+  "capabilities": ["chat", "help", "general-knowledge"],
+  "version": "1.0.0"
+}
