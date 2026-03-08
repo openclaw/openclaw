@@ -215,6 +215,14 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadExecApprovals(host as unknown as OpenClawApp);
   }
   if (host.tab === "chat") {
+    const preferredSessionKey =
+      host.settings.lastActiveSessionKey?.trim() ||
+      host.settings.sessionKey?.trim() ||
+      host.sessionKey;
+    if (preferredSessionKey && preferredSessionKey !== host.sessionKey) {
+      host.sessionKey = preferredSessionKey;
+      syncUrlWithSessionKey(host, preferredSessionKey, true);
+    }
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
