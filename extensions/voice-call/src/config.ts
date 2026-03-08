@@ -5,6 +5,7 @@ import {
   TtsProviderSchema,
 } from "openclaw/plugin-sdk/voice-call";
 import { z } from "zod";
+import { deepMergeDefined } from "./deep-merge.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -376,45 +377,7 @@ function normalizeVoiceCallTtsConfig(
     return undefined;
   }
 
-  return TtsConfigSchema.parse({
-    ...(defaults ?? {}),
-    ...(overrides ?? {}),
-    modelOverrides:
-      defaults?.modelOverrides || overrides?.modelOverrides
-        ? {
-            ...(defaults?.modelOverrides ?? {}),
-            ...(overrides?.modelOverrides ?? {}),
-          }
-        : undefined,
-    elevenlabs:
-      defaults?.elevenlabs || overrides?.elevenlabs
-        ? {
-            ...(defaults?.elevenlabs ?? {}),
-            ...(overrides?.elevenlabs ?? {}),
-            voiceSettings:
-              defaults?.elevenlabs?.voiceSettings || overrides?.elevenlabs?.voiceSettings
-                ? {
-                    ...(defaults?.elevenlabs?.voiceSettings ?? {}),
-                    ...(overrides?.elevenlabs?.voiceSettings ?? {}),
-                  }
-                : undefined,
-          }
-        : undefined,
-    openai:
-      defaults?.openai || overrides?.openai
-        ? {
-            ...(defaults?.openai ?? {}),
-            ...(overrides?.openai ?? {}),
-          }
-        : undefined,
-    edge:
-      defaults?.edge || overrides?.edge
-        ? {
-            ...(defaults?.edge ?? {}),
-            ...(overrides?.edge ?? {}),
-          }
-        : undefined,
-  });
+  return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
 }
 
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
