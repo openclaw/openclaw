@@ -573,3 +573,100 @@ export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
 }
+
+// Model Studio Coding Plan
+import {
+  MODELSTUDIO_CN_BASE_URL,
+  MODELSTUDIO_GLOBAL_BASE_URL,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
+  buildModelStudioModelDefinition,
+} from "./onboard-auth.models.js";
+
+function applyModelStudioProviderConfigWithBaseUrl(
+  cfg: OpenClawConfig,
+  baseUrl: string,
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+
+  // Add all 8 modelstudio models to agents.defaults.models
+  const modelstudioModelIds = [
+    "qwen3.5-plus",
+    "qwen3-max-2026-01-23",
+    "qwen3-coder-next",
+    "qwen3-coder-plus",
+    "MiniMax-M2.5",
+    "glm-5",
+    "glm-4.7",
+    "kimi-k2.5",
+  ];
+  for (const modelId of modelstudioModelIds) {
+    const modelRef = `modelstudio/${modelId}`;
+    if (!models[modelRef]) {
+      models[modelRef] = {};
+    }
+  }
+  // Set alias for default model
+  models[MODELSTUDIO_DEFAULT_MODEL_REF] = {
+    ...models[MODELSTUDIO_DEFAULT_MODEL_REF],
+    alias: models[MODELSTUDIO_DEFAULT_MODEL_REF]?.alias ?? "Qwen",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.modelstudio;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModels = [
+    buildModelStudioModelDefinition({ id: "qwen3.5-plus" }),
+    buildModelStudioModelDefinition({ id: "qwen3-max-2026-01-23" }),
+    buildModelStudioModelDefinition({ id: "qwen3-coder-next" }),
+    buildModelStudioModelDefinition({ id: "qwen3-coder-plus" }),
+    buildModelStudioModelDefinition({ id: "MiniMax-M2.5" }),
+    buildModelStudioModelDefinition({ id: "glm-5" }),
+    buildModelStudioModelDefinition({ id: "glm-4.7" }),
+    buildModelStudioModelDefinition({ id: "kimi-k2.5" }),
+  ];
+
+  const mergedModels = [...existingModels];
+  const seen = new Set(existingModels.map((m) => m.id));
+  for (const model of defaultModels) {
+    if (!seen.has(model.id)) {
+      mergedModels.push(model);
+      seen.add(model.id);
+    }
+  }
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.modelstudio = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+}
+
+export function applyModelStudioProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyModelStudioProviderConfigWithBaseUrl(cfg, MODELSTUDIO_GLOBAL_BASE_URL);
+}
+
+export function applyModelStudioProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  return applyModelStudioProviderConfigWithBaseUrl(cfg, MODELSTUDIO_CN_BASE_URL);
+}
+
+export function applyModelStudioConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelStudioProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
+
+export function applyModelStudioConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelStudioProviderConfigCn(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
