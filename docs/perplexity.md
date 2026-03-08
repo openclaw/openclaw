@@ -8,14 +8,14 @@ title: "Perplexity Search"
 
 # Perplexity Search API
 
-OpenClaw uses Perplexity Search API for the `web_search` tool when `provider: "perplexity"` is set.
-Perplexity Search returns structured results (title, URL, snippet) for fast research.
+OpenClaw supports Perplexity Search API as a `web_search` provider.
+It returns structured results with `title`, `url`, and `snippet` fields.
 
 ## Getting a Perplexity API key
 
 1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
 2. Generate an API key in the dashboard
-3. Store the key in config (recommended) or set `PERPLEXITY_API_KEY` in the Gateway environment.
+3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
 ## Config example
 
@@ -34,29 +34,12 @@ Perplexity Search returns structured results (title, URL, snippet) for fast rese
 }
 ```
 
-## Switching from Brave
+## Where to set the key
 
-```json5
-{
-  tools: {
-    web: {
-      search: {
-        provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...",
-        },
-      },
-    },
-  },
-}
-```
-
-## Where to set the key (recommended)
-
-**Recommended:** run `openclaw configure --section web`. It stores the key in
+**Via config:** run `openclaw configure --section web`. It stores the key in
 `~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
 
-**Environment alternative:** set `PERPLEXITY_API_KEY` in the Gateway process
+**Via environment:** set `PERPLEXITY_API_KEY` in the Gateway process
 environment. For a gateway install, put it in `~/.openclaw/.env` (or your
 service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
@@ -126,7 +109,7 @@ await web_search({
 
 ## Notes
 
-- Perplexity Search API returns structured web search results (title, URL, snippet)
+- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
 
 See [Web tools](/tools/web) for the full web_search configuration.

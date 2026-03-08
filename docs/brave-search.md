@@ -8,13 +8,13 @@ title: "Brave Search"
 
 # Brave Search API
 
-OpenClaw supports Brave Search as a web search provider for `web_search`.
+OpenClaw supports Brave Search API as a `web_search` provider.
 
 ## Get an API key
 
 1. Create a Brave Search API account at [https://brave.com/search/api/](https://brave.com/search/api/)
 2. In the dashboard, choose the **Data for Search** plan and generate an API key.
-3. Store the key in config (recommended) or set `BRAVE_API_KEY` in the Gateway environment.
+3. Store the key in config or set `BRAVE_API_KEY` in the Gateway environment.
 
 ## Config example
 
