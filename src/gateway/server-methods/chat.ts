@@ -722,11 +722,28 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+
+    // Filter out internal delivery-mirror messages (provider=openclaw, model=delivery-mirror)
+    // These are internal transcripts used for message delivery confirmation, not user-visible chat history.
+    const filteredMessages = rawMessages.filter((msg) => {
+      if (!msg || typeof msg !== "object") {
+        return true;
+      }
+      const message = msg as Record<string, unknown>;
+      const provider = message.provider;
+      const model = message.model;
+      // Filter out delivery-mirror entries
+      if (provider === "openclaw" && model === "delivery-mirror") {
+        return false;
+      }
+      return true;
+    });
+
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced = filteredMessages.length > max ? filteredMessages.slice(-max) : filteredMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
