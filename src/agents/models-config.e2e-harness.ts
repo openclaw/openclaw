@@ -83,6 +83,7 @@ export async function withCopilotGithubToken<T>(
 }
 
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
+  "AI_GATEWAY_API_KEY",
   "CLOUDFLARE_AI_GATEWAY_API_KEY",
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",

@@ -52,7 +52,8 @@ const commandIndex = args.findIndex(
     arg === "sessions" ||
     arg === "set-mode" ||
     arg === "set" ||
-    arg === "status",
+    arg === "status" ||
+    arg === "config",
 );
 const command = commandIndex >= 0 ? args[commandIndex] : "";
 const agent = commandIndex > 0 ? args[commandIndex - 1] : "unknown";
@@ -75,13 +76,60 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
+    emitJson({ action: "session_ensured", name: ensureName });
+  } else {
+    emitJson({
+      action: "session_ensured",
+      acpxRecordId: "rec-" + ensureName,
+      acpxSessionId: "sid-" + ensureName,
+      agentSessionId: "inner-" + ensureName,
+      name: ensureName,
+      created: true,
+    });
+  }
+  process.exit(0);
+}
+
+if (command === "sessions" && args[commandIndex + 1] === "new") {
+  writeLog({ kind: "new", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
+    emitJson({ action: "session_created", name: ensureName });
+  } else {
+    emitJson({
+      action: "session_created",
+      acpxRecordId: "rec-" + ensureName,
+      acpxSessionId: "sid-" + ensureName,
+      agentSessionId: "inner-" + ensureName,
+      name: ensureName,
+      created: true,
+    });
+  }
+  process.exit(0);
+}
+
+if (command === "config" && args[commandIndex + 1] === "show") {
+  const configuredAgents = process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS
+    ? JSON.parse(process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS)
+    : {};
   emitJson({
-    action: "session_ensured",
-    acpxRecordId: "rec-" + ensureName,
-    acpxSessionId: "sid-" + ensureName,
-    agentSessionId: "inner-" + ensureName,
-    name: ensureName,
-    created: true,
+    defaultAgent: "codex",
+    defaultPermissions: "approve-reads",
+    nonInteractivePermissions: "deny",
+    authPolicy: "skip",
+    ttl: 300,
+    timeout: null,
+    format: "text",
+    agents: configuredAgents,
+    authMethods: [],
+    paths: {
+      global: "/tmp/mock-global.json",
+      project: "/tmp/mock-project.json",
+    },
+    loaded: {
+      global: false,
+      project: false,
+    },
   });
   process.exit(0);
 }
@@ -202,6 +250,10 @@ if (command === "prompt") {
     process.exit(1);
   }
 
+  if (stdinText.includes("permission-denied")) {
+    process.exit(5);
+  }
+
   if (stdinText.includes("split-spacing")) {
     emitUpdate(sessionFromOption, {
       sessionUpdate: "agent_message_chunk",
@@ -260,6 +312,7 @@ process.exit(2);
 export async function createMockRuntimeFixture(params?: {
   permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
   queueOwnerTtlSeconds?: number;
+  mcpServers?: ResolvedAcpxPluginConfig["mcpServers"];
 }): Promise<{
   runtime: AcpxRuntime;
   logPath: string;
@@ -279,6 +332,7 @@ export async function createMockRuntimeFixture(params?: {
     nonInteractivePermissions: "fail",
     strictWindowsCmdWrapper: true,
     queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
+    mcpServers: params?.mcpServers ?? {},
   };
 
   return {

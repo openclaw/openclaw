@@ -226,7 +226,7 @@ struct CronJob: Identifiable, Codable, Equatable {
     }
 }
 
-struct CronEvent: Codable, Sendable {
+struct CronEvent: Codable {
     let jobId: String
     let action: String
     let runAtMs: Int?
@@ -237,7 +237,7 @@ struct CronEvent: Codable, Sendable {
     let nextRunAtMs: Int?
 }
 
-struct CronRunLogEntry: Codable, Identifiable, Sendable {
+struct CronRunLogEntry: Codable, Identifiable {
     var id: String {
         "\(self.jobId)-\(self.ts)"
     }

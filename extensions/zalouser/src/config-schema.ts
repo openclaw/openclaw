@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/zalouser";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
@@ -17,6 +17,8 @@ const zalouserAccountSchema = z.object({
   profile: z.string().optional(),
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
   allowFrom: z.array(allowFromEntry).optional(),
+  historyLimit: z.number().int().min(0).optional(),
+  groupAllowFrom: z.array(allowFromEntry).optional(),
   groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
   groups: z.object({}).catchall(groupConfigSchema).optional(),
   messagePrefix: z.string().optional(),

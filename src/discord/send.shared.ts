@@ -10,7 +10,7 @@ import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
 import type { ChunkMode } from "../auto-reply/chunk.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
@@ -59,6 +59,7 @@ function normalizeReactionEmoji(raw: string) {
 
 function parseRecipient(raw: string): DiscordRecipient {
   const target = parseDiscordTarget(raw, {
+    defaultKind: "channel",
     ambiguousMessage: `Ambiguous Discord recipient "${raw.trim()}". Use "user:${raw.trim()}" for DMs or "channel:${raw.trim()}" for channel messages.`,
   });
   if (!target) {
@@ -79,9 +80,10 @@ function parseRecipient(raw: string): DiscordRecipient {
 export async function parseAndResolveRecipient(
   raw: string,
   accountId?: string,
+  cfg?: OpenClawConfig,
 ): Promise<DiscordRecipient> {
-  const cfg = loadConfig();
-  const accountInfo = resolveDiscordAccount({ cfg, accountId });
+  const resolvedCfg = cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({ cfg: resolvedCfg, accountId });
 
   // First try to resolve using directory lookup (handles usernames)
   const trimmed = raw.trim();
@@ -92,7 +94,7 @@ export async function parseAndResolveRecipient(
   const resolved = await resolveDiscordTarget(
     raw,
     {
-      cfg,
+      cfg: resolvedCfg,
       accountId: accountInfo.accountId,
     },
     parseOptions,
@@ -413,6 +415,7 @@ async function sendDiscordMedia(
   text: string,
   mediaUrl: string,
   mediaLocalRoots: readonly string[] | undefined,
+  maxBytes: number | undefined,
   replyTo: string | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
@@ -421,7 +424,10 @@ async function sendDiscordMedia(
   chunkMode?: ChunkMode,
   silent?: boolean,
 ) {
-  const media = await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions({ mediaLocalRoots }));
+  const media = await loadWebMedia(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots }),
+  );
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;

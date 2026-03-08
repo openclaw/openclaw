@@ -6,11 +6,15 @@ import { __testing } from "./web-search.js";
 const {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  resolvePerplexityModel,
+  resolvePerplexityTransport,
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
+  resolvePerplexityApiKey,
   normalizeBraveLanguageParams,
   normalizeFreshness,
-  freshnessToPerplexityRecency,
+  normalizeToIsoDate,
+  isoToPerplexityDate,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
@@ -19,21 +23,16 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  resolveContextConfig,
-  clampNumber,
-  normalizeThresholdMode,
+  resolveBraveMode,
 } = __testing;
 
-describe("web_search perplexity baseUrl defaults", () => {
-  it("detects a Perplexity key prefix", () => {
+const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
+const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+
+describe("web_search perplexity compatibility routing", () => {
+  it("detects API key prefixes", () => {
     expect(inferPerplexityBaseUrlFromApiKey("pplx-123")).toBe("direct");
-  });
-
-  it("detects an OpenRouter key prefix", () => {
     expect(inferPerplexityBaseUrlFromApiKey("sk-or-v1-123")).toBe("openrouter");
-  });
-
-  it("returns undefined for unknown key formats", () => {
     expect(inferPerplexityBaseUrlFromApiKey("unknown-key")).toBeUndefined();
   });
 
@@ -43,58 +42,66 @@ describe("web_search perplexity baseUrl defaults", () => {
     );
   });
 
-  it("defaults to direct when using PERPLEXITY_API_KEY", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe("https://api.perplexity.ai");
+  it("resolves OpenRouter env auth and transport", () => {
+    withEnv({ PERPLEXITY_API_KEY: undefined, OPENROUTER_API_KEY: "sk-or-v1-test" }, () => {
+      expect(resolvePerplexityApiKey(undefined)).toEqual({
+        apiKey: "sk-or-v1-test",
+        source: "openrouter_env",
+      });
+      expect(resolvePerplexityTransport(undefined)).toMatchObject({
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "perplexity/sonar-pro",
+        transport: "chat_completions",
+      });
+    });
   });
 
-  it("defaults to OpenRouter when using OPENROUTER_API_KEY", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "openrouter_env")).toBe(
-      "https://openrouter.ai/api/v1",
+  it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
+    withEnv({ PERPLEXITY_API_KEY: "pplx-test", OPENROUTER_API_KEY: undefined }, () => {
+      expect(resolvePerplexityTransport(undefined)).toMatchObject({
+        baseUrl: "https://api.perplexity.ai",
+        model: "perplexity/sonar-pro",
+        transport: "search_api",
+      });
+    });
+  });
+
+  it("switches direct Perplexity to chat completions when model override is configured", () => {
+    expect(resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
+      "perplexity/sonar-reasoning-pro",
     );
+    expect(
+      resolvePerplexityTransport({
+        apiKey: "pplx-test",
+        model: "perplexity/sonar-reasoning-pro",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      model: "perplexity/sonar-reasoning-pro",
+      transport: "chat_completions",
+    });
   });
 
-  it("defaults to direct when config key looks like Perplexity", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "pplx-123")).toBe(
-      "https://api.perplexity.ai",
-    );
+  it("treats unrecognized configured keys as direct Perplexity by default", () => {
+    expect(
+      resolvePerplexityTransport({
+        apiKey: "enterprise-perplexity-test",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      transport: "search_api",
+    });
   });
 
-  it("defaults to OpenRouter when config key looks like OpenRouter", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "sk-or-v1-123")).toBe(
-      "https://openrouter.ai/api/v1",
-    );
-  });
-
-  it("defaults to OpenRouter for unknown config key formats", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "weird-key")).toBe(
-      "https://openrouter.ai/api/v1",
-    );
-  });
-});
-
-describe("web_search perplexity model normalization", () => {
-  it("detects direct Perplexity host", () => {
+  it("normalizes direct Perplexity models for chat completions", () => {
     expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
-    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai/")).toBe(true);
     expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
-  });
-
-  it("strips provider prefix for direct Perplexity", () => {
     expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
       "sonar-pro",
     );
-  });
-
-  it("keeps prefixed model for OpenRouter", () => {
     expect(
       resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
     ).toBe("perplexity/sonar-pro");
-  });
-
-  it("keeps model unchanged when URL is invalid", () => {
-    expect(resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro")).toBe(
-      "perplexity/sonar-pro",
-    );
   });
 });
 
@@ -121,43 +128,69 @@ describe("web_search brave language param normalization", () => {
 });
 
 describe("web_search freshness normalization", () => {
-  it("accepts Brave shortcut values", () => {
-    expect(normalizeFreshness("pd")).toBe("pd");
-    expect(normalizeFreshness("PW")).toBe("pw");
+  it("accepts Brave shortcut values and maps for Perplexity", () => {
+    expect(normalizeFreshness("pd", "brave")).toBe("pd");
+    expect(normalizeFreshness("PW", "brave")).toBe("pw");
+    expect(normalizeFreshness("pd", "perplexity")).toBe("day");
+    expect(normalizeFreshness("pw", "perplexity")).toBe("week");
   });
 
-  it("accepts valid date ranges", () => {
-    expect(normalizeFreshness("2024-01-01to2024-01-31")).toBe("2024-01-01to2024-01-31");
+  it("accepts Perplexity values and maps for Brave", () => {
+    expect(normalizeFreshness("day", "perplexity")).toBe("day");
+    expect(normalizeFreshness("week", "perplexity")).toBe("week");
+    expect(normalizeFreshness("day", "brave")).toBe("pd");
+    expect(normalizeFreshness("week", "brave")).toBe("pw");
   });
 
-  it("rejects invalid date ranges", () => {
-    expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
-    expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
-    expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
+  it("accepts valid date ranges for Brave", () => {
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "brave")).toBe("2024-01-01to2024-01-31");
+  });
+
+  it("rejects invalid values", () => {
+    expect(normalizeFreshness("yesterday", "brave")).toBeUndefined();
+    expect(normalizeFreshness("yesterday", "perplexity")).toBeUndefined();
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "perplexity")).toBeUndefined();
+  });
+
+  it("rejects invalid date ranges for Brave", () => {
+    expect(normalizeFreshness("2024-13-01to2024-01-31", "brave")).toBeUndefined();
+    expect(normalizeFreshness("2024-02-30to2024-03-01", "brave")).toBeUndefined();
+    expect(normalizeFreshness("2024-03-10to2024-03-01", "brave")).toBeUndefined();
   });
 });
 
-describe("freshnessToPerplexityRecency", () => {
-  it("maps Brave shortcuts to Perplexity recency values", () => {
-    expect(freshnessToPerplexityRecency("pd")).toBe("day");
-    expect(freshnessToPerplexityRecency("pw")).toBe("week");
-    expect(freshnessToPerplexityRecency("pm")).toBe("month");
-    expect(freshnessToPerplexityRecency("py")).toBe("year");
+describe("web_search date normalization", () => {
+  it("accepts ISO format", () => {
+    expect(normalizeToIsoDate("2024-01-15")).toBe("2024-01-15");
+    expect(normalizeToIsoDate("2025-12-31")).toBe("2025-12-31");
   });
 
-  it("returns undefined for date ranges (not supported by Perplexity)", () => {
-    expect(freshnessToPerplexityRecency("2024-01-01to2024-01-31")).toBeUndefined();
+  it("accepts Perplexity format and converts to ISO", () => {
+    expect(normalizeToIsoDate("1/15/2024")).toBe("2024-01-15");
+    expect(normalizeToIsoDate("12/31/2025")).toBe("2025-12-31");
   });
 
-  it("returns undefined for undefined/empty input", () => {
-    expect(freshnessToPerplexityRecency(undefined)).toBeUndefined();
-    expect(freshnessToPerplexityRecency("")).toBeUndefined();
+  it("rejects invalid formats", () => {
+    expect(normalizeToIsoDate("01-15-2024")).toBeUndefined();
+    expect(normalizeToIsoDate("2024/01/15")).toBeUndefined();
+    expect(normalizeToIsoDate("invalid")).toBeUndefined();
+  });
+
+  it("converts ISO to Perplexity format", () => {
+    expect(isoToPerplexityDate("2024-01-15")).toBe("1/15/2024");
+    expect(isoToPerplexityDate("2025-12-31")).toBe("12/31/2025");
+    expect(isoToPerplexityDate("2024-03-05")).toBe("3/5/2024");
+  });
+
+  it("rejects invalid ISO dates", () => {
+    expect(isoToPerplexityDate("1/15/2024")).toBeUndefined();
+    expect(isoToPerplexityDate("invalid")).toBeUndefined();
   });
 });
 
 describe("web_search grok config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key"); // pragma: allowlist secret
   });
 
   it("returns undefined when no apiKey is available", () => {
@@ -276,15 +309,17 @@ describe("web_search grok response parsing", () => {
 
 describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
+    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key"); // pragma: allowlist secret
   });
 
   it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    withEnv({ KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("kimi-env");
+    const kimiEnvValue = "kimi-env"; // pragma: allowlist secret
+    const moonshotEnvValue = "moonshot-env"; // pragma: allowlist secret
+    withEnv({ [kimiApiKeyEnv]: kimiEnvValue, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(kimiEnvValue);
     });
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("moonshot-env");
+    withEnv({ [kimiApiKeyEnv]: undefined, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
+      expect(resolveKimiApiKey({})).toBe(moonshotEnvValue);
     });
   });
 
@@ -327,116 +362,24 @@ describe("extractKimiCitations", () => {
   });
 });
 
-describe("web_search_context resolveContextConfig", () => {
-  it("returns undefined for missing config", () => {
-    expect(resolveContextConfig(undefined)).toBeUndefined();
-    expect(resolveContextConfig({})).toBeUndefined();
+describe("resolveBraveMode", () => {
+  it("defaults to 'web' when no config is provided", () => {
+    expect(resolveBraveMode({})).toBe("web");
   });
 
-  it("returns undefined when tools.web.search is missing", () => {
-    expect(resolveContextConfig({ tools: {} } as unknown as OpenClawConfig)).toBeUndefined();
-    expect(
-      resolveContextConfig({ tools: { web: {} } } as unknown as OpenClawConfig),
-    ).toBeUndefined();
-    expect(
-      resolveContextConfig({ tools: { web: { search: {} } } } as unknown as OpenClawConfig),
-    ).toBeUndefined();
+  it("defaults to 'web' when mode is undefined", () => {
+    expect(resolveBraveMode({ mode: undefined })).toBe("web");
   });
 
-  it("returns undefined for non-object context", () => {
-    expect(
-      resolveContextConfig({
-        tools: { web: { search: { context: "invalid" } } },
-      } as unknown as OpenClawConfig),
-    ).toBeUndefined();
+  it("returns 'llm-context' when configured", () => {
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
   });
 
-  it("extracts nested context config correctly", () => {
-    const cfg = {
-      tools: {
-        web: {
-          search: {
-            context: {
-              enabled: true,
-              maxTokens: 4096,
-              maxUrls: 10,
-              maxTokensPerUrl: 2048,
-              thresholdMode: "strict",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const result = resolveContextConfig(cfg);
-    expect(result).toBeDefined();
-    expect(result!.enabled).toBe(true);
-    expect(result!.maxTokens).toBe(4096);
-    expect(result!.maxUrls).toBe(10);
-    expect(result!.maxTokensPerUrl).toBe(2048);
-    expect(result!.thresholdMode).toBe("strict");
+  it("returns 'web' when mode is explicitly 'web'", () => {
+    expect(resolveBraveMode({ mode: "web" })).toBe("web");
   });
 
-  it("returns partial config when some fields omitted", () => {
-    const cfg = {
-      tools: { web: { search: { context: { enabled: false } } } },
-    } as unknown as OpenClawConfig;
-    const result = resolveContextConfig(cfg);
-    expect(result).toBeDefined();
-    expect(result!.enabled).toBe(false);
-    expect(result!.maxTokens).toBeUndefined();
-  });
-});
-
-describe("web_search_context normalizeThresholdMode", () => {
-  it("returns balanced for undefined/empty", () => {
-    expect(normalizeThresholdMode(undefined)).toBe("balanced");
-    expect(normalizeThresholdMode("")).toBe("balanced");
-    expect(normalizeThresholdMode("  ")).toBe("balanced");
-  });
-
-  it("accepts valid modes (case insensitive)", () => {
-    expect(normalizeThresholdMode("strict")).toBe("strict");
-    expect(normalizeThresholdMode("BALANCED")).toBe("balanced");
-    expect(normalizeThresholdMode("Lenient")).toBe("lenient");
-    expect(normalizeThresholdMode("disabled")).toBe("disabled");
-  });
-
-  it("returns balanced for invalid modes", () => {
-    expect(normalizeThresholdMode("unknown")).toBe("balanced");
-    expect(normalizeThresholdMode("aggressive")).toBe("balanced");
-  });
-});
-
-describe("web_search_context clampNumber", () => {
-  it("returns fallback for undefined", () => {
-    expect(clampNumber(undefined, 1, 100, 50)).toBe(50);
-  });
-
-  it("returns fallback for NaN/Infinity", () => {
-    expect(clampNumber(NaN, 1, 100, 50)).toBe(50);
-    expect(clampNumber(Infinity, 1, 100, 50)).toBe(50);
-    expect(clampNumber(-Infinity, 1, 100, 50)).toBe(50);
-  });
-
-  it("clamps to minimum", () => {
-    expect(clampNumber(0, 1024, 32768, 8192)).toBe(1024);
-    expect(clampNumber(-5, 1024, 32768, 8192)).toBe(1024);
-    expect(clampNumber(500, 1024, 32768, 8192)).toBe(1024);
-  });
-
-  it("clamps to maximum", () => {
-    expect(clampNumber(99999, 1024, 32768, 8192)).toBe(32768);
-    expect(clampNumber(40000, 1024, 32768, 8192)).toBe(32768);
-  });
-
-  it("floors fractional values", () => {
-    expect(clampNumber(2048.7, 1024, 32768, 8192)).toBe(2048);
-    expect(clampNumber(1024.9, 1024, 32768, 8192)).toBe(1024);
-  });
-
-  it("passes through valid values", () => {
-    expect(clampNumber(4096, 1024, 32768, 8192)).toBe(4096);
-    expect(clampNumber(1024, 1024, 32768, 8192)).toBe(1024);
-    expect(clampNumber(32768, 1024, 32768, 8192)).toBe(32768);
+  it("falls back to 'web' for unrecognized mode values", () => {
+    expect(resolveBraveMode({ mode: "invalid" })).toBe("web");
   });
 });

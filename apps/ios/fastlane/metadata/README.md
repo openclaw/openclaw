@@ -1,0 +1,47 @@
+# App Store metadata (Fastlane deliver)
+
+This directory is used by `fastlane deliver` for App Store Connect text metadata.
+
+## Upload metadata only
+
+```bash
+cd apps/ios
+ASC_APP_ID=6760218713 \
+DELIVER_METADATA=1 fastlane ios metadata
+```
+
+## Optional: include screenshots
+
+```bash
+cd apps/ios
+DELIVER_METADATA=1 DELIVER_SCREENSHOTS=1 fastlane ios metadata
+```
+
+## Auth
+
+The `ios metadata` lane uses App Store Connect API key auth from `apps/ios/fastlane/.env`:
+
+- Keychain-backed (recommended on macOS):
+  - `ASC_KEY_ID`
+  - `ASC_ISSUER_ID`
+  - `ASC_KEYCHAIN_SERVICE` (default: `openclaw-asc-key`)
+  - `ASC_KEYCHAIN_ACCOUNT` (default: current user)
+- File/path fallback:
+  - `ASC_KEY_ID`
+  - `ASC_ISSUER_ID`
+  - `ASC_KEY_PATH`
+
+Or set `APP_STORE_CONNECT_API_KEY_PATH`.
+
+## Notes
+
+- Locale files live under `metadata/en-US/`.
+- `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
+- If app lookup fails in `deliver`, set one of:
+  - `ASC_APP_IDENTIFIER` (bundle ID)
+  - `ASC_APP_ID` (numeric App Store Connect app ID, e.g. from `/apps/<id>/...` URL)
+- For first app versions, include review contact files under `metadata/review_information/`:
+  - `first_name.txt`
+  - `last_name.txt`
+  - `email_address.txt`
+  - `phone_number.txt` (E.164-ish, e.g. `+1 415 555 0100`)

@@ -76,6 +76,14 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(true);
   });
 
+  it("returns mentionedBot=true when bot mention name differs from configured botName", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "OpenClaw Bot (Alias)", id: { open_id: BOT_OPEN_ID } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "OpenClaw Bot");
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
   it("returns mentionedBot=false when only other users are mentioned", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },

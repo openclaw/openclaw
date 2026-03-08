@@ -200,7 +200,7 @@ Use this when auditing access or deciding what to back up:
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile`
-- **Discord bot token**: config/env (token file not yet supported)
+- **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
@@ -630,7 +630,56 @@ Rules of thumb:
 - If you must bind to LAN, firewall the port to a tight allowlist of source IPs; do not port-forward it broadly.
 - Never expose the Gateway unauthenticated on `0.0.0.0`.
 
-### 0.4.1) mDNS/Bonjour discovery (information disclosure)
+### 0.4.1) Docker port publishing + UFW (`DOCKER-USER`)
+
+If you run OpenClaw with Docker on a VPS, remember that published container ports
+(`-p HOST:CONTAINER` or Compose `ports:`) are routed through Docker's forwarding
+chains, not only host `INPUT` rules.
+
+To keep Docker traffic aligned with your firewall policy, enforce rules in
+`DOCKER-USER` (this chain is evaluated before Docker's own accept rules).
+On many modern distros, `iptables`/`ip6tables` use the `iptables-nft` frontend
+and still apply these rules to the nftables backend.
+
+Minimal allowlist example (IPv4):
+
+```bash
+# /etc/ufw/after.rules (append as its own *filter section)
+*filter
+:DOCKER-USER - [0:0]
+-A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+-A DOCKER-USER -s 127.0.0.0/8 -j RETURN
+-A DOCKER-USER -s 10.0.0.0/8 -j RETURN
+-A DOCKER-USER -s 172.16.0.0/12 -j RETURN
+-A DOCKER-USER -s 192.168.0.0/16 -j RETURN
+-A DOCKER-USER -s 100.64.0.0/10 -j RETURN
+-A DOCKER-USER -p tcp --dport 80 -j RETURN
+-A DOCKER-USER -p tcp --dport 443 -j RETURN
+-A DOCKER-USER -m conntrack --ctstate NEW -j DROP
+-A DOCKER-USER -j RETURN
+COMMIT
+```
+
+IPv6 has separate tables. Add a matching policy in `/etc/ufw/after6.rules` if
+Docker IPv6 is enabled.
+
+Avoid hardcoding interface names like `eth0` in docs snippets. Interface names
+vary across VPS images (`ens3`, `enp*`, etc.) and mismatches can accidentally
+skip your deny rule.
+
+Quick validation after reload:
+
+```bash
+ufw reload
+iptables -S DOCKER-USER
+ip6tables -S DOCKER-USER
+nmap -sT -p 1-65535 <public-ip> --open
+```
+
+Expected external ports should be only what you intentionally expose (for most
+setups: SSH + your reverse proxy ports).
+
+### 0.4.2) mDNS/Bonjour discovery (information disclosure)
 
 The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) for local device discovery. In full mode, this includes TXT records that may expose operational details:
 
@@ -1109,19 +1158,22 @@ If your AI does something bad:
 
 ## Secret Scanning (detect-secrets)
 
-CI runs `detect-secrets scan --baseline .secrets.baseline` in the `secrets` job.
-If it fails, there are new candidates not yet in the baseline.
+CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
+Pushes to `main` always run an all-files scan. Pull requests use a changed-file
+fast path when a base commit is available, and fall back to an all-files scan
+otherwise. If it fails, there are new candidates not yet in the baseline.
 
 ### If CI fails
 
 1. Reproduce locally:
 
    ```bash
-   detect-secrets scan --baseline .secrets.baseline
+   pre-commit run --all-files detect-secrets
    ```
 
 2. Understand the tools:
-   - `detect-secrets scan` finds candidates and compares them to the baseline.
+   - `detect-secrets` in pre-commit runs `detect-secrets-hook` with the repo's
+     baseline and excludes.
    - `detect-secrets audit` opens an interactive review to mark each baseline
      item as real or false positive.
 3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
@@ -18,8 +19,31 @@ type HardeningCase = {
   shellCommand?: string | null;
   withPathToken?: boolean;
   expectedArgv: (ctx: { pathToken: PathTokenSetup | null }) => string[];
+  expectedArgvChanged?: boolean;
   expectedCmdText?: string;
+  checkRawCommandMatchesArgv?: boolean;
 };
+
+function createScriptOperandFixture(tmp: string): {
+  command: string[];
+  scriptPath: string;
+  initialBody: string;
+} {
+  if (process.platform === "win32") {
+    const scriptPath = path.join(tmp, "run.js");
+    return {
+      command: [process.execPath, "./run.js"],
+      scriptPath,
+      initialBody: 'console.log("SAFE");\n',
+    };
+  }
+  const scriptPath = path.join(tmp, "run.sh");
+  return {
+    command: ["/bin/sh", "./run.sh"],
+    scriptPath,
+    initialBody: "#!/bin/sh\necho SAFE\n",
+  };
+}
 
 describe("hardenApprovedExecutionPaths", () => {
   const cases: HardeningCase[] = [
@@ -36,6 +60,7 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["env", "tr", "a", "b"],
       shellCommand: null,
       expectedArgv: () => ["env", "tr", "a", "b"],
+      expectedArgvChanged: false,
     },
     {
       name: "pins direct PATH-token executable during approval hardening",
@@ -44,6 +69,7 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [pathToken!.expected, "SAFE"],
+      expectedArgvChanged: true,
     },
     {
       name: "preserves env-wrapper PATH-token argv during approval hardening",
@@ -52,6 +78,15 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: () => ["env", "poccmd", "SAFE"],
+      expectedArgvChanged: false,
+    },
+    {
+      name: "rawCommand matches hardened argv after executable path pinning",
+      mode: "build-plan",
+      argv: ["poccmd", "hello"],
+      withPathToken: true,
+      expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
+      checkRawCommandMatchesArgv: true,
     },
   ];
 
@@ -82,6 +117,9 @@ describe("hardenApprovedExecutionPaths", () => {
           if (testCase.expectedCmdText) {
             expect(prepared.cmdText).toBe(testCase.expectedCmdText);
           }
+          if (testCase.checkRawCommandMatchesArgv) {
+            expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
+          }
           return;
         }
 
@@ -96,6 +134,9 @@ describe("hardenApprovedExecutionPaths", () => {
           throw new Error("unreachable");
         }
         expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
+        if (typeof testCase.expectedArgvChanged === "boolean") {
+          expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
+        }
       } finally {
         if (testCase.withPathToken) {
           if (oldPath === undefined) {
@@ -108,4 +149,30 @@ describe("hardenApprovedExecutionPaths", () => {
       }
     });
   }
+
+  it("captures mutable shell script operands in approval plans", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+    const fixture = createScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: fixture.command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.mutableFileOperand).toEqual({
+        argvIndex: 1,
+        path: fs.realpathSync(fixture.scriptPath),
+        sha256: expect.any(String),
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

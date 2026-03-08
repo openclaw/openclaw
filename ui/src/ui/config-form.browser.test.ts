@@ -365,7 +365,7 @@ describe("config form renderer", () => {
           "models.providers.*.apiKey": { sensitive: true },
         },
         unsupportedPaths: analysis.unsupportedPaths,
-        value: { models: { providers: { openai: { apiKey: "old" } } } },
+        value: { models: { providers: { openai: { apiKey: "old" } } } }, // pragma: allowlist secret
         onPatch,
       }),
       container,
@@ -427,17 +427,35 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).not.toContain("channels");
   });
 
-  it("flags additionalProperties true", () => {
+  it("treats additionalProperties true as editable map fields", () => {
     const schema = {
       type: "object",
       properties: {
-        extra: {
+        accounts: {
           type: "object",
           additionalProperties: true,
         },
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toContain("extra");
+    expect(analysis.unsupportedPaths).not.toContain("accounts");
+
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { accounts: { default: { enabled: true } } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const removeButton = container.querySelector(".cfg-map__item-remove");
+    expect(removeButton).not.toBeNull();
+    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
   });
 });
