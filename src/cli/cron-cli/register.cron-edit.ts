@@ -184,7 +184,20 @@ export function registerCronEditCommand(cron: Command) {
             const listed = (await callGatewayFromCli("cron.list", opts, {
               includeDisabled: true,
             })) as { jobs?: CronJob[] } | null;
-            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            const jobs = listed?.jobs ?? [];
+            // Try exact match first
+            let existing = jobs.find((job) => job.id === id);
+            // Try prefix match
+            if (!existing) {
+              const matches = jobs.filter((job) => job.id.startsWith(id));
+              if (matches.length === 1) {
+                existing = matches[0];
+              } else if (matches.length > 1) {
+                throw new Error(
+                  `Ambiguous cron job ID "${id}": ${matches.map((j) => j.id).join(", ")}`,
+                );
+              }
+            }
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }

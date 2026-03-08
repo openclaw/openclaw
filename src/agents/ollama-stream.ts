@@ -43,6 +43,7 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  keep_alive?: string | number;
 }
 
 interface OllamaChatMessage {
@@ -465,6 +466,10 @@ export function createOllamaStreamFn(
           stream: true,
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
+          // Keep model loaded if OLLAMA_KEEP_ALIVE env var is set.
+          // Format: "30m", "5m", 300000 (ms), etc.
+          // Helps with sequential cron jobs but increases RAM on memory-constrained hosts.
+          keep_alive: process.env.OLLAMA_KEEP_ALIVE,
         };
 
         const headers: Record<string, string> = {

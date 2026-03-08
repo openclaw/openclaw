@@ -222,11 +222,21 @@ function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "d
 }
 
 export function findJobOrThrow(state: CronServiceState, id: string) {
-  const job = state.store?.jobs.find((j) => j.id === id);
-  if (!job) {
-    throw new Error(`unknown cron job id: ${id}`);
+  const jobs = state.store?.jobs ?? [];
+  // Try exact match first
+  const exact = jobs.find((j) => j.id === id);
+  if (exact) {
+    return exact;
   }
-  return job;
+  // Try prefix match (e.g., "0ed3cd30" matches "0ed3cd30-00a1-...")
+  const matches = jobs.filter((j) => j.id.startsWith(id));
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  if (matches.length > 1) {
+    throw new Error(`Ambiguous cron job ID "${id}": ${matches.map((j) => j.id).join(", ")}`);
+  }
+  throw new Error(`unknown cron job id: ${id}`);
 }
 
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {

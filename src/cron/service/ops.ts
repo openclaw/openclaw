@@ -312,7 +312,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     await persist(state);
     armTimer(state);
     emit(state, {
-      jobId: id,
+      jobId: job.id,
       action: "updated",
       nextRunAtMs: job.state.nextRunAtMs,
     });
