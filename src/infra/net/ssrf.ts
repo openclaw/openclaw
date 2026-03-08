@@ -23,7 +23,30 @@ const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
 // Cloud instance metadata service (IMDS) endpoints that must remain blocked
 // even when allowPrivateNetwork is enabled to prevent credential harvesting.
 const IMDS_HOSTNAMES = new Set(["metadata.google.internal"]);
-const IMDS_IP_ADDRESSES = new Set(["169.254.169.254", "fd00:ec2::254"]);
+const IMDS_IP_ADDRESSES = new Set(["169.254.169.254", "fd00:ec2::254", "::ffff:169.254.169.254"]);
+
+/** Check whether an address (after normalization) matches a known IMDS IP. */
+function isImdsAddress(address: string): boolean {
+  let normalized = address.trim().toLowerCase();
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    normalized = normalized.slice(1, -1);
+  }
+  if (IMDS_IP_ADDRESSES.has(normalized)) return true;
+  // Handle IPv6-mapped IPv4 in both dotted (::ffff:169.254.169.254) and
+  // hex (::ffff:a9fe:a9fe) forms: extract the v4 tail and re-check.
+  if (normalized.startsWith("::ffff:")) {
+    const mapped = normalized.slice("::ffff:".length);
+    // Dotted form
+    if (IMDS_IP_ADDRESSES.has(mapped)) return true;
+    // Hex form (e.g. a9fe:a9fe) — parse back to dotted IPv4
+    const v4 = parseIpv4FromMappedIpv6(mapped);
+    if (v4) {
+      const dotted = v4.join(".");
+      if (IMDS_IP_ADDRESSES.has(dotted)) return true;
+    }
+  }
+  return false;
+}
 
 function normalizeHostname(hostname: string): string {
   const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
@@ -191,7 +214,7 @@ export async function resolvePinnedHostname(
   if (IMDS_HOSTNAMES.has(normalized)) {
     throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
   }
-  if (IMDS_IP_ADDRESSES.has(normalized)) {
+  if (isImdsAddress(normalized)) {
     throw new SsrFBlockedError("Blocked: cloud metadata service IP address");
   }
 
@@ -220,7 +243,7 @@ export async function resolvePinnedHostname(
 
   for (const entry of results) {
     // Always block IMDS IPs even when allowPrivateNetwork is enabled.
-    if (IMDS_IP_ADDRESSES.has(entry.address.trim().toLowerCase())) {
+    if (isImdsAddress(entry.address)) {
       throw new SsrFBlockedError("Blocked: resolves to cloud metadata service IP address");
     }
     if (!allowPrivate && isPrivateIpAddress(entry.address)) {

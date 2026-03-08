@@ -230,6 +230,58 @@ describe("web_fetch SSRF protection", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("blocks IPv6-mapped IMDS address even when allowPrivateNetwork is true", async () => {
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    // Test the SSRF module directly since URL parsing normalizes
+    // ::ffff:169.254.169.254 to hex form ::ffff:a9fe:a9fe.
+    await expect(
+      ssrf.resolvePinnedHostname("::ffff:169.254.169.254", lookupMock, {
+        allowPrivateNetwork: true,
+      }),
+    ).rejects.toThrow(/blocked|metadata/i);
+
+    await expect(
+      ssrf.resolvePinnedHostname("::ffff:a9fe:a9fe", lookupMock, {
+        allowPrivateNetwork: true,
+      }),
+    ).rejects.toThrow(/blocked|metadata/i);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows localhost when allowPrivateNetwork is true", async () => {
+    lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+
+    const fetchSpy = vi.fn().mockResolvedValue(textResponse("local ok"));
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              allowPrivateNetwork: true,
+              firecrawl: { enabled: false },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool?.execute?.("call", { url: "http://localhost:8080/api" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks private hosts when allowPrivateNetwork is false", async () => {
     const fetchSpy = vi.fn();
     // @ts-expect-error mock fetch
