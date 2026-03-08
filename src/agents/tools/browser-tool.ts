@@ -280,6 +280,7 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  config?: ReturnType<typeof loadConfig>;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -288,7 +289,7 @@ export function createBrowserTool(opts?: {
   // Resolve the configured default profile so the description can tell the model.
   let defaultProfile = "openclaw";
   try {
-    const cfg = loadConfig();
+    const cfg = opts?.config ?? loadConfig();
     const resolved = resolveBrowserConfig(cfg?.browser);
     defaultProfile = resolved.defaultProfile;
   } catch {

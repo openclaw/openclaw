@@ -54,6 +54,7 @@ const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
     controlPort: 18791,
+    defaultProfile: "openclaw",
   })),
 }));
 vi.mock("../../browser/config.js", () => browserConfigMocks);
@@ -622,5 +623,45 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/Run action=tabs profile="chrome"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser tool description reflects configured default profile", () => {
+  afterEach(() => {
+    resetBrowserToolMocks();
+  });
+
+  it("includes the configured defaultProfile in description", () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValue({
+      enabled: true,
+      controlPort: 18791,
+      defaultProfile: "browserbase",
+    });
+    const tool = createBrowserTool();
+    expect(tool.description).toContain('"browserbase"');
+    expect(tool.description).not.toContain('Use profile="openclaw" for');
+  });
+
+  it("falls back to 'openclaw' when config resolution fails", () => {
+    browserConfigMocks.resolveBrowserConfig.mockImplementation(() => {
+      throw new Error("config broken");
+    });
+    const tool = createBrowserTool();
+    expect(tool.description).toContain('"openclaw"');
+  });
+
+  it("uses config passed via opts instead of loading from disk", () => {
+    const mockConfig = { browser: { defaultProfile: "remote" } };
+    browserConfigMocks.resolveBrowserConfig.mockReturnValue({
+      enabled: true,
+      controlPort: 18791,
+      defaultProfile: "remote",
+    });
+    const tool = createBrowserTool({
+      config: mockConfig as ReturnType<typeof import("../../config/config.js").loadConfig>,
+    });
+    expect(tool.description).toContain('"remote"');
+    // loadConfig should not be called when config is passed directly
+    expect(configMocks.loadConfig).not.toHaveBeenCalled();
   });
 });
