@@ -85,6 +85,7 @@ describe("web_search perplexity compatibility routing", () => {
   });
 
   it("treats unrecognized configured keys as direct Perplexity by default", () => {
+    // pragma: allowlist secret
     expect(
       resolvePerplexityTransport({
         apiKey: "enterprise-perplexity-test",

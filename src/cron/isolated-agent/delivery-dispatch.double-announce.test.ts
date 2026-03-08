@@ -177,10 +177,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
-    // First countActiveDescendantRuns call returns >0 (had descendants), second returns 0
+    // 1st: hasPendingDescendantFollowup (outer) → 2 so we take announce path
+    // 2nd: initial activeSubagentRuns in deliverViaAnnounce → 2 so we enter wait block
+    // 3rd: after wait → 0 so hadDescendants stays true, then stale-interim suppression
     vi.mocked(countActiveDescendantRuns)
-      .mockReturnValueOnce(2) // initial check → hadDescendants=true, enters wait block
-      .mockReturnValueOnce(0); // second check after wait → activeSubagentRuns=0
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(0);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     // synthesizedText matches initialSynthesizedText & isLikelyInterimCronMessage → stale interim
@@ -210,6 +213,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("normal announce success delivers exactly once and sets deliveryAttempted=true", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true); // force announce path (no direct)
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(true);
 
@@ -236,6 +240,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("announce failure falls back to direct delivery exactly once (no double-deliver)", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true); // force announce path (no direct)
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     // Announce fails: runSubagentAnnounceFlow returns false
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(false);

@@ -665,10 +665,10 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
   return undefined;
 }
 
+// pragma: allowlist secret
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
   apiKeySource: PerplexityApiKeySource = "none",
-  // pragma: allowlist secret
   apiKey?: string,
 ): string {
   const fromConfig =
