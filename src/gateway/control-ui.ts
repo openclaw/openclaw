@@ -275,11 +275,12 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
+
+  // Pass non-GET/HEAD requests through so downstream handlers (plugin HTTP
+  // routes/handlers, webhooks, etc.) are not blocked by the Control UI SPA
+  // fallback.  The SPA only serves static assets and never handles POST.
   if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
+    return false;
   }
 
   const url = new URL(urlRaw, "http://localhost");
