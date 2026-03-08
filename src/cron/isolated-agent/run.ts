@@ -304,7 +304,10 @@ export async function runCronIsolatedAgentTurn(params: {
   const modelOverrideRaw =
     params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
   const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
-  if (modelOverride !== undefined && modelOverride.length > 0) {
+  // Support "default" as a special value to use system default model at runtime
+  // This allows cron jobs to follow the system default_model configuration
+  // without being hardcoded to a specific provider/model
+  if (modelOverride !== undefined && modelOverride.length > 0 && modelOverride !== "default") {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: cfgWithAgentDefaults,
       catalog: await loadCatalog(),
