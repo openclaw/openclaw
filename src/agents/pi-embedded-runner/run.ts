@@ -21,6 +21,7 @@ import {
   markAuthProfileUsed,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
+import { resolveCaMeLConfig } from "../camel/config.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -277,6 +278,21 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         config: params.config,
+      });
+      const defaultsCamel = params.config?.agents?.defaults?.camel;
+      const globalCamel = params.config?.agents?.camel;
+      const agentCamel = params.config?.agents?.list?.find(
+        (entry) => entry.id === workspaceResolution.agentId,
+      )?.camel;
+      const camelConfig = resolveCaMeLConfig({
+        ...defaultsCamel,
+        ...globalCamel,
+        ...agentCamel,
+        policies: {
+          ...defaultsCamel?.policies,
+          ...globalCamel?.policies,
+          ...agentCamel?.policies,
+        },
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
@@ -797,6 +813,9 @@ export async function runEmbeddedPiAgent(
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
+        // Track whether CaMeL already executed side-effect tools to prevent
+        // replaying them on retry (exec, write, message are not idempotent).
+        let camelSideEffectsAlreadyRan = false;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -910,7 +929,12 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            camelConfig: camelSideEffectsAlreadyRan ? undefined : camelConfig,
           });
+
+          if (attempt.camelSideEffectsExecuted) {
+            camelSideEffectsAlreadyRan = true;
+          }
 
           const {
             aborted,
