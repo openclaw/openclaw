@@ -114,7 +114,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(cameraOk)
     }
 
-  var pendingLocationMode by remember { mutableStateOf<LocationMode?>(null) }
+  var pendingLocationRequest by remember { mutableStateOf(false) }
   var pendingPreciseToggle by remember { mutableStateOf(false) }
 
   val locationPermissionLauncher =
@@ -122,8 +122,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       val fineOk = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true
       val coarseOk = perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
       val granted = fineOk || coarseOk
-      val requestedMode = pendingLocationMode
-      pendingLocationMode = null
 
       if (pendingPreciseToggle) {
         pendingPreciseToggle = false
@@ -131,21 +129,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
         return@rememberLauncherForActivityResult
       }
 
-      if (!granted) {
-        viewModel.setLocationMode(LocationMode.Off)
-        return@rememberLauncherForActivityResult
-      }
-
-      if (requestedMode != null) {
-        viewModel.setLocationMode(requestedMode)
-        if (requestedMode == LocationMode.Always) {
-          val backgroundOk =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-              PackageManager.PERMISSION_GRANTED
-          if (!backgroundOk) {
-            openAppSettings(context)
-          }
-        }
+      if (pendingLocationRequest) {
+        pendingLocationRequest = false
+        viewModel.setLocationMode(if (granted) LocationMode.WhileUsing else LocationMode.Off)
       }
     }
 
@@ -309,7 +295,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   }
 
-  fun requestLocationPermissions(targetMode: LocationMode) {
+  fun requestLocationPermissions() {
     val fineOk =
       ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
@@ -317,17 +303,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
       ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     if (fineOk || coarseOk) {
-      viewModel.setLocationMode(targetMode)
-      if (targetMode == LocationMode.Always) {
-        val backgroundOk =
-          ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!backgroundOk) {
-          openAppSettings(context)
-        }
-      }
+      viewModel.setLocationMode(LocationMode.WhileUsing)
     } else {
-      pendingLocationMode = targetMode
+      pendingLocationRequest = true
       locationPermissionLauncher.launch(
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
       )
@@ -783,20 +761,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             trailingContent = {
               RadioButton(
                 selected = locationMode == LocationMode.WhileUsing,
-                onClick = { requestLocationPermissions(LocationMode.WhileUsing) },
-              )
-            },
-          )
-          HorizontalDivider(color = mobileBorder)
-          ListItem(
-            modifier = Modifier.fillMaxWidth(),
-            colors = listItemColors,
-            headlineContent = { Text("Always", style = mobileHeadline) },
-            supportingContent = { Text("Allow background location (requires system permission).", style = mobileCallout) },
-            trailingContent = {
-              RadioButton(
-                selected = locationMode == LocationMode.Always,
-                onClick = { requestLocationPermissions(LocationMode.Always) },
+                onClick = { requestLocationPermissions() },
               )
             },
           )
@@ -816,13 +781,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
           )
         }
       }
-    item {
-      Text(
-        "Always may require Android Settings to allow background location.",
-        style = mobileCallout,
-        color = mobileTextSecondary,
-      )
-    }
       item { HorizontalDivider(color = mobileBorder) }
 
     // Screen
