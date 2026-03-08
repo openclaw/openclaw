@@ -32,6 +32,8 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
   [Security hardening for network exposure](/gateway/security#04-network-exposure-bind--port--firewall),
   especially Docker `DOCKER-USER` firewall policy.
 
+**Security note:** For production deployments, consider using [Docker Hardened Images (DHI)](/install/docker-hardened-images) for enhanced security and reduced vulnerabilities.
+
 ## Containerized Gateway (Docker Compose)
 
 ### Quick start (recommended)
