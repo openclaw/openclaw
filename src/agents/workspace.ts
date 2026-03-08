@@ -141,7 +141,7 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_ALT_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  name: string;
   path: string;
   content?: string;
   missing: boolean;
@@ -164,19 +164,6 @@ type WorkspaceOnboardingState = {
   bootstrapSeededAt?: string;
   onboardingCompletedAt?: string;
 };
-
-/** Set of recognized bootstrap filenames for runtime validation */
-const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
-  DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-  DEFAULT_MEMORY_ALT_FILENAME,
-]);
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
@@ -614,23 +601,14 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
-      diagnostics.push({
-        path: filePath,
-        reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
-      });
-      continue;
-    }
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
       files.push({
-        name: baseName as WorkspaceBootstrapFileName,
+        name: baseName,
         path: filePath,
         content: loaded.content,
         missing: false,
