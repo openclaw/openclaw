@@ -23,8 +23,34 @@ type DeliverWithParams = Omit<
   Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit">>;
 type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
+const triggerInternalHookMock = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  createInternalHookEvent: (
+    type: string,
+    action: string,
+    sessionKey: string,
+    context: unknown,
+  ) => ({
+    type,
+    action,
+    sessionKey,
+    context,
+  }),
+  triggerInternalHook: (...args: unknown[]) => triggerInternalHookMock(...args),
+}));
+
+vi.mock("../../hooks/fire-and-forget.js", () => ({
+  fireAndForgetHook: (promise: Promise<void>) => void promise.catch(() => {}),
+}));
+
+vi.mock("../../hooks/message-hook-mappers.js", () => ({
+  buildCanonicalSentMessageHookContext: (params: Record<string, unknown>) => params,
+  toInternalMessageSentContext: (canonical: Record<string, unknown>) => canonical,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -112,6 +138,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
     messageHookRunner.runMessageSent.mockReset();
+    triggerInternalHookMock.mockClear();
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
@@ -764,5 +791,69 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("emits message:sent internal hook when sessionKey is provided", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 42, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+      sessionKey: "telegram:123",
+      isGroup: false,
+    });
+
+    expect(triggerInternalHookMock).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "sent",
+        sessionKey: "telegram:123",
+      }),
+    );
+  });
+
+  it("does not emit message:sent internal hook when sessionKey is absent", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 43, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+  });
+
+  it("emits message:sent internal hook with success=false on delivery error", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockRejectedValue(new Error("send failed"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverReplies({
+        ...baseDeliveryParams,
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+        sessionKey: "telegram:456",
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(triggerInternalHookMock).toHaveBeenCalledTimes(1);
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "sent",
+        sessionKey: "telegram:456",
+      }),
+    );
   });
 });

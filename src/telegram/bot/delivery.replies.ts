@@ -4,6 +4,12 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose } from "../../globals.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+} from "../../hooks/message-hook-mappers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
@@ -512,6 +518,12 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** Session key for emitting message:sent internal hooks. */
+  sessionKey?: string;
+  /** Whether the conversation is a group chat (for hook context). */
+  isGroup?: boolean;
+  /** Group identifier for hook context. */
+  groupId?: string;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -637,6 +649,33 @@ export async function deliverReplies(params: {
           },
         );
       }
+      if (params.sessionKey) {
+        const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
+        const canonical = buildCanonicalSentMessageHookContext({
+          to: params.chatId,
+          content: contentForSentHook,
+          success: deliveredThisReply,
+          channelId: "telegram",
+          accountId: params.accountId,
+          conversationId: params.chatId,
+          isGroup: params.isGroup,
+          groupId: params.groupId,
+        });
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent(
+              "message",
+              "sent",
+              params.sessionKey,
+              toInternalMessageSentContext(canonical),
+            ),
+          ),
+          "telegram deliverReplies: message:sent internal hook failed",
+          (message) => {
+            logVerbose(message);
+          },
+        );
+      }
     } catch (error) {
       if (hasMessageSentHooks) {
         void hookRunner?.runMessageSent(
@@ -650,6 +689,33 @@ export async function deliverReplies(params: {
             channelId: "telegram",
             accountId: params.accountId,
             conversationId: params.chatId,
+          },
+        );
+      }
+      if (params.sessionKey) {
+        const canonical = buildCanonicalSentMessageHookContext({
+          to: params.chatId,
+          content: contentForSentHook,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          channelId: "telegram",
+          accountId: params.accountId,
+          conversationId: params.chatId,
+          isGroup: params.isGroup,
+          groupId: params.groupId,
+        });
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent(
+              "message",
+              "sent",
+              params.sessionKey,
+              toInternalMessageSentContext(canonical),
+            ),
+          ),
+          "telegram deliverReplies: message:sent internal hook failed",
+          (message) => {
+            logVerbose(message);
           },
         );
       }
