@@ -15,6 +15,7 @@ export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
 export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
+const UNLOADED_SNAPSHOT_THRESHOLD = 2;
 
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
@@ -66,7 +67,7 @@ export async function inspectGatewayRestart(params: {
   let runtime: GatewayServiceRuntime = { status: "unknown" };
   let serviceLoaded: boolean | null = null;
   try {
-    serviceLoaded = await params.service.isLoaded(env);
+    serviceLoaded = await params.service.isLoaded({ env });
   } catch {
     serviceLoaded = null;
   }
@@ -166,13 +167,19 @@ export async function waitForGatewayHealthyRestart(params: {
     env: params.env,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
   });
+  let unloadedSnapshots = 0;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
       return snapshot;
     }
     if (snapshot.serviceLoaded === false) {
-      return snapshot;
+      unloadedSnapshots += 1;
+      if (unloadedSnapshots >= UNLOADED_SNAPSHOT_THRESHOLD) {
+        return snapshot;
+      }
+    } else {
+      unloadedSnapshots = 0;
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return snapshot;

@@ -94,9 +94,13 @@ rm -f "$0"
 # Wait briefly to ensure file locks are released after update.
 sleep 1
 # Hard-reset launchd state to avoid stale runtime / unloaded-label drift.
-launchctl bootout 'gui/${uid}/${escaped}' 2>/dev/null || true
-launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null || true
-launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+if [ -f '${escapedPlistPath}' ] && plutil -lint '${escapedPlistPath}' >/dev/null 2>&1; then
+  launchctl bootout 'gui/${uid}/${escaped}' 2>/dev/null || true
+  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null || true
+  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+else
+  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+fi
 # Self-cleanup
 rm -f "$0"
 `;

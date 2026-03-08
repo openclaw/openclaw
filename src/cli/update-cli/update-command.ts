@@ -559,7 +559,7 @@ async function maybeRestartService(params: {
         }
       }
 
-      if (!params.opts.json && restartInitiated) {
+      if (restartInitiated) {
         const service = resolveGatewayService();
         let health = await waitForGatewayHealthyRestart({
           service,
@@ -597,9 +597,9 @@ async function maybeRestartService(params: {
           });
         }
 
-        if (health.healthy) {
+        if (!params.opts.json && health.healthy) {
           defaultRuntime.log(theme.success("Daemon restart completed."));
-        } else {
+        } else if (!params.opts.json) {
           defaultRuntime.log(theme.warn("Gateway did not become healthy after restart."));
           for (const line of renderRestartDiagnostics(health)) {
             defaultRuntime.log(theme.muted(line));
@@ -610,7 +610,9 @@ async function maybeRestartService(params: {
             ),
           );
         }
-        defaultRuntime.log("");
+        if (!params.opts.json) {
+          defaultRuntime.log("");
+        }
       }
     } catch (err) {
       if (!params.opts.json) {

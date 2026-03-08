@@ -558,9 +558,25 @@ describe("update-cli", () => {
     serviceLoaded
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
 
     await updateCommand({});
+
+    expect(runRestartScript).toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalledTimes(2);
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-registers the gateway in json mode when detached restart leaves the service unloaded", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    await updateCommand({ json: true });
 
     expect(runRestartScript).toHaveBeenCalled();
     expect(runDaemonInstall).toHaveBeenCalledTimes(2);

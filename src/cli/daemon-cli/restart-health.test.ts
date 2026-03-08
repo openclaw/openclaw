@@ -206,4 +206,68 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
   });
+
+  it("passes env with the expected wrapper to service.isLoaded", async () => {
+    const env = { OPENCLAW_PROFILE: "ziggy" } as NodeJS.ProcessEnv;
+    const service = {
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, ppid: 1, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    await inspectGatewayRestart({ service, port: 18789, env });
+
+    expect((service as { isLoaded: ReturnType<typeof vi.fn> }).isLoaded).toHaveBeenCalledWith({
+      env,
+    });
+  });
+});
+
+describe("waitForGatewayHealthyRestart", () => {
+  beforeEach(() => {
+    inspectPortUsage.mockReset();
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, ppid: 1, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    classifyPortListener.mockReset();
+    classifyPortListener.mockReturnValue("gateway");
+    probeGateway.mockReset();
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("does not stop on a single transient unloaded snapshot", async () => {
+    const service = {
+      isLoaded: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      readRuntime: vi.fn(async () => ({ status: "running", state: "running", pid: 4242 })),
+    } as unknown as GatewayService;
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 2,
+      delayMs: 0,
+    });
+
+    expect((service as { isLoaded: ReturnType<typeof vi.fn> }).isLoaded).toHaveBeenCalledTimes(2);
+    expect(snapshot.serviceLoaded).toBe(true);
+    expect(snapshot.healthy).toBe(true);
+  });
 });
