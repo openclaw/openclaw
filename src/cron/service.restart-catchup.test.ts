@@ -69,7 +69,7 @@ describe("CronService restart catch-up", () => {
       "digest now",
       expect.objectContaining({ agentId: undefined }),
     );
-    expect(requestHeartbeatNow).toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((job) => job.id === "restart-overdue-job");

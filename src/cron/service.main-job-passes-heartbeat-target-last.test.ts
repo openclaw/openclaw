@@ -112,8 +112,9 @@ describe("cron main job passes heartbeat target=last", () => {
 
     await runSingleTick(cron);
 
-    // wakeMode=next-heartbeat uses requestHeartbeatNow, not runHeartbeatOnce
-    expect(requestHeartbeatNow).toHaveBeenCalled();
+    // wakeMode=next-heartbeat should NOT call requestHeartbeatNow — the queued
+    // system event will be picked up by the next scheduled heartbeat (#14440).
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
     // runHeartbeatOnce should NOT have been called for next-heartbeat mode
     expect(runHeartbeatOnce).not.toHaveBeenCalled();
   });

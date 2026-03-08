@@ -1031,11 +1031,17 @@ export async function executeJobCore(
       if (abortSignal?.aborted) {
         return resolveAbortError();
       }
-      state.deps.requestHeartbeatNow({
-        reason: `cron:${job.id}`,
-        agentId: job.agentId,
-        sessionKey: targetMainSessionKey,
-      });
+      // wakeMode=now without runHeartbeatOnce still needs requestHeartbeatNow
+      // as a fallback. wakeMode=next-heartbeat should NOT trigger an immediate
+      // heartbeat — the system event is already enqueued above and the next
+      // scheduled heartbeat interval will pick it up (#14440).
+      if (job.wakeMode === "now") {
+        state.deps.requestHeartbeatNow({
+          reason: `cron:${job.id}`,
+          agentId: job.agentId,
+          sessionKey: targetMainSessionKey,
+        });
+      }
       return { status: "ok", summary: text };
     }
   }
