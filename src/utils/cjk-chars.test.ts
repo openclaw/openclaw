@@ -81,7 +81,6 @@ describe("estimateStringChars", () => {
     // "你" counts as 4, emoji remains 2 => total 6
     expect(estimateStringChars("你😀")).toBe(6);
   });
-
   it("yields ~1 token per CJK char when divided by CHARS_PER_TOKEN_ESTIMATE", () => {
     // 10 CJK chars should estimate as ~10 tokens
     const cjk = "这是一个测试用的句子呢";
