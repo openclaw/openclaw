@@ -2233,6 +2233,11 @@ main() {
         exit 1
     fi
 
+    # Step 3: Git (required for all install methods)
+    if ! check_git; then
+        install_git
+    fi
+
     ui_stage "Installing OpenClaw"
 
     local final_git_dir=""
@@ -2258,15 +2263,10 @@ main() {
             ui_success "git wrapper removed"
         fi
 
-        # Step 3: Git (required for npm installs that may fetch from git or apply patches)
-        if ! check_git; then
-            install_git
-        fi
-
-        # Step 4: npm permissions (Linux)
+        # Step 3: npm permissions (Linux)
         fix_npm_permissions
 
-        # Step 5: OpenClaw
+        # Step 4: OpenClaw
         install_openclaw
     fi
 
