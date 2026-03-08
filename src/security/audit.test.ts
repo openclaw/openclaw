@@ -2853,10 +2853,12 @@ description: test skill
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     const prevSlackBotToken = process.env.SLACK_BOT_TOKEN;
     const prevSlackAppToken = process.env.SLACK_APP_TOKEN;
+    const prevSlackUserToken = process.env.SLACK_USER_TOKEN;
     delete process.env.DISCORD_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.SLACK_BOT_TOKEN;
     delete process.env.SLACK_APP_TOKEN;
+    delete process.env.SLACK_USER_TOKEN;
     const stateDir = sharedExtensionsStateDir;
 
     try {
@@ -2895,6 +2897,11 @@ description: test skill
         delete process.env.SLACK_APP_TOKEN;
       } else {
         process.env.SLACK_APP_TOKEN = prevSlackAppToken;
+      }
+      if (prevSlackUserToken == null) {
+        delete process.env.SLACK_USER_TOKEN;
+      } else {
+        process.env.SLACK_USER_TOKEN = prevSlackUserToken;
       }
     }
   });
