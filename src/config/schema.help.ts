@@ -547,12 +547,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
     "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+  "tools.byModel":
+    "Per-model tool allow/deny overrides keyed by model ID (e.g., 'openai/gpt-4o', 'claude-3-opus'). Use this to restrict dangerous tools for less capable models or enable model-specific capabilities. Supports glob patterns like 'gpt-*'.",
   "agents.list[].tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.list[].tools.alsoAllow":
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
+  "agents.list[].tools.byModel":
+    "Per-agent model-specific tool policy overrides keyed by model ID. Use this to apply different tool restrictions per model, such as denying exec for smaller models while allowing it for capable ones.",
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
   "tools.links.enabled":
