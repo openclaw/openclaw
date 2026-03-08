@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   normalizeAntigravityModelId,
+  normalizeGoogleModelId,
   normalizeProviders,
   type ProviderConfig,
 } from "./models-config.providers.js";
@@ -44,6 +45,13 @@ describe("normalizeAntigravityModelId", () => {
     "claude-opus-4-6-thinking",
   ])("keeps already-tiered and non-pro ids unchanged: %s", (id) => {
     expect(normalizeAntigravityModelId(id)).toBe(id);
+  });
+});
+
+describe("normalizeGoogleModelId", () => {
+  it("maps the deprecated 3.1 flash alias to the real preview model", () => {
+    expect(normalizeGoogleModelId("gemini-3.1-flash")).toBe("gemini-3-flash-preview");
+    expect(normalizeGoogleModelId("gemini-3.1-flash-preview")).toBe("gemini-3-flash-preview");
   });
 });
 

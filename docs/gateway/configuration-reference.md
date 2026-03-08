@@ -916,7 +916,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 | `sonnet`       | `anthropic/claude-sonnet-4-5`   |
 | `gpt`          | `openai/gpt-5.2`                |
 | `gpt-mini`     | `openai/gpt-5-mini`             |
-| `gemini`       | `google/gemini-3-pro-preview`   |
+| `gemini`       | `google/gemini-3.1-pro-preview` |
 | `gemini-flash` | `google/gemini-3-flash-preview` |
 
 Your configured aliases always win over defaults.
