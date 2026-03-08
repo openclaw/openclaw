@@ -179,6 +179,28 @@ describe("buildInlineProviderModels", () => {
     expect(result).toHaveLength(1);
     expect(result[0].headers).toBeUndefined();
   });
+
+  it("preserves literal marker-shaped headers in inline provider models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Managed": "secretref-managed",
+      "X-Static": "tenant-a",
+    });
+  });
 });
 
 describe("resolveModel", () => {
@@ -220,6 +242,56 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("preserves literal marker-shaped provider headers in fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: {
+              Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+              "X-Managed": "secretref-managed",
+              "X-Custom-Auth": "token-123",
+            },
+            models: [makeModel("listed-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+      "X-Managed": "secretref-managed",
+      "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("drops marker headers from discovered models.json entries", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "listed-model",
+      templateModel: {
+        ...makeModel("listed-model"),
+        provider: "custom",
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+      },
+    });
+
+    const result = resolveModel("custom", "listed-model", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Static": "tenant-a",
     });
   });
 
