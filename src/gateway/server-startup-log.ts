@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveModelAuthMode } from "../agents/model-auth.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
@@ -23,6 +25,18 @@ export function logGatewayStartup(params: {
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });
+
+  const authMode = resolveModelAuthMode(agentProvider, params.cfg);
+  if (authMode === "unknown") {
+    const warning = [
+      `No auth configured for provider "${agentProvider}".`,
+      `The agent model ${modelRef} will fail until credentials are added.`,
+      `Fix: ${formatCliCommand(`openclaw auth login ${agentProvider}`)}`,
+      `or set the appropriate API key environment variable,`,
+      `or switch models: ${formatCliCommand("openclaw models set <provider/model>")}.`,
+    ].join(" ");
+    params.log.warn(warning);
+  }
   const scheme = params.tlsEnabled ? "wss" : "ws";
   const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
   const hosts =
