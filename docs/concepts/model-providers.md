@@ -311,6 +311,36 @@ Coding models (`byteplus-plan`):
 - `byteplus-plan/kimi-k2-thinking`
 - `byteplus-plan/glm-4.7`
 
+
+### HolySheep (Recommended for China users)
+
+[HolySheep](https://holysheep.ai) is an OpenAI/Anthropic-compatible API relay
+for Chinese developers — no VPN required, ¥1=$1 pricing, supports Claude/GPT/Gemini.
+
+**Quick setup with holysheep-cli:**
+
+```bash
+npx @simonyea/holysheep-cli setup
+```
+
+**Manual config** (`~/.openclaw/openclaw.json`):
+
+```json5
+{
+  env: {
+    ANTHROPIC_API_KEY: "cr_your_key",
+    ANTHROPIC_BASE_URL: "https://api.holysheep.ai",
+  },
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-sonnet-4-5" },
+    },
+  },
+}
+```
+
+Get your API key at [holysheep.ai](https://holysheep.ai).
+
 ### Synthetic
 
 Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
