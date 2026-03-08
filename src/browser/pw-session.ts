@@ -24,6 +24,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { isExtensionRelayCdpEndpoint, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -398,14 +399,70 @@ async function pageTargetId(page: Page): Promise<string | null> {
   }
 }
 
+function matchPageByTargetList(
+  pages: Page[],
+  targets: Array<{ id: string; url: string; title?: string }>,
+  targetId: string,
+): Page | null {
+  const target = targets.find((entry) => entry.id === targetId);
+  if (!target) {
+    return null;
+  }
+
+  const urlMatch = pages.filter((page) => page.url() === target.url);
+  if (urlMatch.length === 1) {
+    return urlMatch[0] ?? null;
+  }
+  if (urlMatch.length > 1) {
+    const sameUrlTargets = targets.filter((entry) => entry.url === target.url);
+    if (sameUrlTargets.length === urlMatch.length) {
+      const idx = sameUrlTargets.findIndex((entry) => entry.id === targetId);
+      if (idx >= 0 && idx < urlMatch.length) {
+        return urlMatch[idx] ?? null;
+      }
+    }
+  }
+  return null;
+}
+
+async function findPageByTargetIdViaTargetList(
+  pages: Page[],
+  targetId: string,
+  cdpUrl: string,
+): Promise<Page | null> {
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+  const targets = await fetchJson<
+    Array<{
+      id: string;
+      url: string;
+      title?: string;
+    }>
+  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
+  return matchPageByTargetList(pages, targets, targetId);
+}
+
 async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
+  const isExtensionRelay = cdpUrl
+    ? await isExtensionRelayCdpEndpoint(cdpUrl).catch(() => false)
+    : false;
+  if (cdpUrl && isExtensionRelay) {
+    try {
+      const matched = await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
+      if (matched) {
+        return matched;
+      }
+    } catch {
+      // Ignore fetch errors and fall through to best-effort single-page fallback.
+    }
+    return pages.length === 1 ? (pages[0] ?? null) : null;
+  }
+
   let resolvedViaCdp = false;
-  // First, try the standard CDP session approach
   for (const page of pages) {
     let tid: string | null = null;
     try {
@@ -418,45 +475,15 @@ async function findPageByTargetId(
       return page;
     }
   }
-  // Extension relays can block CDP attachment APIs entirely. If that happens and
-  // Playwright only exposes one page, return it as the best available mapping.
-  if (!resolvedViaCdp && pages.length === 1) {
-    return pages[0];
-  }
-  // If CDP sessions fail (e.g., extension relay blocks Target.attachToBrowserTarget),
-  // fall back to URL-based matching using the /json/list endpoint
   if (cdpUrl) {
     try {
-      const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
-      const targets = await fetchJson<
-        Array<{
-          id: string;
-          url: string;
-          title?: string;
-        }>
-      >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
-      const target = targets.find((t) => t.id === targetId);
-      if (target) {
-        // Try to find a page with matching URL
-        const urlMatch = pages.filter((p) => p.url() === target.url);
-        if (urlMatch.length === 1) {
-          return urlMatch[0];
-        }
-        // If multiple URL matches, use index-based matching as fallback
-        // This works when Playwright and the relay enumerate tabs in the same order
-        if (urlMatch.length > 1) {
-          const sameUrlTargets = targets.filter((t) => t.url === target.url);
-          if (sameUrlTargets.length === urlMatch.length) {
-            const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
-            if (idx >= 0 && idx < urlMatch.length) {
-              return urlMatch[idx];
-            }
-          }
-        }
-      }
+      return await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
     } catch {
-      // Ignore fetch errors and fall through to return null
+      // Ignore fetch errors and fall through to return null.
     }
+  }
+  if (!resolvedViaCdp && pages.length === 1) {
+    return pages[0] ?? null;
   }
   return null;
 }
@@ -806,14 +833,18 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   try {
     await page.bringToFront();
   } catch (err) {
-    const session = await page.context().newCDPSession(page);
     try {
-      await session.send("Page.bringToFront");
+      await withPageScopedCdpClient({
+        cdpUrl: opts.cdpUrl,
+        page,
+        targetId: opts.targetId,
+        fn: async (send) => {
+          await send("Page.bringToFront");
+        },
+      });
       return;
     } catch {
       throw err;
-    } finally {
-      await session.detach().catch(() => {});
     }
   }
 }

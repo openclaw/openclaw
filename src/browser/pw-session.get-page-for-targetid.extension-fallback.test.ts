@@ -115,4 +115,67 @@ describe("pw-session getPageForTargetId", () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it("resolves extension-relay pages from /json/list without probing page CDP sessions first", async () => {
+    const pageOn = vi.fn();
+    const contextOn = vi.fn();
+    const browserOn = vi.fn();
+    const browserClose = vi.fn(async () => {});
+    const newCDPSession = vi.fn(async () => {
+      throw new Error("Target.attachToBrowserTarget: Not allowed");
+    });
+
+    const context = {
+      pages: () => [],
+      on: contextOn,
+      newCDPSession,
+    } as unknown as import("playwright-core").BrowserContext;
+
+    const pageA = {
+      on: pageOn,
+      context: () => context,
+      url: () => "https://alpha.example",
+    } as unknown as import("playwright-core").Page;
+    const pageB = {
+      on: pageOn,
+      context: () => context,
+      url: () => "https://beta.example",
+    } as unknown as import("playwright-core").Page;
+
+    (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
+
+    const browser = {
+      contexts: () => [context],
+      on: browserOn,
+      close: browserClose,
+    } as unknown as import("playwright-core").Browser;
+
+    connectOverCdpSpy.mockResolvedValue(browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fetchSpy
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ Browser: "OpenClaw/extension-relay" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          { id: "TARGET_A", url: "https://alpha.example" },
+          { id: "TARGET_B", url: "https://beta.example" },
+        ],
+      } as Response);
+
+    try {
+      const resolved = await getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:19993",
+        targetId: "TARGET_B",
+      });
+      expect(resolved).toBe(pageB);
+      expect(newCDPSession).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });

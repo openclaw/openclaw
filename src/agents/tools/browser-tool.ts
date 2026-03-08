@@ -115,6 +115,7 @@ type BrowserProxyResult = {
 };
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -206,10 +207,11 @@ async function callBrowserProxy(params: {
   timeoutMs?: number;
   profile?: string;
 }): Promise<BrowserProxyResult> {
-  const gatewayTimeoutMs =
+  const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
+  const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
   const payload = await callGatewayTool<{ payloadJSON?: string; payload?: string }>(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
@@ -221,7 +223,7 @@ async function callBrowserProxy(params: {
         path: params.path,
         query: params.query,
         body: params.body,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: proxyTimeoutMs,
         profile: params.profile,
       },
       idempotencyKey: crypto.randomUUID(),

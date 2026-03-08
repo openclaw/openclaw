@@ -46,3 +46,19 @@ export function isRetryableReconnectError(err) {
   }
   return true;
 }
+
+export function isMissingTabError(err) {
+  const message = (err instanceof Error ? err.message : String(err || "")).toLowerCase();
+  return (
+    message.includes("no tab with id") ||
+    message.includes("no tab with given id") ||
+    message.includes("tab not found")
+  );
+}
+
+export function isLastRemainingTab(allTabs, tabIdToClose) {
+  if (!Array.isArray(allTabs)) {
+    return true;
+  }
+  return allTabs.filter((tab) => tab && tab.id !== tabIdToClose).length === 0;
+}
