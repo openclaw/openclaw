@@ -65,6 +65,7 @@ services:
           fi
         fi
         chown -R node:node /home/node/.openclaw/workspace/skills /home/node/.openclaw/workspace/scripts 2>/dev/null || true
+        chmod +x /home/node/.openclaw/workspace/skills/twitter-openclaw/bin/twclaw.js 2>/dev/null || true
 
         exec su -s /bin/sh node -c '
           daily_date=$$(TZ=America/New_York date +%F)
