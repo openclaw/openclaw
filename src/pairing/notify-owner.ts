@@ -40,7 +40,10 @@ function buildNotificationText(params: {
 function sanitizeField(value: string, maxLength: number): string {
   // Strip C0/C1 control chars and zero-width/bidi chars that could be used for injection.
   // eslint-disable-next-line no-control-regex -- intentional: sanitizing untrusted input
-  const cleaned = value.replace(/[\u0000-\u001F\u007F\u200B-\u200F\u2028-\u202F\uFEFF]/g, "");
+  const cleaned = value.replace(
+    /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\uFEFF]/g,
+    "",
+  );
   return cleaned.slice(0, maxLength);
 }
 
@@ -53,7 +56,6 @@ async function sendNotification(params: {
   notifyConfig: PairingNotifyConfig;
   text: string;
   sendDeps?: OutboundSendDeps;
-  cfg?: OpenClawConfig;
 }): Promise<void> {
   const { notifyConfig, text, sendDeps } = params;
   const target = notifyConfig.target?.trim();
@@ -119,6 +121,12 @@ async function sendNotification(params: {
       await send(target, text, { accountId });
       break;
     }
+    case "matrix":
+    case "msteams":
+      log.error(
+        `pairing-notify: channel "${channel}" is not yet supported — notification not sent`,
+      );
+      break;
     default:
       log.warn(`pairing-notify: unsupported notification channel "${channel}"`);
   }
@@ -171,7 +179,6 @@ export function registerPairingNotifyHook(deps: PairingNotifyDeps): void {
         notifyConfig,
         text,
         sendDeps: deps.sendDeps,
-        cfg: deps.cfg,
       });
     } catch (err) {
       log.warn(
@@ -182,8 +189,10 @@ export function registerPairingNotifyHook(deps: PairingNotifyDeps): void {
 
   registeredHandler = handler;
   registerInternalHook("pairing:request", handler);
+  const target = notifyConfig.target!; // Guaranteed by resolvePairingNotifyConfig
+  const maskedTarget = target.length > 4 ? `***${target.slice(-4)}` : "****";
   log.info(
-    `pairing-notify: hook registered (channel=${notifyConfig.channel || "imessage"}, target=${notifyConfig.target})`,
+    `pairing-notify: hook registered (channel=${notifyConfig.channel || "imessage"}, target=${maskedTarget})`,
   );
 }
 
