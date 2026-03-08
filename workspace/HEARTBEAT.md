@@ -11,7 +11,8 @@
 - [ ] (Monday) **Data cleanup**: Delete `data/daily/` folders older than 14 days
 - [ ] **Daily Data Drop**: Check if `data/daily/YYYY-MM-DD/data_drop_draft.md` exists. If NOT, fetch metrics via `exec node scripts/fetch-metrics.mjs`, draft tweet, save to file, send preview to Gilberts. If file exists, skip
 - [ ] **Changelog Update**: Check if `data/daily/YYYY-MM-DD/changelog_draft.md` exists. If NOT, fetch changelog via `exec node scripts/fetch-changelog.mjs`, check for new entries, draft tweet if found, save to file, send preview. If file exists, skip
-- [ ] On approval for either draft, create Typefully draft and confirm to Gilberts
+- [ ] **Community Engagement** (10:00 AM): Check if `data/daily/YYYY-MM-DD/engagement_actions.md` exists. If NOT, search for relevant tweets via twclaw, propose up to 5 interactions to Gilberts, wait for approval. If file exists, skip
+- [ ] On approval for any draft or engagement, execute and confirm to Gilberts
 
 ## Anti-Repetition Rules
 

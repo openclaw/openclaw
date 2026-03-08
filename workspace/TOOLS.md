@@ -39,7 +39,23 @@ typefully drafts:list --status scheduled
 - Threads: 4 line breaks between tweets, numbered `1/`, `2/`, `3/`
 - Save locally in `data/daily/YYYY-MM-DD/` or `data/weekly/YYYY-WNN/` before creating draft
 
-## Tool 2: trust8004 API (Ecosystem Metrics)
+## Tool 2: twclaw (Twitter/X Interaction)
+
+```bash
+twclaw search "query" -n 10 --popular --json    # Search tweets
+twclaw like <tweet-url> --yes                    # Like a tweet
+twclaw reply <tweet-url> "text" --yes            # Reply to a tweet
+twclaw retweet <tweet-url> --yes                 # Retweet
+twclaw read <tweet-url>                          # Read a tweet
+twclaw user-tweets <@handle> -n 10               # User's recent tweets
+twclaw mentions -n 10                            # Our mentions
+```
+
+Requires `TWITTER_BEARER_TOKEN` (OAuth 2.0 User Access Token) and `TWITTER_USER_ID`.
+All write actions (`like`, `reply`, `retweet`, `tweet`) need `--yes` flag.
+ALL interactions require Gilberts approval first.
+
+## Tool 3: trust8004 API (Ecosystem Metrics)
 
 ```bash
 exec node scripts/fetch-metrics.mjs
@@ -64,7 +80,7 @@ exec node scripts/fetch-changelog.mjs
 
 Returns JSON array of `{ date, version, type, title, description, highlights }`. Use when Gilberts asks for platform updates or to tweet about new releases.
 
-## Tool 3: Data Logging
+## Tool 4: Data Logging
 
 All data saved in `data/`. Active log: `data/daily/YYYY-MM-DD/data_drop_draft.md`.
 

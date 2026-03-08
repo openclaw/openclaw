@@ -11,7 +11,7 @@
 
 ## Typefully Free Tier Budget (15 posts/month, max 5 drafts, max 3 scheduled)
 
-Only **Daily Data Drop** is active. All other campaigns are paused.
+**Active campaigns:** Daily Data Drop, Changelog Update, Community Engagement.
 
 **Rules:**
 
@@ -21,17 +21,19 @@ Only **Daily Data Drop** is active. All other campaigns are paused.
 
 ## Tools & Logging
 
-| Campaign         | Tool                                | Log File             | Log Folder          |
-| ---------------- | ----------------------------------- | -------------------- | ------------------- |
-| Daily Data Drop  | **trust8004 API** + Typefully       | `data_drop_draft.md` | `daily/YYYY-MM-DD/` |
-| Changelog Update | **trust8004 changelog** + Typefully | `changelog_draft.md` | `daily/YYYY-MM-DD/` |
+| Campaign             | Tool                                | Log File                | Log Folder          |
+| -------------------- | ----------------------------------- | ----------------------- | ------------------- |
+| Daily Data Drop      | **trust8004 API** + Typefully       | `data_drop_draft.md`    | `daily/YYYY-MM-DD/` |
+| Changelog Update     | **trust8004 changelog** + Typefully | `changelog_draft.md`    | `daily/YYYY-MM-DD/` |
+| Community Engagement | **twclaw** (search, like, reply)    | `engagement_actions.md` | `daily/YYYY-MM-DD/` |
 
 ## Daily Schedule (America/Santiago)
 
-| Time            | Campaign         | Action                      |
-| --------------- | ---------------- | --------------------------- |
-| 9:00 AM (Chile) | Daily Data Drop  | Post ecosystem stats tweet  |
-| 9:30 AM (Chile) | Changelog Update | Post platform updates tweet |
+| Time             | Campaign             | Action                                            |
+| ---------------- | -------------------- | ------------------------------------------------- |
+| 9:00 AM (Chile)  | Daily Data Drop      | Post ecosystem stats tweet                        |
+| 9:30 AM (Chile)  | Changelog Update     | Post platform updates tweet                       |
+| 10:00 AM (Chile) | Community Engagement | Search, propose interactions, execute on approval |
 
 ## Campaign 1: Daily Data Drop (9:00 AM ET)
 
@@ -135,6 +137,57 @@ the scanner keeps getting better
 - Follow the Writing Style rules from SOUL.md
 - Link to trust8004.xyz/changelog goes in a REPLY, never in the main tweet
 
+## Campaign 3: Community Engagement (10:00 AM Chile, daily)
+
+**Tool:** twclaw (search, like, reply, retweet) | **Log:** `data/daily/YYYY-MM-DD/engagement_actions.md`
+
+### Search Queries (rotate daily)
+
+- `"ERC-8004"` — direct mentions of the standard
+- `"AI agent" onchain` — builders talking about onchain agents
+- `"agent registry"` — people discussing agent registries
+- `"autonomous agent" ethereum OR base OR polygon` — chain-specific agent talk
+- `from:@VittoStack OR from:@DavideCrapis OR from:@ethereumfndn` — key accounts
+
+### Flow
+
+1. Search tweets: `twclaw search "query" --popular -n 10 --json`
+2. Filter results: pick tweets that are relevant to ERC-8004, onchain agents, or trust/verification
+3. Propose up to 5 interactions to Gilberts via Telegram, with format:
+   - Tweet URL + author + 1-line summary
+   - Proposed action: **like**, **reply** (include draft text), or **retweet**
+4. **Wait for Gilberts approval** — do NOT execute any interaction without approval
+5. On approval, execute using twclaw:
+   - Like: `twclaw like <tweet-url> --yes`
+   - Reply: `twclaw reply <tweet-url> "text" --yes`
+   - Retweet: `twclaw retweet <tweet-url> --yes`
+6. Log each action to `data/daily/YYYY-MM-DD/engagement_actions.md` (tweet URL, handle, action, 1-line summary — NO full tweet text)
+7. Confirm to Gilberts: "Done, [N] interactions executed"
+
+### Reply Guidelines
+
+- Replies must add value: a data point, a clarification, a relevant insight from the scanner
+- Keep replies short (1-2 sentences max)
+- Use the same warm, crypto-native tone from SOUL.md
+- NEVER reply with generic "check us out" or "interesting!" — always contribute something specific
+- If the tweet mentions a specific chain or agent count, reference real data if available
+- Don't be salesy. Be helpful
+
+### Key Accounts Watchlist
+
+Monitor these accounts for engagement opportunities:
+@VittoStack, @marco_derossi, @DavideCrapis, @ethereumfndn, @virtuals_io, @autonolas, @PhalaNetwork, @ETHPanda_Org, @austingriffith, @marvey_crypton
+
+### Rules
+
+- MAX 5 interactions per day (likes + replies + retweets combined) to avoid looking spammy
+- ALL interactions require Gilberts approval first — no exceptions
+- Do NOT engage with spam, scams, or controversial content
+- Do NOT engage with competitor scanner accounts
+- Log only tweet URL, handle, action type, and 1-line summary (X policy: no full text storage)
+- If search returns no relevant results, tell Gilberts "No engagement opportunities found today" and skip
+- Respect rate limits: if you get a 429, stop and report to Gilberts
+
 ## Link Strategy
 
 - NEVER put links in main tweet (algorithm suppression)
@@ -148,13 +201,9 @@ the scanner keeps getting better
 
 > Everything below is **paused**. Do NOT execute any of these campaigns until Gilberts re-enables them. Keep this section for future reference only.
 
-### Campaign 2: Fix My Agent (PAUSED)
+### Fix My Agent (PAUSED)
 
 Post invitation for developers to share their agent ID for a free audit. Tool: Typefully + twclaw API. Log: `fix_my_agent_draft.md` and `audits/YYYY-MM-DD_CHAINID-ID.md`.
-
-### Campaign 3: Community Engagement (PAUSED)
-
-Daily search with `twclaw search --popular`, propose 10 interactions to Gilberts, wait for approval, execute. Log: `engagement_search.md` + `engagement_actions.md`.
 
 ### Campaign 4: Educational Thread (PAUSED)
 

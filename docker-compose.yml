@@ -19,6 +19,10 @@ services:
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
       TWITTER_API_KEY: ${TWITTER_API_KEY}
       TWITTER_API_SECRET: ${TWITTER_API_SECRET}
+      TWITTER_USER_ID: ${TWITTER_USER_ID}
+      TWITTER_REFRESH_TOKEN: ${TWITTER_REFRESH_TOKEN}
+      TWITTER_CLIENT_ID: ${TWITTER_CLIENT_ID}
+      TWITTER_CLIENT_SECRET: ${TWITTER_CLIENT_SECRET}
     volumes:
       - openclaw_config:/home/node/.openclaw
       - openclaw_workspace:/home/node/.openclaw/workspace
@@ -86,6 +90,15 @@ services:
             fi
             sleep 1
           done
+
+          # Twitter token refresh loop (every 90 min, token expires in 2h)
+          if [ -n "$$TWITTER_REFRESH_TOKEN" ] && [ -n "$$TWITTER_CLIENT_ID" ]; then
+            (while true; do
+              sleep 5400
+              eval "$$(node /home/node/.openclaw/workspace/scripts/twitter-refresh-token.mjs 2>/tmp/twitter-refresh.log)" 2>/dev/null || true
+            done) &
+          fi
+
           exec node dist/index.js gateway --bind loopback --port 18789 --allow-unconfigured
         '
 
