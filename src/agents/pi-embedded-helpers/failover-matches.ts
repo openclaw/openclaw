@@ -14,6 +14,7 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    "too many tokens per",
     "tokens per day",
   ],
   overloaded: [
