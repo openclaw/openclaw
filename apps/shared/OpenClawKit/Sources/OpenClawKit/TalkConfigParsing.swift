@@ -23,6 +23,9 @@ public enum TalkConfigParsing {
         allowLegacyFallback: Bool = true,
     ) -> TalkProviderConfigSelection? {
         guard let talk else { return nil }
+        if let resolvedSelection = self.resolvedProviderConfig(talk) {
+            return resolvedSelection
+        }
         let rawProvider = talk["provider"]?.stringValue
         let rawProviders = talk["providers"]
         let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
@@ -66,6 +69,19 @@ public enum TalkConfigParsing {
     private static func normalizedTalkProviderID(_ raw: String?) -> String? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func resolvedProviderConfig(
+        _ talk: [String: AnyCodable]
+    ) -> TalkProviderConfigSelection? {
+        guard
+            let resolved = talk["resolved"]?.dictionaryValue,
+            let providerID = self.normalizedTalkProviderID(resolved["provider"]?.stringValue)
+        else { return nil }
+        return TalkProviderConfigSelection(
+            provider: providerID,
+            config: resolved["config"]?.dictionaryValue ?? [:],
+            normalizedPayload: true)
     }
 
     private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {

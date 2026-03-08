@@ -77,8 +77,19 @@ class TalkModeManager(
       return trimmed.takeIf { it.isNotEmpty() }
     }
 
+    private fun selectResolvedTalkProviderConfig(talk: JsonObject): TalkProviderConfigSelection? {
+      val resolved = talk["resolved"].asObjectOrNull() ?: return null
+      val providerId = normalizeTalkProviderId(resolved["provider"].asStringOrNull()) ?: return null
+      return TalkProviderConfigSelection(
+        provider = providerId,
+        config = resolved["config"].asObjectOrNull() ?: buildJsonObject {},
+        normalizedPayload = true,
+      )
+    }
+
     internal fun selectTalkProviderConfig(talk: JsonObject?): TalkProviderConfigSelection? {
       if (talk == null) return null
+      selectResolvedTalkProviderConfig(talk)?.let { return it }
       val rawProvider = talk["provider"].asStringOrNull()
       val rawProviders = talk["providers"].asObjectOrNull()
       val hasNormalizedPayload = rawProvider != null || rawProviders != null

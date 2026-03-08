@@ -178,17 +178,17 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
 
   const talk = normalized.talk;
   const active = resolveActiveTalkProviderConfig(talk);
-  if (active.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
+  if (active?.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
     return normalized;
   }
 
-  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active.config?.apiKey);
+  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active?.config?.apiKey);
   const existingLegacyApiKeyConfigured = hasConfiguredSecretInput(talk?.apiKey);
   if (existingProviderApiKeyConfigured || existingLegacyApiKeyConfigured) {
     return normalized;
   }
 
-  const providerId = active.provider ?? DEFAULT_TALK_PROVIDER;
+  const providerId = active?.provider ?? DEFAULT_TALK_PROVIDER;
   const providers = { ...talk?.providers };
   const providerConfig = { ...providers[providerId], apiKey: resolved };
   providers[providerId] = providerConfig;
