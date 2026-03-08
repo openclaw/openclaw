@@ -161,7 +161,12 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch) {
-    return normalizeModelCompat(inlineMatch as Model<Api>);
+    // When the inline model already carries a concrete api, use it as-is.
+    // Otherwise fall through so forward-compat resolvers can supply the
+    // correct api (e.g. "openai-codex-responses" for gpt-5.4).  #39682
+    if (inlineMatch.api) {
+      return normalizeModelCompat(inlineMatch as Model<Api>);
+    }
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
