@@ -1115,7 +1115,10 @@ async function agentCommandInternal(
       const promptTokens = input + cacheRead + cacheWrite;
       const totalTokens = usage.total ?? promptTokens + output;
       const contextTokensUsed =
-        agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+        agentCfg?.contextTokens ??
+        sessionEntry?.contextTokens ??
+        lookupContextTokens(modelUsed) ??
+        DEFAULT_CONTEXT_TOKENS;
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
@@ -1126,6 +1129,7 @@ async function agentCommandInternal(
         type: "model.usage",
         sessionKey,
         sessionId,
+        channel: "cli",
         provider: providerUsed,
         model: modelUsed,
         usage: {
