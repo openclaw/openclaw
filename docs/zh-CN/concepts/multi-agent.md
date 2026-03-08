@@ -319,7 +319,7 @@ openclaw agents list --bindings
 - 工具允许/拒绝列表是**工具**，不是 Skills。如果 skill 需要运行二进制文件，请确保 `exec` 被允许且二进制文件存在于沙箱中。
 - 对于更严格的限制，设置 `agents.list[].groupChat.mentionPatterns` 并为渠道保持群组允许列表启用。
 
-## 每智能体沙箱和工具配置
+## 每个智能体的沙箱和工具配置
 
 从 v2026.1.6 开始，每个智能体可以有自己的沙箱和工具限制：
 
