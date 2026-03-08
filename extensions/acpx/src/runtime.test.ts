@@ -21,6 +21,7 @@ beforeAll(async () => {
       allowPluginLocalInstall: false,
       installCommand: "n/a",
       cwd: process.cwd(),
+      mcpServers: {},
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",
       strictWindowsCmdWrapper: true,

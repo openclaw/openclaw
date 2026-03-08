@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
@@ -52,6 +53,25 @@ function parseProcCmdline(raw: string): string[] {
     .filter(Boolean);
 }
 
+function extractWindowsCommandLine(raw: string): string | null {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    if (!line.toLowerCase().startsWith("commandline=")) {
+      continue;
+    }
+    const value = line.slice("commandline=".length).trim();
+    return value || null;
+  }
+  return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
+}
+
+function stripExecutableExtension(value: string): string {
+  return value.replace(/\.(bat|cmd|exe)$/i, "");
+}
+
 function isGatewayArgv(args: string[]): boolean {
   const normalized = args.map(normalizeProcArg);
   if (!normalized.includes("gateway")) {
@@ -69,7 +89,7 @@ function isGatewayArgv(args: string[]): boolean {
     return true;
   }
 
-  const exe = normalized[0] ?? "";
+  const exe = stripExecutableExtension(normalized[0] ?? "");
   return exe.endsWith("/openclaw") || exe === "openclaw" || exe.endsWith("/openclaw-gateway");
 }
 
@@ -91,6 +111,21 @@ function readGatewayProcessArgsSync(pid: number): string[] | null {
     }
     const command = ps.stdout.trim();
     return command ? command.split(/\s+/) : null;
+  }
+  if (process.platform === "win32") {
+    const wmic = spawnSync(
+      "wmic",
+      ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
+      {
+        encoding: "utf8",
+        timeout: 1000,
+      },
+    );
+    if (wmic.error || wmic.status !== 0) {
+      return null;
+    }
+    const command = extractWindowsCommandLine(wmic.stdout);
+    return command ? parseCmdScriptCommandLine(command) : null;
   }
   return null;
 }
