@@ -7,6 +7,7 @@ import {
 } from "../../context-engine/index.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -795,6 +796,9 @@ export async function runEmbeddedPiAgent(
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
+        // Set after successful auto-compaction so the retry prompt includes a
+        // resume notice, preventing the model from "forgetting" the current task.
+        let postCompactionResume = false;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -834,8 +838,11 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+          const rawPrompt = postCompactionResume
+            ? `[System: Context was auto-compacted. Previous conversation was summarized. Resume the task you were working on.]\n\n${params.prompt}`
+            : params.prompt;
           const prompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            provider === "anthropic" ? scrubAnthropicRefusalMagic(rawPrompt) : rawPrompt;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -1050,7 +1057,16 @@ export async function runEmbeddedPiAgent(
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
-                log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                postCompactionResume = true;
+                log.info(
+                  `auto-compaction succeeded for ${provider}/${modelId}; retrying prompt with resume notice`,
+                );
+                if (params.sessionKey) {
+                  enqueueSystemEvent(
+                    "Auto-compaction completed. Previous context was summarized. Agent should resume the task in progress.",
+                    { sessionKey: params.sessionKey },
+                  );
+                }
                 continue;
               }
               log.warn(
