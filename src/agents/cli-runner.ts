@@ -389,6 +389,17 @@ export async function runCliAgent(params: {
         }
         if (outputMode === "jsonl") {
           const parsed = parseCliJsonl(stdout, backend);
+          if (parsed?.sandboxDenied) {
+            throw new FailoverError(
+              "Codex sandbox denied the requested operation (exit 0 with sandbox policy violation in output)",
+              {
+                reason: "sandbox_denied",
+                provider: params.provider,
+                model: modelId,
+                status: resolveFailoverStatus("sandbox_denied"),
+              },
+            );
+          }
           return parsed ?? { text: stdout };
         }
 

@@ -44,6 +44,7 @@ export type AuthProfileFailureReason =
   | "billing"
   | "timeout"
   | "model_not_found"
+  | "sandbox_denied"
   | "session_expired"
   | "unknown";
 
