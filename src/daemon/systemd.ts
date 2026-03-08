@@ -65,7 +65,7 @@ export async function readSystemdServiceExecStart(
     const content = await fs.readFile(unitPath, "utf8");
     let execStart = "";
     let workingDirectory = "";
-    const environment: Record<string, string> = {};
+    const inlineEnvironment: Record<string, string> = {};
     const environmentFileSpecs: string[] = [];
     for (const rawLine of content.split("\n")) {
       const line = rawLine.trim();
@@ -80,7 +80,7 @@ export async function readSystemdServiceExecStart(
         const raw = line.slice("Environment=".length).trim();
         const parsed = parseSystemdEnvAssignment(raw);
         if (parsed) {
-          environment[parsed.key] = parsed.value;
+          inlineEnvironment[parsed.key] = parsed.value;
         }
       } else if (line.startsWith("EnvironmentFile=")) {
         const raw = line.slice("EnvironmentFile=".length).trim();
@@ -98,19 +98,33 @@ export async function readSystemdServiceExecStart(
       unitPath,
     });
     const mergedEnvironment = {
-      ...environmentFromFiles,
-      ...environment,
+      ...inlineEnvironment,
+      ...environmentFromFiles.environment,
+    };
+    const mergedEnvironmentSources = {
+      ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
+      ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
     };
     const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(mergedEnvironment).length > 0 ? { environment: mergedEnvironment } : {}),
+      ...(Object.keys(mergedEnvironmentSources).length > 0
+        ? { environmentValueSources: mergedEnvironmentSources }
+        : {}),
       sourcePath: unitPath,
     };
   } catch {
     return null;
   }
+}
+
+function buildEnvironmentValueSources(
+  environment: Record<string, string>,
+  source: "inline" | "file",
+): Record<string, "inline" | "file"> {
+  return Object.fromEntries(Object.keys(environment).map((key) => [key, source]));
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -165,10 +179,10 @@ async function resolveSystemdEnvironmentFiles(params: {
   environmentFileSpecs: string[];
   env: GatewayServiceEnv;
   unitPath: string;
-}): Promise<Record<string, string>> {
+}): Promise<{ environment: Record<string, string> }> {
   const resolved: Record<string, string> = {};
   if (params.environmentFileSpecs.length === 0) {
-    return resolved;
+    return { environment: resolved };
   }
   const unitDir = path.posix.dirname(params.unitPath);
   for (const specRaw of params.environmentFileSpecs) {
@@ -193,7 +207,7 @@ async function resolveSystemdEnvironmentFiles(params: {
       }
     }
   }
-  return resolved;
+  return { environment: resolved };
 }
 
 export type SystemdServiceInfo = {
@@ -289,6 +303,19 @@ function isSystemctlBusUnavailable(detail: string): boolean {
     normalized.includes("dbus_session_bus_address") ||
     normalized.includes("xdg_runtime_dir") ||
     normalized.includes("no medium found")
+  );
+}
+
+function isSystemdUserScopeUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    isSystemctlMissing(normalized) ||
+    isSystemctlBusUnavailable(normalized) ||
+    normalized.includes("not been booted") ||
+    normalized.includes("not supported")
   );
 }
 
@@ -395,26 +422,11 @@ export async function isSystemdUserServiceAvailable(
   if (res.code === 0) {
     return true;
   }
-  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  const detail = `${res.stderr} ${res.stdout}`.trim();
   if (!detail) {
     return false;
   }
-  if (detail.includes("not found")) {
-    return false;
-  }
-  if (detail.includes("failed to connect")) {
-    return false;
-  }
-  if (detail.includes("not been booted")) {
-    return false;
-  }
-  if (detail.includes("no such file or directory")) {
-    return false;
-  }
-  if (detail.includes("not supported")) {
-    return false;
-  }
-  return false;
+  return !isSystemdUserScopeUnavailable(detail);
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
@@ -425,6 +437,12 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail)) {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
+  }
+  if (!detail) {
+    throw new Error("systemctl --user unavailable: unknown error");
+  }
+  if (!isSystemdUserScopeUnavailable(detail)) {
+    return;
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }

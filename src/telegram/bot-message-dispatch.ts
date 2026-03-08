@@ -194,18 +194,15 @@ export const dispatchTelegramMessage = async ({
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    // Use message transport (sendMessage + editMessageText) for all lanes in
-    // DMs so that streamMessageId is tracked. Draft transport doesn't track a
-    // messageId, causing resolvePreviewTarget() to miss the preview on final
-    // delivery — which sends a duplicate message. (Fixes #33453)
-    const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
+    const useMessagePreviewTransportForDmReasoning =
+      laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
+          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
