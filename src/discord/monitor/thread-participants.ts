@@ -2,12 +2,14 @@
  * Thread Participant Tracking — tracks which bots participate in which threads.
  * Participants can converse in threads without explicit @mentions.
  *
- * Persistence: in-memory Map + async disk flush to state/thread-participants.json
+ * Persistence: in-memory Map + async disk flush to ~/.openclaw/state/thread-participants.json
  * TTL: 24h from last activity per thread
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { resolve } from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -44,24 +46,124 @@ let stateDir: string | null = null;
 
 // ── State Directory ────────────────────────────────────────────────
 
+function resolveThreadParticipantStatePath(dir: string): string {
+  return resolve(dir, "thread-participants.json");
+}
+
+/**
+ * Thread participants must live under the shared OpenClaw state root, not process.cwd().
+ *
+ * Gateway startup, agent workspaces, and repo-local dev shells can all have different cwd values.
+ * If participant persistence follows cwd, one process writes thread membership into its own local
+ * state file while another process restores from a different empty file after restart. That split
+ * state is exactly what makes thread messages reach Discord but never reach an agent session.
+ */
+function resolveCanonicalThreadParticipantStateDir(): string {
+  return resolve(resolveStateDir(process.env, os.homedir), "state");
+}
+
 function getStatePath(): string | null {
-  if (stateDir) {
-    return resolve(stateDir, "thread-participants.json");
+  const dir = stateDir ?? resolveCanonicalThreadParticipantStateDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    stateDir = dir;
+    return resolveThreadParticipantStatePath(dir);
+  } catch {
+    return null;
   }
-  // Try common state dir locations
-  const candidates = [process.env.OPENCLAW_STATE_DIR, resolve(process.cwd(), "state")].filter(
-    Boolean,
-  ) as string[];
-  for (const dir of candidates) {
-    try {
-      mkdirSync(dir, { recursive: true });
-      stateDir = dir;
-      return resolve(dir, "thread-participants.json");
-    } catch {
+}
+
+function readStore(path: string): ThreadParticipantStore | null {
+  try {
+    const raw = readFileSync(path, "utf-8");
+    const store: ThreadParticipantStore = JSON.parse(raw);
+    if (store.version !== 1 || !store.threads) {
+      return null;
+    }
+    return store;
+  } catch {
+    return null;
+  }
+}
+
+function mergeStoreIntoMap(
+  map: Map<string, ThreadParticipantEntry>,
+  store: ThreadParticipantStore,
+  now: number,
+): number {
+  let merged = 0;
+  for (const entry of Object.values(store.threads)) {
+    if (now - entry.lastActivityAt > PARTICIPANT_TTL_MS) {
       continue;
     }
+    const existing = map.get(entry.threadId);
+    const participants = [...new Set(entry.participants)];
+    if (!existing) {
+      map.set(entry.threadId, {
+        ...entry,
+        participants,
+      });
+      merged++;
+      continue;
+    }
+    const mergedParticipants = [...new Set([...existing.participants, ...participants])];
+    const mergedEntry: ThreadParticipantEntry = {
+      threadId: entry.threadId,
+      participants: mergedParticipants,
+      createdAt: Math.min(existing.createdAt, entry.createdAt),
+      lastActivityAt: Math.max(existing.lastActivityAt, entry.lastActivityAt),
+    };
+    const didChange =
+      mergedEntry.createdAt !== existing.createdAt ||
+      mergedEntry.lastActivityAt !== existing.lastActivityAt ||
+      mergedEntry.participants.length !== existing.participants.length;
+    if (didChange) {
+      map.set(entry.threadId, mergedEntry);
+      merged++;
+    }
   }
-  return null;
+  return merged;
+}
+
+/**
+ * Legacy collaboration builds could persist thread participants relative to a repo or per-agent
+ * workspace cwd. Keep reading those files during startup so the first restart after this fix does
+ * not drop still-live collaboration threads. Any imported entries are immediately re-written into
+ * the canonical shared state file so future restarts no longer depend on legacy paths.
+ */
+function resolveLegacyThreadParticipantStatePaths(canonicalPath: string): string[] {
+  const paths = new Set<string>();
+
+  try {
+    const cwdPath = resolve(process.cwd(), "state", "thread-participants.json");
+    if (cwdPath !== canonicalPath) {
+      paths.add(cwdPath);
+    }
+  } catch {
+    // Ignore cwd resolution failures and rely on the canonical state file.
+  }
+
+  const sharedStateRoot = resolveStateDir(process.env, os.homedir);
+  try {
+    for (const entry of readdirSync(sharedStateRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith("workspace-")) {
+        continue;
+      }
+      const workspacePath = resolve(
+        sharedStateRoot,
+        entry.name,
+        "state",
+        "thread-participants.json",
+      );
+      if (workspacePath !== canonicalPath) {
+        paths.add(workspacePath);
+      }
+    }
+  } catch {
+    // Missing workspace directories are fine; canonical state remains the source of truth.
+  }
+
+  return [...paths];
 }
 
 // ── Persistence ────────────────────────────────────────────────────
@@ -71,26 +173,25 @@ export function loadThreadParticipants(): void {
   if (!path) {
     return;
   }
-  try {
-    const raw = readFileSync(path, "utf-8");
-    const store: ThreadParticipantStore = JSON.parse(raw);
-    if (store.version !== 1 || !store.threads) {
-      return;
+  const map = getParticipantMap();
+  const now = Date.now();
+
+  const canonicalStore = readStore(path);
+  if (canonicalStore) {
+    mergeStoreIntoMap(map, canonicalStore, now);
+  }
+
+  let importedLegacyEntries = 0;
+  for (const legacyPath of resolveLegacyThreadParticipantStatePaths(path)) {
+    const legacyStore = readStore(legacyPath);
+    if (!legacyStore) {
+      continue;
     }
-    const map = getParticipantMap();
-    const now = Date.now();
-    for (const [threadId, entry] of Object.entries(store.threads)) {
-      // Skip expired entries
-      if (now - entry.lastActivityAt > PARTICIPANT_TTL_MS) {
-        continue;
-      }
-      map.set(threadId, {
-        ...entry,
-        participants: [...entry.participants],
-      });
-    }
-  } catch {
-    // Safe degradation: start empty, mention-only mode
+    importedLegacyEntries += mergeStoreIntoMap(map, legacyStore, now);
+  }
+
+  if (importedLegacyEntries > 0) {
+    flushToDisk();
   }
 }
 
@@ -243,7 +344,7 @@ export function cleanupExpiredThreads(): number {
  * Set custom state directory (for testing or explicit configuration).
  */
 export function setThreadParticipantStateDir(dir: string): void {
-  stateDir = dir;
+  stateDir = resolve(dir);
 }
 
 /**
