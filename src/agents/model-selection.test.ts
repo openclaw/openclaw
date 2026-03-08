@@ -136,6 +136,17 @@ describe("model-selection", () => {
       });
     });
 
+    it("parses google/gemini-2.5-flash as google provider with correct model id", () => {
+      expect(parseModelRef("google/gemini-2.5-flash", "anthropic")).toEqual({
+        provider: "google",
+        model: "gemini-2.5-flash",
+      });
+      expect(parseModelRef("google/gemini-2.5-pro", "anthropic")).toEqual({
+        provider: "google",
+        model: "gemini-2.5-pro",
+      });
+    });
+
     it("keeps openai gpt-5.3 codex refs on the openai provider", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
         provider: "openai",

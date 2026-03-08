@@ -195,6 +195,25 @@ export function resolveModelWithRegistry(params: {
     } as Model<Api>);
   }
 
+  // Google's Generative AI API accepts any valid model ID. When auth is
+  // configured (GEMINI_API_KEY / auth profile) but the specific model is not
+  // pre-registered in the local catalog, create a pass-through definition so
+  // canonical google/<model> identifiers resolve without "model not found".
+  if (normalizedProvider === "google") {
+    return normalizeModelCompat({
+      id: modelId,
+      name: modelId,
+      api: "google-generative-ai",
+      provider,
+      baseUrl: "https://generativelanguage.googleapis.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: DEFAULT_CONTEXT_TOKENS,
+      maxTokens: 65536,
+    } as Model<Api>);
+  }
+
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);

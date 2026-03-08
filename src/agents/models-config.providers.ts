@@ -780,6 +780,14 @@ function mergeImplicitProviderSet(
 }
 
 const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
+  withApiKey("google", async ({ apiKey }) => ({
+    baseUrl: "https://generativelanguage.googleapis.com",
+    api: "google-generative-ai",
+    apiKey,
+    // Models come from pi-ai built-in catalog; empty list signals that the
+    // provider is available without overriding the built-in model definitions.
+    models: [],
+  })),
   withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
   withApiKey("moonshot", async ({ apiKey }) => ({ ...buildMoonshotProvider(), apiKey })),
   withApiKey("kimi-coding", async ({ apiKey }) => ({ ...buildKimiCodingProvider(), apiKey })),

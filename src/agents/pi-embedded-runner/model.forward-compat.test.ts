@@ -156,4 +156,57 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-gemini-cli/gemini-4-unknown");
   });
+
+  it("resolves google/gemini-2.5-flash via pass-through when not in registry", () => {
+    const result = resolveModel("google", "gemini-2.5-flash", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      id: "gemini-2.5-flash",
+      name: "gemini-2.5-flash",
+    });
+  });
+
+  it("resolves google/gemini-2.5-pro via pass-through when not in registry", () => {
+    const result = resolveModel("google", "gemini-2.5-pro", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      id: "gemini-2.5-pro",
+      name: "gemini-2.5-pro",
+    });
+  });
+
+  it("prefers registry model over google pass-through", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+      templateModel: {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0.15, output: 0.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 65536,
+      },
+    });
+
+    const result = resolveModel("google", "gemini-2.5-flash", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      contextWindow: 1000000,
+      reasoning: true,
+    });
+  });
 });
