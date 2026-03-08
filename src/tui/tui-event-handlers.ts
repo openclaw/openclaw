@@ -320,7 +320,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "usage") {
-      if (onUsageUpdate) {
+      if (onUsageUpdate && (isActiveRun || finalizedRuns.has(evt.runId))) {
         onUsageUpdate(evt.data ?? {});
         tui.requestRender();
       }

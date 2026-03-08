@@ -950,18 +950,16 @@ export async function runEmbeddedPiAgent(
             cacheRead: usageForEvent?.cacheRead,
             cacheWrite: usageForEvent?.cacheWrite,
           });
-          if (typeof promptTokensForEvent === "number") {
-            emitAgentEvent({
-              runId: params.runId,
-              stream: "usage",
-              data: {
-                totalTokens: promptTokensForEvent,
-                contextTokens: ctxInfo.tokens,
-                inputTokens: usageAccumulator.input,
-                outputTokens: usageAccumulator.output,
-              },
-            });
-          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "usage",
+            data: {
+              totalTokens: promptTokensForEvent ?? 0,
+              contextTokens: ctxInfo.tokens,
+              inputTokens: usageAccumulator.input,
+              outputTokens: usageAccumulator.output,
+            },
+          });
 
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
