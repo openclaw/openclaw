@@ -101,6 +101,64 @@ describe("signal quote reply handling", () => {
     expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
   });
 
+  it("uses the latest quote target when debouncing rapid quoted Signal replies", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = createQuoteHandler({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 25 } } } as any,
+      });
+
+      await handler(
+        createSignalReceiveEvent({
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000001,
+          dataMessage: {
+            message: "First chunk",
+            quote: {
+              id: 1700000000000,
+              authorNumber: "+15550003333",
+              text: "First quoted message",
+            },
+          },
+        }),
+      );
+      await handler(
+        createSignalReceiveEvent({
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000002,
+          dataMessage: {
+            message: "Second chunk",
+            quote: {
+              id: 1700000000009,
+              authorNumber: "+15550004444",
+              text: "Second quoted message",
+            },
+          },
+        }),
+      );
+
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(30);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+
+      const ctx = getCapturedCtx();
+      expect(ctx?.BodyForAgent).toBe("First chunk\\nSecond chunk");
+      expect(ctx?.ReplyToId).toBe("1700000000009");
+      expect(ctx?.ReplyToBody).toBe("Second quoted message");
+      expect(ctx?.ReplyToSender).toBe("+15550004444");
+      expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550004444 id:1700000000009]");
+      expect(String(ctx?.Body ?? "")).not.toContain("[Quoting +15550003333 id:1700000000000]");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps quote-only replies and exposes the replied-message context block", async () => {
     const handler = createQuoteHandler();
 
