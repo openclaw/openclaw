@@ -23,6 +23,60 @@ This guide covers:
 
 Sandboxing details: [Sandboxing](/gateway/sandboxing)
 
+## Operator install clarity pack (optional add-on)
+
+Use this section as a pre-flight + troubleshooting layer layered on top of the standard install flow.
+
+### Note for Apple Silicon / M4 Users
+
+- **Run the Global Compass first:** Confirm Rosetta, free disk (>=15 GB), Docker Desktop running, and Terminal Full Disk Access (see [Global Compass](#operator-global-compass-pre-flight)).
+- **Wait for Docker to settle:** After updates the whale icon pulses for ~90 s—running compose before it stabilizes causes mount failures unique to M4 laptops.
+- **Protect the gateway from JSON typos:** Before editing `~/.openclaw/openclaw.json`, run a lint + backup step (`python3 -m json.tool <file>` / `jq` + temp file) so malformed configs never hit disk; if you prefer automation, refer to the forthcoming tooling PR that carries the experimental config-guard add-on.
+- **Keep subagent auth in sync:** Copy or symlink `~/.openclaw/agents/main/agent/auth-profiles.json` into each `~/.openclaw/agents/<name>/agent/auth-profiles.json` right after the Docker step. This prevents the `No API key for provider "anthropic"` loop captured in the [Status Playbook logbook](./status-playbook.md#hardcore-logbook-field-captures).
+- **Bookmark the Status Decoder:** If you see `token mismatch` or `gateway restarting`, jump to the [Status decoder](#status-decoder-keep-nearby) table below—it translates every log referenced in this note.
+
+### Operator Global Compass (pre-flight)
+
+#### Apple Silicon (M1–M4)
+
+- [ ] Rosetta installed: `softwareupdate --install-rosetta --agree-to-license`.
+- [ ] Docker Desktop running with a steady whale icon; >=15 GB free disk.
+- [ ] Terminal granted Full Disk Access; PATH not clobbered by legacy shells.
+
+#### Intel Mac
+
+- [ ] `brew update && brew upgrade` succeeds.
+- [ ] Docker Desktop resources >=4 CPU / 6 GB RAM; laptop on power.
+
+#### Linux / VPS
+
+- [ ] `sudo -n true` works (or be ready to enter password repeatedly).
+- [ ] `locale` shows UTF-8; `df -h ~` >=10 GB free.
+- [ ] `docker info` / `docker ps` both succeed.
+
+#### Windows / WSL2
+
+- [ ] WSL2 enabled with the repo living inside the WSL ext4 filesystem (avoid `/mnt/c`).
+- [ ] Developer Mode + Long Paths enabled in Windows settings.
+
+### Platform runbook highlights
+
+- **Apple Silicon:** Wait for Docker to finish "starting" before running `docker-setup.sh`; `health: starting` <120 s is normal on cold boots.
+- **Intel Mac:** Update Homebrew first; slower image pulls are expected.
+- **Linux / VPS:** Remember "repo root != ~/.openclaw"; run Docker commands from the clone, not the data directory.
+- **Windows / WSL2:** Keep every command inside WSL; add `export PATH="$HOME/.npm-global/bin:$PATH"` if binaries aren't found.
+
+### Status decoder (keep nearby)
+
+| Signal / Log                | What it really means                                                                                                  | What to do                                                                                                                               | Avg. duration                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `health: starting`          | Gateway booting, waiting for services (db, browser bridge, sandbox). Common right after onboarding or Docker restart. | Wait up to 120 s (Apple Silicon) / 60 s (Intel & Linux). If it exceeds that, run `openclaw logs --limit 50` and check for config errors. | 30–120 s                                                                                                                            |
+| `gateway restarting` (loop) | Config validation failed or a fatal crash occurred; supervisor keeps trying.                                          | Run `openclaw logs --limit 200                                                                                                           | less`to find the first error. Most often caused by malformed`openclaw.json`. Revert the last change or run `openclaw doctor --fix`. | Until config is fixed |
+
+### Status decoder deep dives
+
+See [Status Playbook](./status-playbook.md) for expanded tables, logbook captures, and recovery drills.
+
 ## Requirements
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
@@ -60,7 +114,6 @@ Optional env vars:
 
 - `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
-- `OPENCLAW_EXTENSIONS` — pre-install extension dependencies at build time (space-separated extension names, e.g. `diagnostics-otel matrix`)
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 - `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
@@ -167,11 +220,10 @@ The main Docker image currently uses:
 
 - `node:22-bookworm`
 
-The docker image now publishes OCI base-image annotations (sha256 is an example,
-and points at the pinned multi-arch manifest list for that tag):
+The docker image now publishes OCI base-image annotations (sha256 is an example):
 
 - `org.opencontainers.image.base.name=docker.io/library/node:22-bookworm`
-- `org.opencontainers.image.base.digest=sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9`
+- `org.opencontainers.image.base.digest=sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
 - `org.opencontainers.image.source=https://github.com/openclaw/openclaw`
 - `org.opencontainers.image.url=https://openclaw.ai`
 - `org.opencontainers.image.documentation=https://docs.openclaw.ai/install/docker`
@@ -322,31 +374,6 @@ Notes:
 - If you change `OPENCLAW_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
   the image.
 
-### Pre-install extension dependencies (optional)
-
-Extensions with their own `package.json` (e.g. `diagnostics-otel`, `matrix`,
-`msteams`) install their npm dependencies on first load. To bake those
-dependencies into the image instead, set `OPENCLAW_EXTENSIONS` before
-running `docker-setup.sh`:
-
-```bash
-export OPENCLAW_EXTENSIONS="diagnostics-otel matrix"
-./docker-setup.sh
-```
-
-Or when building directly:
-
-```bash
-docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
-```
-
-Notes:
-
-- This accepts a space-separated list of extension directory names (under `extensions/`).
-- Only extensions with a `package.json` are affected; lightweight plugins without one are ignored.
-- If you change `OPENCLAW_EXTENSIONS`, rerun `docker-setup.sh` to rebuild
-  the image.
-
 ### Power-user / full-featured container (opt-in)
 
 The default Docker image is **security-first** and runs as the non-root `node`
@@ -477,10 +504,6 @@ curl -fsS http://127.0.0.1:18789/readyz
 
 Aliases: `/health` and `/ready`.
 
-`/healthz` is a shallow liveness probe for "the gateway process is up".
-`/readyz` stays ready during startup grace, then becomes `503` only if required
-managed channels are still disconnected after grace or disconnect later.
-
 The Docker image includes a built-in `HEALTHCHECK` that pings `/healthz` in the
 background. In plain terms: Docker keeps checking if OpenClaw is still
 responsive. If checks keep failing, Docker marks the container as `unhealthy`,
@@ -535,12 +558,6 @@ docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
 - Gateway bind defaults to `lan` for container use (`OPENCLAW_GATEWAY_BIND`).
 - Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
-
-### Storage model
-
-- **Persistent host data:** Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths survive container replacement.
-- **Ephemeral sandbox tmpfs:** when `agents.defaults.sandbox` is enabled, the sandbox containers use `tmpfs` for `/tmp`, `/var/tmp`, and `/run`. Those mounts are separate from the top-level Compose stack and disappear with the sandbox container.
-- **Disk growth hotspots:** watch `media/`, `agents/<agentId>/sessions/sessions.json`, transcript JSONL files, `cron/runs/*.jsonl`, and rolling file logs under `/tmp/openclaw/` (or your configured `logging.file`). If you also run the macOS app outside Docker, its service logs are separate again: `~/.openclaw/logs/gateway.log`, `~/.openclaw/logs/gateway.err.log`, and `/tmp/openclaw/openclaw-gateway.log`.
 
 ## Agent Sandbox (host gateway + Docker tools)
 

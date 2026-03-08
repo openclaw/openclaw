@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600" viewBox="0 0 1000 600">
+  <rect width="1000" height="600" fill="#f8f9fb"/>
+  <text x="40" y="60" font-size="32" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#1b2733" font-weight="bold">
+    Operator Install Safeguards -- Before vs After
+  </text>
+  <rect x="40" y="100" width="420" height="420" fill="#ffffff" stroke="#cfd8e3" stroke-width="2" rx="12"/>
+  <rect x="540" y="100" width="420" height="420" fill="#ffffff" stroke="#cfd8e3" stroke-width="2" rx="12"/>
+  <text x="70" y="150" font-size="22" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#b23b3b" font-weight="bold">Before: Buried guidance</text>
+  <text x="70" y="200" font-size="18" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#2f3a45">
+    1. FAQ 2288: copy auth-profiles.json only after the error.
+  </text>
+  <text x="70" y="240" font-size="18" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#2f3a45">
+    2. Docker doc warns about repo root once in the appendix.
+  </text>
+  <text x="70" y="280" font-size="18" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#2f3a45">
+    3. `gateway restarting` has zero documentation.
+  </text>
+  <text x="70" y="320" font-size="16" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#6b7280">Evidence: Status Playbook logbook; /app/docs/install/docker.md</text>
+  <text x="570" y="150" font-size="22" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#156a3a" font-weight="bold">After: Clarity protocol</text>
+  <text x="570" y="200" font-size="18" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#1b4d2b">
+    1. Install guide prefaces a Credential Auto-Sync checklist.
+  </text>
+  <text x="570" y="240" font-size="18" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#1b4d2b">
+    2. Docker quick start repeats repo/data split + guard snippet.
+  </text>
+  <text x="570" y="280" font-size="18" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#1b4d2b">
+    3. Status Decoder explains `gateway restarting` with lint + rollback steps.
+  </text>
+  <text x="570" y="320" font-size="16" font-family="'Noto Sans', 'Segoe UI', sans-serif" fill="#4b5563">Action: Global Compass + Status Decoder + Safe-Reload guidance</text>
+</svg>
