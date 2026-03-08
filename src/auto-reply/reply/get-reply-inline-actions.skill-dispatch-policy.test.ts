@@ -42,6 +42,8 @@ function createInput(params: {
     Body: params.commandBody,
     CommandBody: params.commandBody,
     Provider: "whatsapp",
+    OriginatingTo: "whatsapp:+18880001111",
+    MessageThreadId: "thread-42",
   });
   const cleanedBody = params.commandBody;
 
@@ -145,6 +147,12 @@ describe("handleInlineActions skill tool dispatch policy", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "Hello World" } });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageTo: "whatsapp:+18880001111",
+        messageThreadId: "thread-42",
+      }),
+    );
     expect(execute).toHaveBeenCalledWith(
       expect.stringMatching(/^cmd_/),
       expect.objectContaining({

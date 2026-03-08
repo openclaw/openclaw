@@ -203,6 +203,8 @@ export async function handleInlineActions(params: {
         agentId,
         workspaceDir,
         sessionKey,
+        messageTo: ctx.OriginatingTo ?? ctx.To,
+        messageThreadId: ctx.MessageThreadId,
         messageProvider: command.channel ?? channel,
         modelProvider: provider,
         modelId: model,
