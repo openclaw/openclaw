@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stripInboundMetadata } from "./strip-inbound-meta.js";
+import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -117,5 +117,21 @@ Real user content`;
 name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
+  });
+});
+
+describe("extractInboundSenderLabel", () => {
+  it("returns the sender label block when present", () => {
+    const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\nHello from user`;
+    expect(extractInboundSenderLabel(input)).toBe("Alice");
+  });
+
+  it("falls back to conversation sender when sender block is absent", () => {
+    const input = `${CONV_BLOCK}\n\nHello from user`;
+    expect(extractInboundSenderLabel(input)).toBe("+1555000");
+  });
+
+  it("returns null when inbound sender metadata is absent", () => {
+    expect(extractInboundSenderLabel("Hello from user")).toBeNull();
   });
 });

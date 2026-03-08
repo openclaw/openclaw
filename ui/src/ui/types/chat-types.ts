@@ -14,6 +14,7 @@ export type MessageGroup = {
   kind: "group";
   key: string;
   role: string;
+  senderLabel?: string | null;
   messages: Array<{ message: unknown; key: string }>;
   timestamp: number;
   isStreaming: boolean;
@@ -33,6 +34,7 @@ export type NormalizedMessage = {
   content: MessageContentItem[];
   timestamp: number;
   id?: string;
+  senderLabel?: string | null;
 };
 
 /** Tool card representation for tool calls and results */
