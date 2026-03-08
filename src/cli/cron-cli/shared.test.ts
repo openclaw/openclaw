@@ -166,4 +166,42 @@ describe("printCronList", () => {
     printCronList([job], runtime);
     expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
   });
+
+  it("handles job with undefined schedule (#37299)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    // Simulate a job without schedule (as might happen with corrupted data)
+    const jobWithUndefinedSchedule = createBaseJob({
+      id: "no-schedule-job",
+      name: "No Schedule Job",
+      // @ts-expect-error - intentionally testing undefined schedule
+      schedule: undefined,
+    });
+
+    // This should not throw "Cannot read properties of undefined (reading 'kind')"
+    expect(() => printCronList([jobWithUndefinedSchedule], runtime)).not.toThrow();
+
+    // Verify output contains the job and shows dash for missing schedule
+    expect(logs.length).toBeGreaterThan(1);
+    expect(logs.some((line) => line.includes("no-schedule-job"))).toBe(true);
+  });
+
+  it("handles job with undefined payload", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    // Simulate a job without payload
+    const jobWithUndefinedPayload = createBaseJob({
+      id: "no-payload-job",
+      name: "No Payload Job",
+      // @ts-expect-error - intentionally testing undefined payload
+      payload: undefined,
+    });
+
+    // This should not throw "Cannot read properties of undefined (reading 'kind')"
+    expect(() => printCronList([jobWithUndefinedPayload], runtime)).not.toThrow();
+
+    // Verify output contains the job
+    expect(logs.length).toBeGreaterThan(1);
+    expect(logs.some((line) => line.includes("no-payload-job"))).toBe(true);
+  });
 });
