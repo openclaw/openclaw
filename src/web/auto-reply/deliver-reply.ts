@@ -115,7 +115,8 @@ export async function deliverWebReply(params: {
 
   // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
-    const caption = index === 0 ? remainingText.shift() || undefined : undefined;
+    const rawCaption = index === 0 ? remainingText.shift() : undefined;
+    const caption = rawCaption ? rawCaption.trimStart() : undefined;
     try {
       const media = await loadWebMedia(mediaUrl, {
         maxBytes: maxMediaBytes,
