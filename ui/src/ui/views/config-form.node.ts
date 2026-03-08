@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { renderSelect } from "../components/select.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   defaultValue,
@@ -412,7 +413,7 @@ export function renderNode(params: {
 
     if (allLiterals && literals.length > 5) {
       // Use dropdown for larger sets
-      return renderSelect({ ...params, options: literals, value: value ?? schema.default });
+      return renderSelectField({ ...params, options: literals, value: value ?? schema.default });
     }
 
     // Handle mixed primitive types
@@ -469,7 +470,7 @@ export function renderNode(params: {
         </div>
       `;
     }
-    return renderSelect({ ...params, options, value: value ?? schema.default });
+    return renderSelectField({ ...params, options, value: value ?? schema.default });
   }
 
   // Object type - collapsible section
@@ -657,7 +658,7 @@ function renderNumberInput(params: {
   `;
 }
 
-function renderSelect(params: {
+function renderSelectField(params: {
   schema: JsonSchema;
   value: unknown;
   path: Array<string | number>;
@@ -682,22 +683,17 @@ function renderSelect(params: {
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
       ${renderTags(tags)}
-      <select
-        class="cfg-select"
-        ?disabled=${disabled}
-        .value=${currentIndex >= 0 ? String(currentIndex) : unset}
-        @change=${(e: Event) => {
-          const val = (e.target as HTMLSelectElement).value;
+      ${renderSelect({
+        value: currentIndex >= 0 ? String(currentIndex) : unset,
+        options: [
+          { value: unset, label: "Select..." },
+          ...options.map((opt, idx) => ({ value: String(idx), label: String(opt) })),
+        ],
+        onChange: (val) => {
           onPatch(path, val === unset ? undefined : options[Number(val)]);
-        }}
-      >
-        <option value=${unset}>Select...</option>
-        ${options.map(
-          (opt, idx) => html`
-          <option value=${String(idx)}>${String(opt)}</option>
-        `,
-        )}
-      </select>
+        },
+        disabled,
+      })}
     </div>
   `;
 }

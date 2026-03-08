@@ -1,10 +1,10 @@
 import { html } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
+import { renderSelect } from "./components/select.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
@@ -175,11 +175,13 @@ export function renderChatControls(state: AppViewState) {
   return html`
     <div class="chat-controls">
       <label class="field chat-controls__session">
-        <select
-          .value=${state.sessionKey}
-          ?disabled=${!state.connected}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
+        ${renderSelect({
+          value: state.sessionKey,
+          options: sessionOptions.map((entry) => ({
+            value: entry.key,
+            label: entry.displayName ?? entry.key,
+          })),
+          onChange: (next) => {
             state.sessionKey = next;
             state.chatMessage = "";
             state.chatStream = null;
@@ -199,17 +201,9 @@ export function renderChatControls(state: AppViewState) {
               true,
             );
             void loadChatHistory(state as unknown as ChatState);
-          }}
-        >
-          ${repeat(
-            sessionOptions,
-            (entry) => entry.key,
-            (entry) =>
-              html`<option value=${entry.key} title=${entry.key}>
-                ${entry.displayName ?? entry.key}
-              </option>`,
-          )}
-        </select>
+          },
+          disabled: !state.connected,
+        })}
       </label>
       <button
         class="btn btn--sm btn--icon"

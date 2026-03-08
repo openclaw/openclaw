@@ -978,33 +978,6 @@
   margin: 0;
 }
 
-/* Select */
-.cfg-select {
-  padding: 11px 40px 11px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background-color: var(--bg-accent);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  font-size: 14px;
-  cursor: pointer;
-  outline: none;
-  appearance: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.cfg-select:focus {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-
-:root[data-theme="light"] .cfg-select {
-  background-color: white;
-}
-
 /* Segmented Control */
 .cfg-segmented {
   display: inline-flex;
