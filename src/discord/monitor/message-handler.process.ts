@@ -439,12 +439,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload, info) => {
-      // Dispose the typing guard before final delivery so no stale
-      // typing signals arrive at Discord after the message (which
-      // would briefly re-show "typing").
-      if (info.kind === "final") {
-        typingGuard.dispose();
-      }
+      // Dispose the typing guard before delivery so no stale typing
+      // signals arrive at Discord after the message (which would
+      // briefly re-show "typing"). This applies to all reply kinds
+      // (block, tool, final) — any visible message should stop typing.
+      typingGuard.dispose();
       const replyToId = replyReference.use();
       pendingMarkers = await deliverDiscordReply({
         replies: [payload],
