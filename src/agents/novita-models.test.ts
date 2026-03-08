@@ -35,7 +35,7 @@ describe("novita model discovery", () => {
   });
 
   it("falls back to static catalog in test environment", async () => {
-    const models = await discoverNovitaModels({ apiKey: "test-key" });
+    const models = await discoverNovitaModels({ apiKey: "test-key" }); // pragma: allowlist secret
     expect(models).toHaveLength(NOVITA_MODEL_CATALOG.length);
     expect(models[0]?.id).toBe(NOVITA_MODEL_CATALOG[0]?.id);
   });

@@ -8,7 +8,7 @@ describe("Novita provider", () => {
   it("includes novita when NOVITA_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const previous = process.env.NOVITA_API_KEY;
-    process.env.NOVITA_API_KEY = "test-key";
+    process.env.NOVITA_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });

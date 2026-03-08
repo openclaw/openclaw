@@ -560,7 +560,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("infers Novita auth choice from --novita-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-novita-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        novitaApiKey: "novita-test-key",
+        novitaApiKey: "novita-test-key", // pragma: allowlist secret
       });
 
       expect(cfg.auth?.profiles?.["novita:default"]?.provider).toBe("novita");

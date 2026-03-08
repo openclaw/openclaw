@@ -413,10 +413,6 @@ function resolveEnvApiKeyVarName(provider: string): string | undefined {
   return match ? match[1] : undefined;
 }
 
-function resolveEnvApiKeyValue(provider: string): string | undefined {
-  return resolveEnvApiKey(provider)?.apiKey?.trim() || undefined;
-}
-
 function resolveAwsSdkApiKeyVarName(): string {
   return resolveAwsSdkEnvVarName() ?? "AWS_PROFILE";
 }
