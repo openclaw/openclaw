@@ -71,7 +71,9 @@ type ExtractedMediaCandidate = {
 
 function looksLikeStructuredTail(value: string): boolean {
   return (
-    /^\{["']/.test(value) || /^\[(?:\{|"|')/.test(value) || /^,\s*["'][^"'\\]+["']\s*:/.test(value)
+    /^\{\s*["'][^"'\\]+["']\s*:/.test(value) ||
+    /^\[(?:\{|"|')/.test(value) ||
+    /^,\s*["'][^"'\\]+["']\s*:/.test(value)
   );
 }
 
@@ -310,10 +312,6 @@ export function splitMediaFromOutput(raw: string): {
         foundMediaToken = true;
         if (!extracted.remainder.trim() || extracted.dropRemainder) {
           visibleTail = "";
-          break;
-        }
-        if (!extractLeadingMediaCandidate(extracted.remainder)) {
-          visibleTail = extracted.remainder;
           break;
         }
         remainingPayload = extracted.remainder;

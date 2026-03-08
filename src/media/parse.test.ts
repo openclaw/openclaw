@@ -86,6 +86,12 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("");
   });
 
+  it("keeps valid local filenames containing quoted brace segments", () => {
+    const result = splitMediaFromOutput('MEDIA:/tmp/clip{"stereo"}.wav');
+    expect(result.mediaUrls).toEqual(['/tmp/clip{"stereo"}.wav']);
+    expect(result.text).toBe("");
+  });
+
   it("keeps quoted local filenames containing apostrophes", () => {
     const result = splitMediaFromOutput("MEDIA:'/tmp/it's good.mp3'");
     expect(result.mediaUrls).toEqual(["/tmp/it's good.mp3"]);
