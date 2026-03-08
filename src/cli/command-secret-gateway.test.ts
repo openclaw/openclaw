@@ -273,22 +273,17 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   });
 
   it("fails when configured refs remain unresolved after gateway assignments are applied", async () => {
+    const envKey = "TALK_API_KEY_STRICT_UNRESOLVED";
     callGateway.mockResolvedValueOnce({
       assignments: [],
       diagnostics: [],
     });
 
-    await expect(
-      resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-          },
-        } as OpenClawConfig,
-        commandName: "memory status",
-        targetIds: new Set(["talk.apiKey"]),
-      }),
-    ).rejects.toThrow(/talk\.apiKey is unresolved in the active runtime snapshot/i);
+    await withEnvValue(envKey, undefined, async () => {
+      await expect(resolveTalkApiKey({ envKey })).rejects.toThrow(
+        /talk\.apiKey is unresolved in the active runtime snapshot/i,
+      );
+    });
   });
 
   it("allows unresolved refs when gateway diagnostics mark the target as inactive", async () => {

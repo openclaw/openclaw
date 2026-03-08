@@ -95,6 +95,19 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
+        name: "backup",
+        description: "Create and verify local backup archives for OpenClaw state",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.backup.js");
+      mod.registerBackupCommand(program);
+    },
+  },
+  {
+    commands: [
+      {
         name: "doctor",
         description: "Health checks + quick fixes for the gateway and channels",
         hasSubcommands: false,
