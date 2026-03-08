@@ -518,6 +518,60 @@ describe("createTelegramBot", () => {
     expect(payload.SenderUsername).toBe("ada");
   });
 
+  it("ignores inbound messages authored by the bot itself", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        text: "self ping",
+        date: 1736380800,
+        message_id: 3,
+        from: {
+          id: 999,
+          is_bot: true,
+          first_name: "OpenClaw",
+          username: "openclaw_bot",
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("still handles inbound messages from other bots", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        text: "foreign bot ping",
+        date: 1736380800,
+        message_id: 4,
+        from: {
+          id: 1001,
+          is_bot: true,
+          first_name: "WakeBot",
+          username: "wake_bot",
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("uses quote text when a Telegram partial reply is received", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
@@ -1243,6 +1297,7 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledWith(
       12345,
       "You are not authorized to use this command.",
+      {},
     );
   });
 

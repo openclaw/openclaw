@@ -1410,6 +1410,19 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
+      // Prevent self-reply loops by ignoring messages authored by this bot.
+      // Keep this self-only (not all bots) so bot-to-bot/channel workflows still work.
+      if (event.ctx.me?.id != null && event.msg.from?.id === event.ctx.me.id) {
+        return;
+      }
+      // Channel posts often omit from.id and only expose sender_chat/chat identity.
+      // Use sent-message tracking to skip self-authored echoes in those cases.
+      if (
+        typeof event.msg.message_id === "number" &&
+        wasSentByBot(event.chatId, event.msg.message_id)
+      ) {
+        return;
+      }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
         isGroup: event.isGroup,

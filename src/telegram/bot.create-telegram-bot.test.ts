@@ -28,6 +28,7 @@ import {
   setMyCommandsSpy,
   throttlerSpy,
   useSpy,
+  wasSentByBot,
 } from "./bot.create-telegram-bot.test-harness.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -492,6 +493,44 @@ describe("createTelegramBot", () => {
       getFile: async () => ({}),
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips self-authored channel_post echoes tracked by sent-message cache", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+    wasSentByBot.mockReturnValueOnce(true);
+
+    createTelegramBot({ token: "tok" });
+    const channelPostHandler = getOnHandler("channel_post") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await channelPostHandler({
+      channelPost: {
+        chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+        message_id: 888,
+        text: "self echo",
+        date: 1736380800,
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+
+    expect(wasSentByBot).toHaveBeenCalledWith(-100777111222, 888);
+    expect(replySpy).not.toHaveBeenCalled();
   });
 
   it("does not persist update offset past pending updates", async () => {
