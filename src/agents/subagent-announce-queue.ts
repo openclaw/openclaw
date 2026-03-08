@@ -57,6 +57,12 @@ type AnnounceQueueState = {
   consecutiveFailures: number;
 };
 
+/**
+ * Maximum consecutive drain failures before discarding remaining items.
+ * With exponential backoff (2s → 4s → 8s → 16s → 32s), 5 attempts span ~62s.
+ */
+const MAX_ANNOUNCE_DRAIN_FAILURES = 5;
+
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
 export function resetAnnounceQueuesForTests() {
@@ -67,6 +73,7 @@ export function resetAnnounceQueuesForTests() {
     queue.summaryLines.length = 0;
     queue.droppedCount = 0;
     queue.lastEnqueuedAt = 0;
+    queue.consecutiveFailures = 0;
   }
   ANNOUNCE_QUEUES.clear();
 }
@@ -191,13 +198,25 @@ function scheduleAnnounceDrain(key: string) {
       queue.consecutiveFailures = 0;
     } catch (err) {
       queue.consecutiveFailures++;
-      // Exponential backoff on consecutive failures: 2s, 4s, 8s, ... capped at 60s.
-      const errorBackoffMs = Math.min(1000 * Math.pow(2, queue.consecutiveFailures), 60_000);
-      const retryDelayMs = Math.max(errorBackoffMs, queue.debounceMs);
-      queue.lastEnqueuedAt = Date.now() + retryDelayMs - queue.debounceMs;
-      defaultRuntime.error?.(
-        `announce queue drain failed for ${key} (attempt ${queue.consecutiveFailures}, retry in ${Math.round(retryDelayMs / 1000)}s): ${String(err)}`,
-      );
+      if (queue.consecutiveFailures >= MAX_ANNOUNCE_DRAIN_FAILURES) {
+        // Exceeded max retries — discard remaining items to break the infinite loop.
+        const discarded = queue.items.length;
+        queue.items.length = 0;
+        queue.droppedCount = 0;
+        clearQueueSummaryState(queue);
+        defaultRuntime.error?.(
+          `announce queue drain for ${key} failed ${queue.consecutiveFailures} consecutive times, discarding ${discarded} item(s): ${String(err)}`,
+        );
+        queue.consecutiveFailures = 0;
+      } else {
+        // Exponential backoff on consecutive failures: 2s, 4s, 8s, ... capped at 60s.
+        const errorBackoffMs = Math.min(1000 * Math.pow(2, queue.consecutiveFailures), 60_000);
+        const retryDelayMs = Math.max(errorBackoffMs, queue.debounceMs);
+        queue.lastEnqueuedAt = Date.now() + retryDelayMs - queue.debounceMs;
+        defaultRuntime.error?.(
+          `announce queue drain failed for ${key} (attempt ${queue.consecutiveFailures}/${MAX_ANNOUNCE_DRAIN_FAILURES}, retry in ${Math.round(retryDelayMs / 1000)}s): ${String(err)}`,
+        );
+      }
     } finally {
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
