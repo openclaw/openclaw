@@ -3,12 +3,15 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const resolveEffectiveModelFallbacksMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock, resolveEffectiveModelFallbacksMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveRunModelFallbacksOverride: (...args: unknown[]) =>
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    hoisted.resolveEffectiveModelFallbacksMock(...args),
 }));
 
 const {
@@ -45,6 +48,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
   });
 
   it("resolves model fallback options from run context", () => {
@@ -79,6 +83,27 @@ describe("agent-runner-utils", () => {
       sessionKey: run.sessionKey,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("uses effective fallback chain for compaction auto-overrides", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue([
+      "google/gemini-3-pro-preview",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    const run = makeRun({ authProfileIdSource: "auto" });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      hasSessionModelOverride: true,
+    });
+    expect(resolved.fallbacksOverride).toEqual([
+      "google/gemini-3-pro-preview",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
