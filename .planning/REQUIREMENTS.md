@@ -68,22 +68,22 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MATCH-01 | — | Pending |
-| MATCH-02 | — | Pending |
-| MATCH-03 | — | Pending |
-| SSRF-01 | — | Pending |
-| LIST-01 | — | Pending |
-| LIST-02 | — | Pending |
-| OBS-01 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
+| MATCH-01 | Phase 1 | Pending |
+| MATCH-02 | Phase 1 | Pending |
+| MATCH-03 | Phase 1 | Pending |
+| SSRF-01 | Phase 2 | Pending |
+| LIST-01 | Phase 1 | Pending |
+| LIST-02 | Phase 1 | Pending |
+| OBS-01 | Phase 1 | Pending |
+| TEST-01 | Phase 1 | Pending |
+| TEST-02 | Phase 2 | Pending |
+| TEST-03 | Phase 3 | Pending |
 
 **Coverage:**
 - v1 requirements: 10 total
-- Mapped to phases: 0
-- Unmapped: 10
+- Mapped to phases: 10
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-08*
-*Last updated: 2026-03-08 after initial definition*
+*Last updated: 2026-03-08 after roadmap creation*
