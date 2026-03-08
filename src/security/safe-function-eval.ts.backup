@@ -1,23 +1,23 @@
-// Safe function parser - Replacement for dangerous eval usage
-// Used for safely parsing and executing dynamic functions
+// 安全函数解析器 - 替代危险的eval使用
+// 用于安全地解析和执行动态函数
 
 /**
- * Safely parse and execute function strings
- * Replacement for dangerous eval() usage
+ * 安全地解析和执行函数字符串
+ * 替代危险的eval()使用
  */
 export class SafeFunctionParser {
   private static readonly allowedGlobals = new Set([
-    // Math functions
+    // 数学函数
     'Math', 'Number', 'String', 'Boolean', 'Array', 'Object', 'Date',
     'JSON', 'Promise', 'RegExp', 'Error', 'TypeError', 'RangeError',
-    // Browser APIs (limited)
+    // 浏览器API（有限制）
     'console', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
-    // Type checking
+    // 类型检查
     'typeof', 'instanceof', 'isNaN', 'isFinite', 'parseInt', 'parseFloat',
   ]);
 
   private static readonly dangerousPatterns = [
-    // Prevent access to dangerous objects
+    // 禁止访问危险对象
     /window\./g,
     /document\./g,
     /localStorage/g,
@@ -29,43 +29,35 @@ export class SafeFunctionParser {
     /require/g,
     /process\./g,
     /global\./g,
-    // Prevent dangerous operations
+    // 禁止危险操作
     /\.constructor\./g,
     /\.__proto__\./g,
     /\.prototype\./g,
     /Function\(/g,
     /eval\(/g,
-    // Prevent dangerous assignments (only block assignment to dangerous properties)
-    /window\s*=/g,
-    /document\s*=/g,
-    /localStorage\s*=/g,
-    /sessionStorage\s*=/g,
-    /XMLHttpRequest\s*=/g,
-    /fetch\s*=/g,
-    // Prevent function and class definitions
+    // 禁止赋值操作
+    /=/g,
+    // 禁止函数定义
     /function\s*\(/g,
     /=>/g,
     /class\s+/g,
-    // Prevent new operator with dangerous constructors
-    /new\s+Function/g,
-    /new\s+eval/g,
   ];
 
   /**
-   * Check if function body is safe
+   * 检查函数体是否安全
    */
   static isFunctionBodySafe(fnBody: string): boolean {
     if (!fnBody || typeof fnBody !== 'string') {
       return false;
     }
 
-    // Check length limit (prevent DoS)
+    // 检查长度限制（防止DoS）
     if (fnBody.length > 10000) {
       console.warn('Security warning: Function body too long');
       return false;
     }
 
-    // Check for dangerous patterns
+    // 检查危险模式
     for (const pattern of this.dangerousPatterns) {
       if (pattern.test(fnBody)) {
         console.warn(`Security warning: Dangerous pattern found: ${pattern}`);
@@ -73,10 +65,10 @@ export class SafeFunctionParser {
       }
     }
 
-    // Check for unauthorized global variable access
+    // 检查是否包含未授权的全局变量访问
     const globalAccessMatches = fnBody.match(/[A-Za-z_$][A-Za-z0-9_$]*\./g) || [];
     for (const match of globalAccessMatches) {
-      const globalName = match.slice(0, -1); // Remove trailing dot
+      const globalName = match.slice(0, -1); // 移除末尾的点
       if (!this.allowedGlobals.has(globalName)) {
         console.warn(`Security warning: Unauthorized global access: ${globalName}`);
         return false;
@@ -87,7 +79,7 @@ export class SafeFunctionParser {
   }
 
   /**
-   * Safely create a function
+   * 安全地创建函数
    */
   static createSafeFunction(fnBody: string, argNames: string[] = ['el', 'args']): Function | null {
     if (!this.isFunctionBodySafe(fnBody)) {
@@ -96,7 +88,7 @@ export class SafeFunctionParser {
     }
 
     try {
-      // Use Function constructor (slightly safer than eval, but still needs caution)
+      // 使用Function构造函数（比eval稍安全，但仍然需要小心）
       const safeFnBody = `
         "use strict";
         try {
@@ -116,7 +108,7 @@ export class SafeFunctionParser {
   }
 
   /**
-   * Safely execute a function
+   * 安全地执行函数
    */
   static executeSafeFunction(
     fnBody: string,
@@ -125,23 +117,23 @@ export class SafeFunctionParser {
     timeoutMs: number = 5000
   ): Promise<any> {
     return new Promise((resolve, reject) => {
-      // Create safe function
+      // 创建安全函数
       const safeFn = this.createSafeFunction(fnBody);
       if (!safeFn) {
         reject(new Error('Failed to create safe function'));
         return;
       }
 
-      // Set timeout
+      // 设置超时
       const timeoutId = setTimeout(() => {
         reject(new Error(`Function execution timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
       try {
-        // Execute function
+        // 执行函数
         const result = safeFn.call(context, ...args);
         
-        // Handle Promise result
+        // 处理Promise结果
         if (result && typeof result.then === 'function') {
           result
             .then((resolvedResult: any) => {
@@ -164,7 +156,7 @@ export class SafeFunctionParser {
   }
 
   /**
-   * Safe expression evaluation (replacement for eval("(" + expr + ")"))
+   * 安全的表达式求值（替代eval("(" + expr + ")"))
    */
   static safeEvaluateExpression(expr: string): any {
     if (!this.isFunctionBodySafe(expr)) {
@@ -172,12 +164,12 @@ export class SafeFunctionParser {
     }
 
     try {
-      // Use JSON.parse for simple expressions
+      // 使用JSON.parse处理简单表达式
       if (expr.trim().startsWith('{') || expr.trim().startsWith('[')) {
         return JSON.parse(expr);
       }
 
-      // For other expressions, use safe function wrapper
+      // 对于其他表达式，使用安全的函数包装
       const wrappedExpr = `return (${expr})`;
       const safeFn = this.createSafeFunction(wrappedExpr, []);
       if (!safeFn) {
@@ -192,7 +184,7 @@ export class SafeFunctionParser {
   }
 }
 
-// Export convenience functions
+// 导出便捷函数
 export function safeEval(expr: string): any {
   return SafeFunctionParser.safeEvaluateExpression(expr);
 }

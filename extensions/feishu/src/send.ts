@@ -8,7 +8,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
-// 安全修复：导入安全的JSON解析函数
+// Security fix: Import safe JSON parsing function
 import { validateSafeJson } from "../../../src/security/input-validation.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
@@ -70,7 +70,7 @@ function parseQuotedMessageContent(rawContent: string, msgType: string): string 
 
   let parsed: unknown;
   try {
-    // 安全修复：使用安全的JSON解析函数
+    // Security fix: Use safe JSON parsing function
     parsed = validateSafeJson(rawContent);
   } catch {
     return rawContent;
