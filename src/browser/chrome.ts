@@ -280,6 +280,10 @@ export async function launchOpenClawChrome(
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
+        // Expose the active browser profile name so wrapper scripts
+        // (e.g. custom executablePath) can select per-profile resources
+        // such as separate user-data-dirs or proxy configs.
+        OPENCLAW_BROWSER_PROFILE: profile.name || "",
       },
     });
   };
