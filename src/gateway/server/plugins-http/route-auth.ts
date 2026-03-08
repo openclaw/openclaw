@@ -6,6 +6,12 @@ import {
 } from "./path-context.js";
 import { findMatchingPluginHttpRoutes } from "./route-match.js";
 
+export function matchedPluginRoutesRequireGatewayAuth(
+  routes: readonly Pick<NonNullable<PluginRegistry["httpRoutes"]>[number], "auth">[],
+): boolean {
+  return routes.some((route) => route.auth === "gateway");
+}
+
 export function shouldEnforceGatewayAuthForPluginPath(
   registry: PluginRegistry,
   pathnameOrContext: string | PluginRoutePathContext,
@@ -20,9 +26,5 @@ export function shouldEnforceGatewayAuthForPluginPath(
   if (isProtectedPluginRoutePathFromContext(pathContext)) {
     return true;
   }
-  const route = findMatchingPluginHttpRoutes(registry, pathContext)[0];
-  if (!route) {
-    return false;
-  }
-  return route.auth === "gateway";
+  return matchedPluginRoutesRequireGatewayAuth(findMatchingPluginHttpRoutes(registry, pathContext));
 }

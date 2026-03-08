@@ -103,6 +103,10 @@ export type ShellWrapperCommand = {
   command: string | null;
 };
 
+function isWithinDispatchClassificationDepth(depth: number): boolean {
+  return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
+}
+
 export function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
@@ -509,7 +513,7 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   depth: number,
   envManipulationSeen: boolean,
 ): boolean {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return false;
   }
 
@@ -607,7 +611,7 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return { isWrapper: false, command: null };
   }
 

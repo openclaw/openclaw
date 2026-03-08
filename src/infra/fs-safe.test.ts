@@ -300,6 +300,66 @@ describe("fs-safe", () => {
     },
   );
 
+  it("does not truncate existing target when atomic copy rename fails", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
+    const sourcePath = path.join(sourceDir, "in.txt");
+    const targetPath = path.join(root, "nested", "copied.txt");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(sourcePath, "copy-new");
+    await fs.writeFile(targetPath, "copy-existing");
+    const renameSpy = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValue(Object.assign(new Error("rename blocked"), { code: "EACCES" }));
+    try {
+      await expect(
+        copyFileWithinRoot({
+          sourcePath,
+          rootDir: root,
+          relativePath: "nested/copied.txt",
+        }),
+      ).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("copy-existing");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects when a hardlink appears after atomic copy rename",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
+      const sourcePath = path.join(sourceDir, "copy-source.txt");
+      const targetPath = path.join(root, "nested", "copied.txt");
+      const aliasPath = path.join(root, "nested", "alias.txt");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(sourcePath, "copy-new");
+      await fs.writeFile(targetPath, "copy-existing");
+      const realRename = fs.rename.bind(fs);
+      let linked = false;
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await realRename(...args);
+        if (!linked) {
+          linked = true;
+          await fs.link(String(args[1]), aliasPath);
+        }
+      });
+      try {
+        await expect(
+          copyFileWithinRoot({
+            sourcePath,
+            rootDir: root,
+            relativePath: "nested/copied.txt",
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        renameSpy.mockRestore();
+      }
+      await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("copy-new");
+    },
+  );
+
   it("copies a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");

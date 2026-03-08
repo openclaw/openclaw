@@ -67,7 +67,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   it("returns config unchanged when no target SecretRefs are configured", async () => {
     const config = {
       talk: {
-        apiKey: "plain",
+        apiKey: "plain", // pragma: allowlist secret
       },
     } as OpenClawConfig;
     const result = await resolveCommandSecretRefsViaGateway({
@@ -132,6 +132,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
+        config,
         method: "secrets.resolve",
         requiredMethods: ["secrets.resolve"],
         params: {
@@ -171,7 +172,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("falls back to local resolution when gateway secrets.resolve is unavailable", async () => {
     const priorValue = process.env.TALK_API_KEY;
-    process.env.TALK_API_KEY = "local-fallback-key";
+    process.env.TALK_API_KEY = "local-fallback-key"; // pragma: allowlist secret
     callGateway.mockRejectedValueOnce(new Error("gateway closed"));
     try {
       const result = await resolveCommandSecretRefsViaGateway({

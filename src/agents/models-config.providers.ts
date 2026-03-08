@@ -392,6 +392,8 @@ async function discoverVllmModels(
   }
 }
 
+const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
@@ -542,6 +544,18 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3-flash") {
     return "gemini-3-flash-preview";
   }
+  if (id === "gemini-3.1-pro") {
+    return "gemini-3.1-pro-preview";
+  }
+  if (id === "gemini-3.1-flash-lite") {
+    return "gemini-3.1-flash-lite-preview";
+  }
+  // Preserve compatibility with earlier OpenClaw docs/config that pointed at a
+  // non-existent Gemini Flash preview ID. Google's current Flash text model is
+  // `gemini-3-flash-preview`.
+  if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
+    return "gemini-3-flash-preview";
+  }
   return id;
 }
 
@@ -655,6 +669,23 @@ export function normalizeProviders(params: {
       }
     }
 
+    // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
+    // var name), check whether it matches the canonical env var for this provider.
+    // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
+    // to models.json as plaintext. (Fixes #38757)
+    const currentApiKey = normalizedProvider.apiKey;
+    if (
+      typeof currentApiKey === "string" &&
+      currentApiKey.trim() &&
+      !ENV_VAR_NAME_RE.test(currentApiKey.trim())
+    ) {
+      const envVarName = resolveEnvApiKeyVarName(normalizedKey);
+      if (envVarName && process.env[envVarName] === currentApiKey) {
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+      }
+    }
+
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
@@ -737,11 +768,6 @@ function buildMinimaxProvider(): ProviderConfig {
         name: "MiniMax M2.5 Highspeed",
         reasoning: true,
       }),
-      buildMinimaxTextModel({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
-        reasoning: true,
-      }),
     ],
   };
 }
@@ -752,6 +778,12 @@ function buildMinimaxPortalProvider(): ProviderConfig {
     api: "anthropic-messages",
     authHeader: true,
     models: [
+      buildMinimaxModel({
+        id: MINIMAX_DEFAULT_VISION_MODEL_ID,
+        name: "MiniMax VL 01",
+        reasoning: false,
+        input: ["text", "image"],
+      }),
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.5",
@@ -760,11 +792,6 @@ function buildMinimaxPortalProvider(): ProviderConfig {
       buildMinimaxTextModel({
         id: "MiniMax-M2.5-highspeed",
         name: "MiniMax M2.5 Highspeed",
-        reasoning: true,
-      }),
-      buildMinimaxTextModel({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
         reasoning: true,
       }),
     ],
@@ -1097,8 +1124,9 @@ export async function resolveImplicitProviders(params: {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
 
+  const minimaxPortalEnvKey = resolveEnvApiKeyVarName("minimax-portal");
   const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
-  if (minimaxOauthProfile.length > 0) {
+  if (minimaxPortalEnvKey || minimaxOauthProfile.length > 0) {
     providers["minimax-portal"] = {
       ...buildMinimaxPortalProvider(),
       apiKey: MINIMAX_OAUTH_MARKER,

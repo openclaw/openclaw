@@ -177,6 +177,33 @@ import Testing
         #expect(host == "192.168.1.10")
     }
 
+    @Test func localConfigUsesLocalGatewayAuthAndHostResolution() throws {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: [:],
+            token: "launchd-token",
+            password: "launchd-pass")
+        let root: [String: Any] = [
+            "gateway": [
+                "bind": "tailnet",
+                "tls": ["enabled": true],
+                "remote": [
+                    "url": "wss://remote.example:443",
+                    "token": "remote-token",
+                ],
+            ],
+        ]
+
+        let config = GatewayEndpointStore._testLocalConfig(
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot,
+            tailscaleIP: "100.64.1.8")
+
+        #expect(config.url.absoluteString == "wss://100.64.1.8:18789")
+        #expect(config.token == "launchd-token")
+        #expect(config.password == "launchd-pass")
+    }
+
     @Test func dashboardURLUsesLocalBasePathInLocalMode() throws {
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://127.0.0.1:18789")),
@@ -214,6 +241,20 @@ import Testing
             mode: .remote,
             localBasePath: "/local-ui")
         #expect(url.absoluteString == "https://gateway.example:443/remote-ui/")
+    }
+
+    @Test func dashboardURLUsesFragmentTokenAndOmitsPassword() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: "abc123",
+            password: "sekret") // pragma: allowlist secret
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/control")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=abc123")
+        #expect(url.query == nil)
     }
 
     @Test func normalizeGatewayUrlAddsDefaultPortForLoopbackWs() {

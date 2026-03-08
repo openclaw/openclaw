@@ -207,14 +207,15 @@ async function ensureSessionRuntimeCleanup(params: {
     queueKeys.add(params.sessionId);
   }
   clearSessionQueues([...queueKeys]);
-  clearBootstrapSnapshot(params.target.canonicalKey);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
+    clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
     await closeTrackedBrowserTabs();
     return undefined;
