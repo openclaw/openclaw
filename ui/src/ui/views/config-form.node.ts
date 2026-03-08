@@ -440,6 +440,15 @@ export function renderNode(params: {
         });
       }
     }
+
+    // Handle unions with non-primitive types (e.g., string | {source, provider, id})
+    // Fallback to textarea that accepts plain string or JSON object
+    if (primitiveTypes.size > 0) {
+      return renderUnionTextInput({
+        ...params,
+        inputType: "text",
+      });
+    }
   }
 
   // Enum - use segmented for small, dropdown for large
@@ -602,6 +611,68 @@ function renderTextInput(params: {
         `
             : nothing
         }
+      </div>
+    </div>
+  `;
+}
+
+// Render textarea for union types (e.g., string | {source, provider, id})
+// Accepts plain string or JSON object
+function renderUnionTextInput(params: {
+  schema: JsonSchema;
+  value: unknown;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  disabled: boolean;
+  showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
+  inputType: "text" | "number";
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+}): TemplateResult {
+  const { schema, value, path, hints, disabled, onPatch } = params;
+  const showLabel = params.showLabel ?? true;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+
+  // Format value for display: if object, show JSON; otherwise show as string
+  let displayValue: string;
+  if (value !== undefined && value !== null && typeof value === "object") {
+    try {
+      displayValue = JSON.stringify(value, null, 2);
+    } catch {
+      displayValue = String(value);
+    }
+  } else {
+    displayValue = value !== undefined ? String(value) : "";
+  }
+
+  return html`
+    <div class="cfg-field">
+      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${renderTags(tags)}
+      <div class="cfg-input-wrap">
+        <textarea
+          class="cfg-textarea"
+          placeholder="Enter plain string or JSON object (e.g., {&quot;source&quot;: &quot;env&quot;, &quot;id&quot;: &quot;MY_TOKEN&quot;})"
+          rows="3"
+          .value=${displayValue}
+          ?disabled=${disabled}
+          @change=${(e: Event) => {
+            const raw = (e.target as HTMLTextAreaElement).value.trim();
+            if (!raw) {
+              onPatch(path, undefined);
+              return;
+            }
+            // Try to parse as JSON first
+            try {
+              const parsed = JSON.parse(raw);
+              onPatch(path, parsed);
+            } catch {
+              // Not valid JSON, treat as plain string
+              onPatch(path, raw);
+            }
+          }}
+        ></textarea>
       </div>
     </div>
   `;

@@ -100,8 +100,10 @@ export function resolveTranscriptPolicy(params: {
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
-  // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = isCopilotClaude;
+  // Anthropic's API also requires thinking/redacted_thinking blocks to remain unchanged,
+  // so we must either preserve them exactly or drop them entirely before sending back.
+  // To avoid session corruption, drop these blocks for Anthropic models (including Copilot).
+  const dropThinkingBlocks = isCopilotClaude || isAnthropic;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
@@ -119,13 +121,17 @@ export function resolveTranscriptPolicy(params: {
   const sanitizeThoughtSignatures =
     isOpenRouterGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
 
+  // Only preserve signatures for GitHub Copilot Claude - other anthropic-messages API
+  // providers (like kimi-coding) cannot handle re-sent thinkingSignature blocks
+  const preserveSignatures = isCopilotClaude;
+
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds:
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic && !ANTHROPIC_API_SIGNATURE_EXCLUDED_PROVIDERS.has(provider),
+    preserveSignatures,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
