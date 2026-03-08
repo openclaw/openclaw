@@ -453,7 +453,7 @@ describe("rewriteAllAssistantContent", () => {
       makeMsg("assistant", "turn 3"),
     ];
 
-    rewriteAllAssistantContent(messages, ["new 1", "new 2", "new 3"]);
+    rewriteAllAssistantContent(messages, messages, ["new 1", "new 2", "new 3"]);
 
     expect((messages[0] as { content: unknown }).content).toBe("new 1");
     expect((messages[2] as { content: unknown }).content).toBe("new 2");
@@ -469,12 +469,39 @@ describe("rewriteAllAssistantContent", () => {
       makeMsg("assistant", "turn 3"),
     ];
 
-    rewriteAllAssistantContent(messages, ["only first"]);
+    rewriteAllAssistantContent(messages, messages, ["only first"]);
 
     // First message rewritten; extras removed entirely (not blanked to "")
     // to avoid empty-content messages that break Anthropic API.
     expect(messages).toHaveLength(1);
     expect((messages[0] as { content: unknown }).content).toBe("only first");
+  });
+
+  it("removes extras from source array, not just slice (splice-on-slice fix)", async () => {
+    const hookRunner = makeMockHookRunner({ allContent: ["[REDACTED]"] });
+    const activeSession = {
+      messages: [
+        makeMsg("assistant", "PII turn 1"),
+        makeMsg("user", "continue"),
+        makeMsg("assistant", "PII turn 2"),
+      ],
+    };
+
+    await applyBeforeResponseEmitHook({
+      hookRunner,
+      agentCtx: dummyCtx,
+      assistantTexts: ["PII turn 1", "PII turn 2"],
+      messagesSnapshot: activeSession.messages.slice(),
+      activeSession,
+    });
+
+    // First message rewritten, second removed from activeSession.messages (not just slice)
+    const assistants = activeSession.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect((assistants[0] as { content: unknown }).content).toBe("[REDACTED]");
+    // PII turn 2 must not survive in session history
+    const allContent = activeSession.messages.map((m) => (m as { content?: unknown }).content);
+    expect(allContent).not.toContain("PII turn 2");
   });
 
   it("handles content-part arrays", () => {
@@ -485,7 +512,7 @@ describe("rewriteAllAssistantContent", () => {
       ]),
     ];
 
-    rewriteAllAssistantContent(messages, ["new content"]);
+    rewriteAllAssistantContent(messages, messages, ["new content"]);
 
     const parts = (messages[0] as { content: unknown }).content as Array<{
       type: string;
