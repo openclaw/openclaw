@@ -4,6 +4,7 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
+  DEFAULT_ACCOUNT_ID,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
   issuePairingChallenge,
@@ -1165,16 +1166,37 @@ export async function handleFeishuMessage(params: {
       );
     }
 
-    let route = core.channel.routing.resolveAgentRoute({
-      cfg,
+    const routeInput = {
       channel: "feishu",
-      accountId: account.accountId,
       peer: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
       },
       parentPeer,
+    } as const;
+
+    let route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      ...routeInput,
+      accountId: account.accountId,
     });
+
+    if (isGroup && route.matchedBy === "default" && account.accountId !== DEFAULT_ACCOUNT_ID) {
+      const fallbackRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        ...routeInput,
+        accountId: DEFAULT_ACCOUNT_ID,
+      });
+      if (fallbackRoute.matchedBy === "binding.peer" || fallbackRoute.matchedBy === "binding.peer.parent") {
+        route = {
+          ...fallbackRoute,
+          accountId: account.accountId,
+        };
+        log(
+          `feishu[${account.accountId}]: recovered group route via default-account peer binding (peer=${peerId}, agent=${route.agentId})`,
+        );
+      }
+    }
 
     // Dynamic agent creation for DM users
     // When enabled, creates a unique agent instance with its own workspace for each DM user.

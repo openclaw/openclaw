@@ -1709,6 +1709,79 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("falls back to default-account peer bindings for group routes on named accounts", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    mockResolveAgentRoute
+      .mockReturnValueOnce({
+        agentId: "main-agent",
+        channel: "feishu",
+        accountId: "router-d",
+        sessionKey: "agent:main-agent:feishu:group:oc-group-fallback",
+        mainSessionKey: "agent:main-agent:main",
+        matchedBy: "default",
+      })
+      .mockReturnValueOnce({
+        agentId: "hr-agent",
+        channel: "feishu",
+        accountId: "default",
+        sessionKey: "agent:hr-agent:feishu:group:oc-group-fallback",
+        mainSessionKey: "agent:hr-agent:main",
+        matchedBy: "binding.peer",
+      });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group-fallback": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-group-fallback" } },
+      message: {
+        message_id: "msg-group-fallback",
+        chat_id: "oc-group-fallback",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      accountId: "router-d",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ channel: "feishu", accountId: "router-d" }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ channel: "feishu", accountId: "default" }),
+    );
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SessionKey: "agent:hr-agent:feishu:group:oc-group-fallback",
+        AccountId: "router-d",
+      }),
+    );
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "hr-agent",
+      }),
+    );
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
