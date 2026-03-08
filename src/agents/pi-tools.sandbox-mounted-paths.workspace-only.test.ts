@@ -58,6 +58,29 @@ describe("tools.fs.workspaceOnly", () => {
     });
   });
 
+  it("allows the official /agent mount in read-only sandbox mode when workspaceOnly is enabled", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ sandboxRoot, agentRoot, sandbox }) => {
+        await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+        const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as OpenClawConfig;
+        const tools = createOpenClawCodingTools({
+          sandbox,
+          workspaceDir: sandboxRoot,
+          config: cfg,
+        });
+        const readTool = tools.find((tool) => tool.name === "read") as ToolWithExecute | undefined;
+        if (!readTool) {
+          throw new Error("read tool missing");
+        }
+
+        const readResult = await readTool.execute("t-ro-read", { path: "/agent/secret.txt" });
+        expect(getTextContent(readResult as Parameters<typeof getTextContent>[0])).toContain("shh");
+      },
+      { workspaceAccess: "ro" },
+    );
+  });
+
   it("rejects sandbox mounts outside the workspace root when enabled", async () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");

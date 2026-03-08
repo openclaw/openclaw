@@ -358,19 +358,8 @@ function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
+  agentWorkspaceMount?: string;
 }): string {
-  const containerWorkdir = params.containerWorkdir?.trim();
-  if (!containerWorkdir) {
-    return params.filePath;
-  }
-  const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!normalizedWorkdir.startsWith("/")) {
-    return params.filePath;
-  }
-  if (!normalizedWorkdir) {
-    return params.filePath;
-  }
-
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
   if (/^file:\/\//i.test(candidate)) {
     try {
@@ -392,18 +381,58 @@ function mapContainerPathToWorkspaceRoot(params: {
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
-  if (normalizedCandidate === normalizedWorkdir) {
-    return path.resolve(params.root);
+  const containerPath = remapContainerPathToHostRoot({
+    candidate: normalizedCandidate,
+    containerRoot: params.containerWorkdir,
+    hostRoot: params.root,
+  });
+  if (containerPath) {
+    return containerPath;
   }
-  const prefix = `${normalizedWorkdir}/`;
-  if (!normalizedCandidate.startsWith(prefix)) {
-    return candidate;
+  const agentWorkspacePath = remapContainerPathToHostRoot({
+    candidate: normalizedCandidate,
+    containerRoot: params.agentWorkspaceMount,
+    hostRoot: params.root,
+  });
+  if (agentWorkspacePath) {
+    return agentWorkspacePath;
   }
-  const relative = normalizedCandidate.slice(prefix.length);
+  return candidate;
+}
+
+function remapContainerPathToHostRoot(params: {
+  candidate: string;
+  containerRoot?: string;
+  hostRoot: string;
+}): string | undefined {
+  const containerRoot = normalizeContainerRoot(params.containerRoot);
+  if (!containerRoot) {
+    return undefined;
+  }
+  if (params.candidate === containerRoot) {
+    return path.resolve(params.hostRoot);
+  }
+  const prefix = `${containerRoot}/`;
+  if (!params.candidate.startsWith(prefix)) {
+    return undefined;
+  }
+  const relative = params.candidate.slice(prefix.length);
   if (!relative) {
-    return path.resolve(params.root);
+    return path.resolve(params.hostRoot);
   }
-  return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+  return path.resolve(params.hostRoot, ...relative.split("/").filter(Boolean));
+}
+
+function normalizeContainerRoot(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalized || !normalized.startsWith("/")) {
+    return undefined;
+  }
+  return normalized;
 }
 
 export function wrapToolWorkspaceRootGuardWithOptions(
@@ -411,6 +440,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   root: string,
   options?: {
     containerWorkdir?: string;
+    agentWorkspaceMount?: string;
   },
 ): AnyAgentTool {
   return {
@@ -426,6 +456,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           filePath,
           root,
           containerWorkdir: options?.containerWorkdir,
+          agentWorkspaceMount: options?.agentWorkspaceMount,
         });
         await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
       }
