@@ -614,7 +614,10 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         // Register App Shortcuts so the system can discover OpenTalkModeIntent
         // for Siri and the Action Button. Must be called at launch.
-        OpenClawShortcuts.updateAppShortcutParameters()
+        // Guarded by @available — AppShortcutsProvider requires iOS 16+.
+        if #available(iOS 16, *) {
+            OpenClawShortcuts.updateAppShortcutParameters()
+        }
         let appModel = NodeAppModel()
         OpenClawAppModelRegistry.appModel = appModel
         _appModel = State(initialValue: appModel)
