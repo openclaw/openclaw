@@ -198,6 +198,28 @@ describe("modelsListCommand forward-compat", () => {
     );
   });
 
+  it("keeps openai-codex/gpt-5.4 visible as configured (issue #37623)", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ json: true }, runtime as never);
+
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
+      key: string;
+      tags: string[];
+      missing: boolean;
+    }>;
+
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.4",
+        missing: false,
+      }),
+    );
+    const codex = rows.find((row) => row.key === "openai-codex/gpt-5.4");
+    expect(codex?.tags).toContain("configured");
+    expect(codex?.tags).not.toContain("missing");
+  });
+
   it("exits with an error when configured-mode listing has no model registry", async () => {
     vi.clearAllMocks();
     const previousExitCode = process.exitCode;
