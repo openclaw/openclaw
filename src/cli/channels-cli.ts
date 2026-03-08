@@ -52,6 +52,7 @@ const optionNamesAdd = [
   "groupChannels",
   "dmAllowlist",
   "autoDiscoverChannels",
+  "confirmTarget",
 ] as const;
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
@@ -198,6 +199,11 @@ export function registerChannelsCli(program: Command) {
     .option("--auto-discover-channels", "Tlon auto-discover group channels")
     .option("--no-auto-discover-channels", "Disable Tlon auto-discovery")
     .option("--use-env", "Use env token (default account only)", false)
+    .option(
+      "--confirm-target",
+      "Confirm target (channel + account) before applying token/config; required when running non-interactively",
+      false,
+    )
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {
         const hasFlags = hasExplicitOptions(command, optionNamesAdd);

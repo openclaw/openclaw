@@ -69,9 +69,11 @@ describe("channels command", () => {
   }
 
   async function addTelegramAccount(account: string, token: string): Promise<void> {
-    await channelsAddCommand({ channel: "telegram", account, token }, runtime, {
-      hasFlags: true,
-    });
+    await channelsAddCommand(
+      { channel: "telegram", account, token, confirmTarget: true },
+      runtime,
+      { hasFlags: true },
+    );
   }
 
   async function addAlertsTelegramAccount(token: string): Promise<{
@@ -181,6 +183,7 @@ describe("channels command", () => {
         account: "default",
         botToken: "xoxb-1",
         appToken: "xapp-1",
+        confirmTarget: true,
       },
       runtime,
       { hasFlags: true },
@@ -227,7 +230,12 @@ describe("channels command", () => {
   it("adds a named WhatsApp account", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     await channelsAddCommand(
-      { channel: "whatsapp", account: "family", name: "Family Phone" },
+      {
+        channel: "whatsapp",
+        account: "family",
+        name: "Family Phone",
+        confirmTarget: true,
+      },
       runtime,
       { hasFlags: true },
     );
@@ -260,6 +268,7 @@ describe("channels command", () => {
         account: "lab",
         name: "Lab",
         signalNumber: "+15555550123",
+        confirmTarget: true,
       },
       runtime,
       { hasFlags: true },
@@ -350,6 +359,7 @@ describe("channels command", () => {
         account: "default",
         token: "123:abc",
         name: "Primary Bot",
+        confirmTarget: true,
       },
       runtime,
       { hasFlags: true },
@@ -380,9 +390,11 @@ describe("channels command", () => {
       },
     });
 
-    await channelsAddCommand({ channel: "discord", account: "work", token: "d1" }, runtime, {
-      hasFlags: true,
-    });
+    await channelsAddCommand(
+      { channel: "discord", account: "work", token: "d1", confirmTarget: true },
+      runtime,
+      { hasFlags: true },
+    );
 
     const next = getWrittenConfig<{
       channels?: {

@@ -18,6 +18,10 @@ import {
   reloadOnboardingPluginRegistry,
 } from "../onboarding/plugin-install.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
+import {
+  preflightChannelConfigWrite,
+  preflightChannelConfigWriteBatch,
+} from "./preflight-token-apply.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
 export type ChannelsAddOptions = {
@@ -26,6 +30,8 @@ export type ChannelsAddOptions = {
   initialSyncLimit?: number | string;
   groupChannels?: string;
   dmAllowlist?: string;
+  /** Skip interactive preflight; allow token/config write (non-interactive use). */
+  confirmTarget?: boolean;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function parseList(value: string | undefined): string[] | undefined {
@@ -176,6 +182,18 @@ export async function channelsAddCommand(
       }
     }
 
+    const batchTargets = selection.map((ch) => ({
+      channel: ch,
+      accountId: (accountIds[ch] ?? DEFAULT_ACCOUNT_ID).trim(),
+    }));
+    const preflight = await preflightChannelConfigWriteBatch({
+      targets: batchTargets,
+      prompter,
+    });
+    if (!preflight.ok) {
+      await prompter.outro(preflight.reason ?? "Cancelled.");
+      return;
+    }
     await writeConfigFile(nextConfig);
     await prompter.outro("Channels updated.");
     return;
@@ -297,6 +315,17 @@ export async function channelsAddCommand(
     accountId,
     input,
   });
+
+  const preflight = await preflightChannelConfigWrite({
+    channel,
+    accountId,
+    confirmTarget: opts.confirmTarget,
+  });
+  if (!preflight.ok) {
+    runtime.error(preflight.reason ?? "Preflight cancelled.");
+    runtime.exit(1);
+    return;
+  }
 
   if (channel === "telegram") {
     const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();

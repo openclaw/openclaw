@@ -32,7 +32,7 @@ describe("channelsAddCommand", () => {
     });
 
     await channelsAddCommand(
-      { channel: "telegram", account: "default", token: "new-token" },
+      { channel: "telegram", account: "default", token: "new-token", confirmTarget: true },
       runtime,
       { hasFlags: true },
     );
@@ -52,7 +52,7 @@ describe("channelsAddCommand", () => {
     });
 
     await channelsAddCommand(
-      { channel: "telegram", account: "default", token: "same-token" },
+      { channel: "telegram", account: "default", token: "same-token", confirmTarget: true },
       runtime,
       { hasFlags: true },
     );
