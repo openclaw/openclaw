@@ -353,6 +353,12 @@ export type GatewayToolsConfig = {
 };
 
 export type GatewayConfig = {
+  /**
+   * Display name for the gateway (e.g. the bot/assistant name).
+   * Used as a fallback display name in channel typing indicators and other UI surfaces
+   * where no channel-specific or agent-specific name is configured.
+   */
+  displayName?: string;
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
   /**
