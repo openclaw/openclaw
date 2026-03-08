@@ -24,7 +24,7 @@
 ## Phase 02: Runtime Governance Enforcement
 - ID: `02`
 - Slug: `02-runtime-governance-enforcement`
-- Status: `planned-ready`
+- Status: `completed`
 - Goal: Implement enforceable runtime controls so agents consistently apply constitutional rules during task execution, escalation, and memory operations.
 - Dependencies:
   - Phase 01 complete
@@ -40,15 +40,19 @@
   - Runtime enforcement path is defined end-to-end.
   - Clear implementation tasks exist for code/docs changes.
   - Validation scenarios are specified for failure and edge cases.
+  - Human verification gate passed for shadow and enforce behavior.
 
 ## Phase 03: Memory Integrity & Traceability
 - ID: `03`
 - Slug: `03-memory-integrity-traceability`
-- Status: `not-planned`
+- Status: `completed`
 - Goal: Enforce truthfulness, provenance, and correction workflows for memory so evidence and inference are never conflated.
 - Dependencies:
   - Phase 02 complete
 - Planned deliverables:
+  - `.planning/phases/03-memory-integrity-traceability/03-RESEARCH.md`
+  - `.planning/phases/03-memory-integrity-traceability/03-01-PLAN.md`
+  - `.planning/phases/03-memory-integrity-traceability/03-02-PLAN.md`
   - Memory write/read policy enforcement plan.
   - Provenance and supersession metadata standards.
   - Audit workflow for memory corrections and uncertainty tagging.
