@@ -39,7 +39,11 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { buildAgentSessionKey } from "../routing/resolve-route.js";
+import {
+  buildAgentSessionKey,
+  deriveLastRoutePolicy,
+  resolveInboundLastRouteSessionKey,
+} from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -362,6 +366,14 @@ export const buildTelegramMessageContext = async ({
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+  route = {
+    ...route,
+    sessionKey,
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey,
+      mainSessionKey: route.mainSessionKey,
+    }),
+  };
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   // Compute requireMention after access checks and final route selection.
   const activationOverride = resolveGroupActivation({
@@ -832,6 +844,10 @@ export const buildTelegramMessageContext = async ({
         normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
       })
     : null;
+  const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route,
+    sessionKey,
+  });
 
   await recordInboundSession({
     storePath,
@@ -839,14 +855,14 @@ export const buildTelegramMessageContext = async ({
     ctx: ctxPayload,
     updateLastRoute: !isGroup
       ? {
-          sessionKey: route.mainSessionKey,
+          sessionKey: updateLastRouteSessionKey,
           channel: "telegram",
           to: `telegram:${chatId}`,
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
           mainDmOwnerPin:
-            pinnedMainDmOwner && senderId
+            updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
               ? {
                   ownerRecipient: pinnedMainDmOwner,
                   senderRecipient: senderId,

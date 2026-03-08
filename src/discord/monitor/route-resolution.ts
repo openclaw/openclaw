@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  deriveLastRoutePolicy,
   resolveAgentRoute,
   type ResolvedAgentRoute,
   type RoutePeer,
@@ -90,6 +91,10 @@ export function resolveDiscordEffectiveRoute(params: {
     ...params.route,
     sessionKey: boundSessionKey,
     agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey: boundSessionKey,
+      mainSessionKey: params.route.mainSessionKey,
+    }),
     ...(params.matchedBy ? { matchedBy: params.matchedBy } : {}),
   };
 }
