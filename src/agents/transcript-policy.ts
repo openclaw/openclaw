@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
+import { preservesAnthropicThinkingSignatures } from "./provider-capabilities.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -123,12 +124,12 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic,
+    preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
-    applyGoogleTurnOrdering: !isOpenAi && isGoogle,
-    validateGeminiTurns: !isOpenAi && isGoogle,
+    applyGoogleTurnOrdering: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
+    validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };

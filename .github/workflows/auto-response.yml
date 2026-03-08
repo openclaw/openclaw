@@ -50,6 +50,13 @@ jobs:
                   "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
               },
               {
+                label: "r: no-ci-pr",
+                message:
+                  "Please don't make PRs for test failures on main.\n\n" +
+                  "The team is aware of those and will handle them directly on the codebase, not only fixing the tests but also investigating what the root cause is. Having to sift through test-fix-PRs (including some that have been out of date for weeks...) on top of that doesn't help. There are already way too many PRs for humans to manage; please don't make the flood worse.\n\n" +
+                  "Thank you.",
+              },
+              {
                 label: "r: too-many-prs",
                 close: true,
                 message:

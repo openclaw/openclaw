@@ -2186,7 +2186,7 @@ Fix checklist:
 2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
    exists in env/auth profiles so the provider can be injected.
 3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
-   `minimax/MiniMax-M2.5-highspeed` (legacy: `minimax/MiniMax-M2.5-Lightning`).
+   `minimax/MiniMax-M2.5-highspeed`.
 4. Run:
 
    ```bash
@@ -2238,11 +2238,12 @@ Docs: [Models](/concepts/models), [Multi-Agent Routing](/concepts/multi-agent), 
 Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
 - `opus` → `anthropic/claude-opus-4-6`
-- `sonnet` → `anthropic/claude-sonnet-4-5`
-- `gpt` → `openai/gpt-5.2`
+- `sonnet` → `anthropic/claude-sonnet-4-6`
+- `gpt` → `openai/gpt-5.4`
 - `gpt-mini` → `openai/gpt-5-mini`
-- `gemini` → `google/gemini-3-pro-preview`
+- `gemini` → `google/gemini-3.1-pro-preview`
 - `gemini-flash` → `google/gemini-3-flash-preview`
+- `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`
 
 If you set your own alias with the same name, your value wins.
 
@@ -2503,7 +2504,7 @@ Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not 
 
 Facts (from code):
 
-- The Control UI stores the token in browser localStorage key `openclaw.control.settings.v1`.
+- The Control UI keeps the token in memory for the current tab; it no longer persists gateway tokens in browser localStorage.
 
 Fix:
 

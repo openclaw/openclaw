@@ -142,10 +142,10 @@ jobs:
             }
 
             const repo = `${context.repo.owner}/${context.repo.repo}`;
-            const trustedLabel = "trusted-contributor";
-            const experiencedLabel = "experienced-contributor";
-            const trustedThreshold = 4;
-            const experiencedThreshold = 10;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
 
             let isMaintainer = false;
             try {
@@ -170,37 +170,38 @@ jobs:
               return;
             }
 
-            const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            let mergedCount = 0;
-            try {
-              const merged = await github.rest.search.issuesAndPullRequests({
-                q: mergedQuery,
-                per_page: 1,
-              });
-              mergedCount = merged?.data?.total_count ?? 0;
-            } catch (error) {
-              if (error?.status !== 422) {
-                throw error;
-              }
-              core.warning(`Skipping merged search for ${login}; treating as 0.`);
-            }
-
-            if (mergedCount >= experiencedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.pull_request.number,
-                labels: [experiencedLabel],
-              });
-              return;
-            }
-
-            if (mergedCount >= trustedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.pull_request.number,
-                labels: [trustedLabel],
-              });
-            }
+            // trusted-contributor and experienced-contributor labels disabled.
+            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
+            // let mergedCount = 0;
+            // try {
+            //   const merged = await github.rest.search.issuesAndPullRequests({
+            //     q: mergedQuery,
+            //     per_page: 1,
+            //   });
+            //   mergedCount = merged?.data?.total_count ?? 0;
+            // } catch (error) {
+            //   if (error?.status !== 422) {
+            //     throw error;
+            //   }
+            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            // }
+            //
+            // if (mergedCount >= experiencedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.pull_request.number,
+            //     labels: [experiencedLabel],
+            //   });
+            //   return;
+            // }
+            //
+            // if (mergedCount >= trustedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.pull_request.number,
+            //     labels: [trustedLabel],
+            //   });
+            // }
       - name: Apply too-many-prs label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
@@ -386,10 +387,10 @@ jobs:
 
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const labelColor = "b76e79";
-            const trustedLabel = "trusted-contributor";
-            const experiencedLabel = "experienced-contributor";
-            const trustedThreshold = 4;
-            const experiencedThreshold = 10;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
 
             const contributorCache = new Map();
 
@@ -439,27 +440,28 @@ jobs:
                 return "maintainer";
               }
 
-              const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
-              let mergedCount = 0;
-              try {
-                const merged = await github.rest.search.issuesAndPullRequests({
-                  q: mergedQuery,
-                  per_page: 1,
-                });
-                mergedCount = merged?.data?.total_count ?? 0;
-              } catch (error) {
-                if (error?.status !== 422) {
-                  throw error;
-                }
-                core.warning(`Skipping merged search for ${login}; treating as 0.`);
-              }
+              // trusted-contributor and experienced-contributor labels disabled.
+              // const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
+              // let mergedCount = 0;
+              // try {
+              //   const merged = await github.rest.search.issuesAndPullRequests({
+              //     q: mergedQuery,
+              //     per_page: 1,
+              //   });
+              //   mergedCount = merged?.data?.total_count ?? 0;
+              // } catch (error) {
+              //   if (error?.status !== 422) {
+              //     throw error;
+              //   }
+              //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              // }
 
-              let label = null;
-              if (mergedCount >= experiencedThreshold) {
-                label = experiencedLabel;
-              } else if (mergedCount >= trustedThreshold) {
-                label = trustedLabel;
-              }
+              const label = null;
+              // if (mergedCount >= experiencedThreshold) {
+              //   label = experiencedLabel;
+              // } else if (mergedCount >= trustedThreshold) {
+              //   label = trustedLabel;
+              // }
 
               contributorCache.set(login, label);
               return label;
@@ -624,10 +626,10 @@ jobs:
             }
 
             const repo = `${context.repo.owner}/${context.repo.repo}`;
-            const trustedLabel = "trusted-contributor";
-            const experiencedLabel = "experienced-contributor";
-            const trustedThreshold = 4;
-            const experiencedThreshold = 10;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
 
             let isMaintainer = false;
             try {
@@ -652,34 +654,35 @@ jobs:
               return;
             }
 
-            const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            let mergedCount = 0;
-            try {
-              const merged = await github.rest.search.issuesAndPullRequests({
-                q: mergedQuery,
-                per_page: 1,
-              });
-              mergedCount = merged?.data?.total_count ?? 0;
-            } catch (error) {
-              if (error?.status !== 422) {
-                throw error;
-              }
-              core.warning(`Skipping merged search for ${login}; treating as 0.`);
-            }
-
-            if (mergedCount >= experiencedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
-                labels: [experiencedLabel],
-              });
-              return;
-            }
-
-            if (mergedCount >= trustedThreshold) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
-                labels: [trustedLabel],
-              });
-            }
+            // trusted-contributor and experienced-contributor labels disabled.
+            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
+            // let mergedCount = 0;
+            // try {
+            //   const merged = await github.rest.search.issuesAndPullRequests({
+            //     q: mergedQuery,
+            //     per_page: 1,
+            //   });
+            //   mergedCount = merged?.data?.total_count ?? 0;
+            // } catch (error) {
+            //   if (error?.status !== 422) {
+            //     throw error;
+            //   }
+            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            // }
+            //
+            // if (mergedCount >= experiencedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.issue.number,
+            //     labels: [experiencedLabel],
+            //   });
+            //   return;
+            // }
+            //
+            // if (mergedCount >= trustedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.issue.number,
+            //     labels: [trustedLabel],
+            //   });
+            // }

@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +13,8 @@ import {
   stripArchivePath,
   validateArchiveEntryPath,
 } from "./archive-path.js";
-import { openWritableFileWithinRoot, SafeOpenError } from "./fs-safe.js";
+import { sameFileIdentity } from "./file-identity.js";
+import { openFileWithinRoot, openWritableFileWithinRoot, SafeOpenError } from "./fs-safe.js";
 import { isNotFoundPathError, isPathInside } from "./path-guards.js";
 
 export type ArchiveKind = "tar" | "zip";
@@ -63,6 +67,12 @@ const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
   "archive entry extracted size exceeds limit";
 const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
 const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const OPEN_WRITE_CREATE_FLAGS =
+  fsConstants.O_WRONLY |
+  fsConstants.O_CREAT |
+  fsConstants.O_EXCL |
+  (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
 
@@ -275,6 +285,7 @@ type OpenZipOutputFileResult = {
   handle: FileHandle;
   createdForWrite: boolean;
   openedRealPath: string;
+  openedStat: Stats;
 };
 
 async function openZipOutputFile(params: {
@@ -314,6 +325,33 @@ async function cleanupPartialRegularFile(filePath: string): Promise<void> {
   }
   if (stat.isFile()) {
     await fs.unlink(filePath).catch(() => undefined);
+  }
+}
+
+function buildArchiveAtomicTempPath(targetPath: string): string {
+  return path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+}
+
+async function verifyZipWriteResult(params: {
+  destinationRealDir: string;
+  relPath: string;
+  expectedStat: Stats;
+}): Promise<string> {
+  const opened = await openFileWithinRoot({
+    rootDir: params.destinationRealDir,
+    relativePath: params.relPath,
+    rejectHardlinks: true,
+  });
+  try {
+    if (!sameFileIdentity(opened.stat, params.expectedStat)) {
+      throw new SafeOpenError("path-mismatch", "path changed during zip extract");
+    }
+    return opened.realPath;
+  } finally {
+    await opened.handle.close().catch(() => undefined);
   }
 }
 
@@ -403,36 +441,65 @@ async function writeZipFileEntry(params: {
   });
   params.budget.startEntry();
   const readable = await readZipEntryStream(params.entry);
-  const writable = opened.handle.createWriteStream();
+  const destinationPath = opened.openedRealPath;
+  const targetMode = opened.openedStat.mode & 0o777;
+  await opened.handle.close().catch(() => undefined);
+
+  let tempHandle: FileHandle | null = null;
+  let tempPath: string | null = null;
+  let tempStat: Stats | null = null;
   let handleClosedByStream = false;
-  writable.once("close", () => {
-    handleClosedByStream = true;
-  });
 
   try {
+    tempPath = buildArchiveAtomicTempPath(destinationPath);
+    tempHandle = await fs.open(tempPath, OPEN_WRITE_CREATE_FLAGS, targetMode || 0o666);
+    const writable = tempHandle.createWriteStream();
+    writable.once("close", () => {
+      handleClosedByStream = true;
+    });
+
     await pipeline(
       readable,
       createExtractBudgetTransform({ onChunkBytes: params.budget.addBytes }),
       writable,
     );
+    tempStat = await fs.stat(tempPath);
+    if (!tempStat) {
+      throw new Error("zip temp write did not produce file metadata");
+    }
+    if (!handleClosedByStream) {
+      await tempHandle.close().catch(() => undefined);
+      handleClosedByStream = true;
+    }
+    tempHandle = null;
+    await fs.rename(tempPath, destinationPath);
+    tempPath = null;
+    const verifiedPath = await verifyZipWriteResult({
+      destinationRealDir: params.destinationRealDir,
+      relPath: params.relPath,
+      expectedStat: tempStat,
+    });
+
+    // Best-effort permission restore for zip entries created on unix.
+    if (typeof params.entry.unixPermissions === "number") {
+      const mode = params.entry.unixPermissions & 0o777;
+      if (mode !== 0) {
+        await fs.chmod(verifiedPath, mode).catch(() => undefined);
+      }
+    }
   } catch (err) {
-    if (opened.createdForWrite) {
-      await fs.rm(opened.openedRealPath, { force: true }).catch(() => undefined);
+    if (tempPath) {
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
     } else {
-      await cleanupPartialRegularFile(opened.openedRealPath).catch(() => undefined);
+      await cleanupPartialRegularFile(destinationPath).catch(() => undefined);
+    }
+    if (err instanceof SafeOpenError) {
+      throw symlinkTraversalError(params.entry.name);
     }
     throw err;
   } finally {
-    if (!handleClosedByStream) {
-      await opened.handle.close().catch(() => undefined);
-    }
-  }
-
-  // Best-effort permission restore for zip entries created on unix.
-  if (typeof params.entry.unixPermissions === "number") {
-    const mode = params.entry.unixPermissions & 0o777;
-    if (mode !== 0) {
-      await fs.chmod(opened.openedRealPath, mode).catch(() => undefined);
+    if (tempHandle && !handleClosedByStream) {
+      await tempHandle.close().catch(() => undefined);
     }
   }
 }

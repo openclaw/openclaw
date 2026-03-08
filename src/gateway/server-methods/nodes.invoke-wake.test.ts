@@ -115,7 +115,7 @@ function mockSuccessfulWakeConfig(nodeId: string) {
     value: {
       teamId: "TEAM123",
       keyId: "KEY123",
-      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
     },
   });
   mocks.sendApnsBackgroundWake.mockResolvedValue({
