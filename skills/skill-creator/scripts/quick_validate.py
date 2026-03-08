@@ -70,7 +70,7 @@ def _coerce_allowed_tools(value):
     Normalize allowed-tools into a list when possible.
 
     The fallback parser (used without PyYAML) returns multiline values as strings,
-    so we accept simple "- tool" lines and JSON-style string arrays.
+    so we accept simple "- tool" lines and JSON-style arrays.
     """
     if isinstance(value, str):
         stripped = value.strip()
@@ -82,17 +82,28 @@ def _coerce_allowed_tools(value):
                 pass
 
         lines = [line.strip() for line in value.splitlines() if line.strip()]
-        if lines and all(line.startswith("- ") and len(line) > 2 for line in lines):
-            return [line[2:].strip() for line in lines]
+        if lines:
+            parsed_lines = []
+            for line in lines:
+                if line == "-":
+                    parsed_lines.append("")
+                    continue
+                if not line.startswith("- "):
+                    break
+                parsed_lines.append(line[2:].strip())
+            else:
+                return parsed_lines
 
     return value
 
 
-def _validate_allowed_tools(value):
+def _validate_allowed_tools(value, *, allow_fallback_string_coercion=False):
     if value is None:
         return True, None
 
-    normalized = _coerce_allowed_tools(value)
+    normalized = (
+        _coerce_allowed_tools(value) if allow_fallback_string_coercion else value
+    )
     if not isinstance(normalized, list):
         return False, "'allowed-tools' must be a list of tool names"
 
@@ -121,7 +132,8 @@ def validate_skill(skill_path):
     frontmatter_text = _extract_frontmatter(content)
     if frontmatter_text is None:
         return False, "Invalid frontmatter format"
-    if yaml is not None:
+    using_fallback_parser = yaml is None
+    if not using_fallback_parser:
         try:
             frontmatter = yaml.safe_load(frontmatter_text)
             if not isinstance(frontmatter, dict):
@@ -153,7 +165,8 @@ def validate_skill(skill_path):
         return False, "Missing 'description' in frontmatter"
 
     allowed_tools_valid, allowed_tools_error = _validate_allowed_tools(
-        frontmatter.get("allowed-tools")
+        frontmatter.get("allowed-tools"),
+        allow_fallback_string_coercion=using_fallback_parser,
     )
     if not allowed_tools_valid:
         return False, allowed_tools_error

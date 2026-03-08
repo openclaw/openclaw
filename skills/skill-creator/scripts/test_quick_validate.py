@@ -98,7 +98,23 @@ allowed-tools:
 """
         (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
-        valid, message = quick_validate.validate_skill(skill_dir)
+        class _YamlStub:
+            YAMLError = Exception
+
+            @staticmethod
+            def safe_load(_text):
+                return {
+                    "name": "non-string-allowed-tools",
+                    "description": "invalid list entries",
+                    "allowed-tools": ["gh", 123],
+                }
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = _YamlStub
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
 
         self.assertFalse(valid)
         self.assertEqual(message, "'allowed-tools' entry #2 must be a string")
@@ -117,7 +133,69 @@ allowed-tools:
 """
         (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
-        valid, message = quick_validate.validate_skill(skill_dir)
+        class _YamlStub:
+            YAMLError = Exception
+
+            @staticmethod
+            def safe_load(_text):
+                return {
+                    "name": "empty-allowed-tool",
+                    "description": "invalid empty tool",
+                    "allowed-tools": ["gh", "   "],
+                }
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = _YamlStub
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' entry #2 cannot be empty")
+
+    def test_fallback_rejects_non_string_allowed_tools_entries(self):
+        skill_dir = self.temp_dir / "fallback-non-string-allowed-tools"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: fallback-non-string-allowed-tools
+description: invalid fallback list entries
+allowed-tools: ["gh", 123]
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' entry #2 must be a string")
+
+    def test_fallback_rejects_empty_dash_allowed_tools_entry(self):
+        skill_dir = self.temp_dir / "fallback-empty-dash-allowed-tools"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: fallback-empty-dash-allowed-tools
+description: invalid fallback empty list entry
+allowed-tools:
+  - gh
+  -
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
 
         self.assertFalse(valid)
         self.assertEqual(message, "'allowed-tools' entry #2 cannot be empty")
