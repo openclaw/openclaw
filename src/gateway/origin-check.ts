@@ -9,17 +9,27 @@ type OriginCheckResult =
 
 function parseOrigin(
   originRaw?: string,
-): { origin: string; host: string; hostname: string } | null {
+): { origin: string; host: string; hostname: string; protocol: string } | null {
   const trimmed = (originRaw ?? "").trim();
   if (!trimmed || trimmed === "null") {
     return null;
   }
   try {
     const url = new URL(trimmed);
+    const normalizedOrigin =
+      url.origin && url.origin !== "null"
+        ? url.origin.toLowerCase()
+        : url.host
+          ? `${url.protocol}//${url.host}`.toLowerCase()
+          : "";
+    if (!normalizedOrigin) {
+      return null;
+    }
     return {
-      origin: url.origin.toLowerCase(),
+      origin: normalizedOrigin,
       host: url.host.toLowerCase(),
       hostname: url.hostname.toLowerCase(),
+      protocol: url.protocol.toLowerCase(),
     };
   } catch {
     return null;
@@ -41,7 +51,9 @@ export function checkBrowserOrigin(params: {
   const allowlist = new Set(
     (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
   );
-  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
+  const hasChromeExtensionWildcard =
+    allowlist.has("chrome-extension://*") && parsedOrigin.protocol === "chrome-extension:";
+  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin) || hasChromeExtensionWildcard) {
     return { ok: true, matchedBy: "allowlist" };
   }
 
