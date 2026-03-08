@@ -403,8 +403,11 @@ function normalizeApiKeyConfig(value: string): string {
   return match?.[1] ?? trimmed;
 }
 
-function resolveEnvApiKeyVarName(provider: string): string | undefined {
-  const resolved = resolveEnvApiKey(provider);
+function resolveEnvApiKeyVarName(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const resolved = resolveEnvApiKey(provider, env);
   if (!resolved) {
     return undefined;
   }
@@ -470,6 +473,7 @@ function toDiscoveryApiKey(value: string | undefined): string | undefined {
 
 function resolveApiKeyFromCredential(
   cred: ReturnType<typeof ensureAuthProfileStore>["profiles"][string] | undefined,
+  env: NodeJS.ProcessEnv = process.env,
 ): ProfileApiKeyResolution | undefined {
   if (!cred) {
     return undefined;
@@ -482,7 +486,7 @@ function resolveApiKeyFromCredential(
         return {
           apiKey: envVar,
           source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(process.env[envVar]),
+          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
         };
       }
       return {
@@ -507,7 +511,7 @@ function resolveApiKeyFromCredential(
         return {
           apiKey: envVar,
           source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(process.env[envVar]),
+          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
         };
       }
       return {
@@ -529,10 +533,11 @@ function resolveApiKeyFromCredential(
 function resolveApiKeyFromProfiles(params: {
   provider: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
+  env?: NodeJS.ProcessEnv;
 }): ProfileApiKeyResolution | undefined {
   const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
-    const resolved = resolveApiKeyFromCredential(params.store.profiles[id]);
+    const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
     if (resolved) {
       return resolved;
     }
@@ -1117,23 +1122,26 @@ async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConfig> {
 
 export async function resolveImplicitProviders(params: {
   agentDir: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   explicitProviders?: Record<string, ProviderConfig> | null;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
+  const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
   const resolveProviderApiKey = (
     provider: string,
   ): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const envVar = resolveEnvApiKeyVarName(provider);
+    const envVar = resolveEnvApiKeyVarName(provider, env);
     if (envVar) {
       return {
         apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(process.env[envVar]),
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore });
+    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
     return {
       apiKey: fromProfiles?.apiKey,
       discoveryApiKey: fromProfiles?.discoveryApiKey,
@@ -1145,7 +1153,7 @@ export async function resolveImplicitProviders(params: {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
 
-  const minimaxPortalEnvKey = resolveEnvApiKeyVarName("minimax-portal");
+  const minimaxPortalEnvKey = resolveEnvApiKeyVarName("minimax-portal", env);
   const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
   if (minimaxPortalEnvKey || minimaxOauthProfile.length > 0) {
     providers["minimax-portal"] = {
@@ -1220,8 +1228,8 @@ export async function resolveImplicitProviders(params: {
     if (!baseUrl) {
       continue;
     }
-    const envVarApiKey = resolveEnvApiKeyVarName("cloudflare-ai-gateway");
-    const profileApiKey = resolveApiKeyFromCredential(cred)?.apiKey;
+    const envVarApiKey = resolveEnvApiKeyVarName("cloudflare-ai-gateway", env);
+    const profileApiKey = resolveApiKeyFromCredential(cred, env)?.apiKey;
     const apiKey = envVarApiKey ?? profileApiKey ?? "";
     if (!apiKey) {
       continue;
@@ -1327,6 +1335,35 @@ export async function resolveImplicitProviders(params: {
   const kilocodeKey = resolveProviderApiKey("kilocode").apiKey;
   if (kilocodeKey) {
     providers.kilocode = { ...(await buildKilocodeProviderWithDiscovery()), apiKey: kilocodeKey };
+  }
+
+  if (!providers["github-copilot"]) {
+    const implicitCopilot = await resolveImplicitCopilotProvider({
+      agentDir: params.agentDir,
+      env,
+    });
+    if (implicitCopilot) {
+      providers["github-copilot"] = implicitCopilot;
+    }
+  }
+
+  const implicitBedrock = await resolveImplicitBedrockProvider({
+    agentDir: params.agentDir,
+    config: params.config,
+    env,
+  });
+  if (implicitBedrock) {
+    const existing = providers["amazon-bedrock"];
+    providers["amazon-bedrock"] = existing
+      ? {
+          ...implicitBedrock,
+          ...existing,
+          models:
+            Array.isArray(existing.models) && existing.models.length > 0
+              ? existing.models
+              : implicitBedrock.models,
+        }
+      : implicitBedrock;
   }
 
   return providers;

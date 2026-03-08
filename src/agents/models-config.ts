@@ -11,15 +11,12 @@ import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   mergeProviders,
-  mergeProviderModels,
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
   normalizeProviders,
   type ProviderConfig,
-  resolveImplicitBedrockProvider,
-  resolveImplicitCopilotProvider,
   resolveImplicitProviders,
 } from "./models-config.providers.js";
 
@@ -52,24 +49,15 @@ async function resolveProvidersForModelsJson(params: {
 }): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir } = params;
   const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
+  const implicitProviders = await resolveImplicitProviders({
+    agentDir,
+    config: cfg,
+    explicitProviders,
+  });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
   });
-
-  const implicitBedrock = await resolveImplicitBedrockProvider({ agentDir, config: cfg });
-  if (implicitBedrock) {
-    const existing = providers["amazon-bedrock"];
-    providers["amazon-bedrock"] = existing
-      ? mergeProviderModels(implicitBedrock, existing)
-      : implicitBedrock;
-  }
-
-  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
-  if (implicitCopilot && !providers["github-copilot"]) {
-    providers["github-copilot"] = implicitCopilot;
-  }
   return providers;
 }
 
