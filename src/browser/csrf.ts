@@ -54,12 +54,40 @@ export function shouldRejectBrowserMutation(params: {
   return false;
 }
 
+/**
+ * Apply SameSite=Strict attribute to Set-Cookie headers on the response.
+ * This prevents the browser from sending cookies on cross-site requests,
+ * providing an additional CSRF defense layer.
+ */
+export function enforceSameSiteCookies(res: Response): void {
+  const originalSetHeader = res.setHeader.bind(res);
+  res.setHeader = function patchedSetHeader(
+    name: string,
+    value: string | number | readonly string[],
+  ) {
+    if (name.toLowerCase() === "set-cookie") {
+      const cookies = Array.isArray(value) ? value : [String(value)];
+      const patched = cookies.map((cookie: string) => {
+        if (!/samesite=/i.test(cookie)) {
+          return `${cookie}; SameSite=Strict`;
+        }
+        return cookie;
+      });
+      return originalSetHeader(name, patched);
+    }
+    return originalSetHeader(name, value);
+  } as typeof res.setHeader;
+}
+
 export function browserMutationGuardMiddleware(): (
   req: Request,
   res: Response,
   next: NextFunction,
 ) => void {
   return (req: Request, res: Response, next: NextFunction) => {
+    // Enforce SameSite=Strict on all cookies set by the response.
+    enforceSameSiteCookies(res);
+
     // OPTIONS is used for CORS preflight. Even if cross-origin, the preflight isn't mutating.
     const method = (req.method || "").trim().toUpperCase();
     if (method === "OPTIONS") {
@@ -78,7 +106,10 @@ export function browserMutationGuardMiddleware(): (
         secFetchSite,
       })
     ) {
-      res.status(403).send("Forbidden");
+      res.status(403).json({
+        error: "Forbidden",
+        message: "Cross-site mutation rejected by CSRF guard",
+      });
       return;
     }
 
