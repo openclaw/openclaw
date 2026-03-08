@@ -6,6 +6,8 @@ export type MatrixRoomInfo = {
   altAliases: string[];
 };
 
+const MAX_ROOM_INFO_CACHE_SIZE = 2048;
+
 export function createMatrixRoomInfoResolver(client: MatrixClient) {
   const roomInfoCache = new Map<string, MatrixRoomInfo>();
 
@@ -34,6 +36,12 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
     }
     const info = { name, canonicalAlias, altAliases };
     roomInfoCache.set(roomId, info);
+    if (roomInfoCache.size > MAX_ROOM_INFO_CACHE_SIZE) {
+      const oldest = roomInfoCache.keys().next().value;
+      if (oldest !== undefined) {
+        roomInfoCache.delete(oldest);
+      }
+    }
     return info;
   };
 
