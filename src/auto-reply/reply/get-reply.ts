@@ -4,11 +4,17 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../../agents/model-catalog.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -52,6 +58,79 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+/**
+ * Auto-switch to imageModel.primary when images are present and the current
+ * model doesn't support vision. Returns the updated provider/model if a switch
+ * is needed, otherwise returns the original values.
+ */
+export async function resolveImageModelAutoSwitch(params: {
+  provider: string;
+  model: string;
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  hasResolvedHeartbeatModelOverride: boolean;
+  hasSessionModelOverride: boolean;
+  hasChannelModelOverride: boolean;
+  aliasIndex: ReturnType<typeof import("../../agents/model-selection.js").buildModelAliasIndex>;
+}): Promise<{ provider: string; model: string }> {
+  // Skip auto-switch if model was explicitly overridden via heartbeat, session, or channel
+  if (
+    params.hasResolvedHeartbeatModelOverride ||
+    params.hasSessionModelOverride ||
+    params.hasChannelModelOverride
+  ) {
+    return { provider: params.provider, model: params.model };
+  }
+
+  // Check if images are present in the message
+  const hasImages =
+    Boolean(params.ctx.MediaPath?.trim()) ||
+    (Array.isArray(params.ctx.MediaPaths) && params.ctx.MediaPaths.length > 0);
+  if (!hasImages) {
+    return { provider: params.provider, model: params.model };
+  }
+
+  // Check if current model supports vision
+  const catalog = await loadModelCatalog({ config: params.cfg });
+  const currentModelEntry = findModelInCatalog(catalog, params.provider, params.model);
+  if (modelSupportsVision(currentModelEntry)) {
+    return { provider: params.provider, model: params.model };
+  }
+
+  // Current model doesn't support vision, check if imageModel.primary is configured
+  const imageModelPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageModel);
+  if (!imageModelPrimary?.trim()) {
+    return { provider: params.provider, model: params.model };
+  }
+
+  // Resolve imageModel.primary to provider/model
+  const imageModelResolved = resolveModelRefFromString({
+    raw: imageModelPrimary.trim(),
+    defaultProvider: params.provider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (!imageModelResolved) {
+    return { provider: params.provider, model: params.model };
+  }
+
+  // Verify the imageModel actually supports vision
+  const imageModelEntry = findModelInCatalog(
+    catalog,
+    imageModelResolved.ref.provider,
+    imageModelResolved.ref.model,
+  );
+  if (!modelSupportsVision(imageModelEntry)) {
+    // Configured imageModel doesn't support vision either, don't switch
+    return { provider: params.provider, model: params.model };
+  }
+
+  // Auto-switch to the imageModel
+  return {
+    provider: imageModelResolved.ref.provider,
+    model: imageModelResolved.ref.model,
+  };
 }
 
 export async function getReplyFromConfig(
@@ -206,6 +285,7 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
+  let hasChannelModelOverride = false;
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
@@ -215,8 +295,24 @@ export async function getReplyFromConfig(
     if (resolved) {
       provider = resolved.ref.provider;
       model = resolved.ref.model;
+      hasChannelModelOverride = true;
     }
   }
+
+  // Auto-switch to imageModel.primary when images are present and current model
+  // doesn't support vision
+  const imageModelSwitch = await resolveImageModelAutoSwitch({
+    provider,
+    model,
+    ctx: finalized,
+    cfg,
+    hasResolvedHeartbeatModelOverride,
+    hasSessionModelOverride,
+    hasChannelModelOverride,
+    aliasIndex,
+  });
+  provider = imageModelSwitch.provider;
+  model = imageModelSwitch.model;
 
   const directiveResult = await resolveReplyDirectives({
     ctx: finalized,
