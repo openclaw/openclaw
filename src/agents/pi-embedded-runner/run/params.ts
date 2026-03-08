@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
+import type { CaMeLConfig } from "../../camel/types.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
@@ -113,6 +114,7 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  camelConfig?: CaMeLConfig;
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,
    * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.

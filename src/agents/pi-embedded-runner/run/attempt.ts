@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -39,6 +40,18 @@ import {
 } from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { activeCaMeLOrchestratorScopes, resolveCaMeLScopeKey } from "../../camel/active-scopes.js";
+import { createApprovalPromptHandler } from "../../camel/approval-flow.js";
+import { CaMeLOrchestrator } from "../../camel/orchestrator.js";
+import type {
+  ExecutionPlan,
+  ToolDefinition as CaMeLToolDefinition,
+} from "../../camel/plan-generator.js";
+import { createPlanGenerator } from "../../camel/plan-generator.js";
+import { createQuarantinedQuery } from "../../camel/quarantined-llm.js";
+import { createDefaultPolicies } from "../../camel/security-policy.js";
+import { TaintTracker } from "../../camel/taint-tracker.js";
+import { createDefaultToolClassificationRegistry } from "../../camel/tool-classifications.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
@@ -49,7 +62,11 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
+import {
+  normalizeProviderId,
+  parseModelRef,
+  resolveDefaultModelForAgent,
+} from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
@@ -63,6 +80,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { isMessagingTool, isMessagingToolSendAction } from "../../pi-embedded-messaging.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
@@ -103,7 +121,7 @@ import {
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
-import { buildModelAliasLines } from "../model.js";
+import { buildModelAliasLines, resolveModelWithRegistry } from "../model.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -131,6 +149,8 @@ import {
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+let camelToolCallCounter = 0;
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -743,6 +763,107 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+function extractAssistantTextContent(message: AgentMessage | undefined): string {
+  if (!message || message.role !== "assistant") {
+    return "";
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const textParts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim()) {
+      textParts.push(text);
+    }
+  }
+  return textParts.join("\n").trim();
+}
+
+function stripJsonCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced?.[1]?.trim() ?? trimmed;
+}
+
+function summarizeToolParameters(parameters: unknown): string | undefined {
+  if (!parameters || typeof parameters !== "object") {
+    return undefined;
+  }
+  const schema = parameters as Record<string, unknown>;
+  const properties = schema.properties as Record<string, unknown> | undefined;
+  if (!properties || typeof properties !== "object") {
+    return undefined;
+  }
+  const required = new Set(
+    Array.isArray(schema.required)
+      ? (schema.required as string[]).filter((key) => typeof key === "string")
+      : [],
+  );
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(properties)) {
+    const propType =
+      value && typeof value === "object" && "type" in (value as Record<string, unknown>)
+        ? String((value as Record<string, unknown>).type)
+        : "any";
+    parts.push(`${key}: ${propType}${required.has(key) ? " (required)" : ""}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+function toCamelToolDefinitions(
+  tools: Array<{ name: string; description?: string; parameters?: unknown }>,
+): CaMeLToolDefinition[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description ?? "",
+    parameterHints: summarizeToolParameters(tool.parameters),
+  }));
+}
+
+function buildCaMeLPlannerPrompt(params: {
+  userPrompt: string;
+  availableTools: CaMeLToolDefinition[];
+}): string {
+  const toolList =
+    params.availableTools.length > 0
+      ? params.availableTools
+          .map((tool) => {
+            let line = `- ${tool.name}`;
+            if (tool.description) {
+              line += `: ${tool.description}`;
+            }
+            if (tool.parameterHints) {
+              line += `\n  Parameters: {${tool.parameterHints}}`;
+            }
+            return line;
+          })
+          .join("\n")
+      : "- (none)";
+  return [
+    "Return only valid JSON for an execution plan.",
+    'Schema: {"description": string, "steps": [{"id": string, "tool": string, "args": object, "assignTo"?: string}]}',
+    "Rules:",
+    "- Use only listed tool names.",
+    "- Always include all required parameters in args.",
+    "- Keep args JSON-serializable.",
+    "- Use ref/extract only when needed for chaining.",
+    "",
+    "Available tools:",
+    toolList,
+    "",
+    "User prompt:",
+    params.userPrompt,
+  ].join("\n");
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -1146,9 +1267,22 @@ export async function runEmbeddedAttempt(
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
+      const useCaMeLOrchestrator = Boolean(params.camelConfig?.enabled);
+      let camelSideEffectsExecuted = false;
+      // When CaMeL is enabled, the session keeps ALL tools.  The CaMeL
+      // planner decides which calls need orchestration (side-effect tools).
+      // For read-only plans, the normal agent loop handles tool calls
+      // directly — the before-tool-call hook still applies CaMeL security
+      // checks to any direct LLM tool calls outside orchestration scope.
+      const camelToolClassifier = useCaMeLOrchestrator
+        ? createDefaultToolClassificationRegistry({
+            noSideEffectTools: params.camelConfig?.policies?.noSideEffectTools,
+          })
+        : undefined;
+      const toolsForSession = tools;
 
       const { builtInTools, customTools } = splitSdkTools({
-        tools,
+        tools: toolsForSession,
         sandboxEnabled: !!sandbox?.enabled,
       });
 
@@ -1774,9 +1908,274 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
+          if (useCaMeLOrchestrator && params.camelConfig) {
+            const resolveCaMeLModel = (modelRef: string) => {
+              const parsed = parseModelRef(modelRef, params.provider);
+              if (!parsed) {
+                log.warn(`invalid CaMeL model reference "${modelRef}", using active model instead`);
+                return params.model;
+              }
+              const resolved = resolveModelWithRegistry({
+                provider: parsed.provider,
+                modelId: parsed.model,
+                modelRegistry: params.modelRegistry,
+                cfg: params.config,
+              });
+              if (!resolved) {
+                log.warn(
+                  `unable to resolve CaMeL model "${parsed.provider}/${parsed.model}", using active model instead`,
+                );
+                return params.model;
+              }
+              return resolved;
+            };
+            const plannerRun = async (plannerPrompt: string): Promise<string> => {
+              // Per the CaMeL paper (Section 5.1): the P-LLM (planner) must be a
+              // capable model because it generates execution plans. The Q-LLM
+              // (quarantined extractor) can be a cheaper model since it only
+              // parses/extracts data. Use the main agent model for planning.
+              const plannerModel = activeSession.model ?? params.model;
+              const { session: plannerSession } = await createAgentSession({
+                cwd: resolvedWorkspace,
+                agentDir,
+                authStorage: params.authStorage,
+                modelRegistry: params.modelRegistry,
+                model: plannerModel,
+                thinkingLevel: mapThinkingLevel(params.thinkLevel),
+                tools: [],
+                customTools: [],
+                sessionManager: SessionManager.inMemory(),
+                settingsManager,
+              });
+              try {
+                await abortable(plannerSession.prompt(plannerPrompt));
+                const plannerAssistant = plannerSession.messages
+                  .toReversed()
+                  .find((message) => message.role === "assistant");
+                const plannerText = stripJsonCodeFence(
+                  extractAssistantTextContent(plannerAssistant),
+                );
+                if (!plannerText) {
+                  throw new Error("CaMeL planner returned empty output.");
+                }
+                return plannerText;
+              } finally {
+                plannerSession.dispose?.();
+              }
+            };
+            const runQuarantinedExtraction = async (prompt: string, modelRef: string) => {
+              const { session: quarantinedSession } = await createAgentSession({
+                cwd: resolvedWorkspace,
+                agentDir,
+                authStorage: params.authStorage,
+                modelRegistry: params.modelRegistry,
+                model: resolveCaMeLModel(modelRef),
+                thinkingLevel: mapThinkingLevel(params.thinkLevel),
+                tools: [],
+                customTools: [],
+                sessionManager: SessionManager.inMemory(),
+                settingsManager,
+              });
+              applySystemPromptOverrideToSession(
+                quarantinedSession,
+                "You are a data extraction assistant. Extract only what is requested from the provided data. Return plain text with no additional commentary.",
+              );
+              try {
+                await abortable(quarantinedSession.prompt(prompt));
+                const assistant = quarantinedSession.messages
+                  .toReversed()
+                  .find((message) => message.role === "assistant");
+                const output = stripJsonCodeFence(extractAssistantTextContent(assistant));
+                if (!output) {
+                  throw new Error("CaMeL quarantined extractor returned empty output.");
+                }
+                return output;
+              } finally {
+                quarantinedSession.dispose?.();
+              }
+            };
+            const planGenerator = createPlanGenerator(async ({ userPrompt, availableTools }) => {
+              return plannerRun(
+                buildCaMeLPlannerPrompt({
+                  userPrompt,
+                  availableTools,
+                }),
+              );
+            });
+            const quarantinedExtractor = createQuarantinedQuery(
+              async ({ instruction, untrustedData, model }) => {
+                return runQuarantinedExtraction(
+                  [
+                    "Extract only what is requested from untrusted data.",
+                    "Return plain text only with no additional commentary.",
+                    "",
+                    `Instruction: ${instruction}`,
+                    "Untrusted data:",
+                    untrustedData,
+                  ].join("\n"),
+                  model,
+                );
+              },
+            );
+            const approvalHandler = createApprovalPromptHandler();
+            const toolByName = new Map(
+              tools.map((tool) => [normalizeToolName(tool.name), tool] as const),
+            );
+
+            // Generate the plan first to decide whether CaMeL orchestration is
+            // actually needed.  Plans that contain only no-side-effect tools
+            // (read, search, memory) can be handled by the normal agent loop
+            // where the LLM calls tools itself and synthesizes a response.
+            const camelToolDefs = toCamelToolDefinitions(
+              tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters,
+              })),
+            );
+            let plan: ExecutionPlan | null = null;
+            try {
+              plan = await planGenerator(
+                effectivePrompt,
+                camelToolDefs,
+                `${params.provider}/${params.modelId}`,
+              );
+            } catch (planError) {
+              // Planner failures (empty output, parse errors, etc.) should not
+              // kill the run.  Fall through to the normal agent loop instead.
+              log.warn(
+                `CaMeL planner failed, falling back to normal prompt: ${planError instanceof Error ? planError.message : String(planError)}`,
+              );
+            }
+            const planHasSideEffectTools =
+              plan !== null &&
+              plan.steps.length > 0 &&
+              plan.steps.some((step) => !camelToolClassifier!.isNoSideEffectTool(step.tool));
+
+            if (!planHasSideEffectTools) {
+              // Plan is empty, read-only, or planner failed — let the normal
+              // agent loop handle it.  The session has all tools and the
+              // before-tool-call hook still applies CaMeL security checks.
+              if (plan !== null && plan.steps.length > 0) {
+                log.debug(
+                  `CaMeL: plan has ${plan.steps.length} steps, no side-effect tools — using normal prompt`,
+                );
+              }
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(effectivePrompt));
+              }
+            } else {
+              // Plan has side-effect tools — use CaMeL orchestration for taint
+              // tracking and policy enforcement.
+              // Re-use the plan we already generated instead of calling the
+              // planner model again inside orchestrator.execute().
+              const cachedPlanGenerator = async () => plan!;
+              const orchestrator = new CaMeLOrchestrator({
+                config: params.camelConfig,
+                policyEngine: createDefaultPolicies(params.camelConfig),
+                taintTracker: new TaintTracker(),
+                approvalHandler,
+                planGenerator: cachedPlanGenerator,
+                quarantinedExtractor,
+              });
+              const camelScopeKey = resolveCaMeLScopeKey({
+                runId: params.runId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: sessionAgentId,
+              });
+              activeCaMeLOrchestratorScopes.add(camelScopeKey);
+              let camelSentViaMessagingTool = false;
+              let orchestratedResult: unknown;
+              try {
+                orchestratedResult = await orchestrator.execute(
+                  effectivePrompt,
+                  camelToolDefs,
+                  async (name, args) => {
+                    const tool = toolByName.get(normalizeToolName(name));
+                    if (!tool) {
+                      log.warn(`CaMeL plan referenced unknown tool "${name}", skipping step`);
+                      return { skipped: true, reason: `unknown tool: ${name}` };
+                    }
+                    // Track messaging tool sends so we can suppress duplicate replies.
+                    const argsRecord = args && typeof args === "object" ? args : {};
+                    if (isMessagingTool(name) && isMessagingToolSendAction(name, argsRecord)) {
+                      camelSentViaMessagingTool = true;
+                    }
+                    const toolCallId = `camel_${Date.now().toString(36)}_${(++camelToolCallCounter).toString(36)}`;
+                    emitAgentEvent({
+                      runId: params.runId,
+                      stream: "tool",
+                      data: { phase: "start", name, toolCallId },
+                    });
+                    const result = await tool.execute(
+                      toolCallId,
+                      args,
+                      runAbortController.signal,
+                      undefined,
+                    );
+                    emitAgentEvent({
+                      runId: params.runId,
+                      stream: "tool",
+                      data: {
+                        phase: "result",
+                        name,
+                        toolCallId,
+                        isError: false,
+                      },
+                    });
+                    if (result && typeof result === "object" && "details" in (result as object)) {
+                      return (result as { details?: unknown }).details ?? result;
+                    }
+                    return result;
+                  },
+                  {
+                    plannerModel: `${params.provider}/${params.modelId}`,
+                    quarantinedModel:
+                      params.camelConfig.qModel ?? `${params.provider}/${params.modelId}`,
+                  },
+                );
+              } finally {
+                activeCaMeLOrchestratorScopes.delete(camelScopeKey);
+              }
+              camelSideEffectsExecuted = true;
+              if (camelSentViaMessagingTool) {
+                // A messaging tool already delivered the reply to the channel.
+                log.debug("CaMeL: messaging tool already sent reply, skipping duplicate response");
+              } else {
+                // Side-effect tools ran but no messaging tool sent a reply.
+                // Build a synthesis prompt with tool results so the LLM
+                // generates a text-only response. The before-tool-call hook
+                // still enforces CaMeL security on any tool calls the LLM
+                // might attempt, providing a safety net.
+                let toolResultContext = "";
+                if (
+                  orchestratedResult &&
+                  typeof orchestratedResult === "object" &&
+                  "raw" in orchestratedResult
+                ) {
+                  const raw = (orchestratedResult as { raw: unknown }).raw;
+                  const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+                  const trimmed = text?.trim();
+                  if (trimmed) {
+                    toolResultContext = `\n\n[Tool results from completed actions]\n${trimmed}`;
+                  }
+                }
+                await abortable(
+                  activeSession.prompt(
+                    effectivePrompt +
+                      toolResultContext +
+                      "\n\nThe actions above have already been completed. Respond to the user with a natural summary. Do not re-run any tools.",
+                  ),
+                );
+              }
+            }
+          } else if (imageResult.images.length > 0) {
+            // Only pass images option if there are actually images to pass.
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
@@ -2053,6 +2452,7 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        camelSideEffectsExecuted,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

@@ -63,4 +63,6 @@ export type EmbeddedRunAttemptResult = {
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
+  /** CaMeL orchestration already executed side-effect tools this attempt. */
+  camelSideEffectsExecuted?: boolean;
 };
