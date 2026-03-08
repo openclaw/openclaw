@@ -648,7 +648,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("chat.send inherits external delivery context for CLI clients on configured main sessions", async () => {
+  it("chat.send does not inherit external delivery context for CLI clients on configured main sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-cli-routes-");
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
@@ -684,14 +684,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "whatsapp",
-        OriginatingTo: "whatsapp:+8613800138000",
-        AccountId: "default",
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+        ExplicitDeliverRoute: false,
       }),
     );
   });
 
-  it("chat.send keeps configured main delivery inheritance when connect metadata omits client details", async () => {
+  it("chat.send does not inherit external delivery context when connect metadata omits client details on configured main", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-connect-no-client-");
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
@@ -722,9 +723,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toEqual(
       expect.objectContaining({
-        OriginatingChannel: "whatsapp",
-        OriginatingTo: "whatsapp:+8613800138000",
-        AccountId: "default",
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+        ExplicitDeliverRoute: false,
       }),
     );
   });

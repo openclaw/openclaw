@@ -165,21 +165,15 @@ function resolveChatSendOriginatingRoute(params: {
     typeof sessionScopeParts[1] === "string" &&
     sessionChannelHint === routeChannelCandidate;
   const isFromWebchatClient = isWebchatClient(params.client);
-  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
-  const isConfiguredMainSessionScope =
-    normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
-
-  // Webchat/Control UI clients never inherit external delivery routes, even when
-  // accessing channel-scoped sessions. External routes are only for non-webchat
-  // clients where the session key explicitly encodes an external target.
-  // Preserve the old configured-main contract: any connected non-webchat client
-  // may inherit the last external route even when client metadata is absent.
+  // Webchat/Control UI/TUI clients must not inherit external delivery routes on
+  // shared/main sessions. External route inheritance is only allowed when the
+  // session key itself is explicitly channel-scoped.
   const canInheritDeliverableRoute = Boolean(
     !isFromWebchatClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      (isConfiguredMainSessionScope && params.hasConnectedClient)),
+    !isChannelAgnosticSessionScope &&
+    (isChannelScopedSession || hasLegacyChannelPeerShape),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
