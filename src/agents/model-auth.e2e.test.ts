@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
 
@@ -404,6 +404,54 @@ describe("getApiKeyForModel", () => {
         process.env.ANTHROPIC_API_KEY = previous;
       }
     }
+  });
+
+  it("reads ANTHROPIC_API_KEY_FILE when ANTHROPIC_API_KEY is unset", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_API_KEY_FILE: undefined,
+      },
+      async () => {
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-file-"));
+        const file = path.join(dir, "anthropic.txt");
+        await fs.writeFile(file, "sk-ant-file-key\n", "utf8");
+
+        try {
+          process.env.ANTHROPIC_API_KEY_FILE = file;
+          const resolved = resolveEnvApiKey("anthropic");
+          expect(resolved?.apiKey).toBe("sk-ant-file-key");
+          expect(resolved?.source).toContain("ANTHROPIC_API_KEY_FILE");
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  it("prefers ANTHROPIC_API_KEY over ANTHROPIC_API_KEY_FILE", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_API_KEY_FILE: undefined,
+      },
+      async () => {
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-file-"));
+        const file = path.join(dir, "anthropic.txt");
+        await fs.writeFile(file, "sk-ant-file-key\n", "utf8");
+
+        try {
+          process.env.ANTHROPIC_API_KEY = "sk-ant-direct-key";
+          process.env.ANTHROPIC_API_KEY_FILE = file;
+          const resolved = resolveEnvApiKey("anthropic");
+          expect(resolved?.apiKey).toBe("sk-ant-direct-key");
+          expect(resolved?.source).toContain("ANTHROPIC_API_KEY");
+          expect(resolved?.source).not.toContain("_FILE");
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
   });
 
   it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {

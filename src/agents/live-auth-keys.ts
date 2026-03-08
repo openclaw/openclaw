@@ -1,3 +1,4 @@
+import { resolveSecretEnvValue } from "../utils/secret-env.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -56,7 +57,7 @@ function parseKeyList(raw?: string | null): string[] {
 function collectEnvPrefixedKeys(prefix: string): string[] {
   const keys: string[] = [];
   for (const [name, value] of Object.entries(process.env)) {
-    if (!name.startsWith(prefix)) {
+    if (!name.startsWith(prefix) || name.endsWith("_FILE")) {
       continue;
     }
     const trimmed = value?.trim();
@@ -100,17 +101,23 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
 export function collectProviderApiKeys(provider: string): string[] {
   const config = resolveProviderApiKeyConfig(provider);
 
-  const forcedSingle = config.liveSingle ? process.env[config.liveSingle]?.trim() : undefined;
+  const forcedSingle = config.liveSingle
+    ? resolveSecretEnvValue(config.liveSingle)?.value
+    : undefined;
   if (forcedSingle) {
     return [forcedSingle];
   }
 
-  const fromList = parseKeyList(config.listVar ? process.env[config.listVar] : undefined);
-  const primary = config.primaryVar ? process.env[config.primaryVar]?.trim() : undefined;
+  const fromList = parseKeyList(
+    config.listVar
+      ? (resolveSecretEnvValue(config.listVar)?.value ?? process.env[config.listVar])
+      : undefined,
+  );
+  const primary = config.primaryVar ? resolveSecretEnvValue(config.primaryVar)?.value : undefined;
   const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar) : [];
 
   const fallback = config.fallbackVars
-    .map((envVar) => process.env[envVar]?.trim())
+    .map((envVar) => resolveSecretEnvValue(envVar)?.value)
     .filter(Boolean) as string[];
 
   const seen = new Set<string>();

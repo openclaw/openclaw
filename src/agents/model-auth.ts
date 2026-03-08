@@ -8,6 +8,7 @@ import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
+import { resolveSecretEnvValue } from "../utils/secret-env.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -239,12 +240,12 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = normalizeOptionalSecretInput(process.env[envVar]);
-    if (!value) {
+    const resolved = resolveSecretEnvValue(envVar, process.env);
+    if (!resolved) {
       return null;
     }
-    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
-    return { apiKey: value, source };
+    const prefix = applied.has(envVar) ? "shell env" : resolved.source;
+    return { apiKey: resolved.value, source: `${prefix}: ${resolved.envVar}` };
   };
 
   if (normalized === "github-copilot") {

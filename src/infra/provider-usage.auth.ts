@@ -12,6 +12,7 @@ import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveSecretEnvValue } from "../utils/secret-env.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -37,7 +38,7 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
 
 function resolveZaiApiKey(): string | undefined {
   const envDirect =
-    normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
+    resolveSecretEnvValue("ZAI_API_KEY")?.value || resolveSecretEnvValue("Z_AI_API_KEY")?.value;
   if (envDirect) {
     return envDirect;
   }
