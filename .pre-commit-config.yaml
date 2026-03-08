@@ -66,9 +66,11 @@ repos:
           - --exclude-lines
           - 'env: \{ MISTRAL_API_K[E]Y: "sk-\.\.\." \},'
           - --exclude-lines
-          - '"ap[i]Key": "xxxxx",'
+          - '"ap[i]Key": "xxxxx"(,)?'
           - --exclude-lines
           - 'ap[i]Key: "A[I]za\.\.\.",'
+          - --exclude-lines
+          - '"ap[i]Key": "(resolved|normalized|legacy)-key"(,)?'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0

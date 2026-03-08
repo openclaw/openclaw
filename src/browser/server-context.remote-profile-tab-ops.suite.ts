@@ -139,7 +139,7 @@ describe("browser server-context remote profile tab operations", () => {
     expect(second.targetId).toBe("A");
   });
 
-  it("falls back to the only tab for remote profiles when targetId is stale", async () => {
+  it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
     const responses = [
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
@@ -151,8 +151,7 @@ describe("browser server-context remote profile tab operations", () => {
     } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const { remote } = createRemoteRouteHarness();
-    const chosen = await remote.ensureTabAvailable("STALE_TARGET");
-    expect(chosen.targetId).toBe("T1");
+    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
   });
 
   it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
