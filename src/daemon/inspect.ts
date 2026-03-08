@@ -85,15 +85,42 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
+/**
+ * Extracts ProgramArguments from plist XML and returns them as an array of strings.
+ * Returns null if parsing fails or no ProgramArguments found.
+ */
+function extractProgramArguments(contents: string): string[] | null {
+  // Find ProgramArguments array block
+  const argsMatch = contents.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
+  if (!argsMatch) {
+    return null;
+  }
+
+  const arrayContent = argsMatch[1];
+  const args: string[] = [];
+
+  // Extract all <string>...</string> elements from the array
+  const stringRegex = /<string>([^<]*)<\/string>/g;
+  let match;
+  while ((match = stringRegex.exec(arrayContent)) !== null) {
+    args.push(match[1]);
+  }
+
+  return args.length > 0 ? args : null;
+}
+
 function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) {
     return true;
   }
-  const lowerContents = contents.toLowerCase();
-  if (!lowerContents.includes("gateway")) {
-    return false;
+
+  // Parse ProgramArguments and check if "gateway" is an actual argument
+  const args = extractProgramArguments(contents);
+  if (args) {
+    return args.some((arg) => arg.toLowerCase() === "gateway");
   }
-  return label.startsWith("ai.openclaw.");
+
+  return false;
 }
 
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
