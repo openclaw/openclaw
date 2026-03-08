@@ -51,7 +51,8 @@ function looksLikeBase64Credential(value: string): boolean {
   if (value.length < 80 || value.length % 4 !== 0) {
     return false;
   }
-  // Must contain at least one of +, /, or = to distinguish from plain alphanumeric strings
+  // Must contain at least one of +, /, or = to distinguish from plain alphanumeric strings.
+  // Accepts ~7.7% false-negative rate: valid base64 using only [A-Za-z0-9] bypasses detection.
   if (!/[+/=]/.test(value)) {
     return false;
   }
