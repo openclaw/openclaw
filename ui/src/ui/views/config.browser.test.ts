@@ -25,6 +25,7 @@ describe("config view", () => {
     searchQuery: "",
     activeSection: null,
     activeSubsection: null,
+    showDiff: false,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onFormPatch: vi.fn(),
@@ -35,6 +36,7 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    onShowDiffChange: vi.fn(),
   });
 
   function findActionButtons(container: HTMLElement): {

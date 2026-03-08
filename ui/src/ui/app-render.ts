@@ -1048,6 +1048,7 @@ export function renderApp(state: AppViewState) {
                 schemaLoading: state.configSchemaLoading,
                 uiHints: state.configUiHints,
                 formMode: state.configFormMode,
+                showDiff: state.configShowDiff,
                 formValue: state.configForm,
                 originalValue: state.configFormOriginal,
                 searchQuery: state.configSearchQuery,
@@ -1057,6 +1058,7 @@ export function renderApp(state: AppViewState) {
                   state.configRaw = next;
                 },
                 onFormModeChange: (mode) => (state.configFormMode = mode),
+                onShowDiffChange: (show) => (state.configShowDiff = show),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.configSearchQuery = query),
                 onSectionChange: (section) => {

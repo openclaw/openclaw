@@ -107,6 +107,7 @@ export type AppViewState = {
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
   configFormMode: "form" | "raw";
+  configShowDiff: boolean;
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
@@ -284,6 +285,7 @@ export type AppViewState = {
     handleConfigApply: () => Promise<void>;
     handleConfigFormUpdate: (path: string, value: unknown) => void;
     handleConfigFormModeChange: (mode: "form" | "raw") => void;
+    handleConfigShowDiffChange: (show: boolean) => void;
     handleConfigRawChange: (raw: string) => void;
     handleInstallSkill: (key: string) => Promise<void>;
     handleUpdateSkill: (key: string) => Promise<void>;

@@ -1656,3 +1656,209 @@
     min-width: 70px;
   }
 }
+
+/* ===========================================
+   JSON Raw Diff (config raw mode)
+   =========================================== */
+
+.config-raw-diff {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+:root[data-theme="light"] .config-raw-diff {
+  background: white;
+}
+
+.config-raw-diff__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-accent);
+  border-bottom: 1px solid var(--border);
+}
+
+:root[data-theme="light"] .config-raw-diff__header {
+  background: var(--bg-hover);
+}
+
+.config-raw-diff__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.config-raw-diff__legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.config-raw-diff__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.config-raw-diff__legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.config-raw-diff__legend-color--line {
+  background: var(--danger-subtle);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.config-raw-diff__legend-color--char {
+  background: var(--danger);
+}
+
+.config-raw-diff__content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.config-raw-diff__line {
+  display: flex;
+  gap: 12px;
+  padding: 4px 8px;
+  border-radius: 2px;
+  white-space: pre;
+}
+
+.config-raw-diff__line--changed {
+  background: var(--danger-subtle);
+}
+
+.config-raw-diff__line-num {
+  color: var(--muted);
+  min-width: 32px;
+  text-align: right;
+  user-select: none;
+}
+
+.config-raw-diff__char--added {
+  background: var(--danger);
+  color: white;
+  border-radius: 2px;
+}
+
+.config-raw-diff__char--removed {
+  background: var(--danger);
+  color: white;
+  border-radius: 2px;
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* Multi-line diff */
+.config-raw-diff__multi {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  margin: 4px 0;
+  overflow-x: auto;
+}
+
+.config-raw-diff__multi-column {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-raw-diff__multi-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.config-raw-diff__line--removed {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.config-raw-diff__line--added {
+  background: rgba(34, 197, 94, 0.1);
+}
+
+/* Compact multi-line diff */
+.config-raw-diff__multi-compact {
+  margin: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.config-raw-diff__multi-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-accent);
+  border-bottom: 1px solid var(--border);
+}
+
+.config-raw-diff__multi-badge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.config-raw-diff__multi-range {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.config-raw-diff__multi-lines {
+  background: var(--bg-elevated);
+}
+
+.config-raw-diff__text {
+  flex: 1;
+  word-break: break-all;
+}
+
+/* Empty diff state */
+.config-raw-diff--empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Diff toggle */
+.config-raw-changes-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--accent-subtle);
+  border: 1px solid rgba(255, 77, 77, 0.25);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+}

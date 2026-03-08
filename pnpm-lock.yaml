@@ -545,6 +545,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.0.0
         version: 3.0.0
+      diff:
+        specifier: ^8.0.3
+        version: 8.0.3
       dompurify:
         specifier: ^3.3.2
         version: 3.3.2

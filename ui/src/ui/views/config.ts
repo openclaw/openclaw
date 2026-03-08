@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types.ts";
+import { computeDiff, truncateValue, renderRawDiff } from "./config-diff.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 import { getTagFilters, replaceTagFilters } from "./config-search.ts";
@@ -23,12 +24,14 @@ export type ConfigProps = {
   searchQuery: string;
   activeSection: string | null;
   activeSubsection: string | null;
+  showDiff: boolean;
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
   onSearchChange: (query: string) => void;
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
+  onShowDiffChange: (show: boolean) => void;
   onReload: () => void;
   onSave: () => void;
   onApply: () => void;
@@ -347,61 +350,6 @@ function resolveSubsections(params: {
   return entries;
 }
 
-function computeDiff(
-  original: Record<string, unknown> | null,
-  current: Record<string, unknown> | null,
-): Array<{ path: string; from: unknown; to: unknown }> {
-  if (!original || !current) {
-    return [];
-  }
-  const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
-
-  function compare(orig: unknown, curr: unknown, path: string) {
-    if (orig === curr) {
-      return;
-    }
-    if (typeof orig !== typeof curr) {
-      changes.push({ path, from: orig, to: curr });
-      return;
-    }
-    if (typeof orig !== "object" || orig === null || curr === null) {
-      if (orig !== curr) {
-        changes.push({ path, from: orig, to: curr });
-      }
-      return;
-    }
-    if (Array.isArray(orig) && Array.isArray(curr)) {
-      if (JSON.stringify(orig) !== JSON.stringify(curr)) {
-        changes.push({ path, from: orig, to: curr });
-      }
-      return;
-    }
-    const origObj = orig as Record<string, unknown>;
-    const currObj = curr as Record<string, unknown>;
-    const allKeys = new Set([...Object.keys(origObj), ...Object.keys(currObj)]);
-    for (const key of allKeys) {
-      compare(origObj[key], currObj[key], path ? `${path}.${key}` : key);
-    }
-  }
-
-  compare(original, current, "");
-  return changes;
-}
-
-function truncateValue(value: unknown, maxLen = 40): string {
-  let str: string;
-  try {
-    const json = JSON.stringify(value);
-    str = json ?? String(value);
-  } catch {
-    str = String(value);
-  }
-  if (str.length <= maxLen) {
-    return str;
-  }
-  return str.slice(0, maxLen - 3) + "...";
-}
-
 export function renderConfig(props: ConfigProps) {
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const analysis = analyzeConfigSchema(props.schema);
@@ -444,8 +392,9 @@ export function renderConfig(props: ConfigProps) {
 
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = props.formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
+  const hasFormChanges = props.formMode === "form" && diff.length > 0;
   const hasRawChanges = props.formMode === "raw" && props.raw !== props.originalRaw;
-  const hasChanges = props.formMode === "form" ? diff.length > 0 : hasRawChanges;
+  const hasChanges = hasFormChanges || hasRawChanges;
 
   // Save/apply buttons require actual changes to be enabled.
   // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
@@ -626,6 +575,19 @@ export function renderConfig(props: ConfigProps) {
                         : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
                     }</span
                   >
+                  ${
+                    props.formMode === "raw"
+                      ? html`
+                        <button
+                          class="btn btn--sm"
+                          style="margin-left: 8px;"
+                          @click=${() => props.onShowDiffChange(!props.showDiff)}
+                        >
+                          ${props.showDiff ? "Hide Diff" : "Show Diff"}
+                        </button>
+                      `
+                      : nothing
+                  }
                 `
                 : html`
                     <span class="config-status muted">No changes</span>
@@ -795,6 +757,37 @@ export function renderConfig(props: ConfigProps) {
               : html`
                 <label class="field config-raw-field">
                   <span>Raw JSON5</span>
+                  ${
+                    hasChanges && props.formMode === "raw"
+                      ? html`
+                        <div style="margin-bottom: 12px;">
+                          ${
+                            props.showDiff
+                              ? html`
+                                <div style="display: flex; justify-content: flex-end; margin-bottom: 8px;">
+                                  <button
+                                    class="btn btn--sm"
+                                    @click=${() => props.onShowDiffChange(false)}
+                                  >
+                                    Hide Diff
+                                  </button>
+                                </div>
+                                ${renderRawDiff(props.originalRaw, props.raw)}
+                              `
+                              : html`
+                                <div
+                                  class="config-raw-changes-hint"
+                                  style="cursor: pointer;"
+                                  @click=${() => props.onShowDiffChange(true)}
+                                >
+                                  <span>View pending change</span>
+                                </div>
+                              `
+                          }
+                        </div>
+                      `
+                      : nothing
+                  }
                   <textarea
                     .value=${props.raw}
                     @input=${(e: Event) =>
