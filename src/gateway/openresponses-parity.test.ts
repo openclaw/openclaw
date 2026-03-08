@@ -316,4 +316,115 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.message).toContain("Thanks");
     });
   });
+
+  describe("Tool Definition Normalization", () => {
+    let normalizeToolDefinitions: typeof import("./openresponses-http.js").normalizeToolDefinitions;
+
+    beforeAll(async () => {
+      ({ normalizeToolDefinitions } = await import("./openresponses-http.js"));
+    });
+
+    it("should pass through OpenAI-format tools unchanged", () => {
+      const tools = [
+        {
+          type: "function",
+          function: {
+            name: "read",
+            description: "Read a file",
+            parameters: { type: "object", properties: { path: { type: "string" } } },
+          },
+        },
+      ];
+      const result = normalizeToolDefinitions(tools);
+      expect(result).toEqual(tools);
+    });
+
+    it("should normalize Anthropic-format tools (name + input_schema) to OpenAI format", () => {
+      const tools = [
+        {
+          name: "read",
+          description: "Read the contents of a file",
+          input_schema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+        },
+      ];
+      const result = normalizeToolDefinitions(tools);
+      expect(result).toEqual([
+        {
+          type: "function",
+          function: {
+            name: "read",
+            description: "Read the contents of a file",
+            parameters: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            },
+          },
+        },
+      ]);
+    });
+
+    it("should normalize flat tools with parameters field", () => {
+      const tools = [
+        {
+          name: "write",
+          description: "Write a file",
+          parameters: { type: "object", properties: { content: { type: "string" } } },
+        },
+      ];
+      const result = normalizeToolDefinitions(tools);
+      expect(result).toEqual([
+        {
+          type: "function",
+          function: {
+            name: "write",
+            description: "Write a file",
+            parameters: { type: "object", properties: { content: { type: "string" } } },
+          },
+        },
+      ]);
+    });
+
+    it("should handle mixed OpenAI and Anthropic format tools", () => {
+      const tools = [
+        { type: "function", function: { name: "tool_a" } },
+        { name: "tool_b", description: "B", input_schema: { type: "object" } },
+      ];
+      const result = normalizeToolDefinitions(tools);
+      expect(result![0]).toEqual({ type: "function", function: { name: "tool_a" } });
+      expect(result![1]).toEqual({
+        type: "function",
+        function: { name: "tool_b", description: "B", parameters: { type: "object" } },
+      });
+    });
+
+    it("should return undefined for undefined input", () => {
+      expect(normalizeToolDefinitions(undefined)).toBeUndefined();
+    });
+
+    it("should return empty array for empty input", () => {
+      expect(normalizeToolDefinitions([])).toEqual([]);
+    });
+
+    it("should produce tools that pass ToolDefinitionSchema validation after normalization", () => {
+      const anthropicTools = [
+        {
+          name: "web_search",
+          description: "Search the web",
+          input_schema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      ];
+      const normalized = normalizeToolDefinitions(anthropicTools)!;
+      const result = ToolDefinitionSchema.safeParse(normalized[0]);
+      expect(result.success).toBe(true);
+    });
+  });
 });
