@@ -16,10 +16,10 @@ type ResetOps = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
 
-async function closePlaywrightBrowserConnection(): Promise<void> {
+async function closePlaywrightBrowserConnectionForProfile(cdpUrl?: string): Promise<void> {
   try {
     const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection();
+    await mod.closePlaywrightBrowserConnection(cdpUrl ? { cdpUrl } : undefined);
   } catch {
     // ignore
   }
@@ -48,14 +48,14 @@ export function createProfileResetOps({
     const httpReachable = await isHttpReachable(300);
     if (httpReachable && !profileState.running) {
       // Port in use but not by us - kill it.
-      await closePlaywrightBrowserConnection();
+      await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
     }
 
     if (profileState.running) {
       await stopRunningBrowser();
     }
 
-    await closePlaywrightBrowserConnection();
+    await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
 
     if (!fs.existsSync(userDataDir)) {
       return { moved: false, from: userDataDir };

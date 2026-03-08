@@ -176,6 +176,28 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(false);
   });
 
+  it("preserves loopback direct WebSocket cdpUrl for explicit profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        localws: {
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
+          color: "#0066CC",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "localws");
+    expect(profile?.cdpUrl).toBe("ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key");
+    expect(profile?.cdpPort).toBe(9222);
+    expect(profile?.cdpIsLoopback).toBe(true);
+  });
+
+  it("trims relayBindHost when configured", () => {
+    const resolved = resolveBrowserConfig({
+      relayBindHost: " 0.0.0.0 ",
+    });
+    expect(resolved.relayBindHost).toBe("0.0.0.0");
+  });
+
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",

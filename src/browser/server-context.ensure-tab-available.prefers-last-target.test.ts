@@ -99,7 +99,7 @@ describe("browser server-context ensureTabAvailable", () => {
     expect(second.targetId).toBe("A");
   });
 
-  it("falls back to the only attached tab when an invalid targetId is provided (extension)", async () => {
+  it("rejects invalid targetId even when only one extension tab remains", async () => {
     const responses = [
       [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
       [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
@@ -109,8 +109,7 @@ describe("browser server-context ensureTabAvailable", () => {
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
-    const chosen = await chrome.ensureTabAvailable("NOT_A_TAB");
-    expect(chosen.targetId).toBe("A");
+    await expect(chrome.ensureTabAvailable("NOT_A_TAB")).rejects.toThrow(/tab not found/i);
   });
 
   it("returns a descriptive message when no extension tabs are attached", async () => {

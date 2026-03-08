@@ -571,17 +571,18 @@ describe("browser tool external content wrapping", () => {
 describe("browser tool act stale target recovery", () => {
   registerBrowserToolAfterEachReset();
 
-  it("retries chrome act once without targetId when tab id is stale", async () => {
+  it("retries safe chrome act once without targetId when exactly one tab remains", async () => {
     browserActionsMocks.browserAct
       .mockRejectedValueOnce(new Error("404: tab not found"))
       .mockResolvedValueOnce({ ok: true });
+    browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);
 
     const tool = createBrowserTool();
     const result = await tool.execute?.("call-1", {
       action: "act",
       profile: "chrome",
       request: {
-        action: "click",
+        kind: "hover",
         targetId: "stale-tab",
         ref: "btn-1",
       },
@@ -591,7 +592,7 @@ describe("browser tool act stale target recovery", () => {
     expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
       1,
       undefined,
-      expect.objectContaining({ targetId: "stale-tab", action: "click", ref: "btn-1" }),
+      expect.objectContaining({ targetId: "stale-tab", kind: "hover", ref: "btn-1" }),
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
@@ -601,5 +602,25 @@ describe("browser tool act stale target recovery", () => {
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(result?.details).toMatchObject({ ok: true });
+  });
+
+  it("does not retry mutating chrome act requests without targetId", async () => {
+    browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);
+
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        profile: "chrome",
+        request: {
+          kind: "click",
+          targetId: "stale-tab",
+          ref: "btn-1",
+        },
+      }),
+    ).rejects.toThrow(/Run action=tabs profile="chrome"/i);
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
   });
 });
