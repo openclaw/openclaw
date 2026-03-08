@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
+  type GmailCliMode,
   type OpenClawConfig,
   CONFIG_PATH,
   loadConfig,
@@ -18,13 +19,15 @@ import {
   ensureSubscription,
   ensureTailscaleEndpoint,
   ensureTopic,
-  resolveProjectIdFromGogCredentials,
+  resolveProjectIdFromCredentials,
   runGcloud,
 } from "./gmail-setup-utils.js";
+import { spawnGwsWatch } from "./gmail-watcher.js";
 import {
   buildDefaultHookUrl,
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
+  buildGwsWatchArgs,
   buildTopicPath,
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -45,6 +48,7 @@ import {
 } from "./gmail.js";
 
 type GmailCommonOptions = {
+  cli?: GmailCliMode;
   topic?: string;
   subscription?: string;
   label?: string;
@@ -76,9 +80,17 @@ export type GmailRunOptions = GmailCommonOptions & {
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER = "serviceAccount:gmail-api-push@system.gserviceaccount.com";
 
 export async function runGmailSetup(opts: GmailSetupOptions) {
+  const cli: GmailCliMode = opts.cli ?? "gog";
+  const isGws = cli === "gws";
+
   await ensureDependency("gcloud", ["--cask", "gcloud-cli"]);
-  await ensureDependency("gog", ["gogcli"]);
-  if (opts.tailscale !== "off" && !opts.pushEndpoint) {
+  if (isGws) {
+    await ensureDependency("gws", ["@googleworkspace/cli"], "npm");
+  } else {
+    await ensureDependency("gog", ["gogcli"]);
+  }
+  // Tailscale only needed for gog (push-based); gws uses pull
+  if (!isGws && opts.tailscale !== "off" && !opts.pushEndpoint) {
     await ensureDependency("tailscale", ["tailscale"]);
   }
 
@@ -92,18 +104,20 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   const baseConfig = configSnapshot.config;
   const hooksPath = normalizeHooksPath(baseConfig.hooks?.path);
   const hookToken = opts.hookToken ?? baseConfig.hooks?.token ?? generateHookToken();
-  const pushToken = opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? generateHookToken();
+  const pushToken = isGws
+    ? (opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? "")
+    : (opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? generateHookToken());
 
   const topicInput = opts.topic ?? baseConfig.hooks?.gmail?.topic ?? DEFAULT_GMAIL_TOPIC;
   const parsedTopic = parseTopicPath(topicInput);
   const topicName = parsedTopic?.topicName ?? topicInput;
 
   const projectId =
-    opts.project ?? parsedTopic?.projectId ?? (await resolveProjectIdFromGogCredentials());
-  // Gmail watch requires the Pub/Sub topic to live in the OAuth client project.
+    opts.project ?? parsedTopic?.projectId ?? (await resolveProjectIdFromCredentials(cli));
   if (!projectId) {
+    const hint = isGws ? "gws" : "gog";
     throw new Error(
-      "GCP project id required (use --project or ensure gog credentials are available)",
+      `GCP project id required (use --project or ensure ${hint} credentials are available)`,
     );
   }
 
@@ -134,9 +148,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   const maxBytes = opts.maxBytes ?? DEFAULT_GMAIL_MAX_BYTES;
   const renewEveryMinutes = opts.renewEveryMinutes ?? DEFAULT_GMAIL_RENEW_MINUTES;
 
-  const tailscaleMode = opts.tailscale ?? "funnel";
-  // Tailscale strips the path before proxying; keep a public path while gog
-  // listens on "/" whenever Tailscale is enabled.
+  const tailscaleMode = isGws ? "off" : (opts.tailscale ?? "funnel");
   const servePath = normalizeServePath(
     tailscaleMode !== "off" && !normalizedTailscaleTarget ? "/" : normalizedServePath,
   );
@@ -172,30 +184,34 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
     "--quiet",
   ]);
 
-  const pushEndpoint = opts.pushEndpoint
-    ? opts.pushEndpoint
-    : await ensureTailscaleEndpoint({
-        mode: tailscaleMode,
-        path: tailscalePath,
-        port: servePort,
-        target: normalizedTailscaleTarget,
-        token: pushToken,
-      });
+  // gws handles its own pull subscription; gog needs push endpoint + subscription
+  let pushEndpoint = "";
+  if (!isGws) {
+    pushEndpoint = opts.pushEndpoint
+      ? opts.pushEndpoint
+      : await ensureTailscaleEndpoint({
+          mode: tailscaleMode,
+          path: tailscalePath,
+          port: servePort,
+          target: normalizedTailscaleTarget,
+          token: pushToken,
+        });
 
-  if (!pushEndpoint) {
-    throw new Error("push endpoint required (set --push-endpoint)");
+    if (!pushEndpoint) {
+      throw new Error("push endpoint required (set --push-endpoint)");
+    }
+
+    await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
+
+    await startGmailWatch(
+      {
+        account: opts.account,
+        label,
+        topic: topicPath,
+      },
+      true,
+    );
   }
-
-  await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
-
-  await startGmailWatch(
-    {
-      account: opts.account,
-      label,
-      topic: topicPath,
-    },
-    true,
-  );
 
   const nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -207,11 +223,13 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
       presets: mergeHookPresets(baseConfig.hooks?.presets, "gmail"),
       gmail: {
         ...baseConfig.hooks?.gmail,
+        cli,
+        project: projectId,
         account: opts.account,
         label,
         topic: topicPath,
         subscription,
-        pushToken,
+        ...(pushToken ? { pushToken } : {}),
         hookUrl,
         includeBody,
         maxBytes,
@@ -238,20 +256,19 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   }
   await writeConfigFile(validated.config);
 
-  const summary = {
+  const summary: Record<string, unknown> = {
+    cli,
     projectId,
     topic: topicPath,
     subscription,
-    pushEndpoint,
     hookUrl,
     hookToken,
-    pushToken,
-    serve: {
-      bind: serveBind,
-      port: servePort,
-      path: servePath,
-    },
   };
+  if (!isGws) {
+    summary.pushEndpoint = pushEndpoint;
+    summary.pushToken = pushToken;
+    summary.serve = { bind: serveBind, port: servePort, path: servePath };
+  }
 
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(summary, null, 2));
@@ -259,20 +276,32 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   }
 
   defaultRuntime.log("Gmail hooks configured:");
+  defaultRuntime.log(`- cli: ${cli}`);
   defaultRuntime.log(`- project: ${projectId}`);
   defaultRuntime.log(`- topic: ${topicPath}`);
   defaultRuntime.log(`- subscription: ${subscription}`);
-  defaultRuntime.log(`- push endpoint: ${pushEndpoint}`);
+  if (!isGws) {
+    defaultRuntime.log(`- push endpoint: ${pushEndpoint}`);
+  }
   defaultRuntime.log(`- hook url: ${hookUrl}`);
   defaultRuntime.log(`- config: ${displayPath(CONFIG_PATH)}`);
-  defaultRuntime.log(`Next: ${formatCliCommand("openclaw webhooks gmail run")}`);
+  const runCmd = isGws ? "openclaw webhooks gmail run --cli gws" : "openclaw webhooks gmail run";
+  defaultRuntime.log(`Next: ${formatCliCommand(runCmd)}`);
 }
 
 export async function runGmailService(opts: GmailRunOptions) {
-  await ensureDependency("gog", ["gogcli"]);
   const config = loadConfig();
+  const cli: GmailCliMode = opts.cli ?? config.hooks?.gmail?.cli ?? "gog";
+  const isGws = cli === "gws";
+
+  if (isGws) {
+    await ensureDependency("gws", ["@googleworkspace/cli"], "npm");
+  } else {
+    await ensureDependency("gog", ["gogcli"]);
+  }
 
   const overrides: GmailHookOverrides = {
+    cli,
     account: opts.account,
     topic: opts.topic,
     subscription: opts.subscription,
@@ -298,6 +327,12 @@ export async function runGmailService(opts: GmailRunOptions) {
 
   const runtimeConfig = resolved.value;
 
+  if (isGws) {
+    runGwsService(runtimeConfig);
+    return;
+  }
+
+  // gog path: Tailscale + push watch + serve
   if (runtimeConfig.tailscale.mode !== "off") {
     await ensureDependency("tailscale", ["tailscale"]);
     await ensureTailscaleEndpoint({
@@ -336,19 +371,69 @@ export async function runGmailService(opts: GmailRunOptions) {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  child.on("exit", () => {
-    if (shuttingDown) {
-      detachSignals();
-      return;
-    }
-    defaultRuntime.log("gog watch serve exited; restarting in 2s");
-    setTimeout(() => {
+  function attachExitHandler(proc: ReturnType<typeof spawnGogServe>) {
+    proc.on("exit", () => {
       if (shuttingDown) {
+        detachSignals();
         return;
       }
-      child = spawnGogServe(runtimeConfig);
-    }, 2000);
-  });
+      defaultRuntime.log("gog watch serve exited; restarting in 2s");
+      setTimeout(() => {
+        if (shuttingDown) {
+          return;
+        }
+        child = spawnGogServe(runtimeConfig);
+        attachExitHandler(child);
+      }, 2000);
+    });
+  }
+  attachExitHandler(child);
+}
+
+/**
+ * Run the gws-based gmail service (pull mode, NDJSON stdout).
+ */
+function runGwsService(runtimeConfig: GmailHookRuntimeConfig) {
+  const args = buildGwsWatchArgs(runtimeConfig);
+  defaultRuntime.log(`Starting gws ${args.join(" ")}`);
+
+  let shuttingDown = false;
+  let child = spawnGwsWatch(runtimeConfig);
+
+  const detachSignals = () => {
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
+  };
+
+  const shutdown = () => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    detachSignals();
+    child.kill("SIGTERM");
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  function attachExitHandler(proc: ReturnType<typeof spawnGwsWatch>) {
+    proc.on("exit", () => {
+      if (shuttingDown) {
+        detachSignals();
+        return;
+      }
+      defaultRuntime.log("gws gmail +watch exited; restarting in 2s");
+      setTimeout(() => {
+        if (shuttingDown) {
+          return;
+        }
+        child = spawnGwsWatch(runtimeConfig);
+        attachExitHandler(child);
+      }, 2000);
+    });
+  }
+  attachExitHandler(child);
 }
 
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {

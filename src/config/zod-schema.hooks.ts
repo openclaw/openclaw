@@ -120,6 +120,8 @@ export const InternalHooksSchema = z
 
 export const HooksGmailSchema = z
   .object({
+    cli: z.union([z.literal("gog"), z.literal("gws")]).optional(),
+    project: z.string().optional(),
     account: z.string().optional(),
     label: z.string().optional(),
     topic: z.string().optional(),

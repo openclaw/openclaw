@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   ensureTailscaleEndpoint,
+  gwsCredentialsPaths,
   resetGmailSetupUtilsCachesForTest,
   resolvePythonExecutablePath,
 } from "./gmail-setup-utils.js";
@@ -120,5 +121,21 @@ describe("ensureTailscaleEndpoint", () => {
     expect(message).toContain("returned invalid JSON");
     expect(message).toContain("stdout: not-json");
     expect(message).toContain("code=0");
+  });
+});
+
+describe("gwsCredentialsPaths", () => {
+  it("returns paths including ~/.config/gws/client_secret.json", () => {
+    const paths = gwsCredentialsPaths();
+    expect(paths.length).toBeGreaterThan(0);
+    const hasGwsPath = paths.some((p) => p.includes(path.join("gws", "client_secret.json")));
+    expect(hasGwsPath).toBe(true);
+  });
+
+  it("includes XDG_CONFIG_HOME path when set", async () => {
+    await withEnvAsync({ XDG_CONFIG_HOME: "/tmp/xdg-test" }, async () => {
+      const paths = gwsCredentialsPaths();
+      expect(paths[0]).toBe(path.join("/tmp/xdg-test", "gws", "client_secret.json"));
+    });
   });
 });
