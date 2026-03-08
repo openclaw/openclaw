@@ -306,6 +306,34 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("di_123...abc");
   });
 
+  it("shows fallback details from fallback notice state even when persisted runtime model stays selected", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-4.1-mini",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "fallback-notice-driven",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-4.1-mini",
+        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
+        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+        fallbackNoticeReason: "rate limit",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
+    expect(normalized).toContain("(rate limit)");
+  });
+
   it("omits active fallback details when runtime drift does not match fallback state", () => {
     const text = buildStatusMessage({
       agent: {

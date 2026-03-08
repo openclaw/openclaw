@@ -765,6 +765,55 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("keeps persisted runtime model pinned to the selected model during fallback", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "anthropic",
+      model: "claude",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementation(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "Provider anthropic is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+    try {
+      const { run } = createMinimalRun({
+        resolvedVerboseLevel: "on",
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+      });
+      const res = await run();
+      const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(firstText).toContain("Model Fallback:");
+      expect(sessionEntry.modelProvider).toBe("anthropic");
+      expect(sessionEntry.model).toBe("claude");
+      expect(sessionEntry.fallbackNoticeSelectedModel).toBe("anthropic/claude");
+      expect(sessionEntry.fallbackNoticeActiveModel).toBe("openai/gpt-5.4");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("announces model fallback only once per active fallback state", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

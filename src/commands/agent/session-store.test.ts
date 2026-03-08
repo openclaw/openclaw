@@ -45,8 +45,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       sessionKey,
       storePath,
       sessionStore: staleInMemory,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.3-codex",
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.3-codex",
       result: {
         payloads: [],
         meta: {
@@ -62,6 +62,48 @@ describe("updateSessionStoreAfterAgentRun", () => {
     const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
     expect(persisted?.acp).toBeDefined();
     expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+  });
+
+  it("persists selected runtime model even when a fallback model handled the turn", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:codex:fallback:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      selectedProvider: "anthropic",
+      selectedModel: "claude-opus-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.modelProvider).toBe("anthropic");
+    expect(persisted?.model).toBe("claude-opus-4-6");
+    // Context sizing still follows the model that actually served the turn.
+    expect(persisted?.contextTokens).toBeGreaterThan(0);
   });
 
   it("persists latest systemPromptReport for downstream warning dedupe", async () => {
@@ -101,8 +143,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       sessionKey,
       storePath,
       sessionStore,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.3-codex",
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.3-codex",
       result: {
         payloads: [],
         meta: {

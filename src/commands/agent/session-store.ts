@@ -22,8 +22,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   sessionKey: string;
   storePath: string;
   sessionStore: Record<string, SessionEntry>;
-  defaultProvider: string;
-  defaultModel: string;
+  selectedProvider: string;
+  selectedModel: string;
   fallbackProvider?: string;
   fallbackModel?: string;
   result: RunResult;
@@ -34,8 +34,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     sessionKey,
     storePath,
     sessionStore,
-    defaultProvider,
-    defaultModel,
+    selectedProvider,
+    selectedModel,
     fallbackProvider,
     fallbackModel,
     result,
@@ -44,8 +44,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
-  const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-  const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? selectedModel;
+  const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? selectedProvider;
   const contextTokens =
     resolveContextTokensForModel({
       cfg,
@@ -66,8 +66,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     contextTokens,
   };
   setSessionRuntimeModel(next, {
-    provider: providerUsed,
-    model: modelUsed,
+    provider: selectedProvider,
+    model: selectedModel,
   });
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
