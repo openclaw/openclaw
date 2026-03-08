@@ -440,17 +440,14 @@ export function isSecureWebSocketUrl(
     return true;
   }
   // Optional break-glass for trusted private-network overlays.
+  // Only allow private/loopback IP literals — hostnames are rejected because
+  // DNS resolution is not available in this synchronous validator and
+  // allowing arbitrary hostnames would effectively disable TLS enforcement
+  // for any non-IP target (see #37177).
   if (opts?.allowPrivateWs) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
     }
-    // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
-    // but resolution is not available in this synchronous validator.
-    const hostForIpCheck =
-      parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
-        ? parsed.hostname.slice(1, -1)
-        : parsed.hostname;
-    return net.isIP(hostForIpCheck) === 0;
   }
   return false;
 }
