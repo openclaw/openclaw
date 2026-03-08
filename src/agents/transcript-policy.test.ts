@@ -78,22 +78,22 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeMode).toBe("full");
   });
 
-  it("preserves thinking signatures for Anthropic provider (#32526)", () => {
+  it("drops thinking blocks for Anthropic provider to avoid API rejection (#39887)", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
       modelId: "claude-opus-4-5",
       modelApi: "anthropic-messages",
     });
-    expect(policy.preserveSignatures).toBe(true);
+    expect(policy.dropThinkingBlocks).toBe(true);
   });
 
-  it("preserves thinking signatures for Bedrock Anthropic (#32526)", () => {
+  it("drops thinking blocks for Bedrock Anthropic to avoid API rejection (#39887)", () => {
     const policy = resolveTranscriptPolicy({
       provider: "amazon-bedrock",
       modelId: "us.anthropic.claude-opus-4-6-v1",
       modelApi: "bedrock-converse-stream",
     });
-    expect(policy.preserveSignatures).toBe(true);
+    expect(policy.dropThinkingBlocks).toBe(true);
   });
 
   it("does not preserve signatures for Google provider (#32526)", () => {
