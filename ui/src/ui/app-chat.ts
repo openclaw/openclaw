@@ -24,7 +24,9 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+// Show sessions active in the last 24 hours (1440 minutes) to prevent recently
+// used sessions from disappearing from the dropdown after switching sessions.
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 1440;
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
