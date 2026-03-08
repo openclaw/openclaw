@@ -39,6 +39,16 @@ const BATCH_FAILURE_LIMIT = 2;
 
 const log = createSubsystemLogger("memory");
 
+function isAuthScopeError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("missing_scope") ||
+    lower.includes("missing scope") ||
+    (lower.includes("insufficient permission") && lower.includes("model")) ||
+    (lower.includes("insufficient permissions") && lower.includes("api"))
+  );
+}
+
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
@@ -305,7 +315,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         ? await this.searchKeyword(cleaned, candidates).catch(() => [])
         : [];
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    let queryVec: number[] = [];
+    try {
+      queryVec = await this.embedQueryWithTimeout(cleaned);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isAuthScopeError(message) && this.fts.enabled && this.fts.available) {
+        log.warn(
+          `memory search: embedding provider auth scope error; degrading to FTS-only for this query: ${message}`,
+        );
+        return keywordResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      }
+      throw err;
+    }
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates).catch(() => [])

@@ -101,4 +101,20 @@ describe("memory search async sync", () => {
     await closePromise;
     manager = null;
   });
+
+  it("degrades to FTS results when embedding query fails with missing_scope", async () => {
+    const cfg = buildConfig();
+    manager = await createMemoryManagerOrThrow(cfg);
+
+    // First search populates the index/FTS.
+    await manager.search("hello");
+
+    embedQuery.mockImplementationOnce(async () => {
+      throw new Error("401 missing_scope: model.request");
+    });
+
+    const results = await manager.search("hello");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-07.md");
+  });
 });
