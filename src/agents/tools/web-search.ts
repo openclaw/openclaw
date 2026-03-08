@@ -1682,11 +1682,27 @@ export function createWebSearchTool(options?: {
       }
       const resolvedSearchLang = normalizedBraveLanguageParams.search_lang;
       const resolvedUiLang = normalizedBraveLanguageParams.ui_lang;
+      if (resolvedUiLang && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_ui_lang",
+          message:
+            "ui_lang is not supported by Brave llm-context mode. Remove ui_lang or use Brave web mode for locale-based UI hints.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const rawFreshness = readStringParam(params, "freshness");
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_freshness",
           message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      if (rawFreshness && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message:
+            "freshness filtering is not supported by Brave llm-context mode. Remove freshness or use Brave web mode.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1712,6 +1728,14 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "unsupported_date_filter",
           message: `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave and Perplexity support date filtering.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      if ((rawDateAfter || rawDateBefore) && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_date_filter",
+          message:
+            "date_after/date_before filtering is not supported by Brave llm-context mode. Use Brave web mode for date filters.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }

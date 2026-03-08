@@ -31,6 +31,23 @@ function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string }) {
   });
 }
 
+function createBraveSearchTool(braveConfig?: { mode?: "web" | "llm-context" }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            apiKey: "brave-config-test", // pragma: allowlist secret
+            ...(braveConfig ? { brave: braveConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
 function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; model?: string }) {
   return createWebSearchTool({
     config: {
@@ -162,7 +179,7 @@ describe("web_search country and language parameters", () => {
     }>,
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     expect(tool).not.toBeNull();
     await tool?.execute?.("call-1", { query: "test", ...params });
     expect(mockFetch).toHaveBeenCalled();
@@ -180,7 +197,7 @@ describe("web_search country and language parameters", () => {
 
   it("should pass language parameter to Brave API as search_lang", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     await tool?.execute?.("call-1", { query: "test", language: "de" });
 
     const url = new URL(mockFetch.mock.calls[0][0] as string);
@@ -204,7 +221,7 @@ describe("web_search country and language parameters", () => {
 
   it("rejects unsupported Brave search_lang values before upstream request", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     const result = await tool?.execute?.("call-1", { query: "test", search_lang: "xx" });
 
     expect(mockFetch).not.toHaveBeenCalled();
@@ -511,8 +528,27 @@ describe("web_search external content wrapping", () => {
     return mock;
   }
 
+  function installBraveLlmContextFetch(
+    result: Record<string, unknown>,
+    mock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            grounding: {
+              generic: [result],
+            },
+            sources: [{ url: "https://example.com/ctx", hostname: "example.com" }],
+          }),
+      } as Response),
+    ),
+  ) {
+    global.fetch = withFetchPreconnect(mock);
+    return mock;
+  }
+
   async function executeBraveSearch(query: string) {
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createBraveSearchTool();
     return tool?.execute?.("call-1", { query });
   }
 
@@ -543,6 +579,154 @@ describe("web_search external content wrapping", () => {
       source: "web_search",
       wrapped: true,
     });
+  });
+
+  it("uses Brave llm-context endpoint when mode is configured", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "Context title",
+      url: "https://example.com/ctx",
+      snippets: [{ text: "Context chunk one" }, { text: "Context chunk two" }],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "llm-context test",
+      country: "DE",
+      search_lang: "de",
+    });
+
+    const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("q")).toBe("llm-context test");
+    expect(requestUrl.searchParams.get("country")).toBe("DE");
+    expect(requestUrl.searchParams.get("search_lang")).toBe("de");
+
+    const details = result?.details as {
+      mode?: string;
+      results?: Array<{
+        title?: string;
+        url?: string;
+        snippets?: string[];
+        siteName?: string;
+      }>;
+      sources?: Array<{ hostname?: string }>;
+    };
+    expect(details.mode).toBe("llm-context");
+    expect(details.results?.[0]?.url).toBe("https://example.com/ctx");
+    expect(details.results?.[0]?.title).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(details.results?.[0]?.snippets?.[0]).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(details.results?.[0]?.snippets?.[0]).toContain("Context chunk one");
+    expect(details.results?.[0]?.siteName).toBe("example.com");
+    expect(details.sources?.[0]?.hostname).toBe("example.com");
+  });
+
+  it("rejects freshness in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "test", freshness: "week" });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_freshness" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects date_after/date_before in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      date_after: "2025-01-01",
+      date_before: "2025-01-31",
+    });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_date_filter" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects ui_lang in Brave llm-context mode", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "unused",
+      url: "https://example.com",
+      snippets: ["unused"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      ui_lang: "de-DE",
+    });
+
+    expect(result?.details).toMatchObject({ error: "unsupported_ui_lang" });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {

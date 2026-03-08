@@ -111,6 +111,29 @@ Brave provides paid plans; check the Brave API portal for the current limits and
 }
 ```
 
+**Brave LLM Context mode:**
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "brave",
+        apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
+        brave: {
+          mode: "llm-context",
+        },
+      },
+    },
+  },
+}
+```
+
+`llm-context` returns extracted page chunks for grounding instead of standard Brave snippets.
+In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`,
+`freshness`, `date_after`, and `date_before` are rejected.
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -246,6 +269,9 @@ await web_search({
   max_tokens_per_page: 4096,
 });
 ```
+
+When Brave `llm-context` mode is enabled, `ui_lang`, `freshness`, `date_after`, and
+`date_before` are not supported. Use Brave `web` mode for those filters.
 
 ## web_fetch
 
