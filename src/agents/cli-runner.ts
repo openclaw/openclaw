@@ -23,6 +23,7 @@ import {
   buildCliSupervisorScopeKey,
   buildCliArgs,
   buildSystemPrompt,
+  detectSandboxDeniedInText,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
@@ -385,6 +386,17 @@ export async function runCliAgent(params: {
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
 
         if (outputMode === "text") {
+          if (detectSandboxDeniedInText(stdout)) {
+            throw new FailoverError(
+              "Codex sandbox denied the requested operation (exit 0 with sandbox policy violation in text output)",
+              {
+                reason: "sandbox_denied",
+                provider: params.provider,
+                model: modelId,
+                status: resolveFailoverStatus("sandbox_denied"),
+              },
+            );
+          }
           return { text: stdout, sessionId: undefined };
         }
         if (outputMode === "jsonl") {

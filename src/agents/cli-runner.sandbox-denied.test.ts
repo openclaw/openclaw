@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { detectSandboxDenied, parseCliJsonl } from "./cli-runner/helpers.js";
+import {
+  detectSandboxDenied,
+  detectSandboxDeniedInText,
+  parseCliJsonl,
+} from "./cli-runner/helpers.js";
 
 const CODEX_BACKEND = {
   command: "codex",
@@ -89,6 +93,45 @@ describe("detectSandboxDenied", () => {
     ];
     expect(detectSandboxDenied(records)).toBe(false);
   });
+
+  it("does not flag long tool output that coincidentally mentions sandbox denial", () => {
+    const longLog = `${"x".repeat(600)} sandbox policy: write denied for /tmp/file ${"y".repeat(200)}`;
+    const records = [
+      {
+        item: {
+          type: "tool_call_output",
+          text: longLog,
+        },
+      },
+    ];
+    expect(detectSandboxDenied(records)).toBe(false);
+  });
+
+  it("flags long tool output with error status even when text is long", () => {
+    const longLog = `${"x".repeat(600)} sandbox policy: write denied for /tmp/file`;
+    const records = [
+      {
+        item: {
+          type: "tool_call_output",
+          text: longLog,
+          status: "error",
+        },
+      },
+    ];
+    expect(detectSandboxDenied(records)).toBe(true);
+  });
+
+  it("flags short tool output with sandbox denial", () => {
+    const records = [
+      {
+        item: {
+          type: "tool_call_output",
+          text: "sandbox policy: write to /workspace/file denied",
+        },
+      },
+    ];
+    expect(detectSandboxDenied(records)).toBe(true);
+  });
 });
 
 describe("parseCliJsonl sandbox detection", () => {
@@ -145,5 +188,25 @@ describe("parseCliJsonl sandbox detection", () => {
     const result = parseCliJsonl(jsonl, CODEX_BACKEND);
     expect(result).not.toBeNull();
     expect(result!.sandboxDenied).toBeUndefined();
+  });
+});
+
+describe("detectSandboxDeniedInText", () => {
+  it("detects sandbox denial in raw text output", () => {
+    expect(
+      detectSandboxDeniedInText("sandbox policy: write denied for /workspace/TEST_RO.md"),
+    ).toBe(true);
+  });
+
+  it("detects sandbox denied phrasing", () => {
+    expect(detectSandboxDeniedInText("The operation was sandbox denied")).toBe(true);
+  });
+
+  it("does not flag normal text output", () => {
+    expect(detectSandboxDeniedInText("I've created the file successfully.")).toBe(false);
+  });
+
+  it("does not flag empty text", () => {
+    expect(detectSandboxDeniedInText("")).toBe(false);
   });
 });
