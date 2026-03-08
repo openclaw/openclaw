@@ -9,6 +9,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   buildStreamErrorAssistantMessage,
@@ -18,6 +19,21 @@ import {
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  const providerBaseUrl = params.providerBaseUrl?.trim();
+  if (providerBaseUrl) {
+    return providerBaseUrl;
+  }
+  const modelBaseUrl = params.modelBaseUrl?.trim();
+  if (modelBaseUrl) {
+    return modelBaseUrl;
+  }
+  return OLLAMA_NATIVE_BASE_URL;
+}
 
 // ── Ollama /api/chat request types ──────────────────────────────────────────
 
@@ -406,6 +422,15 @@ function resolveOllamaChatUrl(baseUrl: string): string {
   return `${apiBase}/api/chat`;
 }
 
+function resolveOllamaModelHeaders(model: {
+  headers?: unknown;
+}): Record<string, string> | undefined {
+  if (!model.headers || typeof model.headers !== "object" || Array.isArray(model.headers)) {
+    return undefined;
+  }
+  return model.headers as Record<string, string>;
+}
+
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
@@ -447,7 +472,10 @@ export function createOllamaStreamFn(
           ...defaultHeaders,
           ...options?.headers,
         };
-        if (options?.apiKey) {
+        if (
+          options?.apiKey &&
+          (!headers.Authorization || !isNonSecretApiKeyMarker(options.apiKey))
+        ) {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
@@ -538,4 +566,18 @@ export function createOllamaStreamFn(
     queueMicrotask(() => void run());
     return stream;
   };
+}
+
+export function createConfiguredOllamaStreamFn(params: {
+  model: { baseUrl?: string; headers?: unknown };
+  providerBaseUrl?: string;
+}): StreamFn {
+  const modelBaseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
+  return createOllamaStreamFn(
+    resolveOllamaBaseUrlForRun({
+      modelBaseUrl,
+      providerBaseUrl: params.providerBaseUrl,
+    }),
+    resolveOllamaModelHeaders(params.model),
+  );
 }

@@ -1,5 +1,6 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -38,6 +39,10 @@ vi.mock("../agents/model-auth.js", () => ({
     mode: "api-key",
   })),
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
+}));
+
+vi.mock("../agents/custom-api-registry.js", () => ({
+  ensureCustomApiRegistered: vi.fn(),
 }));
 
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
@@ -370,6 +375,35 @@ describe("tts", () => {
       });
 
       expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+    });
+
+    it("registers the Ollama api before direct summarization", async () => {
+      vi.mocked(resolveModel).mockReturnValue({
+        model: {
+          provider: "ollama",
+          id: "qwen3:8b",
+          name: "qwen3:8b",
+          api: "ollama",
+          baseUrl: "http://127.0.0.1:11434",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 8192,
+        },
+        authStorage: { profiles: {} } as never,
+        modelRegistry: { find: vi.fn() } as never,
+      } as never);
+
+      await summarizeText({
+        text: "Long text to summarize",
+        targetLength: 500,
+        cfg: baseCfg,
+        config: baseConfig,
+        timeoutMs: 30_000,
+      });
+
+      expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", expect.any(Function));
     });
 
     it("validates targetLength bounds", async () => {
