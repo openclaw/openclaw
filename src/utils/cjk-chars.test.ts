@@ -74,6 +74,20 @@ describe("estimateStringChars", () => {
     expect(estimateStringChars("你𠀀好")).toBe(12);
   });
 
+  it("does not collapse emoji surrogate pairs (only CJK surrogates)", () => {
+    // "😀" is a surrogate pair (U+1F600) but NOT matched by NON_LATIN_RE.
+    // text.length = 2, nonLatinCount = 0 → fast path → returns 2.
+    expect(estimateStringChars("😀")).toBe(2);
+  });
+
+  it("handles mixed CJK + emoji consistently", () => {
+    // "你😀" = 1 CJK (BMP) + 1 emoji (surrogate pair, not CJK)
+    // text.length = 3 (1 + 2), nonLatinCount = 1 (only 你), no CJK surrogates
+    // codePointLength = 3 (no CJK surrogate adjustment)
+    // Result = 3 + 1 * 3 = 6
+    expect(estimateStringChars("你😀")).toBe(6);
+  });
+
   it("yields ~1 token per CJK char when divided by CHARS_PER_TOKEN_ESTIMATE", () => {
     // 10 CJK chars should estimate as ~10 tokens
     const cjk = "这是一个测试用的句子呢";

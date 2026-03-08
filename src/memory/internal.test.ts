@@ -251,6 +251,16 @@ describe("chunkMarkdown", () => {
       expect(cjkCount).toBeLessThanOrEqual(200 * 2);
     }
   });
+
+  it("does not over-split long Latin lines (backward compat)", () => {
+    // A single Latin line of 2000 chars. With tokens=200, maxChars=800.
+    // Should be split at ~800-char boundaries (2000/800 ≈ 3 segments), NOT
+    // at 200-char boundaries (which would give 10 tiny segments).
+    const longLatinLine = "a".repeat(2000);
+    const chunks = chunkMarkdown(longLatinLine, { tokens: 200, overlap: 0 });
+    // 2000 ASCII chars / 800 maxChars → ~3 chunks. Should NOT be ~10.
+    expect(chunks.length).toBeLessThanOrEqual(5);
+  });
 });
 
 describe("remapChunkLines", () => {

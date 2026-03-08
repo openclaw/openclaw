@@ -45,25 +45,29 @@ export function estimateStringChars(text: string): number {
 }
 
 /**
- * Return the number of Unicode code points in the string.
- * Falls back to `text.length` when there are no surrogate pairs (the common case).
+ * Matches surrogate pairs whose code point falls in the CJK Extension B+
+ * range (U+20000–U+2FA1F).  Only these surrogates need adjustment because
+ * they are matched by {@link NON_LATIN_RE} and already counted in
+ * `nonLatinCount`.  Other surrogates (emoji, symbols) are not matched by
+ * that regex, so collapsing them would create an inconsistency.
+ *
+ * High-surrogate range for U+20000–U+2FA1F is D840–D87E.
+ */
+const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
+
+/**
+ * Return the code-point-aware length of the string, adjusting only for
+ * CJK Extension B+ surrogate pairs.  For text without such characters
+ * (the vast majority of inputs) this returns `text.length` unchanged.
  */
 function countCodePoints(text: string, nonLatinCount: number): number {
-  // Fast path: if no non-Latin chars matched, there are no surrogates.
   if (nonLatinCount === 0) {
     return text.length;
   }
-  // Count surrogate pairs (high surrogate 0xD800–0xDBFF followed by low surrogate)
-  // and subtract from UTF-16 length to get code-point count.
-  let surrogates = 0;
-  for (let i = 0; i < text.length - 1; i += 1) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      surrogates += 1;
-      i += 1; // skip the low surrogate
-    }
-  }
-  return text.length - surrogates;
+  // Count only CJK-range surrogate pairs — each occupies 2 UTF-16 units
+  // but represents 1 code point (and 1 regex match in NON_LATIN_RE).
+  const cjkSurrogates = (text.match(CJK_SURROGATE_HIGH_RE) ?? []).length;
+  return text.length - cjkSurrogates;
 }
 
 /**
