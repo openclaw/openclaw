@@ -7,7 +7,7 @@ import {
   removeBlockedDomain,
   setBlockedDomains,
 } from "./domain-filter.js";
-import { SsrFBlockedError } from "./ssrf.js";
+import { SsrFBlockedError } from "./ssrf-error.js";
 
 afterEach(() => {
   // Reset blocklist to default after each test for isolation.
