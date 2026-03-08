@@ -191,6 +191,62 @@ describe("announce loop guard (#18264)", () => {
     expect(announceFn).toHaveBeenCalledTimes(1);
   });
 
+  test("sets wakeParentOnCompletion only for internal orchestration cleanup resumes", async () => {
+    announceFn.mockReset().mockResolvedValue(true);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          "run-internal-wake",
+          {
+            runId: "run-internal-wake",
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            task: "internal orchestrated follow-up",
+            cleanup: "keep",
+            createdAt: now - 20_000,
+            startedAt: now - 19_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+          },
+        ],
+        [
+          "run-direct-delivery",
+          {
+            runId: "run-direct-delivery",
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            task: "direct completion delivery",
+            cleanup: "keep",
+            createdAt: now - 20_000,
+            startedAt: now - 19_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+            expectsCompletionMessage: true,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(announceFn).toHaveBeenCalledTimes(2);
+    const [internalCall, directCall] = announceFn.mock.calls as unknown as Array<
+      [{ wakeParentOnCompletion?: boolean; expectsCompletionMessage?: boolean; task?: string }]
+    >;
+    expect(internalCall?.[0]?.task).toBe("internal orchestrated follow-up");
+    expect(internalCall?.[0]?.wakeParentOnCompletion).toBe(true);
+    expect(directCall?.[0]?.task).toBe("direct completion delivery");
+    expect(directCall?.[0]?.expectsCompletionMessage).toBe(true);
+    expect(directCall?.[0]?.wakeParentOnCompletion).toBe(false);
+  });
+
   test("announce rejection resets cleanupHandled so retries can resume", async () => {
     announceFn.mockReset();
     announceFn.mockRejectedValueOnce(new Error("announce failed"));
