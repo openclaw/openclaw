@@ -377,6 +377,10 @@ async function restoreHeartbeatUpdatedAt(params: {
  * Prune heartbeat transcript entries by truncating the file back to a previous size.
  * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
  * preventing context pollution from zero-information exchanges.
+ *
+ * If the heartbeat run made tool calls (indicated by toolResult entries in the new
+ * content), the transcript is preserved — the run contained meaningful work that
+ * should remain in session history even if the final reply was empty/HEARTBEAT_OK.
  */
 async function pruneHeartbeatTranscript(params: {
   transcriptPath?: string;
@@ -388,10 +392,44 @@ async function pruneHeartbeatTranscript(params: {
   }
   try {
     const stat = await fs.stat(transcriptPath);
-    // Only truncate if the file has grown during the heartbeat run
-    if (stat.size > preHeartbeatSize) {
-      await fs.truncate(transcriptPath, preHeartbeatSize);
+    if (stat.size <= preHeartbeatSize) {
+      return;
     }
+
+    const handle = await fs.open(transcriptPath, "r");
+    let hasToolCalls = false;
+    try {
+      const newSize = stat.size - preHeartbeatSize;
+      const buffer = Buffer.alloc(newSize);
+      await handle.read(buffer, 0, newSize, preHeartbeatSize);
+      const newContent = buffer.toString("utf-8");
+      if (newContent.includes('"toolResult"')) {
+        const lines = newContent.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+          try {
+            const entry = JSON.parse(trimmed);
+            if (entry?.message?.role === "toolResult") {
+              hasToolCalls = true;
+              break;
+            }
+          } catch {
+            // Not valid JSON — skip
+          }
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+
+    if (hasToolCalls) {
+      return;
+    }
+
+    await fs.truncate(transcriptPath, preHeartbeatSize);
   } catch {
     // File may not exist or may have been removed - ignore errors
   }
