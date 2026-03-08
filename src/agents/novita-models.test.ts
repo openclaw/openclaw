@@ -70,7 +70,7 @@ describe("novita model discovery", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
 
-      const models = await discoverNovitaModels({ apiKey: "test-key", useCache: false });
+      const models = await discoverNovitaModels({ apiKey: "test-key", useCache: false }); // pragma: allowlist secret
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       const known = models.find((model) => model.id === "moonshotai/kimi-k2.5");
