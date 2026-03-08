@@ -329,6 +329,7 @@ export const ToolsWebFetchSchema = z
         baseUrl: z.string().optional(),
         onlyMainContent: z.boolean().optional(),
         maxAgeMs: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
