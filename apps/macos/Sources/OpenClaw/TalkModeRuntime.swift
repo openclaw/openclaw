@@ -67,7 +67,7 @@ actor TalkModeRuntime {
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
 
-    private var silenceWindow: TimeInterval = TimeInterval(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
+    private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
 
@@ -808,95 +808,14 @@ extension TalkModeRuntime {
         let apiKey: String?
     }
 
-    struct TalkProviderConfigSelection {
-        let provider: String
-        let config: [String: AnyCodable]
-        let normalizedPayload: Bool
-    }
-
-    private static func normalizedTalkProviderID(_ raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func normalizedTalkProviderConfig(_ value: AnyCodable) -> [String: AnyCodable]? {
-        if let typed = value.value as? [String: AnyCodable] {
-            return typed
-        }
-        if let foundation = value.value as? [String: Any] {
-            return foundation.mapValues(AnyCodable.init)
-        }
-        if let nsDict = value.value as? NSDictionary {
-            var converted: [String: AnyCodable] = [:]
-            for case let (key as String, raw) in nsDict {
-                converted[key] = AnyCodable(raw)
-            }
-            return converted
-        }
-        return nil
-    }
-
-    private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {
-        guard let raw else { return [:] }
-        var providerMap: [String: AnyCodable] = [:]
-        if let typed = raw.value as? [String: AnyCodable] {
-            providerMap = typed
-        } else if let foundation = raw.value as? [String: Any] {
-            providerMap = foundation.mapValues(AnyCodable.init)
-        } else if let nsDict = raw.value as? NSDictionary {
-            for case let (key as String, value) in nsDict {
-                providerMap[key] = AnyCodable(value)
-            }
-        } else {
-            return [:]
-        }
-
-        return providerMap.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
-            guard
-                let providerID = Self.normalizedTalkProviderID(entry.key),
-                let providerConfig = Self.normalizedTalkProviderConfig(entry.value)
-            else { return }
-            acc[providerID] = providerConfig
-        }
-    }
-
     static func selectTalkProviderConfig(
         _ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection?
     {
-        guard let talk else { return nil }
-        let rawProvider = talk["provider"]?.stringValue
-        let rawProviders = talk["providers"]
-        let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
-        if hasNormalizedPayload {
-            let normalizedProviders = Self.normalizedTalkProviders(rawProviders)
-            let providerID =
-                Self.normalizedTalkProviderID(rawProvider) ??
-                normalizedProviders.keys.min() ??
-                Self.defaultTalkProvider
-            return TalkProviderConfigSelection(
-                provider: providerID,
-                config: normalizedProviders[providerID] ?? [:],
-                normalizedPayload: true)
-        }
-        return TalkProviderConfigSelection(
-            provider: Self.defaultTalkProvider,
-            config: talk,
-            normalizedPayload: false)
+        TalkConfigParsing.selectProviderConfig(talk, defaultProvider: self.defaultTalkProvider)
     }
 
     static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
-        if let timeout = talk?["silenceTimeoutMs"]?.intValue, timeout > 0 {
-            return timeout
-        }
-        if
-            let timeout = talk?["silenceTimeoutMs"]?.doubleValue,
-            timeout > 0,
-            timeout.rounded(.towardZero) == timeout,
-            timeout <= Double(Int.max)
-        {
-            return Int(timeout)
-        }
-        return Self.defaultSilenceTimeoutMs
+        TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: self.defaultSilenceTimeoutMs)
     }
 
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
