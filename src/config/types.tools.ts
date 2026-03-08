@@ -436,8 +436,6 @@ export type MemorySearchConfig = {
     maxResults?: number;
     /** Regex patterns for messages to skip (e.g. heartbeat markers). */
     skipPatterns?: string[];
-    /** Where to inject results: prepend to user message body ("context") or append to system prompt ("system"). Default: "context". */
-    injection?: "system" | "context";
   };
 };
 

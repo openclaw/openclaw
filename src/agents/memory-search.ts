@@ -82,7 +82,6 @@ export type ResolvedMemorySearchConfig = {
     minMessageLength: number;
     maxResults: number;
     skipPatterns: string[];
-    injection: "system" | "context";
   };
 };
 
@@ -298,10 +297,6 @@ function mergeConfig(
       ...(defaults?.autoPrefetch?.skipPatterns ?? []),
       ...(overrides?.autoPrefetch?.skipPatterns ?? []),
     ],
-    injection:
-      overrides?.autoPrefetch?.injection ??
-      defaults?.autoPrefetch?.injection ??
-      ("context" as "system" | "context"),
   };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
@@ -375,7 +370,6 @@ function mergeConfig(
       minMessageLength: Math.max(0, Math.floor(autoPrefetch.minMessageLength)),
       maxResults: Math.max(1, Math.floor(autoPrefetch.maxResults)),
       skipPatterns: autoPrefetch.skipPatterns.filter(Boolean),
-      injection: autoPrefetch.injection,
     },
   };
 }

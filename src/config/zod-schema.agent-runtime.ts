@@ -681,7 +681,6 @@ export const MemorySearchSchema = z
         minMessageLength: z.number().int().nonnegative().optional(),
         maxResults: z.number().int().positive().optional(),
         skipPatterns: z.array(z.string()).optional(),
-        injection: z.union([z.literal("system"), z.literal("context")]).optional(),
       })
       .strict()
       .optional(),

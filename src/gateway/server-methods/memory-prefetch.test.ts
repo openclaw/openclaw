@@ -39,7 +39,6 @@ function makeResolvedCfg(overrides: Partial<ReturnType<typeof resolveMemorySearc
       minMessageLength: 20,
       maxResults: 3,
       skipPatterns: [],
-      injection: "context" as const,
     },
     ...overrides,
   } as ReturnType<typeof resolveMemorySearchConfig>;
@@ -70,7 +69,6 @@ describe("runMemoryPrefetch", () => {
           minMessageLength: 20,
           maxResults: 3,
           skipPatterns: [],
-          injection: "context",
         },
       }),
     );
@@ -100,7 +98,6 @@ describe("runMemoryPrefetch", () => {
           minMessageLength: 5,
           maxResults: 3,
           skipPatterns: ["HEARTBEAT_OK", "heartbeat"],
-          injection: "context",
         },
       }),
     );
@@ -150,35 +147,6 @@ describe("runMemoryPrefetch", () => {
     expect(result.context).toContain("We use PostgreSQL.");
     expect(result.context).toContain("[memory/arch.md#L1]");
     expect(result.context).toContain("Single DB node.");
-    expect(result.injection).toBe("context");
-  });
-
-  it("uses system injection mode when configured", async () => {
-    mockResolveConfig.mockReturnValue(
-      makeResolvedCfg({
-        autoPrefetch: {
-          enabled: true,
-          minMessageLength: 20,
-          maxResults: 3,
-          skipPatterns: [],
-          injection: "system",
-        },
-      }),
-    );
-    const manager = makeManager([
-      {
-        path: "memory/facts.md",
-        startLine: 2,
-        endLine: 2,
-        score: 0.9,
-        snippet: "Key fact.",
-        source: "memory",
-      },
-    ]);
-    mockGetManager.mockResolvedValue({ manager });
-    const result = await runMemoryPrefetch(baseParams);
-    expect(result.context).not.toBeNull();
-    expect(result.injection).toBe("system");
   });
 
   it("passes maxResults from config to manager.search", async () => {
@@ -189,7 +157,6 @@ describe("runMemoryPrefetch", () => {
           minMessageLength: 10,
           maxResults: 2,
           skipPatterns: [],
-          injection: "context",
         },
       }),
     );
@@ -221,7 +188,6 @@ describe("runMemoryPrefetch", () => {
           minMessageLength: 5,
           maxResults: 3,
           skipPatterns: ["[invalid-regex"],
-          injection: "context",
         },
       }),
     );

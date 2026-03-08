@@ -7,8 +7,6 @@ import type { MemorySearchResult } from "../../memory/types.js";
 export type MemoryPrefetchResult = {
   /** Formatted context block to inject, or null if skipped/unavailable. */
   context: string | null;
-  /** Where to inject: into user message body or system prompt. */
-  injection: "system" | "context";
 };
 
 /**
@@ -27,7 +25,7 @@ export async function runMemoryPrefetch(params: {
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const memCfg = resolveMemorySearchConfig(cfg, agentId);
 
-  const noResult: MemoryPrefetchResult = { context: null, injection: "context" };
+  const noResult: MemoryPrefetchResult = { context: null };
 
   if (!memCfg || !memCfg.autoPrefetch.enabled) {
     return noResult;
@@ -68,7 +66,7 @@ export async function runMemoryPrefetch(params: {
     }
 
     const context = formatMemoryContext(results);
-    return { context, injection: ap.injection };
+    return { context };
   } catch {
     // Graceful degradation: prefetch failure must not break message dispatch
     return noResult;
