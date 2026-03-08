@@ -467,6 +467,14 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
   // Reply messages: Feishu may omit the bot from the mentions array while
   // keeping the @_user_N / @_bot_N placeholder in the text content.  Detect
   // orphaned mention keys as a signal that a mention was dropped.
+  //
+  // Trade-off: this heuristic cannot tell *which* user the orphaned key
+  // belongs to.  In practice the false-positive risk is negligible because:
+  //   1. If the bot IS in the mentions array, we already returned true above.
+  //   2. We only reach here when at least one @_user_N key has no matching
+  //      entry — Feishu almost exclusively drops bot mentions in replies.
+  //   3. A false positive (bot responds once extra) is far less harmful than
+  //      a false negative (bot silently ignores a real @-mention).
   if (event.message.parent_id && event.message.message_type === "text") {
     try {
       const parsed = JSON.parse(rawContent);
