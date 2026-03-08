@@ -78,6 +78,37 @@ describe("CronService.getJob", () => {
     }
   });
 
+  it("rejects cron ids that differ only by case (session keys are lowercased)", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+
+    try {
+      await cron.add({
+        id: "MyJob",
+        name: "first",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+      await expect(
+        cron.add({
+          id: "myjob",
+          name: "second",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "pong" },
+        }),
+      ).rejects.toThrow('cron job with id "myjob" already exists');
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("preserves webhook delivery on create", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
