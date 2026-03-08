@@ -1,14 +1,6 @@
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk";
 import type { PluginRuntime } from "openclaw/plugin-sdk/googlechat";
 
-let runtime: PluginRuntime | null = null;
-
-export function setGoogleChatRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getGoogleChatRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Google Chat runtime not initialized");
-  }
-  return runtime;
-}
+const { setRuntime: setGoogleChatRuntime, getRuntime: getGoogleChatRuntime } =
+  createPluginRuntimeStore<PluginRuntime>("Google Chat runtime not initialized");
+export { getGoogleChatRuntime, setGoogleChatRuntime };

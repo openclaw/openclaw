@@ -1,20 +1,8 @@
-/**
- * Plugin runtime singleton.
- * Stores the PluginRuntime from api.runtime (set during register()).
- * Used by channel.ts to access dispatch functions.
- */
-
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk";
 import type { PluginRuntime } from "openclaw/plugin-sdk/synology-chat";
 
-let runtime: PluginRuntime | null = null;
-
-export function setSynologyRuntime(r: PluginRuntime): void {
-  runtime = r;
-}
-
-export function getSynologyRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Synology Chat runtime not initialized - plugin not registered");
-  }
-  return runtime;
-}
+const { setRuntime: setSynologyRuntime, getRuntime: getSynologyRuntime } =
+  createPluginRuntimeStore<PluginRuntime>(
+    "Synology Chat runtime not initialized - plugin not registered",
+  );
+export { getSynologyRuntime, setSynologyRuntime };
