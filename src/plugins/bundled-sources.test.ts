@@ -73,6 +73,70 @@ describe("bundled plugin sources", () => {
     });
   });
 
+  it("omits npmSpec for private bundled packages without explicit install.npmSpec", () => {
+    discoverOpenClawPluginsMock.mockReturnValue({
+      candidates: [
+        {
+          origin: "bundled",
+          rootDir: "/app/extensions/memory-lancedb",
+          packageName: "@openclaw/memory-lancedb",
+          packagePrivate: true,
+          packageManifest: {},
+        },
+        {
+          origin: "bundled",
+          rootDir: "/app/extensions/voice-call",
+          packageName: "@openclaw/voice-call",
+          packagePrivate: true,
+          packageManifest: { install: { npmSpec: "@openclaw/voice-call" } },
+        },
+        {
+          origin: "bundled",
+          rootDir: "/app/extensions/feishu",
+          packageName: "@openclaw/feishu",
+          packageManifest: { install: { npmSpec: "@openclaw/feishu" } },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    loadPluginManifestMock.mockImplementation((rootDir: string) => {
+      if (rootDir === "/app/extensions/memory-lancedb") {
+        return { ok: true, manifest: { id: "memory-lancedb" } };
+      }
+      if (rootDir === "/app/extensions/voice-call") {
+        return { ok: true, manifest: { id: "voice-call" } };
+      }
+      if (rootDir === "/app/extensions/feishu") {
+        return { ok: true, manifest: { id: "feishu" } };
+      }
+      return { ok: false, error: "not found", manifestPath: `${rootDir}/openclaw.plugin.json` };
+    });
+
+    const map = resolveBundledPluginSources({});
+
+    // Private package without explicit npmSpec should have no npmSpec
+    expect(map.get("memory-lancedb")).toEqual({
+      pluginId: "memory-lancedb",
+      localPath: "/app/extensions/memory-lancedb",
+      npmSpec: undefined,
+    });
+
+    // Private package WITH explicit install.npmSpec should keep its npmSpec
+    expect(map.get("voice-call")).toEqual({
+      pluginId: "voice-call",
+      localPath: "/app/extensions/voice-call",
+      npmSpec: "@openclaw/voice-call",
+    });
+
+    // Non-private package should use packageName as npmSpec fallback
+    expect(map.get("feishu")).toEqual({
+      pluginId: "feishu",
+      localPath: "/app/extensions/feishu",
+      npmSpec: "@openclaw/feishu",
+    });
+  });
+
   it("finds bundled source by npm spec", () => {
     discoverOpenClawPluginsMock.mockReturnValue({
       candidates: [

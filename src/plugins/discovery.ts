@@ -24,6 +24,7 @@ export type PluginCandidate = {
   packageName?: string;
   packageVersion?: string;
   packageDescription?: string;
+  packagePrivate?: boolean;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
 };
@@ -359,6 +360,7 @@ function addCandidate(params: {
     packageName: manifest?.name?.trim() || undefined,
     packageVersion: manifest?.version?.trim() || undefined,
     packageDescription: manifest?.description?.trim() || undefined,
+    packagePrivate: manifest?.private === true ? true : undefined,
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
   });
