@@ -75,8 +75,8 @@ for (const [path, raw] of Object.entries(rawDocs)) {
 
   docsPages[filename] = {
     slug: filename,
-    title: extractTitle(raw),
-    content: stripFrontmatter(raw),
+    title: extractTitle(raw as string),
+    content: stripFrontmatter(raw as string),
     category: slugToCategory.get(filename) ?? "overview",
   };
 }

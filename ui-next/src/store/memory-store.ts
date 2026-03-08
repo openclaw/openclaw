@@ -105,6 +105,7 @@ export type MemoryState = {
   activityLog: ActivityEntry[];
   activityLoading: boolean;
   activityFilter: ActivityFilter;
+  activityHasMore: boolean;
 
   // Active tab
   activeTab: string;
@@ -138,6 +139,7 @@ export type MemoryState = {
   setActivityLog: (log: ActivityEntry[]) => void;
   setActivityLoading: (loading: boolean) => void;
   setActivityFilter: (filter: ActivityFilter) => void;
+  setActivityHasMore: (hasMore: boolean) => void;
 
   setActiveTab: (tab: string) => void;
 
@@ -197,6 +199,7 @@ const initialState = {
   activityLog: [] as ActivityEntry[],
   activityLoading: false,
   activityFilter: "all" as ActivityFilter,
+  activityHasMore: true,
 
   activeTab: loadPersistedActiveTab(),
 };
@@ -250,6 +253,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   setActivityLog: (log) => set({ activityLog: log }),
   setActivityLoading: (loading) => set({ activityLoading: loading }),
   setActivityFilter: (filter) => set({ activityFilter: filter }),
+  setActivityHasMore: (hasMore) => set({ activityHasMore: hasMore }),
 
   // Tab
   setActiveTab: (tab) => {

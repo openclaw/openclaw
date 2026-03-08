@@ -1123,7 +1123,7 @@ function SearchTab() {
 // --- Activity Log Tab ---
 
 function ActivityLogTab() {
-  const { activityLog, activityLoading, activityFilter } = useMemoryStore();
+  const { activityLog, activityLoading, activityFilter, activityHasMore } = useMemoryStore();
   const { loadActivityLog } = useMemory();
   const [sessionLimit, setSessionLimit] = useState(5);
   const loadedRef = useRef(false);
@@ -1228,18 +1228,20 @@ function ActivityLogTab() {
           ))}
 
           {/* Load more */}
-          <div className="flex justify-center pt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleLoadMore}
-              disabled={activityLoading}
-              className="text-xs"
-            >
-              {activityLoading ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
-              Load more sessions
-            </Button>
-          </div>
+          {activityHasMore && (
+            <div className="flex justify-center pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleLoadMore}
+                disabled={activityLoading}
+                className="text-xs"
+              >
+                {activityLoading ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+                Load more sessions
+              </Button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">

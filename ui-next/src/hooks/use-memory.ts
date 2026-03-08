@@ -307,6 +307,9 @@ export function useMemory() {
         const merged = append ? [...store.activityLog, ...entries] : entries;
         merged.sort((a, b) => b.timestamp - a.timestamp);
         store.setActivityLog(merged);
+
+        // Determine if there are more sessions to scan beyond the current window
+        store.setActivityHasMore(sessionLimit < allSessions.length);
       } catch (err) {
         if (!isGatewayTeardownError(err)) {
           console.error("[memory] failed to load activity:", err);
