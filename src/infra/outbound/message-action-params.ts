@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
@@ -9,7 +10,9 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
+import { detectMime } from "../../media/mime.js";
 import { extensionForMime } from "../../media/mime.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
@@ -152,6 +155,17 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
+// These channels treat `send.media` as a remote URL (or plain text fallback) and
+// do not consume local filesystem paths in their send action implementations.
+const URL_ONLY_SEND_MEDIA_CHANNELS = new Set<ChannelId>([
+  "zalo",
+  "line",
+  "irc",
+  "nextcloud-talk",
+  "synology-chat",
+  "tlon",
+]);
+
 export type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
@@ -260,6 +274,114 @@ async function hydrateAttachmentPayload(params: {
       mediaHint: mediaSource,
       contentType: contentTypeParam ?? undefined,
     });
+  }
+}
+
+export async function hydrateBufferedSendParams(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  dryRun?: boolean;
+  mediaPolicy: AttachmentMediaPolicy;
+}): Promise<void> {
+  const existingMedia =
+    readStringParam(params.args, "media", { trim: false }) ??
+    readStringParam(params.args, "path", { trim: false }) ??
+    readStringParam(params.args, "filePath", { trim: false });
+  if (existingMedia) {
+    return;
+  }
+
+  const contentTypeParam =
+    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
+  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
+  const normalized = normalizeBase64Payload({
+    base64: rawBuffer,
+    contentType: contentTypeParam ?? undefined,
+  });
+  if (normalized.base64 !== rawBuffer && normalized.base64) {
+    params.args.buffer = normalized.base64;
+    if (normalized.contentType && !contentTypeParam) {
+      params.args.contentType = normalized.contentType;
+    }
+  }
+
+  const bufferedPayload = readStringParam(params.args, "buffer", { trim: false });
+  if (!bufferedPayload) {
+    return;
+  }
+
+  if (URL_ONLY_SEND_MEDIA_CHANNELS.has(params.channel)) {
+    return;
+  }
+
+  if (params.dryRun) {
+    // Preserve attachment-only dry-run behavior without touching disk.
+    params.args.__dryRunBufferedMediaReady = true;
+    return;
+  }
+
+  const maxBytes = resolveAttachmentMaxBytes({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+  });
+  const fileName =
+    readStringParam(params.args, "filename") ??
+    inferAttachmentFilename({
+      contentType:
+        readStringParam(params.args, "contentType") ??
+        readStringParam(params.args, "mimeType") ??
+        undefined,
+    });
+  const buffer = Buffer.from(bufferedPayload, "base64");
+  if (maxBytes != null && buffer.byteLength > maxBytes) {
+    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+  }
+
+  const requestedContentType =
+    readStringParam(params.args, "contentType") ??
+    readStringParam(params.args, "mimeType") ??
+    undefined;
+  const detectedContentType = await detectMime({
+    buffer,
+    headerMime: requestedContentType,
+  });
+
+  if (params.mediaPolicy.mode === "sandbox") {
+    const parsedName = path.parse(fileName ?? "attachment");
+    const normalizedBase =
+      (parsedName.name || "attachment")
+        .replace(/[^\p{L}\p{N}._-]+/gu, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_|_$/g, "")
+        .slice(0, 60) || "attachment";
+    const ext = parsedName.ext || extensionForMime(detectedContentType) || "";
+    const targetDir = path.join(params.mediaPolicy.sandboxRoot, "outbound");
+    const targetPath = path.join(targetDir, `${normalizedBase}${ext}`);
+    await fs.mkdir(targetDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(targetPath, buffer, { mode: 0o600 });
+    params.args.media = targetPath;
+  } else {
+    const saved = await saveMediaBuffer(
+      buffer,
+      requestedContentType,
+      "outbound",
+      maxBytes ?? buffer.byteLength,
+      fileName ?? undefined,
+    );
+    params.args.media = saved.path;
+    if (!readStringParam(params.args, "contentType") && saved.contentType) {
+      params.args.contentType = saved.contentType;
+    }
+  }
+
+  if (!readStringParam(params.args, "filename")) {
+    params.args.filename = fileName;
+  }
+  if (!readStringParam(params.args, "contentType") && detectedContentType) {
+    params.args.contentType = detectedContentType;
   }
 }
 

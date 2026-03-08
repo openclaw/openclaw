@@ -28,6 +28,7 @@ import type { OutboundSendDeps } from "./deliver.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
+  hydrateBufferedSendParams,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   parseButtonsParam,
@@ -473,7 +474,15 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
-  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard && !hasComponents) {
+  const hasDryRunBufferedMedia = dryRun && params.__dryRunBufferedMediaReady === true;
+  if (
+    !message.trim() &&
+    !mediaUrl &&
+    mergedMediaUrls.length === 0 &&
+    !hasCard &&
+    !hasComponents &&
+    !hasDryRunBufferedMedia
+  ) {
     throw new Error("send requires text or media");
   }
   params.message = message;
@@ -750,6 +759,17 @@ export async function runMessageAction(
     dryRun,
     mediaPolicy,
   });
+
+  if (action === "send") {
+    await hydrateBufferedSendParams({
+      cfg,
+      channel,
+      accountId,
+      args: params,
+      dryRun,
+      mediaPolicy,
+    });
+  }
 
   const resolvedTarget = await resolveActionTarget({
     cfg,
