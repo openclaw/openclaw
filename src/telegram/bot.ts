@@ -271,6 +271,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
+      // Forward whether a groupAllowFrom list exists so resolveChannelGroupPolicy can
+      // activate the senderFilterBypass path: groupPolicy="allowlist" + groupAllowFrom
+      // but no explicit per-group `groups` config should let every chat through — the
+      // sender-level allowlist check in evaluateTelegramGroupPolicyAccess already gates
+      // individual senders, so blocking the chat here would incorrectly drop all messages.
+      hasGroupAllowFrom: Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0,
     });
   const resolveGroupActivation = (params: {
     chatId: string | number;

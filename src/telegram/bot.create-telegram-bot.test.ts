@@ -658,6 +658,46 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 0,
     },
     {
+      // Regression: groupPolicy="allowlist" + allowFrom but NO groups config must still allow
+      // in-allowlist senders (sender-level filtering is sufficient; the chat-allowlist
+      // check must activate senderFilterBypass when groupAllowFrom is present).
+      name: "allows group messages from authorized senders when groupPolicy='allowlist' + allowFrom but no groups config",
+      config: {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            allowFrom: ["123456789"],
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "@openclaw_bot hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
+      // Regression: same as above but using the dedicated groupAllowFrom field.
+      name: "allows group messages from authorized senders when groupPolicy='allowlist' + groupAllowFrom but no groups config",
+      config: {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["123456789"],
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "@openclaw_bot hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
       name: "allows group messages from senders in allowFrom (by ID) when groupPolicy is 'allowlist'",
       config: {
         channels: {
