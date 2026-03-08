@@ -122,6 +122,19 @@ describe("launchd runtime parsing", () => {
     expect(info.pid).toBeUndefined();
     expect(info.state).toBe("waiting");
   });
+
+  it("rejects pid and exit status values with junk suffixes", () => {
+    const output = [
+      "state = waiting",
+      "pid = 123abc",
+      "last exit status = 7ms",
+      "last exit reason = exited",
+    ].join("\n");
+    expect(parseLaunchctlPrint(output)).toEqual({
+      state: "waiting",
+      lastExitReason: "exited",
+    });
+  });
 });
 
 describe("launchctl list detection", () => {
