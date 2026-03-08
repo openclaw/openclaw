@@ -97,7 +97,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
 
   it("writes lastRoute to the isolated Telegram DM session under per-channel-peer dmScope", async () => {
     const isolatedCfg = {
-      ...baseTelegramMessageContextConfig,
+      ...(baseTelegramMessageContextConfig as Record<string, unknown>),
       session: { dmScope: "per-channel-peer" },
     };
     loadConfigMock.mockReturnValue(isolatedCfg);
