@@ -12,7 +12,18 @@ import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
+const DEFAULT_PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
+
+function resolvePairingTtlMs(): number {
+  const envMinutes = process.env.OPENCLAW_PAIRING_TTL_MINUTES;
+  if (envMinutes) {
+    const parsed = Number(envMinutes);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed * 60 * 1000;
+    }
+  }
+  return DEFAULT_PAIRING_PENDING_TTL_MS;
+}
 const PAIRING_PENDING_MAX = 3;
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
@@ -173,7 +184,7 @@ function isExpired(entry: PairingRequest, nowMs: number): boolean {
   if (!createdAt) {
     return true;
   }
-  return nowMs - createdAt > PAIRING_PENDING_TTL_MS;
+  return nowMs - createdAt > resolvePairingTtlMs();
 }
 
 function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
