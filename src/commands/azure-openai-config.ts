@@ -60,7 +60,6 @@ export function normalizeAzureOpenAIBaseUrl(value: string): string {
       `Azure OpenAI base URL must use HTTPS (received: ${parsed.protocol.replace(":", "")}).`,
     );
   }
-
   return `${parsed.origin}/openai/v1`;
 }
 

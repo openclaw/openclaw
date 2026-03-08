@@ -126,7 +126,6 @@ describe("applyAuthChoiceAzureOpenAI", () => {
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
   });
-
   it("persists model params azureApiVersion when provided in opts", async () => {
     await setupTempState();
     const prompter = createWizardPrompter({}, { defaultSelect: "" });

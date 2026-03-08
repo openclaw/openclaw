@@ -77,7 +77,6 @@ export async function applyAuthChoiceAzureOpenAI(
   if (params.opts?.azureOpenaiModelId?.trim()) {
     normalizeAzureOpenAIModelId(params.opts.azureOpenaiModelId);
   }
-
   await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.opts?.azureOpenaiApiKey,
     tokenProvider: "azure-openai-responses",
