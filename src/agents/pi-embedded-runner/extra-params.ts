@@ -4,6 +4,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  requiresOpenAiCompatibleAnthropicToolPayload,
   usesOpenAiFunctionAnthropicToolSchema,
   usesOpenAiStringModeAnthropicToolChoice,
 } from "../provider-capabilities.js";
@@ -790,7 +791,7 @@ function createMoonshotThinkingWrapper(
   };
 }
 
-function requiresAnthropicToolPayloadCompatibility(model: {
+function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
@@ -799,7 +800,10 @@ function requiresAnthropicToolPayloadCompatibility(model: {
     return false;
   }
 
-  if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
+  if (
+    typeof model.provider === "string" &&
+    requiresOpenAiCompatibleAnthropicToolPayload(model.provider)
+  ) {
     return true;
   }
 
@@ -899,27 +903,19 @@ function createAnthropicToolPayloadCompatibilityWrapper(
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
+        const provider = typeof model.provider === "string" ? model.provider : undefined;
         if (
           payload &&
           typeof payload === "object" &&
-          requiresAnthropicToolPayloadCompatibility(model)
+          requiresAnthropicToolPayloadCompatibilityForModel(model)
         ) {
           const payloadObj = payload as Record<string, unknown>;
-          if (
-            Array.isArray(payloadObj.tools) &&
-            usesOpenAiFunctionAnthropicToolSchema(
-              typeof model.provider === "string" ? model.provider : undefined,
-            )
-          ) {
+          if (Array.isArray(payloadObj.tools) && usesOpenAiFunctionAnthropicToolSchema(provider)) {
             payloadObj.tools = payloadObj.tools
               .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
               .filter((tool): tool is Record<string, unknown> => !!tool);
           }
-          if (
-            usesOpenAiStringModeAnthropicToolChoice(
-              typeof model.provider === "string" ? model.provider : undefined,
-            )
-          ) {
+          if (usesOpenAiStringModeAnthropicToolChoice(provider)) {
             payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(
               payloadObj.tool_choice,
             );
