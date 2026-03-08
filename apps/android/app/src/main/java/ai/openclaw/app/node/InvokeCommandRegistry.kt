@@ -63,7 +63,6 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Notifications.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.System.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.AppUpdate.rawValue),
       NodeCapabilitySpec(
         name = OpenClawCapability.Camera.rawValue,
         availability = NodeCapabilityAvailability.CameraEnabled,
@@ -202,7 +201,6 @@ object InvokeCommandRegistry {
         name = "debug.ed25519",
         availability = InvokeCommandAvailability.DebugBuild,
       ),
-      InvokeCommandSpec(name = "app.update"),
     )
 
   private val byNameInternal: Map<String, InvokeCommandSpec> = all.associateBy { it.name }

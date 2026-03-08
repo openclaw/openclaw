@@ -240,12 +240,6 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
       expect(readString(obj.diagnostics)).not.toBeNull();
     },
   },
-  "app.update": {
-    buildParams: () => ({}),
-    timeoutMs: 20_000,
-    outcome: "error",
-    allowedErrorCodes: ["INVALID_REQUEST"],
-  },
 };
 
 function resolveGatewayConnection() {
