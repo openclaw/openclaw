@@ -766,4 +766,199 @@ describe("doctor config flow", () => {
 
     expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
+
+  it("does not emit false groupPolicy warning for multi-account telegram config (#35560)", async () => {
+    const warnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              enabled: true,
+              botToken: "fake:token",
+              groupPolicy: "allowlist",
+              groupAllowFrom: [123456],
+              dmPolicy: "pairing",
+              allowFrom: [123456],
+            },
+          },
+        },
+      },
+    });
+
+    const groupPolicyWarning = warnings.find((w) => w.includes("channels.telegram.groupPolicy"));
+    expect(groupPolicyWarning).toBeUndefined();
+  });
+
+  it("still warns about empty groupAllowFrom inside accounts (#35560)", async () => {
+    const warnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              enabled: true,
+              botToken: "fake:token",
+              groupPolicy: "allowlist",
+              dmPolicy: "pairing",
+              // groupAllowFrom and allowFrom intentionally omitted
+            },
+          },
+        },
+      },
+    });
+
+    const accountWarning = warnings.find((w) =>
+      w.includes("channels.telegram.accounts.default.groupPolicy"),
+    );
+    expect(accountWarning).toBeDefined();
+  });
+
+  it("does not inject orphan top-level allowFrom when repairing dmPolicy=open with accounts (#35560)", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "fake:token",
+                dmPolicy: "open",
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          allowFrom?: unknown;
+          accounts: { default: { allowFrom: string[] } };
+        };
+      };
+    };
+    // Repair should add "*" to the account, not the top level
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toContain("*");
+    // Top-level should NOT have an orphan allowFrom injected by repair
+    const topAllowFrom = cfg.channels.telegram.allowFrom as string[] | undefined;
+    expect(
+      topAllowFrom === undefined || !Array.isArray(topAllowFrom) || topAllowFrom.length === 0,
+    ).toBe(true);
+  });
+
+  it("does not inject orphan top-level allowFrom when repairing allowlist with accounts (#35560)", async () => {
+    const result = await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      // Create a pairing store with entries so the repair has something to restore
+      const pairingDir = path.join(configDir, "pairing");
+      await fs.mkdir(pairingDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pairingDir, "telegram.json"),
+        JSON.stringify({ default: { "99999": { paired: true } } }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          channels: {
+            telegram: {
+              accounts: {
+                default: {
+                  enabled: true,
+                  botToken: "fake:token",
+                  dmPolicy: "allowlist",
+                  // allowFrom intentionally omitted — should be restored from pairing store
+                },
+              },
+            },
+          },
+        }),
+        "utf-8",
+      );
+      return loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          allowFrom?: unknown;
+          accounts: { default: { allowFrom?: string[] } };
+        };
+      };
+    };
+    // Top-level should NOT have an orphan allowFrom
+    const topAllowFrom = cfg.channels.telegram.allowFrom as string[] | undefined;
+    expect(
+      topAllowFrom === undefined || !Array.isArray(topAllowFrom) || topAllowFrom.length === 0,
+    ).toBe(true);
+  });
+
+  it("repairs inherited dmPolicy=open for accounts when policy is only on top level (#35560)", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "fake:token",
+                // dmPolicy inherited from top level
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          accounts: { default: { allowFrom: string[] } };
+        };
+      };
+    };
+    // Account should get "*" added even though dmPolicy is inherited from parent
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toContain("*");
+  });
+
+  it("skips account repair when parent already has allowFrom wildcard (#35560)", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "fake:token",
+                // inherits dmPolicy=open and allowFrom=["*"] from parent
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          accounts: { default: { allowFrom?: string[] } };
+        };
+      };
+    };
+    // Account should NOT get its own allowFrom — parent already has "*"
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toBeUndefined();
+  });
 });

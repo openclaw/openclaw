@@ -1070,14 +1070,24 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     account: Record<string, unknown>,
     prefix: string,
     mode: OpenPolicyAllowFromMode,
+    parent?: Record<string, unknown>,
   ) => {
     const dmEntry = account.dm;
     const dm =
       dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
         ? (dmEntry as Record<string, unknown>)
         : undefined;
+    const parentDmEntry = parent?.dm;
+    const parentDm =
+      parentDmEntry && typeof parentDmEntry === "object" && !Array.isArray(parentDmEntry)
+        ? (parentDmEntry as Record<string, unknown>)
+        : undefined;
     const dmPolicy =
-      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
+      (account.dmPolicy as string | undefined) ??
+      (dm?.policy as string | undefined) ??
+      (parent?.dmPolicy as string | undefined) ??
+      (parentDm?.policy as string | undefined) ??
+      undefined;
 
     if (dmPolicy !== "open") {
       return;
@@ -1085,6 +1095,16 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
 
     const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
     const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
+    // If the account has no local allowFrom override, check whether the parent
+    // already satisfies the wildcard requirement (runtime inherits parent values).
+    const hasLocalAllowFrom = Array.isArray(topAllowFrom) || Array.isArray(nestedAllowFrom);
+    if (!hasLocalAllowFrom) {
+      const parentTopAllowFrom = parent?.allowFrom as Array<string | number> | undefined;
+      const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
+      if (hasWildcard(parentTopAllowFrom) || hasWildcard(parentNestedAllowFrom)) {
+        return;
+      }
+    }
 
     if (mode === "nestedOnly") {
       if (hasWildcard(nestedAllowFrom)) {
@@ -1140,18 +1160,25 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
 
     const allowFromMode = resolveAllowFromMode(channelName);
 
-    // Check the top-level channel config
-    ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
-
     // Check per-account configs (e.g. channels.discord.accounts.mybot)
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
-    if (accounts && typeof accounts === "object") {
+    const hasAccounts =
+      accounts && typeof accounts === "object" && Object.keys(accounts).length > 0;
+
+    // Skip top-level repair when accounts exist — top-level values are
+    // Zod-injected defaults and lack allowFrom, causing spurious repairs (#35560).
+    if (!hasAccounts) {
+      ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
+    }
+
+    if (hasAccounts) {
       for (const [accountName, accountConfig] of Object.entries(accounts)) {
         if (accountConfig && typeof accountConfig === "object") {
           ensureWildcard(
             accountConfig,
             `channels.${channelName}.accounts.${accountName}`,
             allowFromMode,
+            channelConfig,
           );
         }
       }
@@ -1242,14 +1269,23 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
     account: Record<string, unknown>;
     accountId?: string;
     prefix: string;
+    parent?: Record<string, unknown>;
   }) => {
     const dmEntry = params.account.dm;
     const dm =
       dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
         ? (dmEntry as Record<string, unknown>)
         : undefined;
+    const parentDmEntry = params.parent?.dm;
+    const parentDm =
+      parentDmEntry && typeof parentDmEntry === "object" && !Array.isArray(parentDmEntry)
+        ? (parentDmEntry as Record<string, unknown>)
+        : undefined;
     const dmPolicy =
-      (params.account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined);
+      (params.account.dmPolicy as string | undefined) ??
+      (dm?.policy as string | undefined) ??
+      (params.parent?.dmPolicy as string | undefined) ??
+      (parentDm?.policy as string | undefined);
     if (dmPolicy !== "allowlist") {
       return;
     }
@@ -1258,6 +1294,16 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
     const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
     if (hasAllowFromEntries(topAllowFrom) || hasAllowFromEntries(nestedAllowFrom)) {
       return;
+    }
+    // If the account has no local allowFrom, check whether the parent already
+    // has entries — at runtime, the account inherits them and recovery is unnecessary.
+    const hasLocalAllowFrom = Array.isArray(topAllowFrom) || Array.isArray(nestedAllowFrom);
+    if (!hasLocalAllowFrom) {
+      const parentTopAllowFrom = params.parent?.allowFrom as Array<string | number> | undefined;
+      const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
+      if (hasAllowFromEntries(parentTopAllowFrom) || hasAllowFromEntries(parentNestedAllowFrom)) {
+        return;
+      }
     }
 
     const normalizedChannelId = (normalizeChatChannelId(params.channelName) ?? params.channelName)
@@ -1292,26 +1338,34 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    await recoverAllowFromForAccount({
-      channelName,
-      account: channelConfig,
-      prefix: `channels.${channelName}`,
-    });
 
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
-    if (!accounts || typeof accounts !== "object") {
-      continue;
-    }
-    for (const [accountId, accountConfig] of Object.entries(accounts)) {
-      if (!accountConfig || typeof accountConfig !== "object") {
-        continue;
-      }
+    const hasAccounts =
+      accounts && typeof accounts === "object" && Object.keys(accounts).length > 0;
+
+    // Skip top-level repair when accounts exist — top-level values are
+    // Zod-injected defaults and lack allowFrom, causing spurious repairs (#35560).
+    if (!hasAccounts) {
       await recoverAllowFromForAccount({
         channelName,
-        account: accountConfig,
-        accountId,
-        prefix: `channels.${channelName}.accounts.${accountId}`,
+        account: channelConfig,
+        prefix: `channels.${channelName}`,
       });
+    }
+
+    if (hasAccounts) {
+      for (const [accountId, accountConfig] of Object.entries(accounts)) {
+        if (!accountConfig || typeof accountConfig !== "object") {
+          continue;
+        }
+        await recoverAllowFromForAccount({
+          channelName,
+          account: accountConfig,
+          accountId,
+          prefix: `channels.${channelName}.accounts.${accountId}`,
+          parent: channelConfig,
+        });
+      }
     }
   }
 
@@ -1430,10 +1484,19 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
-
     const accounts = channelConfig.accounts;
-    if (accounts && typeof accounts === "object") {
+    const hasAccounts =
+      accounts && typeof accounts === "object" && Object.keys(accounts).length > 0;
+
+    // Skip top-level policy check when accounts exist — top-level values are
+    // Zod-injected defaults and lack allowFrom/groupAllowFrom, producing false
+    // warnings. Per-account checks below handle each account with the top-level
+    // config as parent fallback (#35560).
+    if (!hasAccounts) {
+      checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
+    }
+
+    if (hasAccounts) {
       for (const [accountId, account] of Object.entries(
         accounts as Record<string, Record<string, unknown>>,
       )) {
