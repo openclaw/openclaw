@@ -40,7 +40,12 @@ describe("collectBundledExtensionRootDependencyGapErrors", () => {
             id: "googlechat",
             packageJson: {
               dependencies: { "google-auth-library": "^1.0.0" },
-              openclaw: { install: { npmSpec: "@openclaw/googlechat" } },
+              openclaw: {
+                install: { npmSpec: "@openclaw/googlechat" },
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["google-auth-library"],
+                },
+              },
             },
           },
           {
@@ -66,7 +71,12 @@ describe("collectBundledExtensionRootDependencyGapErrors", () => {
             id: "googlechat",
             packageJson: {
               dependencies: { "google-auth-library": "^1.0.0", undici: "^7.0.0" },
-              openclaw: { install: { npmSpec: "@openclaw/googlechat" } },
+              openclaw: {
+                install: { npmSpec: "@openclaw/googlechat" },
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["google-auth-library"],
+                },
+              },
             },
           },
         ],
@@ -85,7 +95,12 @@ describe("collectBundledExtensionRootDependencyGapErrors", () => {
             id: "googlechat",
             packageJson: {
               dependencies: { "google-auth-library": "^1.0.0" },
-              openclaw: { install: { npmSpec: "@openclaw/googlechat" } },
+              openclaw: {
+                install: { npmSpec: "@openclaw/googlechat" },
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["google-auth-library"],
+                },
+              },
             },
           },
         ],
