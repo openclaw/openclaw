@@ -39,6 +39,8 @@ type MockSubagentRun = {
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
+const enqueueSystemEventMock = vi.fn();
+const requestHeartbeatNowMock = vi.fn();
 const readLatestAssistantReplyMock = vi.fn(
   async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
 );
@@ -162,6 +164,14 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunnerMock,
 }));
 
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -228,6 +238,8 @@ describe("subagent announce formatting", () => {
     hookRunnerMock.hasHooks.mockClear();
     hookRunnerMock.runSubagentDeliveryTarget.mockClear();
     subagentDeliveryTargetHookMock.mockReset().mockResolvedValue(undefined);
+    enqueueSystemEventMock.mockClear().mockReturnValue(true);
+    requestHeartbeatNowMock.mockClear();
     readLatestAssistantReplyMock.mockClear().mockResolvedValue("raw subagent reply");
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
     sessionStore = {};
@@ -286,6 +298,44 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
+  });
+
+  it("optionally wakes the parent session on settled completion", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:wake-test",
+      childRunId: "run-wake-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      wakeParentOnCompletion: true,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Subagent completed: do thing (ok)",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        contextKey: expect.stringContaining("subagent-completion:"),
+      }),
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "subagent:subagent task:completion",
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("does not wake the parent session when wakeParentOnCompletion is disabled", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:wake-test-off",
+      childRunId: "run-wake-2",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("includes success status when outcome is ok", async () => {
@@ -2339,6 +2389,8 @@ describe("subagent announce formatting", () => {
       expect(didAnnounce).toBe(false);
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
     }
   });
 
