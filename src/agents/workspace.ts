@@ -564,12 +564,16 @@ const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
-  sessionKey?: string,
+  params: {
+    sessionKey?: string;
+  },
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
-    return files;
+  const sessionKey = params.sessionKey;
+  if (sessionKey && (isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey))) {
+    return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+
+  return files;
 }
 
 export async function loadExtraBootstrapFiles(
