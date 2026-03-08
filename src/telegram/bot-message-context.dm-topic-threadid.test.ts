@@ -1,21 +1,36 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock recordInboundSession to capture updateLastRoute parameter
+const loadConfigMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+  };
+});
+
+import {
+  baseTelegramMessageContextConfig,
+  buildTelegramMessageContextForTest,
+} from "./bot-message-context.test-harness.js";
+
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../channels/session.js", () => ({
   recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
 }));
 
-describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#8891)", () => {
+describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#8891, #40005)", () => {
   async function buildCtx(params: {
     message: Record<string, unknown>;
     options?: Record<string, unknown>;
+    cfg?: Record<string, unknown>;
     resolveGroupActivation?: () => boolean | undefined;
   }) {
     return await buildTelegramMessageContextForTest({
       message: params.message,
       options: params.options,
+      cfg: params.cfg,
       resolveGroupActivation: params.resolveGroupActivation,
     });
   }
@@ -27,20 +42,21 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
 
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue(baseTelegramMessageContextConfig);
   });
 
   it("passes threadId to updateLastRoute for DM topics", async () => {
     const ctx = await buildCtx({
       message: {
         chat: { id: 1234, type: "private" },
-        message_thread_id: 42, // DM Topic ID
+        message_thread_id: 42,
       },
     });
 
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    // Check that updateLastRoute includes threadId
     const updateLastRoute = getUpdateLastRoute() as { threadId?: string; to?: string } | undefined;
     expect(updateLastRoute).toBeDefined();
     expect(updateLastRoute?.to).toBe("telegram:1234");
@@ -57,7 +73,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    // Check that updateLastRoute does NOT include threadId
     const updateLastRoute = getUpdateLastRoute() as { threadId?: string; to?: string } | undefined;
     expect(updateLastRoute).toBeDefined();
     expect(updateLastRoute?.to).toBe("telegram:1234");
@@ -77,8 +92,52 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
 
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
-
-    // Check that updateLastRoute is undefined for groups
     expect(getUpdateLastRoute()).toBeUndefined();
+  });
+
+  it("writes lastRoute to the isolated Telegram DM session under per-channel-peer dmScope", async () => {
+    const isolatedCfg = {
+      ...baseTelegramMessageContextConfig,
+      session: { dmScope: "per-channel-peer" },
+    };
+    loadConfigMock.mockReturnValue(isolatedCfg);
+
+    const ctx = await buildCtx({
+      cfg: isolatedCfg,
+      message: {
+        chat: { id: 1234, type: "private" },
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:direct:42");
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    const updateLastRoute = getUpdateLastRoute() as
+      | { sessionKey?: string; to?: string; threadId?: string }
+      | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.sessionKey).toBe("agent:main:telegram:direct:42");
+    expect(updateLastRoute?.to).toBe("telegram:1234");
+    expect(updateLastRoute?.threadId).toBeUndefined();
+  });
+
+  it("keeps writing lastRoute to agent:main:main when dmScope resolves to the main session", async () => {
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    const updateLastRoute = getUpdateLastRoute() as
+      | { sessionKey?: string; to?: string }
+      | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.sessionKey).toBe("agent:main:main");
+    expect(updateLastRoute?.to).toBe("telegram:1234");
   });
 });
