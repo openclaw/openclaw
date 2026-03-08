@@ -794,6 +794,33 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
   </Accordion>
 
+  <Accordion title="DMing the bot but getting no reply">
+
+    If your bot token is valid and polling is healthy, the most common cause is DM pairing/allowlist access control.
+
+    1. DM the bot and send `/start`.
+    2. Check pending pairing requests:
+
+```bash
+openclaw pairing list telegram
+```
+
+    3. Approve with the exact code:
+
+```bash
+openclaw pairing approve telegram <CODE>
+```
+
+    4. Test again in Telegram (same DM chat).
+
+    Quick checks:
+
+    - confirm you're messaging the correct bot username from BotFather
+    - if using `dmPolicy: "allowlist"`, verify your numeric Telegram user ID is in `allowFrom`
+    - if no pairing requests appear, use `openclaw channels status --probe` and `openclaw logs --follow`
+
+  </Accordion>
+
   <Accordion title="Polling or network instability">
 
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.
