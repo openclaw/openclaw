@@ -60,7 +60,6 @@ class TalkModeManager(
     private const val defaultModelIdFallback = "eleven_v3"
     private const val defaultOutputFormatFallback = "pcm_24000"
     private const val defaultTalkProvider = "elevenlabs"
-    private const val defaultSilenceTimeoutMs = 700L
     private const val listenWatchdogMs = 12_000L
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
@@ -118,11 +117,12 @@ class TalkModeManager(
     }
 
     internal fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {
-      val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return defaultSilenceTimeoutMs
-      if (primitive.isString) return defaultSilenceTimeoutMs
-      val timeout = primitive.content.toDoubleOrNull() ?: return defaultSilenceTimeoutMs
+      val fallback = TalkDefaults.defaultSilenceTimeoutMs
+      val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return fallback
+      if (primitive.isString) return fallback
+      val timeout = primitive.content.toDoubleOrNull() ?: return fallback
       if (timeout <= 0 || timeout % 1.0 != 0.0 || timeout > Long.MAX_VALUE.toDouble()) {
-        return defaultSilenceTimeoutMs
+        return fallback
       }
       return timeout.toLong()
     }
@@ -155,7 +155,7 @@ class TalkModeManager(
   private var listeningMode = false
 
   private var silenceJob: Job? = null
-  private var silenceWindowMs = defaultSilenceTimeoutMs
+  private var silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
   private var lastTranscript: String = ""
   private var lastHeardAtMs: Long? = null
   private var lastSpokenText: String? = null
@@ -1467,7 +1467,7 @@ class TalkModeManager(
       }
       configLoaded = true
     } catch (_: Throwable) {
-      silenceWindowMs = defaultSilenceTimeoutMs
+      silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       defaultModelId = defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
