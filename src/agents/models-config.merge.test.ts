@@ -52,7 +52,11 @@ describe("models-config merge helpers", () => {
   it("merges explicit providers onto trimmed keys", () => {
     const merged = mergeProviders({
       explicit: {
-        " custom ": { api: "openai-responses", models: [] } as ProviderConfig,
+        " custom ": {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          models: [],
+        } as ProviderConfig,
       },
     });
 
@@ -72,7 +76,7 @@ describe("models-config merge helpers", () => {
       existingProviders: {
         custom: {
           baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
           models: [{ id: "model", api: "openai-completions" }],
         } as ExistingProviderConfig,
       },
@@ -82,7 +86,7 @@ describe("models-config merge helpers", () => {
 
     expect(merged.custom).toEqual(
       expect.objectContaining({
-        apiKey: "AGENT_KEY",
+        apiKey: "AGENT_KEY", // pragma: allowlist secret
         baseUrl: "https://config.example/v1",
       }),
     );

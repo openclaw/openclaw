@@ -358,7 +358,7 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(validRepo, {
       head: "ref: refs/heads/main\n",
       refs: {
-        "refs/heads/main": "fedcba9876543210fedcba9876543210fedcba98",
+        "refs/heads/main": "fedcba9876543210fedcba9876543210fedcba98", // pragma: allowlist secret
       },
     });
     expect(resolveCommitHash({ cwd: validRepo, env: {} })).toBe("fedcba9");
@@ -391,7 +391,7 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(repoRoot, {
       head: `ref: ${longRefName}\n`,
       refs: {
-        [longRefName]: "0123456789abcdef0123456789abcdef01234567",
+        [longRefName]: "0123456789abcdef0123456789abcdef01234567", // pragma: allowlist secret
       },
     });
 

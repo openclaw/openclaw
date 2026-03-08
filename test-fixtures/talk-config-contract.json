@@ -80,8 +80,7 @@
         "voiceId": "voice-legacy"
       },
       "talk": {
-        "voiceId": "voice-legacy",
-        "apiKey": "legacy-key"
+        "voiceId": "voice-legacy"
       }
     }
   ]
