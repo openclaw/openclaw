@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearSessionStoreCacheForTest, updateLastRoute } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
@@ -934,6 +935,47 @@ describe("initSessionState reset policy", () => {
       },
     });
 
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("stale session resets after updateLastRoute (idle)", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 6, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-route-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:idle-route";
+    const existingSessionId = "idle-route-session-id";
+
+    // Session last active 2 hours ago — well past the 30-minute idle window.
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
+      },
+    });
+
+    // Simulate recordInboundSession calling updateLastRoute before initSessionState.
+    clearSessionStoreCacheForTest();
+    await updateLastRoute({
+      storePath,
+      sessionKey,
+      channel: "whatsapp",
+      to: "whatsapp:user-1",
+    });
+
+    clearSessionStoreCacheForTest();
     const cfg = {
       session: {
         store: storePath,
