@@ -207,6 +207,13 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
+  /** Auto-show context usage footer when prompt token usage exceeds a threshold. */
+  contextUsageWarning?: {
+    /** Context usage ratio (0–1) at which the warning appears. Default 0.7. */
+    threshold?: number;
+    /** Set to false to disable context usage warnings. Default true. */
+    enabled?: boolean;
+  };
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**

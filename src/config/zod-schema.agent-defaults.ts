@@ -153,6 +153,15 @@ export const AgentDefaultsSchema = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    contextUsageWarning: z
+      .object({
+        /** Context usage ratio (0–1) at which a usage footer is auto-shown. Default 0.7. */
+        threshold: z.number().min(0).max(1).optional(),
+        /** Set to false to disable the feature entirely. Default true. */
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),

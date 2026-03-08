@@ -983,6 +983,12 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.contextUsageWarning":
+    "Auto-show a context usage footer when prompt token usage exceeds a threshold. Helps users notice when a session should be reset (/new) before hitting compaction or performance issues.",
+  "agents.defaults.contextUsageWarning.threshold":
+    "Context usage ratio (0–1) at which the warning footer appears. Default: 0.7 (70%).",
+  "agents.defaults.contextUsageWarning.enabled":
+    "Set to false to disable the context usage warning entirely. Default: true.",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":
