@@ -354,6 +354,27 @@ describe("applyJobPatch", () => {
 
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
   });
+
+  it("rejects Feishu announce delivery without target", () => {
+    const job = createIsolatedAgentTurnJob("job-feishu-no-target", {
+      mode: "announce",
+      channel: "feishu",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      "cron feishu announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
+    );
+  });
+
+  it("accepts Feishu announce delivery with explicit target", () => {
+    const job = createIsolatedAgentTurnJob("job-feishu-target", {
+      mode: "announce",
+      channel: "feishu",
+      to: "chat:oc_group_chat",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
 });
 
 function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
