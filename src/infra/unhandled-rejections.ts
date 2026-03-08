@@ -20,6 +20,14 @@ const FATAL_ERROR_CODES = new Set([
 
 const CONFIG_ERROR_CODES = new Set(["INVALID_CONFIG", "MISSING_API_KEY", "MISSING_CREDENTIALS"]);
 
+// SQLite error codes that indicate transient failures (shouldn't crash the gateway)
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+]);
+
 // Network error codes that indicate transient failures (shouldn't crash the gateway)
 const TRANSIENT_NETWORK_CODES = new Set([
   "ECONNRESET",
@@ -193,6 +201,14 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a transient SQLite error that shouldn't crash the gateway.
+ */
+export function isTransientSqliteError(err: unknown): boolean {
+  const code = extractErrorCodeWithCause(err);
+  return code !== undefined && TRANSIENT_SQLITE_CODES.has(code.toUpperCase());
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -244,6 +260,14 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isTransientSqliteError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal SQLite transient error (continuing):",
         formatUncaughtError(reason),
       );
       return;
