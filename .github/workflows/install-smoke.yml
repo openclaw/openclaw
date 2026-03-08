@@ -59,6 +59,10 @@ jobs:
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
 
+      - name: Smoke test bundled Matrix runtime deps in root Dockerfile
+        run: |
+          bash scripts/docker/check-bundled-matrix-runtime.sh openclaw-dockerfile-smoke:local
+
       # This smoke only validates that the build-arg path preinstalls selected
       # extension deps without breaking image build or basic CLI startup. It
       # does not exercise runtime loading/registration of diagnostics-otel.
