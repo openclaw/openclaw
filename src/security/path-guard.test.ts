@@ -15,7 +15,7 @@ describe("PathGuard Exhaustive Tests", () => {
     if (normalized.startsWith(`${workspacePrefix}/`)) {
       return `${realWorkspaceRoot}${normalized.slice(workspacePrefix.length)}`;
     }
-    return mapWorkspacePath(normalized);
+    return normalized;
   };
 
   beforeEach(() => {

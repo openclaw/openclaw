@@ -450,14 +450,11 @@ export function createImageTool(options?: {
               };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
-        if (
-          !sandboxConfig &&
-          resolvedPath &&
-          !isHttpUrl &&
-          options?.fsPolicy &&
-          options.workspaceDir
-        ) {
-          await checkPathGuardStrict(resolvedPath, options.fsPolicy, options.workspaceDir);
+        if (resolvedPath && !isHttpUrl && !isDataUrl && options?.fsPolicy) {
+          const policyRoot = sandboxConfig?.root ?? options.workspaceDir;
+          if (policyRoot) {
+            await checkPathGuardStrict(resolvedPath, options.fsPolicy, policyRoot);
+          }
         }
 
         const media = isDataUrl

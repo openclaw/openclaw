@@ -473,18 +473,11 @@ export function createPdfTool(options?: {
                 : resolvedPdf,
             };
 
-        if (
-          !sandboxConfig &&
-          !isHttpUrl &&
-          !isDataUrl &&
-          options?.fsPolicy &&
-          options.workspaceDir
-        ) {
-          await checkPathGuardStrict(
-            resolvedPathInfo.resolved,
-            options.fsPolicy,
-            options.workspaceDir,
-          );
+        if (!isHttpUrl && !isDataUrl && options?.fsPolicy) {
+          const policyRoot = sandboxConfig?.root ?? options.workspaceDir;
+          if (policyRoot) {
+            await checkPathGuardStrict(resolvedPathInfo.resolved, options.fsPolicy, policyRoot);
+          }
         }
 
         const media = sandboxConfig
