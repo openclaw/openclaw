@@ -42,6 +42,12 @@ export function createReplyToModeFilter(
       return payload;
     }
     if (hasThreaded) {
+      // Compaction notices are transient status messages that should always
+      // appear in-thread, even after the first assistant block has already
+      // consumed the "first" slot.  Let them keep their replyToId.
+      if (payload.isCompactionNotice) {
+        return payload;
+      }
       return { ...payload, replyToId: undefined };
     }
     // Compaction notices are transient status messages — they should be
