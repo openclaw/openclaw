@@ -5,6 +5,15 @@ export const EventType = {
   RoomMessageEncrypted: "m.room.encrypted",
   RoomMember: "m.room.member",
   Location: "m.location",
+  // Key verification event types
+  VerificationRequest: "m.key.verification.request",
+  VerificationReady: "m.key.verification.ready",
+  VerificationStart: "m.key.verification.start",
+  VerificationAccept: "m.key.verification.accept",
+  VerificationKey: "m.key.verification.key",
+  VerificationMac: "m.key.verification.mac",
+  VerificationDone: "m.key.verification.done",
+  VerificationCancel: "m.key.verification.cancel",
 } as const;
 
 export const RelationType = {
