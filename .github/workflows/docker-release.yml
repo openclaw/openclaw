@@ -13,6 +13,8 @@ on:
       - ".agents/**"
       - "skills/**"
 
+permissions: {}
+
 concurrency:
   group: docker-release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
