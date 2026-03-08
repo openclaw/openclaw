@@ -556,7 +556,9 @@ export async function sanitizeSessionHistory(params: {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls)
+    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+        allowSyntheticToolResults: policy.allowSyntheticToolResults,
+      })
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(

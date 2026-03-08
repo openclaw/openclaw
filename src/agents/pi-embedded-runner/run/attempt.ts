@@ -1412,7 +1412,9 @@ export async function runEmbeddedAttempt(
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
+          ? sanitizeToolUseResultPairing(truncated, {
+              allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+            })
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {

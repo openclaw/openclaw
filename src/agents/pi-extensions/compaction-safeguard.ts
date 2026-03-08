@@ -258,6 +258,7 @@ function formatNonTextPlaceholder(content: unknown): string | null {
 function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
+  allowSyntheticToolResults?: boolean;
 }): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
   const preserveTurns = Math.min(
     MAX_RECENT_TURNS_PRESERVE,
@@ -353,7 +354,11 @@ function splitPreservedRecentTurns(params: {
   const summarizableMessages = params.messages.filter((_, idx) => !preservedIndexSet.has(idx));
   // Preserving recent assistant turns can orphan downstream toolResult messages.
   // Repair pairings here so compaction summarization doesn't trip strict providers.
-  const repairedSummarizableMessages = repairToolUseResultPairing(summarizableMessages).messages;
+  // When allowSyntheticToolResults is false, don't create synthetic errors for
+  // missing tool results (they may be in progress, e.g., after gateway restarts).
+  const repairedSummarizableMessages = repairToolUseResultPairing(summarizableMessages, {
+    allowSyntheticToolResults: params.allowSyntheticToolResults,
+  }).messages;
   const preservedMessages = params.messages
     .filter((_, idx) => preservedIndexSet.has(idx))
     .filter((msg) => {

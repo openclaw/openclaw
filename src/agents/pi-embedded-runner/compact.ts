@@ -665,7 +665,9 @@ export async function compactEmbeddedPiSessionDirect(
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
+          ? sanitizeToolUseResultPairing(truncated, {
+              allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+            })
           : truncated;
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);

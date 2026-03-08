@@ -342,6 +342,7 @@ export async function summarizeInStages(params: {
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
   parts?: number;
+  allowSyntheticToolResults?: boolean;
   minMessagesForSplit?: number;
 }): Promise<string> {
   const { messages } = params;
@@ -400,6 +401,7 @@ export function pruneHistoryForContextShare(params: {
   maxContextTokens: number;
   maxHistoryShare?: number;
   parts?: number;
+  allowSyntheticToolResults?: boolean;
 }): {
   messages: AgentMessage[];
   droppedMessagesList: AgentMessage[];
@@ -431,7 +433,11 @@ export function pruneHistoryForContextShare(params: {
     // orphaned tool_results (whose tool_use was in the dropped chunk).
     // repairToolUseResultPairing drops orphaned tool_results, preventing
     // "unexpected tool_use_id" errors from Anthropic's API.
-    const repairReport = repairToolUseResultPairing(flatRest);
+    // When allowSyntheticToolResults is false, don't create synthetic errors for
+    // missing tool results (they may be in progress, e.g., after gateway restarts).
+    const repairReport = repairToolUseResultPairing(flatRest, {
+      allowSyntheticToolResults: params.allowSyntheticToolResults,
+    });
     const repairedKept = repairReport.messages;
 
     // Track orphaned tool_results as dropped (they were in kept but their tool_use was dropped)

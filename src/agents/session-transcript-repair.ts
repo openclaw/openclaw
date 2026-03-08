@@ -327,8 +327,11 @@ export function sanitizeToolCallInputs(
   return repairToolCallInputs(messages, options).messages;
 }
 
-export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
-  return repairToolUseResultPairing(messages).messages;
+export function sanitizeToolUseResultPairing(
+  messages: AgentMessage[],
+  options?: { allowSyntheticToolResults?: boolean },
+): AgentMessage[] {
+  return repairToolUseResultPairing(messages, options).messages;
 }
 
 export type ToolUseRepairReport = {
@@ -339,13 +342,17 @@ export type ToolUseRepairReport = {
   moved: boolean;
 };
 
-export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRepairReport {
+export function repairToolUseResultPairing(
+  messages: AgentMessage[],
+  options?: { allowSyntheticToolResults?: boolean },
+): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
   // displaced (e.g. after user turns) or duplicated. Repair by:
   // - moving matching toolResult messages directly after their assistant toolCall turn
-  // - inserting synthetic error toolResults for missing ids
+  // - inserting synthetic error toolResults for missing ids (when allowSyntheticToolResults is true)
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  const allowSyntheticToolResults = options?.allowSyntheticToolResults ?? true;
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
@@ -470,7 +477,10 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       const existing = spanResultsById.get(call.id);
       if (existing) {
         pushToolResult(existing);
-      } else {
+      } else if (allowSyntheticToolResults) {
+        // Only create synthetic tool results when explicitly allowed.
+        // During gateway restarts or with long-running commands, missing tool results
+        // may be legitimate (not yet written) rather than errors.
         const missing = makeMissingToolResult({
           toolCallId: call.id,
           toolName: call.name,
@@ -479,6 +489,8 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
         changed = true;
         pushToolResult(missing);
       }
+      // When allowSyntheticToolResults is false, we simply skip tool calls without results
+      // (they may still be in progress, especially after gateway restarts)
     }
 
     for (const rem of remainder) {
