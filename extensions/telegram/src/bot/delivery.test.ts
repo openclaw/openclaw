@@ -588,23 +588,85 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("silently skips when formatted and plain fallback text are both empty", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await expect(
-      deliverReplies({
-        replies: [{ text: "   " }],
-        chatId: "123",
-        token: "tok",
-        runtime,
-        bot,
-        replyToMode: "off",
-        textLimit: 4000,
-      }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    const result = await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+  });
+
+  it("attaches buttons to second chunk when first chunk is empty", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 50,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    // Force two chunks where the first renders to empty HTML.
+    // Use a small textLimit and text that will produce an empty first chunk.
+    await deliverReplies({
+      replies: [
+        {
+          text: "real content here",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Click me", callback_data: "click" }]],
+            },
+          },
+        },
+      ],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    // At minimum sendMessage should have been called and the last call
+    // should carry the reply_markup when buttons are present.
+    expect(sendMessage).toHaveBeenCalled();
+    const firstCall = sendMessage.mock.calls[0];
+    expect(firstCall[2]).toEqual(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [[{ text: "Click me", callback_data: "click" }]],
+        },
+      }),
+    );
+  });
+
+  it("does not call markDelivered when sendTelegramText returns undefined (safety net)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    // All-whitespace text: sendTelegramText returns undefined (safety net)
+    const result = await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {
