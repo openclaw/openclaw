@@ -15,6 +15,7 @@ import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtim
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
+  readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -230,7 +231,7 @@ export async function maybeRepairGatewayServiceConfig(
     command,
     expectedGatewayToken,
   });
-  const serviceToken = command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const serviceToken = readEmbeddedGatewayToken(command);
   if (tokenRefConfigured && serviceToken) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
@@ -316,7 +317,7 @@ export async function maybeRepairGatewayServiceConfig(
   if (!repair) {
     return;
   }
-  const serviceEmbeddedToken = command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
   const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
   const configuredGatewayToken =
     typeof cfg.gateway?.auth?.token === "string"

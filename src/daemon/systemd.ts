@@ -65,7 +65,7 @@ export async function readSystemdServiceExecStart(
     const content = await fs.readFile(unitPath, "utf8");
     let execStart = "";
     let workingDirectory = "";
-    const environment: Record<string, string> = {};
+    const inlineEnvironment: Record<string, string> = {};
     const environmentFileSpecs: string[] = [];
     for (const rawLine of content.split("\n")) {
       const line = rawLine.trim();
@@ -80,7 +80,7 @@ export async function readSystemdServiceExecStart(
         const raw = line.slice("Environment=".length).trim();
         const parsed = parseSystemdEnvAssignment(raw);
         if (parsed) {
-          environment[parsed.key] = parsed.value;
+          inlineEnvironment[parsed.key] = parsed.value;
         }
       } else if (line.startsWith("EnvironmentFile=")) {
         const raw = line.slice("EnvironmentFile=".length).trim();
@@ -98,19 +98,33 @@ export async function readSystemdServiceExecStart(
       unitPath,
     });
     const mergedEnvironment = {
-      ...environmentFromFiles,
-      ...environment,
+      ...inlineEnvironment,
+      ...environmentFromFiles.environment,
+    };
+    const mergedEnvironmentSources = {
+      ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
+      ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
     };
     const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(mergedEnvironment).length > 0 ? { environment: mergedEnvironment } : {}),
+      ...(Object.keys(mergedEnvironmentSources).length > 0
+        ? { environmentValueSources: mergedEnvironmentSources }
+        : {}),
       sourcePath: unitPath,
     };
   } catch {
     return null;
   }
+}
+
+function buildEnvironmentValueSources(
+  environment: Record<string, string>,
+  source: "inline" | "file",
+): Record<string, "inline" | "file"> {
+  return Object.fromEntries(Object.keys(environment).map((key) => [key, source]));
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -165,10 +179,10 @@ async function resolveSystemdEnvironmentFiles(params: {
   environmentFileSpecs: string[];
   env: GatewayServiceEnv;
   unitPath: string;
-}): Promise<Record<string, string>> {
+}): Promise<{ environment: Record<string, string> }> {
   const resolved: Record<string, string> = {};
   if (params.environmentFileSpecs.length === 0) {
-    return resolved;
+    return { environment: resolved };
   }
   const unitDir = path.posix.dirname(params.unitPath);
   for (const specRaw of params.environmentFileSpecs) {
@@ -193,7 +207,7 @@ async function resolveSystemdEnvironmentFiles(params: {
       }
     }
   }
-  return resolved;
+  return { environment: resolved };
 }
 
 export type SystemdServiceInfo = {
