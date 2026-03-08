@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
+import { resetMattermostOpaqueTargetCacheForTests } from "./target-resolution.js";
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -14,8 +15,8 @@ const mockState = vi.hoisted(() => ({
   createMattermostPost: vi.fn(),
   fetchMattermostChannelByName: vi.fn(),
   fetchMattermostMe: vi.fn(),
-  fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUser: vi.fn(),
+  fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
   uploadMattermostFile: vi.fn(),
@@ -35,8 +36,8 @@ vi.mock("./client.js", () => ({
   createMattermostPost: mockState.createMattermostPost,
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
   fetchMattermostMe: mockState.fetchMattermostMe,
-  fetchMattermostUserTeams: mockState.fetchMattermostUserTeams,
   fetchMattermostUser: mockState.fetchMattermostUser,
+  fetchMattermostUserTeams: mockState.fetchMattermostUserTeams,
   fetchMattermostUserByUsername: mockState.fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl: mockState.normalizeMattermostBaseUrl,
   uploadMattermostFile: mockState.uploadMattermostFile,
@@ -79,10 +80,11 @@ describe("sendMessageMattermost", () => {
     mockState.createMattermostPost.mockReset();
     mockState.fetchMattermostChannelByName.mockReset();
     mockState.fetchMattermostMe.mockReset();
-    mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUser.mockReset();
+    mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.uploadMattermostFile.mockReset();
+    resetMattermostOpaqueTargetCacheForTests();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-user" });
@@ -184,6 +186,61 @@ describe("sendMessageMattermost", () => {
         }),
       }),
     );
+  });
+
+  it("resolves a bare Mattermost user id as a DM target before upload", async () => {
+    const userId = "dthcxgoxhifn3pwh65cut3ud3w";
+    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
+    mockState.createMattermostDirectChannel.mockResolvedValueOnce({ id: "dm-channel-1" });
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("media-bytes"),
+      fileName: "photo.png",
+      contentType: "image/png",
+      kind: "image",
+    });
+
+    const result = await sendMessageMattermost(userId, "hello", {
+      mediaUrl: "file:///tmp/agent-workspace/photo.png",
+      mediaLocalRoots: ["/tmp/agent-workspace"],
+    });
+
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, userId);
+    expect(mockState.createMattermostDirectChannel).toHaveBeenCalledWith({}, ["bot-user", userId]);
+    expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        channelId: "dm-channel-1",
+      }),
+    );
+    expect(result.channelId).toBe("dm-channel-1");
+  });
+
+  it("falls back to a channel target when bare Mattermost id is not a user", async () => {
+    const channelId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+    mockState.fetchMattermostUser.mockRejectedValueOnce(
+      new Error("Mattermost API 404 Not Found: user not found"),
+    );
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("media-bytes"),
+      fileName: "photo.png",
+      contentType: "image/png",
+      kind: "image",
+    });
+
+    const result = await sendMessageMattermost(channelId, "hello", {
+      mediaUrl: "file:///tmp/agent-workspace/photo.png",
+      mediaLocalRoots: ["/tmp/agent-workspace"],
+    });
+
+    expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, channelId);
+    expect(mockState.createMattermostDirectChannel).not.toHaveBeenCalled();
+    expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        channelId,
+      }),
+    );
+    expect(result.channelId).toBe(channelId);
   });
 });
 

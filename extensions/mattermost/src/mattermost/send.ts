@@ -7,7 +7,6 @@ import {
   createMattermostPost,
   fetchMattermostChannelByName,
   fetchMattermostMe,
-  fetchMattermostUser,
   fetchMattermostUserByUsername,
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
@@ -20,6 +19,7 @@ import {
   setInteractionSecret,
   type MattermostInteractiveButtonInput,
 } from "./interactions.js";
+import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
   cfg?: OpenClawConfig;
@@ -51,11 +51,6 @@ type MattermostTarget =
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
-
-// Cache for ambiguous, unprefixed IDs:
-// - whether an opaque id resolved as a user
-// - DM channel ids per user
-const userIdResolutionCache = new Map<string, boolean>();
 const dmChannelCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
@@ -73,44 +68,6 @@ function normalizeMessage(text: string, mediaUrl?: string): string {
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
-
-/** Mattermost IDs are 26-character lowercase alphanumeric strings. */
-function isMattermostId(value: string): boolean {
-  return /^[a-z0-9]{26}$/.test(value);
-}
-
-/** Returns true when the target has an explicit prefix (user:, channel:, mattermost:, @). */
-function isExplicitMattermostTarget(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^(channel|user|mattermost):/i.test(trimmed)) {
-    return true;
-  }
-  if (trimmed.startsWith("@")) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Extract Mattermost HTTP status from an error message.
- * Returns undefined for non-API errors or when parsing fails.
- */
-function parseMattermostApiStatus(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const msg = "message" in err ? String((err as { message?: unknown }).message ?? "") : "";
-  const m = /Mattermost API (\d{3})\b/.exec(msg);
-  if (!m) {
-    return undefined;
-  }
-  const code = Number(m[1]);
-  return Number.isFinite(code) ? code : undefined;
-}
-
 export function parseMattermostTarget(raw: string): MattermostTarget {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -247,13 +204,11 @@ async function resolveTargetChannelId(params: {
         token: params.token,
         username: params.target.username ?? "",
       });
-
   const dmKey = `${cacheKey(params.baseUrl, params.token)}::dm::${userId}`;
   const cachedDm = dmChannelCache.get(dmKey);
   if (cachedDm) {
     return cachedDm;
   }
-
   const botUser = await resolveBotUser(params.baseUrl, params.token);
   const client = createMattermostClient({
     baseUrl: params.baseUrl,
@@ -296,49 +251,17 @@ async function resolveMattermostSendContext(
   }
 
   const trimmedTo = to?.trim() ?? "";
-
-  // User-first resolution for ambiguous, unprefixed 26-char Mattermost IDs.
-  // A bare 26-char ID is ambiguous: it could be a user ID or a channel ID.
-  // We probe the users API first; on 404 we fall back to treating it as a channel ID.
-  // Negative results are only cached for confirmed 404s to avoid poisoning the cache
-  // on transient errors (429, 5xx, network failures).
-  let target: MattermostTarget;
-  if (!isExplicitMattermostTarget(trimmedTo) && isMattermostId(trimmedTo)) {
-    const key = `${cacheKey(baseUrl, token)}::isUser::${trimmedTo}`;
-    const cachedResolution = userIdResolutionCache.get(key);
-    if (cachedResolution === true) {
-      target = { kind: "user", id: trimmedTo };
-    } else if (cachedResolution === false) {
-      target = { kind: "channel", id: trimmedTo };
-    } else {
-      const client = createMattermostClient({ baseUrl, botToken: token });
-      try {
-        await fetchMattermostUser(client, trimmedTo);
-        userIdResolutionCache.set(key, true);
-        target = { kind: "user", id: trimmedTo };
-      } catch (err) {
-        const status = parseMattermostApiStatus(err);
-
-        // Only cache negative resolution for confirmed not-found.
-        // For transient errors (429/5xx/network), avoid poisoning the cache.
-        if (status === 404) {
-          userIdResolutionCache.set(key, false);
-        } else {
-          if (core.logging.shouldLogVerbose()) {
-            const logger = core.logging.getChildLogger({ module: "mattermost" });
-            logger.debug?.(
-              `mattermost send: could not resolve ambiguous id as user (status=${status ?? "unknown"}); falling back to channel id`,
-            );
-          }
-        }
-
-        target = { kind: "channel", id: trimmedTo };
-      }
-    }
-  } else {
-    target = parseMattermostTarget(trimmedTo);
-  }
-
+  const opaqueTarget = await resolveMattermostOpaqueTarget({
+    input: trimmedTo,
+    token,
+    baseUrl,
+  });
+  const target =
+    opaqueTarget?.kind === "user"
+      ? { kind: "user" as const, id: opaqueTarget.id }
+      : opaqueTarget?.kind === "channel"
+        ? { kind: "channel" as const, id: opaqueTarget.id }
+        : parseMattermostTarget(trimmedTo);
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
