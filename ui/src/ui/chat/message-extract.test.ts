@@ -42,6 +42,26 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("extracts output_text blocks for assistant replies", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "output_text", text: "OpenResponses reply" }],
+    };
+    expect(extractText(message)).toBe("OpenResponses reply");
+    expect(extractTextCached(message)).toBe("OpenResponses reply");
+  });
+
+  it("extracts mixed input/output text blocks", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "input_text", text: "Prompt mirror" },
+        { type: "output_text", text: "Final answer" },
+      ],
+    };
+    expect(extractText(message)).toBe("Prompt mirror\nFinal answer");
+  });
 });
 
 describe("extractThinkingCached", () => {
