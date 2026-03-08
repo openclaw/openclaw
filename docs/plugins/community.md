@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **External A2A Delegation** — Native OpenClaw outbound A2A delegation plugin that exposes one `remote_agent` tool for target discovery, remote delegation, task watch, status, and cancel.
+  npm: `@aramisfa/openclaw-a2a-outbound`
+  repo: `https://github.com/aramisfacchinetti/openclaw-a2a-plugins`
+  install: `openclaw plugins install @aramisfa/openclaw-a2a-outbound`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
