@@ -508,6 +508,22 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /**
+       * SSRF policy overrides for web_fetch.
+       *
+       * Useful when running behind proxy tools (e.g. Clash TUN fake-ip mode)
+       * that resolve hostnames to addresses in the RFC 2544 benchmark range
+       * (198.18.0.0/15), which would otherwise be blocked by default SSRF
+       * protection.
+       */
+      ssrfPolicy?: {
+        /**
+         * Allow the RFC 2544 benchmark range (198.18.0.0/15).
+         * Required when using Clash or similar proxy tools in fake-ip mode.
+         * Default: false.
+         */
+        allowRfc2544BenchmarkRange?: boolean;
+      };
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;
