@@ -324,6 +324,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/preview-final edit idempotence: treat `message is not modified` errors during preview finalization as delivered so partial-stream final replies do not fall back to duplicate sends. Landed from contributor PR #34983 by @HOYALIM. Thanks @HOYALIM.
 - Telegram/DM streaming transport parity: use message preview transport for all DM streaming lanes so final delivery can edit the active preview instead of sending duplicate finals. Landed from contributor PR #38906 by @gambletan. Thanks @gambletan.
 - Telegram/send retry safety: retry non-idempotent send paths only for pre-connect failures and make custom retry predicates strict, preventing ambiguous reconnect retries from sending duplicate messages. Landed from contributor PR #34238 by @hal-crackbot. Thanks @hal-crackbot.
+- Discord/DM session-key normalization: rewrite legacy `discord:dm:*` and phantom direct-message `discord:channel:<user>` session keys to `discord:direct:*` when the sender matches, so multi-agent Discord DMs stop falling into empty channel-shaped sessions and resume replying correctly.
 
 ## 2026.3.2
 
