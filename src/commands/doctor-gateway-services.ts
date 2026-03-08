@@ -8,7 +8,7 @@ import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   findExtraGatewayServices,
-  renderGatewayServiceCleanupHints,
+  renderCleanupHintsForService,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
@@ -425,7 +425,9 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  // Show per-service removal commands using the actual labels detected, not
+  // the current profile's label.
+  const cleanupHints = extraServices.flatMap((svc) => renderCleanupHintsForService(svc));
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }

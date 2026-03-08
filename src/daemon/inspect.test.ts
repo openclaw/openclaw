@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findExtraGatewayServices } from "./inspect.js";
+import { findExtraGatewayServices, renderCleanupHintsForService } from "./inspect.js";
 
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
@@ -83,5 +83,55 @@ describe("findExtraGatewayServices (win32)", () => {
         legacy: true,
       },
     ]);
+  });
+});
+
+describe("renderCleanupHintsForService", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+  });
+
+  it("generates macOS hints using the service's own label", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    const hints = renderCleanupHintsForService({
+      platform: "darwin",
+      label: "ai.openclaw.gateway-backup",
+      detail: "plist: /Library/LaunchAgents/ai.openclaw.gateway-backup.plist",
+      scope: "user",
+    });
+    expect(hints).toEqual([
+      "launchctl bootout gui/$UID/ai.openclaw.gateway-backup",
+      "rm ~/Library/LaunchAgents/ai.openclaw.gateway-backup.plist",
+    ]);
+  });
+
+  it("generates Linux hints using the service's label, stripping .service suffix", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    const hints = renderCleanupHintsForService({
+      platform: "linux",
+      label: "moltbot-gateway.service",
+      detail: "unit: /home/user/.config/systemd/user/moltbot-gateway.service",
+      scope: "user",
+    });
+    expect(hints).toEqual([
+      "systemctl --user disable --now moltbot-gateway.service",
+      "rm ~/.config/systemd/user/moltbot-gateway.service",
+    ]);
+  });
+
+  it("generates Windows hints using the service's task name", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    const hints = renderCleanupHintsForService({
+      platform: "win32",
+      label: "Clawdbot Legacy",
+      detail: "task: Clawdbot Legacy",
+      scope: "system",
+    });
+    expect(hints).toEqual(['schtasks /Delete /TN "Clawdbot Legacy" /F']);
   });
 });

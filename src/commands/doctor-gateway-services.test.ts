@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
-  renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
+  renderCleanupHintsForService: vi.fn().mockReturnValue([]),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
 }));
@@ -28,7 +28,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: mocks.findExtraGatewayServices,
-  renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,
+  renderCleanupHintsForService: mocks.renderCleanupHintsForService,
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -357,7 +357,7 @@ describe("maybeScanExtraGatewayServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findExtraGatewayServices.mockResolvedValue([]);
-    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+    mocks.renderCleanupHintsForService.mockReturnValue([]);
     mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
   });
 
@@ -404,6 +404,42 @@ describe("maybeScanExtraGatewayServices", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    );
+  });
+
+  it("generates cleanup hints using the detected service label, not the current profile label", async () => {
+    const extraService = {
+      platform: "darwin" as const,
+      label: "ai.openclaw.gateway-backup",
+      detail: "plist: /Library/LaunchAgents/ai.openclaw.gateway-backup.plist",
+      scope: "user" as const,
+      marker: "openclaw" as const,
+      legacy: false,
+    };
+    mocks.findExtraGatewayServices.mockResolvedValue([extraService]);
+    mocks.renderCleanupHintsForService.mockReturnValue([
+      "launchctl bootout gui/$UID/ai.openclaw.gateway-backup",
+      "rm ~/Library/LaunchAgents/ai.openclaw.gateway-backup.plist",
+    ]);
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const prompter = {
+      confirm: vi.fn(),
+      confirmRepair: vi.fn(),
+      confirmAggressive: vi.fn(),
+      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(false),
+      select: vi.fn(),
+      shouldRepair: false,
+      shouldForce: false,
+    };
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);
+
+    // The hint renderer must be called with the specific detected service.
+    expect(mocks.renderCleanupHintsForService).toHaveBeenCalledWith(extraService);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("ai.openclaw.gateway-backup"),
+      "Cleanup hints",
     );
   });
 });
