@@ -261,30 +261,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           // The actual message will be sent in the "final" phase
           if (info?.kind === "block") {
             // Start streaming for card mode blocks (code blocks, tables, etc. need markdown rendering)
-            if (streamingEnabled && shouldDeliverText && useCard) {
+            if (streamingEnabled && useCard) {
               startStreaming();
               if (streamingStartPromise) {
                 await streamingStartPromise;
               }
-              // Mirror block text into streamText so onIdle close still sends content
-              queueStreamingUpdate(text, { mode: "delta" });
-              // Block phase: only collect text for streaming, don't send yet
-              // Media is sent immediately even in block phase
-              if (hasMedia) {
-                for (const mediaUrl of mediaList) {
-                  await sendMediaFeishu({
-                    cfg,
-                    to: chatId,
-                    mediaUrl,
-                    replyToMessageId: sendReplyToMessageId,
-                    replyInThread: effectiveReplyInThread,
-                    accountId,
-                  });
+              // If streaming started successfully, use streaming path
+              if (streaming?.isActive()) {
+                // Mirror block text into streamText so onIdle close still sends content
+                queueStreamingUpdate(text, { mode: "delta" });
+                // Block phase: only collect text for streaming, don't send yet
+                // Media is sent immediately even in block phase
+                if (hasMedia) {
+                  for (const mediaUrl of mediaList) {
+                    await sendMediaFeishu({
+                      cfg,
+                      to: chatId,
+                      mediaUrl,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      accountId,
+                    });
+                  }
                 }
+                return; // Don't send text in block phase - wait for final
               }
-              return; // Don't send text in block phase - wait for final
+              // If streaming failed to start, fallback to regular send path below
             }
-            // Non-card mode: continue to regular send path below
+            // Non-card mode or streaming failed: continue to regular send path below
           }
 
           if (info?.kind === "final" && streamingEnabled && useCard) {

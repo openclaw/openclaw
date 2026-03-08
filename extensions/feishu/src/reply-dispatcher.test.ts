@@ -11,6 +11,7 @@ const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted(() => [] as any[]);
+const streamingStartShouldFail = vi.hoisted(() => ({ value: false }));
 
 vi.mock("./accounts.js", () => ({ resolveFeishuAccount: resolveFeishuAccountMock }));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
@@ -46,6 +47,9 @@ vi.mock("./streaming-card.js", () => ({
   FeishuStreamingSession: class {
     active = false;
     start = vi.fn(async () => {
+      if (streamingStartShouldFail.value) {
+        throw new Error("Network error: streaming start failed");
+      }
       this.active = true; // Set immediately so isActive() returns true after await
     });
     update = vi.fn(async () => {});
@@ -918,5 +922,34 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(0);
     // Should use regular card send
     expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("runtime streaming failure: block falls back to regular send path", async () => {
+    streamingInstances.length = 0;
+
+    // Enable failure mode for streaming.start()
+    streamingStartShouldFail.value = true;
+
+    try {
+      createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        chatId: "oc_chat",
+      });
+
+      const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+      await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+
+      // Streaming start should have been attempted and failed
+      expect(streamingInstances).toHaveLength(1);
+      expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+      // Since streaming failed (isActive returns false), should fall back to regular card send
+      expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      // Reset failure mode
+      streamingStartShouldFail.value = false;
+    }
   });
 });
