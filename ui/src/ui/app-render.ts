@@ -139,10 +139,18 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  const helloVersion =
+    typeof state.hello?.server?.version === "string" ? state.hello.server.version.trim() : "";
+  const updateCurrentVersion =
+    typeof state.updateAvailable?.currentVersion === "string"
+      ? state.updateAvailable.currentVersion.trim()
+      : "";
+  // UI safeguard: after upgrade/restart, hello version can be stale until reconnect.
+  // Prefer update-check's currentVersion when both are present but disagree.
   const openClawVersion =
-    (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
-    state.updateAvailable?.currentVersion ||
-    t("common.na");
+    updateCurrentVersion && helloVersion && updateCurrentVersion !== helloVersion
+      ? updateCurrentVersion
+      : helloVersion || updateCurrentVersion || t("common.na");
   const availableUpdate =
     state.updateAvailable &&
     state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion

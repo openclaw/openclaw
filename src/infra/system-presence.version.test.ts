@@ -13,7 +13,7 @@ async function withPresenceModule<T>(
 }
 
 describe("system-presence version fallback", () => {
-  it("uses runtime VERSION when OPENCLAW_VERSION is not set", async () => {
+  it("prefers runtime VERSION over OPENCLAW_SERVICE_VERSION when both exist", async () => {
     await withPresenceModule(
       {
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
@@ -27,16 +27,17 @@ describe("system-presence version fallback", () => {
     );
   });
 
-  it("prefers OPENCLAW_VERSION over runtime VERSION", async () => {
+  it("still prefers runtime VERSION over OPENCLAW_VERSION and OPENCLAW_SERVICE_VERSION", async () => {
     await withPresenceModule(
       {
         OPENCLAW_VERSION: "9.9.9-cli",
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
         npm_package_version: "1.0.0-package",
       },
-      ({ listSystemPresence }) => {
+      async ({ listSystemPresence }) => {
+        const { VERSION } = await import("../version.js");
         const selfEntry = listSystemPresence().find((entry) => entry.reason === "self");
-        expect(selfEntry?.version).toBe("9.9.9-cli");
+        expect(selfEntry?.version).toBe(VERSION);
       },
     );
   });
