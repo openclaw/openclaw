@@ -82,7 +82,7 @@ export class OpenAITTSProvider {
     this.model = config.model || "gpt-4o-mini-tts";
     // Default to coral - good balance of quality and natural tone
     this.voice = (config.voice as OpenAITTSVoice) || "coral";
-    this.speed = config.speed || 1.0;
+    this.speed = config.speed ?? 1.0;
     this.instructions = config.instructions;
 
     if (!this.apiKey) {
