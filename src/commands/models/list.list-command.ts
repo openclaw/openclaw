@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { parseModelRef } from "../../agents/model-selection.js";
 import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -69,6 +70,7 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
 
   if (opts.all) {
+    const seenKeys = new Set<string>();
     const sorted = [...models].toSorted((a, b) => {
       const p = a.provider.localeCompare(b.provider);
       if (p !== 0) {
@@ -97,6 +99,46 @@ export async function modelsListCommand(
           authStore,
         }),
       );
+      seenKeys.add(key);
+    }
+
+    if (modelRegistry) {
+      const catalog = await loadModelCatalog({ config: cfg });
+      for (const entry of catalog) {
+        if (providerFilter && entry.provider.toLowerCase() !== providerFilter) {
+          continue;
+        }
+        const key = modelKey(entry.provider, entry.id);
+        if (seenKeys.has(key)) {
+          continue;
+        }
+        const model = resolveModelWithRegistry({
+          provider: entry.provider,
+          modelId: entry.id,
+          modelRegistry,
+          cfg,
+        });
+        if (!model) {
+          continue;
+        }
+        if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
+          continue;
+        }
+        const configured = configuredByKey.get(key);
+        rows.push(
+          toModelRow({
+            model,
+            key,
+            tags: configured ? Array.from(configured.tags) : [],
+            aliases: configured?.aliases ?? [],
+            availableKeys,
+            cfg,
+            authStore,
+            allowProviderAvailabilityFallback: !discoveredKeys.has(key),
+          }),
+        );
+        seenKeys.add(key);
+      }
     }
   } else {
     const registry = modelRegistry;
