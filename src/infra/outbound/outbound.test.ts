@@ -1219,6 +1219,28 @@ describe("normalizeOutboundPayloadsForJson", () => {
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
   });
+
+  it("strips echoed inbound metadata before parsing outbound media directives", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      {
+        text: `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"msg-abc","sender":"+1555000"}
+\`\`\`
+
+final answer
+MEDIA:https://x.test/a.jpg`,
+      },
+    ]);
+    expect(normalized).toEqual([
+      {
+        text: "final answer",
+        mediaUrl: "https://x.test/a.jpg",
+        mediaUrls: ["https://x.test/a.jpg"],
+        channelData: undefined,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
