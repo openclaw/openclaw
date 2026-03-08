@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
+import { createDedupeCache } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
@@ -376,10 +377,24 @@ function registerEventHandlers(
     },
   });
 
+  // Early event-level dedup to drop duplicate webhook retries and WebSocket replays
+  // before they enter the debouncer or processing pipeline.  The downstream dedup in
+  // handleFeishuMessage guards against restarts (persistent), but cannot prevent two
+  // concurrent dispatches of the same event from both being enqueued.
+  const eventDedup = createDedupeCache({ ttlMs: 5 * 60 * 1000, maxSize: 2_000 });
+
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
+      const event = data as unknown as FeishuMessageEvent;
+      const messageId = event.message?.message_id?.trim();
+      if (messageId) {
+        const eventKey = `${accountId}:evt:${messageId}`;
+        if (!eventDedup.check(eventKey)) {
+          log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+          return;
+        }
+      }
       const processMessage = async () => {
-        const event = data as unknown as FeishuMessageEvent;
         await inboundDebouncer.enqueue(event);
       };
       if (fireAndForget) {
