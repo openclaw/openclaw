@@ -21,6 +21,8 @@ export interface IdeationSchedulerDeps {
   existingStrategyNamesResolver: () => string[];
   /** Returns current max concurrent strategy count. */
   maxConcurrentResolver?: () => number;
+  /** Returns failure feedback summary for ideation prompt injection. */
+  failureFeedbackResolver?: () => string;
 }
 
 export class IdeationScheduler {
@@ -133,7 +135,13 @@ export class IdeationScheduler {
     // The LLM agent will call fin_strategy_create which goes through the
     // normal StrategyRegistry path. Dedup happens at prompt level (existing
     // strategy names are listed) and the LLM is instructed not to duplicate.
-    this.deps.engine.triggerIdeation(snapshot, existingNames, this.config.maxStrategiesPerCycle);
+    const failurePatterns = this.deps.failureFeedbackResolver?.() ?? "";
+    this.deps.engine.triggerIdeation(
+      snapshot,
+      existingNames,
+      this.config.maxStrategiesPerCycle,
+      failurePatterns || undefined,
+    );
 
     const result: IdeationResult = {
       timestamp: startMs,

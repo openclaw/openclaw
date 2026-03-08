@@ -31,6 +31,7 @@ export class IdeationEngine {
     snapshot: MarketSnapshot,
     existingStrategyNames: string[],
     maxStrategies: number,
+    failurePatterns?: string,
   ): void {
     if (snapshot.symbols.length === 0) {
       this.deps.activityLog?.append({
@@ -41,7 +42,12 @@ export class IdeationEngine {
       return;
     }
 
-    const prompt = this.buildPrompt(snapshot, existingStrategyNames, maxStrategies);
+    const prompt = this.buildPrompt(
+      snapshot,
+      existingStrategyNames,
+      maxStrategies,
+      failurePatterns,
+    );
 
     this.deps.activityLog?.append({
       category: "ideation",

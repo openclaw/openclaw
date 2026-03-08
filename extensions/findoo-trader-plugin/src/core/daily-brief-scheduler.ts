@@ -6,6 +6,7 @@ type PaperEngineLike = {
   getAccountState(
     id: string,
   ): { equity: number; cash?: number; positions: Array<Record<string, unknown>> } | null;
+  getSnapshots?(id: string): Array<{ dailyPnl: number }>;
 };
 
 type StrategyRegistryLike = {
@@ -87,6 +88,11 @@ export class DailyBriefScheduler {
       const accounts = paperEngine.listAccounts();
       for (const acct of accounts) {
         totalEquity += acct.equity;
+        // Read actual dailyPnl from latest equity snapshot
+        const snapshots = paperEngine.getSnapshots?.(acct.id) ?? [];
+        if (snapshots.length > 0) {
+          dailyPnl += snapshots[snapshots.length - 1]!.dailyPnl;
+        }
       }
     }
     const dailyPnlPct = totalEquity > 0 ? (dailyPnl / totalEquity) * 100 : 0;

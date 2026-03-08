@@ -19,13 +19,10 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
-import { CapacityEstimator } from "./src/alpha-factory/capacity-estimator.js";
 import { EvolutionScheduler } from "./src/alpha-factory/evolution-scheduler.js";
 import { GarbageCollector } from "./src/alpha-factory/garbage-collector.js";
-import { GradualScaleIn } from "./src/alpha-factory/gradual-scale-in.js";
 import { AlphaFactoryOrchestrator } from "./src/alpha-factory/orchestrator.js";
 import { ScreeningPipeline } from "./src/alpha-factory/screening-pipeline.js";
-import { ValidationOrchestrator } from "./src/alpha-factory/validation-orchestrator.js";
 import { resolveConfig } from "./src/config.js";
 import { ActivityLogStore } from "./src/core/activity-log-store.js";
 import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
@@ -654,6 +651,9 @@ const findooTraderPlugin = {
 
     const dedupFilter = new DeduplicationFilter(strategyRegistry);
 
+    // Create FailureFeedbackStore early so ideationScheduler can reference it
+    const failureFeedbackStore = new FailureFeedbackStore();
+
     const ideationEngine = new IdeationEngine({
       wakeBridge,
       activityLog,
@@ -681,6 +681,13 @@ const findooTraderPlugin = {
             return 20;
           }
         },
+        failureFeedbackResolver: () => {
+          try {
+            return failureFeedbackStore.getSummary();
+          } catch {
+            return "";
+          }
+        },
       },
       ideationConfig,
     );
@@ -701,8 +708,6 @@ const findooTraderPlugin = {
     setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
 
     // ── Alpha Factory (S1-S6 pipeline) ──
-
-    const failureFeedbackStore = new FailureFeedbackStore();
 
     const screeningPipeline = new ScreeningPipeline({
       backtestService: {
@@ -739,6 +744,7 @@ const findooTraderPlugin = {
         },
         paperEngine,
         activityLog,
+        wakeBridge,
       },
       86_400_000, // 24h
     );
@@ -748,6 +754,17 @@ const findooTraderPlugin = {
       evolutionScheduler,
       garbageCollector,
       activityLog,
+      onFailure: (strategyId, stage, reason) => {
+        const s = strategyRegistry.get(strategyId);
+        failureFeedbackStore.record({
+          templateId: s?.name ?? strategyId,
+          symbol: s?.definition?.symbols?.[0] ?? "unknown",
+          failStage: stage as "screening" | "validation" | "paper" | "gc",
+          failReason: reason,
+          parameters: s?.definition?.parameters ?? {},
+          timestamp: Date.now(),
+        });
+      },
     });
     alphaFactory.start();
 
@@ -805,6 +822,7 @@ const findooTraderPlugin = {
       handler: async (req: unknown, res: unknown) => {
         const httpRes = res as import("./src/types-http.js").HttpRes;
         const ids = strategyRegistry.list().map((s) => s.id);
+        // runFullPipeline internally calls runScreening which triggers onFailure callback
         const result = await alphaFactory.runFullPipeline(ids);
         httpRes.writeHead(200, { "Content-Type": "application/json" });
         httpRes.end(JSON.stringify(result));

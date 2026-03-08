@@ -255,6 +255,34 @@ export class AgentWakeBridge {
         `Call fin_lifecycle_scan to review the full action list and make decisions. ` +
         `Use fin_fund_rebalance to execute promotions/demotions.`,
       "cron:findoo:lifecycle-recommendation",
+      { cooldownMs: 30 * 60_000 }, // 30min cooldown — lifecycle runs every 5m
+    );
+  }
+
+  /** Evolution scheduler detected alpha decay — wake Agent to decide. */
+  onEvolutionNeeded(info: {
+    strategyId: string;
+    name: string;
+    classification: string;
+    halfLifeDays: number;
+  }): void {
+    this.activityLog?.append({
+      category: "evolution",
+      action: "evolution_needed_wake",
+      strategyId: info.strategyId,
+      detail: `Alpha decay detected on "${info.name}": ${info.classification} (half-life: ${info.halfLifeDays.toFixed(0)}d)`,
+      metadata: {
+        strategyId: info.strategyId,
+        classification: info.classification,
+        halfLifeDays: info.halfLifeDays,
+      },
+    });
+    this.wake(
+      `[findoo-trader] Strategy "${info.name}" alpha decay detected: ` +
+        `${info.classification} (half-life: ${info.halfLifeDays.toFixed(0)} days). ` +
+        `Use fin_evolve_trigger to evolve parameters, or fin_fund_status to review.`,
+      `cron:findoo:evolution-needed:${info.strategyId}`,
+      { cooldownMs: 4 * 60 * 60_000 }, // 4h cooldown — decay is a slow process
     );
   }
 
@@ -273,7 +301,15 @@ export class AgentWakeBridge {
     );
   }
 
-  private wake(text: string, contextKey: string): void {
+  private wake(text: string, contextKey: string, opts?: { cooldownMs?: number }): void {
+    // TTL cooldown: skip if same contextKey was fired recently
+    if (opts?.cooldownMs) {
+      const existing = this.pendingWakes.get(contextKey);
+      if (existing && Date.now() - existing.firedAt < opts.cooldownMs) {
+        return; // still within cooldown period
+      }
+    }
+
     // Track for pending wake reconciliation
     this.currentCycleFired.add(contextKey);
     const wakeId = `wake-${++this.wakeCounter}-${Date.now()}`;
