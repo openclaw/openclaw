@@ -265,6 +265,7 @@ export const ToolsWebSearchSchema = z
     provider: z
       .union([
         z.literal("brave"),
+        z.literal("serper"),
         z.literal("perplexity"),
         z.literal("grok"),
         z.literal("gemini"),
@@ -275,6 +276,12 @@ export const ToolsWebSearchSchema = z
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
+    serper: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
