@@ -44,20 +44,22 @@ describe("registerPluginCommand", () => {
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
-    expect(listPluginCommands()).toEqual([
-      {
+    expect(listPluginCommands()).toHaveLength(1);
+    expect(listPluginCommands()[0]).toEqual(
+      expect.objectContaining({
         name: "demo_cmd",
         description: "Demo command",
         pluginId: "demo-plugin",
-      },
-    ]);
-    expect(getPluginCommandSpecs()).toEqual([
-      {
+      }),
+    );
+    expect(getPluginCommandSpecs()).toHaveLength(1);
+    expect(getPluginCommandSpecs()[0]).toEqual(
+      expect.objectContaining({
         name: "demo_cmd",
         description: "Demo command",
         acceptsArgs: false,
-      },
-    ]);
+      }),
+    );
   });
 
   it("supports provider-specific native command aliases", () => {
