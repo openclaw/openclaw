@@ -62,6 +62,7 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+const HYBRID_KEYWORD_FANOUT_LIMIT = 8;
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
@@ -384,24 +385,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const resultSets =
         fullQueryResults.length > 0
           ? [fullQueryResults]
-          : await Promise.all(
-              // Fallback: broaden recall for conversational queries when the
-              // exact AND query is too strict to return any results.
-              (() => {
-                const keywords = extractKeywords(cleaned, {
-                  ftsTokenizer: this.settings.store.fts.tokenizer,
-                });
-                const searchTerms = keywords.length > 0 ? keywords : [cleaned];
-                return searchTerms.map((term) =>
-                  this.searchKeyword(
-                    term,
-                    candidates,
-                    { boostFallbackRanking: true },
-                    sourceFilterList,
-                  ).catch(() => []),
-                );
-              })(),
-            );
+          : [
+              await this.searchKeywordsMulti(
+                cleaned,
+                candidates,
+                { boostFallbackRanking: true, includeFullQuery: false },
+                sourceFilterList,
+              ),
+            ];
 
       // Merge and deduplicate results, keeping highest score for each chunk
       const seenIds = new Map<string, (typeof resultSets)[0][0]>();
@@ -427,7 +418,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(() => [])
+        ? await this.searchKeywordsMulti(cleaned, candidates, undefined, sourceFilterList)
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
@@ -559,6 +550,51 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+  }
+
+  private resolveHybridKeywordTerms(query: string): string[] {
+    const keywords = extractKeywords(query, {
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+    });
+    const ranked = keywords
+      .toSorted((a, b) => b.length - a.length)
+      .slice(0, HYBRID_KEYWORD_FANOUT_LIMIT);
+    return ranked.length > 0 ? ranked : [query];
+  }
+
+  private async searchKeywordsMulti(
+    query: string,
+    limit: number,
+    options?: { boostFallbackRanking?: boolean; includeFullQuery?: boolean },
+    sourceFilterList?: MemorySource[],
+  ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
+    const terms = this.resolveHybridKeywordTerms(query);
+    const includeFullQuery = options?.includeFullQuery ?? true;
+    const searchTerms = includeFullQuery
+      ? [query, ...terms.filter((term) => term !== query)]
+      : terms;
+    const resultSets = await Promise.all(
+      searchTerms.map((term) =>
+        this.searchKeyword(
+          term,
+          limit,
+          { boostFallbackRanking: options?.boostFallbackRanking },
+          sourceFilterList,
+        ).catch(() => []),
+      ),
+    );
+
+    const byId = new Map<string, MemorySearchResult & { id: string; textScore: number }>();
+    for (const results of resultSets) {
+      for (const result of results) {
+        const existing = byId.get(result.id);
+        if (!existing || result.score > existing.score) {
+          byId.set(result.id, result);
+        }
+      }
+    }
+
+    return [...byId.values()].toSorted((a, b) => b.score - a.score).slice(0, limit);
   }
 
   private mergeHybridResults(params: {

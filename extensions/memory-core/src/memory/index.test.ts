@@ -152,6 +152,7 @@ describe("memory index", () => {
   let memoryDir = "";
   let indexVectorPath = "";
   let indexMainPath = "";
+  let indexHybridKeywordsPath = "";
   let indexMultimodalPath = "";
 
   const managersForCleanup = new Set<MemoryIndexManager>();
@@ -162,6 +163,7 @@ describe("memory index", () => {
     memoryDir = path.join(workspaceDir, "memory");
     indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
+    indexHybridKeywordsPath = path.join(workspaceDir, "index-hybrid-keywords.sqlite");
     indexMultimodalPath = path.join(workspaceDir, "index-multimodal.sqlite");
   });
 
@@ -397,6 +399,35 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
+  });
+
+  it("finds provider-backed hybrid keyword matches when multi-word terms are split across files", async () => {
+    await fs.rm(memoryDir, { recursive: true, force: true });
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "alpha-note.md"), "# Alpha\nAlpha protocol notes.");
+    await fs.writeFile(path.join(memoryDir, "beta-note.md"), "# Beta\nBeta release notes.");
+
+    const manager = await getFreshManager(
+      createCfg({
+        storePath: indexHybridKeywordsPath,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      }),
+    );
+    try {
+      if (!manager.status().fts?.available) {
+        return;
+      }
+
+      await manager.sync({ reason: "test" });
+      const results = await manager.search("alpha beta", { maxResults: 10 });
+      const resultPaths = results.map((result) => result.path);
+
+      expect(resultPaths.some((entry) => entry.endsWith("memory/alpha-note.md"))).toBe(true);
+      expect(resultPaths.some((entry) => entry.endsWith("memory/beta-note.md"))).toBe(true);
+    } finally {
+      await manager.close?.();
+    }
   });
 
   it("reports vector availability after probe", async () => {
