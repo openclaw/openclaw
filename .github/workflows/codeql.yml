@@ -27,27 +27,42 @@ jobs:
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: true
             needs_python: false
+            needs_java: false
+            needs_swift_tools: false
+            needs_manual_build: false
             needs_autobuild: false
           - language: actions
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
             needs_python: false
+            needs_java: false
+            needs_swift_tools: false
+            needs_manual_build: false
             needs_autobuild: false
           - language: python
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
             needs_python: true
+            needs_java: false
+            needs_swift_tools: false
+            needs_manual_build: false
             needs_autobuild: false
           - language: java-kotlin
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
             needs_python: false
-            needs_autobuild: true
+            needs_java: true
+            needs_swift_tools: false
+            needs_manual_build: true
+            needs_autobuild: false
           - language: swift
             runs_on: macos-latest
             needs_node: false
             needs_python: false
-            needs_autobuild: true
+            needs_java: false
+            needs_swift_tools: true
+            needs_manual_build: true
+            needs_autobuild: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,6 +82,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Setup Java
+        if: matrix.needs_java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Swift build tools
+        if: matrix.needs_swift_tools
+        run: brew install xcodegen swiftlint swiftformat
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
@@ -76,6 +102,24 @@ jobs:
       - name: Autobuild
         if: matrix.needs_autobuild
         uses: github/codeql-action/autobuild@v4
+
+      - name: Build Android for CodeQL
+        if: matrix.language == 'java-kotlin'
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Build Swift for CodeQL
+        if: matrix.language == 'swift'
+        run: |
+          set -euo pipefail
+          swift build --package-path apps/macos --configuration release
+          cd apps/ios
+          xcodegen generate
+          xcodebuild build \
+            -project OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
