@@ -112,6 +112,13 @@ If you see `!`:
 
 - Make sure the Gateway is running locally (default setup), or run a node host on this machine if the Gateway runs elsewhere.
 - Open the extension Options page; it validates relay reachability + gateway-token auth.
+- Use the **relay port** in Options (default `18792`), not the Gateway port. Relay port = Gateway port + 3 (e.g. Gateway `18789` → relay `18792`).
+
+If the badge stays at `…` and never turns ON or `!`:
+
+- Click the toolbar icon again to cancel the attempt, then click once more to retry.
+- Ensure the port in Options is the relay port (Gateway + 3), not the Gateway port; otherwise the connection can hang.
+- After 8 seconds the extension will show `!` with a timeout message; if not, use the cancel-then-retry step above.
 
 ## Remote Gateway (use a node host)
 

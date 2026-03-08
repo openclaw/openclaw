@@ -154,20 +154,37 @@ async function ensureRelayConnection() {
       void whenReady(() => onRelayMessage(String(event.data || '')))
     }
 
+    const CONNECT_TIMEOUT_MS = 8000
     await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('WebSocket connect timeout')), 5000)
-      ws.onopen = () => {
-        clearTimeout(t)
-        resolve()
+      let settled = false
+      const settle = (fn) => () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutId)
+        fn()
       }
-      ws.onerror = () => {
-        clearTimeout(t)
+      const timeoutId = setTimeout(
+        settle(() => {
+          try {
+            ws.close()
+          } catch {
+            /* ignore */
+          }
+          if (ws === relayWs) relayWs = null
+          reject(new Error('WebSocket connect timeout (relay not responding)'))
+        }),
+        CONNECT_TIMEOUT_MS
+      )
+      ws.onopen = settle(() => resolve())
+      ws.onerror = settle(() => {
+        if (ws === relayWs) relayWs = null
         reject(new Error('WebSocket connect failed'))
-      }
-      ws.onclose = (ev) => {
-        clearTimeout(t)
-        reject(new Error(`WebSocket closed (${ev.code} ${ev.reason || 'no reason'})`))
-      }
+      })
+      ws.onclose = (ev) =>
+        settle(() => {
+          if (ws === relayWs) relayWs = null
+          reject(new Error(`WebSocket closed (${ev.code} ${ev.reason || 'no reason'})`))
+        })()
     })
 
     // Bind permanent handlers. Guard against stale socket: if this WS was
@@ -576,9 +593,22 @@ async function connectOrToggleForActiveTab() {
   const tabId = active?.id
   if (!tabId) return
 
+  const existing = tabs.get(tabId)
   // Prevent concurrent operations on the same tab.
   if (tabOperationLocks.has(tabId)) return
   tabOperationLocks.add(tabId)
+
+  try {
+    // Escape hatch: second click while "connecting" cancels and allows retry.
+    if (existing?.state === 'connecting') {
+      tabs.delete(tabId)
+      setBadge(tabId, 'off')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay (click to attach/detach)',
+      })
+      return
+    }
 
   try {
     if (reattachPending.has(tabId)) {
@@ -591,7 +621,6 @@ async function connectOrToggleForActiveTab() {
       return
     }
 
-    const existing = tabs.get(tabId)
     if (existing?.state === 'connected') {
       await detachTab(tabId, 'toggle')
       return
