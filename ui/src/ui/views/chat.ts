@@ -163,6 +163,46 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function handleDrop(e: DragEvent, props: ChatProps) {
+  if (!props.onAttachmentsChange) {
+    return;
+  }
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) {
+    return;
+  }
+
+  const imageFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file.type.startsWith("image/")) {
+      imageFiles.push(file);
+    }
+  }
+
+  if (imageFiles.length === 0) {
+    return;
+  }
+
+  e.preventDefault();
+
+  for (const file of imageFiles) {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const newAttachment: ChatAttachment = {
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      };
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, newAttachment]);
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -254,7 +294,7 @@ export function renderChat(props: ChatProps) {
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
+      : "Message (↩ to send, Shift+↩ for line breaks, paste or drop images)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -421,7 +461,15 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div
+        class="chat-compose"
+        @dragover=${(e: DragEvent) => {
+          if (props.onAttachmentsChange && e.dataTransfer?.types.includes("Files")) {
+            e.preventDefault();
+          }
+        }}
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
