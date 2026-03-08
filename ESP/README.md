@@ -1,20 +1,21 @@
 # OpenClaw ESP32-S3 Node
 
-基于 ESP32-S3 的 OpenClaw 多功能物联网节点固件 v2.0.0。
+基于 ESP32-S3 的 OpenClaw 多功能物联网节点固件 v3.1.0。
 
 ## 功能特性
 
 | 功能 | 说明 | 状态 |
 |------|------|------|
 | 🔤 麦克风 | I2S 数字麦克风，语音采集 | 🔧 规划中 |
-| 📷 摄像头 | OV2640 200万像素，拍照/录像 | 🔧 规划中 |
+| 📷 摄像头 | OV2640 200万像素，拍照/录像 | ✅ 已实现 |
 | 🖥️ 屏幕 | ST7789 2.8" TFT 显示屏 | 🔧 规划中 |
-| 🌡️ 温湿度 | DHT22 传感器 | 🔧 规划中 |
+| 🌡️ 温湿度 | DHT22 传感器 | ✅ 已实现 |
 | 🧭 姿态 | MPU6050 6轴加速度计/陀螺仪 | 🔧 规划中 |
-| 📟 继电器 | 1路继电器控制 | 🔧 规划中 |
-| 🔘 按钮 | 功能按钮交互 | ✅ 已实现 |
-| 🔐 认证 | RSA密钥 + 设备配对 | ✅ 已实现 |
-| 💾 存储 | NVS持久化Token | ✅ 已实现 |
+| 📟 继电器 | 1路继电器控制 | ✅ 已实现 |
+| 🔘 按钮 | 功能按钮交互 (短按/长按) | ✅ 已实现 |
+| 🔐 认证 | Ed25519签名 + 设备配对 | ✅ 已实现 |
+| 💾 存储 | NVS持久化Token + SPIFFS | ✅ 已实现 |
+| 🔄 OTA | WiFi远程固件更新 | ✅ 已实现 |
 
 ## 快速开始
 
@@ -118,15 +119,47 @@ v3|{deviceId}|{clientId}|{clientMode}|{role}|{scopes}|{signedAtMs}|{token}|{nonc
 ### 签名流程
 
 1. 构建 v3 格式的认证载荷字符串
-2. 对载荷进行 SHA256 哈希
-3. 使用 RSA-2048 私钥签名
-4. 签名结果 Base64 编码
+2. 使用 Ed25519 私钥签名
+3. 签名结果 Base64 URL 编码
+
+## 按钮交互
+
+| 操作 | 动作 | 功能 |
+|------|------|------|
+| 短按 (< 3秒) | 释放后触发 | 切换继电器状态 |
+| 长按 (>= 3秒) | 释放后触发 | 清除配对信息，重新配对 |
+
+## OTA 固件更新
+
+### HTTP API
+
+设备启动后会开启 OTA 服务器 (默认端口 8266)：
+
+```bash
+# 查看设备状态
+curl http://<ESP32_IP>:8266/status
+
+# 上传固件更新
+curl -X POST -F "image=@firmware.bin" http://<ESP32_IP>:8266/update
+
+# 远程重启
+curl -X POST http://<ESP32_IP>:8266/reboot
+```
+
+### 通过 Gateway 命令更新
+
+```json
+{
+  "command": "ota.update",
+  "paramsJSON": "{\"url\":\"http://server/firmware.bin\"}"
+}
+```
 
 ## 支持的命令
 
 ### sensor.read
 
-读取传感器数据。
+读取传感器数据（包含真实DHT22数据）。
 
 **请求示例：**
 ```json
@@ -138,25 +171,65 @@ v3|{deviceId}|{clientId}|{clientMode}|{role}|{scopes}|{signedAtMs}|{token}|{nonc
 **响应示例：**
 ```json
 {
-  "nodeId": "esp32-s3-node001",
-  "sensors": {
-    "rssi": -45,
-    "uptime": 3600,
-    "freeHeap": 245760,
-    "temperature": 25.5,
-    "humidity": 65.0
-  }
+  "nodeId": "...",
+  "rssi": -45,
+  "uptime": 3600,
+  "freeHeap": 245760,
+  "temperature": 25.5,
+  "humidity": 65.0
 }
 ```
 
 ### camera.snap
 
-拍照。
+拍照（需要在固件中启用 `USE_CAMERA`）。
 
 **请求示例：**
 ```json
 {
   "command": "camera.snap"
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "format": "jpeg",
+  "encoding": "base64",
+  "data": "..."
+}
+```
+
+### relay.set
+
+控制继电器开关。
+
+**请求示例：**
+```json
+{
+  "command": "relay.set",
+  "paramsJSON": "{\"state\":true}"
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "state": true
+}
+```
+
+### ota.update
+
+OTA固件更新。
+
+**请求示例：**
+```json
+{
+  "command": "ota.update",
+  "paramsJSON": "{\"url\":\"http://server/firmware.bin\"}"
 }
 ```
 
@@ -203,16 +276,16 @@ v3|{deviceId}|{clientId}|{clientMode}|{role}|{scopes}|{signedAtMs}|{token}|{nonc
 ### 引脚分配
 
 ```
-摄像头 OV2640:
-- D0-D7: GPIO 0-7
+摄像头 OV2640 (ESP32-S3 AI Thinker):
+- D0-D7: GPIO 11, 9, 8, 10, 12, 18, 17, 16
 - XCLK: GPIO 15
-- PCLK: GPIO 16
-- VSYNC: GPIO 17
-- HREF: GPIO 18
-- PWDN: GPIO 21
-- RESET: GPIO 20
-- SDA: GPIO 22
-- SCL: GPIO 23
+- PCLK: GPIO 13
+- VSYNC: GPIO 6
+- HREF: GPIO 7
+- PWDN: GPIO -1
+- RESET: GPIO -1
+- SDA: GPIO 4
+- SCL: GPIO 5
 
 显示屏 ST7789:
 - SCL: GPIO 39
@@ -232,18 +305,29 @@ MPU6050 (I2C):
 - SCL: GPIO 9
 - INT: GPIO 3
 
-DHT22:
+DHT22 温湿度传感器:
 - DATA: GPIO 4
+- VCC: 3.3V
+- GND: GND
 
 继电器:
 - IN1: GPIO 5
+- VCC: 5V
+- GND: GND
 
 按钮:
-- BOOT: GPIO 0
-- RST: GPIO 2
+- BOOT: GPIO 0 (内置)
 
 状态LED:
-- BUILTIN: GPIO 2
+- BUILTIN: GPIO 2 (内置)
+```
+
+### 启用摄像头
+
+编辑 `main.cpp`，取消注释：
+
+```cpp
+#define USE_CAMERA
 ```
 
 ## 故障排除
@@ -311,11 +395,21 @@ void cmdMyCommand(String reqId, String paramsJSON) {
 
 ## 版本历史
 
-### v2.0.0 (2026-03-04)
+### v3.1.0 (2026-03-05)
 
-- ✅ 完整重写认证流程
+- ✅ DHT22 温湿度传感器支持
+- ✅ 按钮交互 (短按切换继电器/长按清除配对)
+- ✅ 继电器控制命令 (relay.set)
+- ✅ OTA 固件更新 (HTTP服务器 + 命令)
+- ✅ 摄像头功能框架 (需启用 USE_CAMERA)
+- ✅ SPIFFS 文件系统支持
+- ✅ 继电器状态持久化
+
+### v3.0.0 (2026-03-04)
+
+- ✅ Ed25519 签名算法
 - ✅ 正确的v3认证载荷格式
-- ✅ RSA签名实现
+- ✅ Base64 URL 编码
 - ✅ NVS Token持久化
 - ✅ 完善的WebSocket帧处理
 - ✅ 命令处理框架

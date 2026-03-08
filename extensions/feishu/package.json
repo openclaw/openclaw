@@ -31,5 +31,8 @@
       "localPath": "extensions/feishu",
       "defaultChoice": "npm"
     }
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }

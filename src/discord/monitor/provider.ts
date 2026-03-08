@@ -307,8 +307,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   // Apply global proxy for undici so @buape/carbon's REST client also uses the proxy
-  applyDiscordGlobalProxy(rawDiscordCfg.proxy, runtime);
-  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  applyDiscordGlobalProxy(rawDiscordCfg.proxy, runtime, rawDiscordCfg.proxyBypass);
+  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime, rawDiscordCfg.proxyBypass);
   const dmConfig = rawDiscordCfg.dm;
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);

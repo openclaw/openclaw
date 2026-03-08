@@ -1,24 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
-const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
+const { undiciFetchMock, envHttpProxyAgentSpy } = vi.hoisted(() => ({
   undiciFetchMock: vi.fn(),
-  proxyAgentSpy: vi.fn(),
+  envHttpProxyAgentSpy: vi.fn(),
 }));
 
 vi.mock("undici", () => {
-  class ProxyAgent {
-    proxyUrl: string;
-    constructor(proxyUrl: string) {
-      if (proxyUrl === "bad-proxy") {
+  class EnvHttpProxyAgent {
+    httpProxy: string;
+    httpsProxy: string;
+    noProxy: string;
+    constructor(opts: { httpProxy: string; httpsProxy: string; noProxy: string }) {
+      if (opts.httpProxy === "bad-proxy") {
         throw new Error("bad proxy");
       }
-      this.proxyUrl = proxyUrl;
-      proxyAgentSpy(proxyUrl);
+      this.httpProxy = opts.httpProxy;
+      this.httpsProxy = opts.httpsProxy;
+      this.noProxy = opts.noProxy;
+      envHttpProxyAgentSpy(opts);
     }
   }
   return {
-    ProxyAgent,
+    EnvHttpProxyAgent,
     fetch: undiciFetchMock,
   };
 });
@@ -31,16 +35,23 @@ describe("resolveDiscordRestFetch", () => {
       exit: vi.fn(),
     } as const;
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
-    proxyAgentSpy.mockClear();
+    envHttpProxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(envHttpProxyAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "http://proxy.test:8080",
+        httpsProxy: "http://proxy.test:8080",
+      }),
+    );
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/oauth2/applications/@me",
       expect.objectContaining({
-        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+        dispatcher: expect.objectContaining({
+          httpProxy: "http://proxy.test:8080",
+        }),
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");

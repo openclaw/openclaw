@@ -42,10 +42,10 @@ const char* NODE_SCOPE = "node.admin";
 // Gateway auth token (from OpenClaw config: gateway.auth.token)
 const char* GATEWAY_AUTH_TOKEN = "f81890ae55aba1faa181e210005330eb08ca223673c2f596";
 
-const char* NODE_CAPS[] = {"sensor.read", "camera.snap", "system.notify", "device.info"};
-const char* NODE_COMMANDS[] = {"sensor.read", "camera.snap", "system.notify", "device.info"};
-#define CAPS_COUNT 4
-#define COMMANDS_COUNT 4
+const char* NODE_CAPS[] = {"sensor.read", "camera.snap", "system.notify", "device.info", "relay.set", "ota.update", "imu.read", "audio.capture", "audio.play"};
+const char* NODE_COMMANDS[] = {"sensor.read", "camera.snap", "system.notify", "device.info", "relay.set", "ota.update", "imu.read", "audio.capture", "audio.play"};
+#define CAPS_COUNT 9
+#define COMMANDS_COUNT 9
 
 // ==================== Globals ====================
 
@@ -236,14 +236,51 @@ void clearPairedToken() {
 void initKeys() {
     Serial.println("[CRYPTO] Initializing Ed25519 keys...");
 
-    // Generate random seed using ESP32 hardware RNG
-    unsigned char seed[32];
-    for (int i = 0; i < 32; i++) {
-        seed[i] = (unsigned char)(esp_random() & 0xFF);
-    }
+    // Load persisted keys if available
+    String savedPubKey = preferences.getString("pubkey", "");
+    String savedPrivKey = preferences.getString("privkey", "");
 
-    // Create Ed25519 keypair
-    ed25519_create_keypair(ed25519PublicKey, ed25519PrivateKey, seed);
+    if (savedPubKey.length() == 64 && savedPrivKey.length() == 128) {
+        // Load existing keys from NVS
+        Serial.println("[CRYPTO] Loading persisted keys...");
+        for (int i = 0; i < 32; i++) {
+            String byteStr = savedPubKey.substring(i * 2, i * 2 + 2);
+            ed25519PublicKey[i] = (unsigned char)strtol(byteStr.c_str(), NULL, 16);
+        }
+        for (int i = 0; i < 64; i++) {
+            String byteStr = savedPrivKey.substring(i * 2, i * 2 + 2);
+            ed25519PrivateKey[i] = (unsigned char)strtol(byteStr.c_str(), NULL, 16);
+        }
+    } else {
+        // Generate new keys and persist
+        Serial.println("[CRYPTO] Generating new Ed25519 keypair...");
+
+        // Generate random seed using ESP32 hardware RNG
+        unsigned char seed[32];
+        for (int i = 0; i < 32; i++) {
+            seed[i] = (unsigned char)(esp_random() & 0xFF);
+        }
+
+        // Create Ed25519 keypair
+        ed25519_create_keypair(ed25519PublicKey, ed25519PrivateKey, seed);
+
+        // Save keys to Preferences (hex format)
+        String pubKeyHex = "";
+        String privKeyHex = "";
+        for (int i = 0; i < 32; i++) {
+            char buf[3];
+            sprintf(buf, "%02x", ed25519PublicKey[i]);
+            pubKeyHex += buf;
+        }
+        for (int i = 0; i < 64; i++) {
+            char buf[3];
+            sprintf(buf, "%02x", ed25519PrivateKey[i]);
+            privKeyHex += buf;
+        }
+        preferences.putString("pubkey", pubKeyHex);
+        preferences.putString("privkey", privKeyHex);
+        Serial.println("[CRYPTO] Keys persisted to NVS");
+    }
 
     // Create PEM format public key for compatibility
     // OpenClaw expects: -----BEGIN PUBLIC KEY----- with SPKI DER format
