@@ -303,9 +303,9 @@ export function createOpenClawCodingTools(options?: {
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(
-        options.config,
-        getSubagentDepthFromSessionStore(options.sessionKey, { cfg: options.config }),
-      )
+          options.config,
+          getSubagentDepthFromSessionStore(options.sessionKey, { cfg: options.config }),
+        )
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
@@ -347,7 +347,6 @@ export function createOpenClawCodingTools(options?: {
     (fsConfig.allowedPaths?.length ?? 0) > 0 ||
     (fsConfig.denyPaths?.length ?? 0) > 0;
 
-
   if (sandboxRoot && !sandboxFsBridge) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
@@ -365,9 +364,9 @@ export function createOpenClawCodingTools(options?: {
         return [
           shouldWrapFsTools
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-              containerWorkdir: sandbox.containerWorkdir,
-              policy: fsPolicy,
-            })
+                containerWorkdir: sandbox.containerWorkdir,
+                policy: fsPolicy,
+              })
             : sandboxed,
         ];
       }
@@ -376,7 +375,11 @@ export function createOpenClawCodingTools(options?: {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
       });
-      return [shouldWrapFsTools ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy }) : wrapped];
+      return [
+        shouldWrapFsTools
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy })
+          : wrapped,
+      ];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
       return [];
@@ -386,14 +389,22 @@ export function createOpenClawCodingTools(options?: {
         return [];
       }
       const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-      return [shouldWrapFsTools ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy }) : wrapped];
+      return [
+        shouldWrapFsTools
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy })
+          : wrapped,
+      ];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
       const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-      return [shouldWrapFsTools ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy }) : wrapped];
+      return [
+        shouldWrapFsTools
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy })
+          : wrapped,
+      ];
     }
     return [tool];
   });
@@ -426,11 +437,11 @@ export function createOpenClawCodingTools(options?: {
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
     sandbox: sandbox
       ? {
-        containerName: sandbox.containerName,
-        workspaceDir: sandbox.workspaceDir,
-        containerWorkdir: sandbox.containerWorkdir,
-        env: sandbox.docker.env,
-      }
+          containerName: sandbox.containerName,
+          workspaceDir: sandbox.workspaceDir,
+          containerWorkdir: sandbox.containerWorkdir,
+          env: sandbox.docker.env,
+        }
       : undefined,
   });
   const processTool = createProcessTool({
@@ -441,39 +452,39 @@ export function createOpenClawCodingTools(options?: {
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
       : createApplyPatchTool({
-        cwd: sandboxRoot ?? workspaceRoot,
-        sandbox:
-          sandboxRoot && allowWorkspaceWrites
-            ? { root: sandboxRoot, bridge: sandboxFsBridge! }
-            : undefined,
-        workspaceOnly: applyPatchWorkspaceOnly,
-      });
+          cwd: sandboxRoot ?? workspaceRoot,
+          sandbox:
+            sandboxRoot && allowWorkspaceWrites
+              ? { root: sandboxRoot, bridge: sandboxFsBridge! }
+              : undefined,
+          workspaceOnly: applyPatchWorkspaceOnly,
+        });
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
       ? allowWorkspaceWrites
         ? [
-          shouldWrapFsTools
-            ? wrapToolWorkspaceRootGuardWithOptions(
-              createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-              sandboxRoot,
-              {
-                containerWorkdir: sandbox.containerWorkdir,
-                policy: fsPolicy,
-              },
-            )
-            : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-          shouldWrapFsTools
-            ? wrapToolWorkspaceRootGuardWithOptions(
-              createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-              sandboxRoot,
-              {
-                containerWorkdir: sandbox.containerWorkdir,
-                policy: fsPolicy,
-              },
-            )
-            : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
-        ]
+            shouldWrapFsTools
+              ? wrapToolWorkspaceRootGuardWithOptions(
+                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                    policy: fsPolicy,
+                  },
+                )
+              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+            shouldWrapFsTools
+              ? wrapToolWorkspaceRootGuardWithOptions(
+                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                    policy: fsPolicy,
+                  },
+                )
+              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+          ]
         : []
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
