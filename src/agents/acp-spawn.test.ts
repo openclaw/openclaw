@@ -35,6 +35,9 @@ const hoisted = vi.hoisted(() => {
   const initializeSessionMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
+  const loadSessionStoreMock = vi.fn();
+  const resolveStorePathMock = vi.fn();
+  const resolveSessionTranscriptFileMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -49,6 +52,9 @@ const hoisted = vi.hoisted(() => {
     initializeSessionMock,
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
+    loadSessionStoreMock,
+    resolveStorePathMock,
+    resolveSessionTranscriptFileMock,
     state,
   };
 });
@@ -85,6 +91,24 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+    resolveStorePath: (store: unknown, opts: unknown) => hoisted.resolveStorePathMock(store, opts),
+  };
+});
+
+vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/transcript.js")>();
+  return {
+    ...actual,
+    resolveSessionTranscriptFile: (params: unknown) =>
+      hoisted.resolveSessionTranscriptFileMock(params),
+  };
+});
 
 vi.mock("../acp/control-plane/manager.js", () => {
   return {
@@ -263,6 +287,34 @@ describe("spawnAcpDirect", () => {
     hoisted.resolveAcpSpawnStreamLogPathMock
       .mockReset()
       .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
+    hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<string, { sessionId: string; updatedAt: number }> = {};
+      return new Proxy(store, {
+        get(_target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return undefined;
+        },
+      });
+    });
+    hoisted.resolveSessionTranscriptFileMock
+      .mockReset()
+      .mockImplementation(async (params: unknown) => {
+        const typed = params as { threadId?: string };
+        const sessionFile = typed.threadId
+          ? `/tmp/agents/codex/sessions/sess-123-topic-${typed.threadId}.jsonl`
+          : "/tmp/agents/codex/sessions/sess-123.jsonl";
+        return {
+          sessionFile,
+          sessionEntry: {
+            sessionId: "sess-123",
+            updatedAt: Date.now(),
+            sessionFile,
+          },
+        };
+      });
   });
 
   it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
@@ -286,6 +338,13 @@ describe("spawnAcpDirect", () => {
     expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
     expect(result.runId).toBe("run-1");
     expect(result.mode).toBe("session");
+    const patchCalls = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .filter((request) => request.method === "sessions.patch");
+    expect(patchCalls[0]?.params).toMatchObject({
+      key: result.childSessionKey,
+      spawnedBy: "agent:main:main",
+    });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         targetKind: "session",
@@ -308,6 +367,12 @@ describe("spawnAcpDirect", () => {
         mode: "persistent",
       }),
     );
+    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { threadId?: string },
+    );
+    expect(transcriptCalls).toHaveLength(2);
+    expect(transcriptCalls[0]?.threadId).toBeUndefined();
+    expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
@@ -328,6 +393,13 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.mode).toBe("run");
+    expect(hoisted.resolveSessionTranscriptFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-123",
+        storePath: "/tmp/codex-sessions.json",
+        agentId: "codex",
+      }),
+    );
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -335,6 +407,32 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
     expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it("keeps ACP spawn running when session-file persistence fails", async () => {
+    hoisted.resolveSessionTranscriptFileMock.mockRejectedValueOnce(new Error("disk full"));
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+        agentThreadId: "1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.sessionKey).toBe(result.childSessionKey);
   });
 
   it("includes cwd in ACP thread intro banner when provided at spawn time", async () => {
