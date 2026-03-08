@@ -3,7 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import { flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -293,9 +293,7 @@ function handleTerminalChatEvent(
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
-      void loadSessions(host as unknown as OpenClawApp, {
-        activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      });
+      void loadSessions(host as unknown as OpenClawApp);
     }
   }
   // Reload history when tools were used so the persisted tool results
