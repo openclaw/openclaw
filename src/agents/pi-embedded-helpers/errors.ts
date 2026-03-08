@@ -558,6 +558,13 @@ export function formatAssistantErrorText(
     return "LLM request failed with an unknown error.";
   }
 
+  // Suppress internal error markers that should never reach users
+  // "terminated" is a transient internal state (e.g., aborted runs) that may
+  // temporarily set errorMessage but doesn't represent a user-facing error.
+  if (raw === "terminated" || raw === "aborted") {
+    return undefined;
+  }
+
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
