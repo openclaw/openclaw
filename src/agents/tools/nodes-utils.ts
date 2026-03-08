@@ -167,3 +167,34 @@ export async function resolveNode(
     pickDefaultNode: pickDefaultNode,
   });
 }
+
+/**
+ * Returns all connected canvas-capable node IDs for broadcast commands.
+ * If a specific node query is provided, resolves to just that single node.
+ * Throws if no canvas-capable nodes are connected.
+ */
+export async function resolveCanvasNodeIds(
+  opts: GatewayCallOptions,
+  query?: string,
+): Promise<string[]> {
+  const q = String(query ?? "").trim();
+  const nodes = await loadNodes(opts);
+  if (q) {
+    return [resolveNodeIdFromList(nodes, q)];
+  }
+  // When caps is available, filter to canvas-capable nodes; when caps is
+  // absent (pair-list fallback), assume the node may support canvas.
+  const withCanvas = nodes.filter((n) =>
+    Array.isArray(n.caps) ? n.caps.includes("canvas") : true,
+  );
+  // Prefer connected nodes; fall back to all candidates only when no node
+  // has a `connected` field at all (pair-list fallback does not populate it).
+  // When nodes explicitly report `connected: false`, respect that.
+  const hasConnectedField = withCanvas.some((n) => typeof n.connected === "boolean");
+  const connected = withCanvas.filter((n) => n.connected);
+  const candidates = hasConnectedField ? connected : withCanvas;
+  if (candidates.length === 0) {
+    throw new Error("no connected canvas-capable nodes");
+  }
+  return candidates.map((n) => n.nodeId);
+}

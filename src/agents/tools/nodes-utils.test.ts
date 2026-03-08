@@ -8,7 +8,7 @@ vi.mock("./gateway.js", () => ({
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
+import { listNodes, resolveCanvasNodeIds, resolveNodeIdFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -81,5 +81,78 @@ describe("listNodes", () => {
     await expect(listNodes({})).rejects.toThrow("gateway closed (1008): unauthorized");
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {});
+  });
+});
+
+describe("resolveCanvasNodeIds", () => {
+  it("returns all connected canvas-capable nodes", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: true },
+        { nodeId: "ios-1", caps: ["canvas"], connected: true },
+        { nodeId: "cli-1", caps: [], connected: true },
+      ],
+    });
+
+    const ids = await resolveCanvasNodeIds({});
+    expect(ids).toEqual(["mac-1", "ios-1"]);
+  });
+
+  it("excludes disconnected nodes", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: true },
+        { nodeId: "ios-1", caps: ["canvas"], connected: false },
+      ],
+    });
+
+    const ids = await resolveCanvasNodeIds({});
+    expect(ids).toEqual(["mac-1"]);
+  });
+
+  it("throws when no canvas-capable nodes are connected", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [{ nodeId: "cli-1", caps: [], connected: true }],
+    });
+
+    await expect(resolveCanvasNodeIds({})).rejects.toThrow("no connected canvas-capable nodes");
+  });
+
+  it("includes pair-list fallback nodes that lack caps/connected fields", async () => {
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("unknown method: node.list"))
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          { nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" },
+          { nodeId: "pair-2", displayName: "Pair 2", platform: "macos", remoteIp: "5.6.7.8" },
+        ],
+      });
+
+    const ids = await resolveCanvasNodeIds({});
+    expect(ids).toEqual(["pair-1", "pair-2"]);
+  });
+
+  it("throws when all canvas nodes are explicitly disconnected", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: false },
+        { nodeId: "ios-1", caps: ["canvas"], connected: false },
+      ],
+    });
+
+    await expect(resolveCanvasNodeIds({})).rejects.toThrow("no connected canvas-capable nodes");
+  });
+
+  it("resolves to a single node when a query is provided", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: true },
+        { nodeId: "ios-1", caps: ["canvas"], connected: true },
+      ],
+    });
+
+    const ids = await resolveCanvasNodeIds({}, "ios-1");
+    expect(ids).toEqual(["ios-1"]);
   });
 });
