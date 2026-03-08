@@ -66,9 +66,24 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
-  it("does not override explicit env values", () => {
+  it("overrides STATE_DIR and CONFIG_PATH even when already set in env", () => {
+    // --profile must win over inherited env vars from a running default gateway (#28236).
     const env: Record<string, string | undefined> = {
-      OPENCLAW_STATE_DIR: "/custom",
+      OPENCLAW_STATE_DIR: "/wrong-inherited-dir",
+    };
+    applyCliProfileEnv({
+      profile: "dev",
+      env,
+      homedir: () => "/home/peter",
+    });
+    const expectedStateDir = path.join(path.resolve("/home/peter"), ".openclaw-dev");
+    expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "openclaw.json"));
+  });
+
+  it("does not override explicit OPENCLAW_GATEWAY_PORT for dev profile", () => {
+    // GATEWAY_PORT is intentionally preserved when explicitly set (dev-only behaviour).
+    const env: Record<string, string | undefined> = {
       OPENCLAW_GATEWAY_PORT: "19099",
     };
     applyCliProfileEnv({
@@ -76,9 +91,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
-    expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
-    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
   });
 
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
