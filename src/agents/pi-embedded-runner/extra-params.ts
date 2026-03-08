@@ -1305,13 +1305,13 @@ export function applyExtraParamsToAgent(
   if (rawParallelToolCalls !== undefined) {
     if (typeof rawParallelToolCalls === "boolean") {
       agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+    } else if (rawParallelToolCalls === null) {
+      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
     } else {
       const summary =
-        rawParallelToolCalls === null
-          ? "null"
-          : typeof rawParallelToolCalls === "string"
-            ? rawParallelToolCalls
-            : typeof rawParallelToolCalls;
+        typeof rawParallelToolCalls === "string"
+          ? rawParallelToolCalls
+          : typeof rawParallelToolCalls;
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
