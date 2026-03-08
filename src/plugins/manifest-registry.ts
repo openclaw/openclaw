@@ -236,19 +236,19 @@ export function loadPluginManifestRegistry(params: {
         new Set([existing.candidate.origin, candidate.origin]).has("bundled") &&
         new Set([existing.candidate.origin, candidate.origin]).has("config");
       if (isBundledAndConfig) {
-        // Skip the duplicate warning - config entry is intentionally for the same bundled channel plugin
-        // Add both entries so loader can handle precedence
-        seenIds.set(manifest.id, { candidate, recordIndex: records.length });
-        records.push(
-          buildRecord({
+        // Skip the duplicate warning - config entry is intentionally for the same bundled channel plugin.
+        // Prefer higher-precedence origins (config > bundled).
+        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+          records[existing.recordIndex] = buildRecord({
             manifest,
             candidate,
             manifestPath: manifestRes.manifestPath,
             schemaCacheKey,
             configSchema,
-          }),
-        );
-        continue;
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        continue; // Skip without adding duplicate record
       }
       diagnostics.push({
         level: "warn",
