@@ -281,6 +281,76 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
+  it("maps provider-prefixed tool names to allowed canonical tools", async () => {
+    const partialToolCall = { type: "toolCall", name: " functions.read " };
+    const messageToolCall = { type: "toolCall", name: " functions.write " };
+    const finalToolCall = { type: "toolCall", name: " tools/exec " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("write");
+    expect(finalToolCall.name).toBe("exec");
+  });
+
+  it("normalizes toolUse and functionCall names before dispatch", async () => {
+    const partialToolCall = { type: "toolUse", name: " functions.read " };
+    const messageToolCall = { type: "functionCall", name: " functions.exec " };
+    const finalToolCall = { type: "toolUse", name: " tools/write " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("exec");
+    expect(finalToolCall.name).toBe("write");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("preserves multi-segment tool suffixes when dropping provider prefixes", async () => {
+    const finalToolCall = { type: "toolCall", name: " functions.graph.search " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["graph.search", "search"]));
+    const result = await stream.result();
+
+    expect(finalToolCall.name).toBe("graph.search");
+    expect(result).toBe(finalMessage);
+  });
+
   it("does not collapse whitespace-only tool names to empty strings", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };

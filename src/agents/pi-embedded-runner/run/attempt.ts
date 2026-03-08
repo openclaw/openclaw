@@ -251,25 +251,45 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
   }
-  if (allowedToolNames.has(trimmed)) {
-    return trimmed;
-  }
-  const normalized = normalizeToolName(trimmed);
-  if (allowedToolNames.has(normalized)) {
-    return normalized;
-  }
-  const folded = trimmed.toLowerCase();
-  let caseInsensitiveMatch: string | null = null;
-  for (const name of allowedToolNames) {
-    if (name.toLowerCase() !== folded) {
-      continue;
+
+  const candidateNames = new Set<string>([trimmed, normalizeToolName(trimmed)]);
+  const normalizedDelimiter = trimmed.replace(/\//g, ".");
+  const segments = normalizedDelimiter
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length > 1) {
+    for (let index = 1; index < segments.length; index += 1) {
+      const suffix = segments.slice(index).join(".");
+      candidateNames.add(suffix);
+      candidateNames.add(normalizeToolName(suffix));
     }
-    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
-      return trimmed;
-    }
-    caseInsensitiveMatch = name;
   }
-  return caseInsensitiveMatch ?? trimmed;
+
+  for (const candidate of candidateNames) {
+    if (allowedToolNames.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const candidate of candidateNames) {
+    const folded = candidate.toLowerCase();
+    let caseInsensitiveMatch: string | null = null;
+    for (const name of allowedToolNames) {
+      if (name.toLowerCase() !== folded) {
+        continue;
+      }
+      if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+        return candidate;
+      }
+      caseInsensitiveMatch = name;
+    }
+    if (caseInsensitiveMatch) {
+      return caseInsensitiveMatch;
+    }
+  }
+
+  return trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -361,7 +381,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
       continue;
     }
     const typedBlock = block as { type?: unknown; name?: unknown };
-    if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
       continue;
     }
     const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
