@@ -5,6 +5,7 @@ import {
   TtsProviderSchema,
 } from "openclaw/plugin-sdk/voice-call";
 import { z } from "zod";
+import { deepMergeDefined } from "./deep-merge.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -368,6 +369,17 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
+function normalizeVoiceCallTtsConfig(
+  defaults: VoiceCallTtsConfig,
+  overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,
+): VoiceCallTtsConfig {
+  if (!defaults && !overrides) {
+    return undefined;
+  }
+
+  return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   return {
@@ -387,7 +399,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     },
     streaming: { ...defaults.streaming, ...config.streaming },
     stt: { ...defaults.stt, ...config.stt },
-    tts: config.tts ?? defaults.tts,
+    tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
 }
 
