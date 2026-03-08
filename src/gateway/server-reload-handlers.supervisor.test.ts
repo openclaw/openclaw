@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 
-const deferGatewayRestartUntilIdle = vi.fn();
-const emitGatewayRestart = vi.fn(() => true);
-const setGatewaySigusr1RestartPolicy = vi.fn();
-const setCommandLaneConcurrency = vi.fn();
+const {
+  deferGatewayRestartUntilIdle,
+  emitGatewayRestart,
+  setGatewaySigusr1RestartPolicy,
+  setCommandLaneConcurrency,
+} = vi.hoisted(() => ({
+  deferGatewayRestartUntilIdle: vi.fn(),
+  emitGatewayRestart: vi.fn(() => true),
+  setGatewaySigusr1RestartPolicy: vi.fn(),
+  setCommandLaneConcurrency: vi.fn(),
+}));
 
 let totalQueueSize = 0;
 let totalPendingReplies = 0;
@@ -12,14 +19,14 @@ let activeEmbeddedRuns = 0;
 let activeSupervisorRuns = 0;
 
 vi.mock("../infra/restart.js", () => ({
-  deferGatewayRestartUntilIdle: (...args: unknown[]) => deferGatewayRestartUntilIdle(...args),
-  emitGatewayRestart: (...args: unknown[]) => emitGatewayRestart(...args),
-  setGatewaySigusr1RestartPolicy: (...args: unknown[]) => setGatewaySigusr1RestartPolicy(...args),
+  deferGatewayRestartUntilIdle,
+  emitGatewayRestart,
+  setGatewaySigusr1RestartPolicy,
 }));
 
 vi.mock("../process/command-queue.js", () => ({
   getTotalQueueSize: () => totalQueueSize,
-  setCommandLaneConcurrency: (...args: unknown[]) => setCommandLaneConcurrency(...args),
+  setCommandLaneConcurrency,
 }));
 
 vi.mock("../auto-reply/reply/dispatcher-registry.js", () => ({
