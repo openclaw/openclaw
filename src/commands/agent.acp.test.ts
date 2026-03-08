@@ -7,6 +7,7 @@ import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
+import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
@@ -133,6 +134,17 @@ async function withAcpSessionEnv(fn: () => Promise<void>) {
   });
 }
 
+async function withAcpSessionEnvInfo(
+  fn: (env: { home: string; storePath: string }) => Promise<void>,
+) {
+  await withTempHome(async (home) => {
+    const storePath = path.join(home, "sessions.json");
+    writeAcpSessionStore(storePath);
+    mockConfig(home, storePath);
+    await fn({ home, storePath });
+  });
+}
+
 function createRunTurnFromTextDeltas(chunks: string[]) {
   return vi.fn(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
@@ -217,6 +229,62 @@ describe("agentCommand ACP runtime routing", () => {
         .mocked(runtime.log)
         .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
       expect(hasAckLog).toBe(true);
+    });
+  });
+
+  it("persists ACP child session history to the transcript store", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      const runTurn = createRunTurnFromTextDeltas(["ACP_", "OK"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string }
+      >;
+      const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
+      const messages = readSessionMessages("acp-session-1", storePath, sessionFile);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "ping",
+      });
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "ACP_OK" }],
+      });
+    });
+  });
+
+  it("preserves exact ACP transcript text without trimming whitespace", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      const runTurn = createRunTurnFromTextDeltas(["  ACP_OK\n"]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "  ping\n", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      const persistedStore = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string }
+      >;
+      const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
+      const messages = readSessionMessages("acp-session-1", storePath, sessionFile);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "  ping\n",
+      });
+      expect(messages[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "  ACP_OK\n" }],
+      });
     });
   });
 
