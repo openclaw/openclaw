@@ -41,7 +41,10 @@ vi.mock("openclaw/plugin-sdk/msteams", () => ({
 }));
 
 vi.mock("express", () => {
-  const json = vi.fn(() => {
+  // Shared no-op middleware factory used for both json() and raw().
+  // monitor.ts switched from express.json() to express.raw() so both must
+  // be provided; missing raw() would throw "express.raw is not a function".
+  const makeNoopMiddleware = vi.fn(() => {
     return (_req: unknown, _res: unknown, next?: (err?: unknown) => void) => {
       next?.();
     };
@@ -74,7 +77,9 @@ vi.mock("express", () => {
 
   return {
     default: factory,
-    json,
+    // Both json() and raw() must be present; monitor.ts uses express.raw() now.
+    json: makeNoopMiddleware,
+    raw: makeNoopMiddleware,
   };
 });
 
