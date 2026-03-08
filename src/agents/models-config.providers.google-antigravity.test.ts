@@ -53,6 +53,10 @@ describe("normalizeGoogleModelId", () => {
     expect(normalizeGoogleModelId("gemini-3.1-flash")).toBe("gemini-3-flash-preview");
     expect(normalizeGoogleModelId("gemini-3.1-flash-preview")).toBe("gemini-3-flash-preview");
   });
+
+  it("adds the preview suffix for gemini 3.1 flash-lite", () => {
+    expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite-preview");
+  });
 });
 
 describe("google-antigravity provider normalization", () => {

@@ -2238,11 +2238,12 @@ Docs: [Models](/concepts/models), [Multi-Agent Routing](/concepts/multi-agent), 
 Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
 - `opus` → `anthropic/claude-opus-4-6`
-- `sonnet` → `anthropic/claude-sonnet-4-5`
-- `gpt` → `openai/gpt-5.2`
+- `sonnet` → `anthropic/claude-sonnet-4-6`
+- `gpt` → `openai/gpt-5.4`
 - `gpt-mini` → `openai/gpt-5-mini`
 - `gemini` → `google/gemini-3.1-pro-preview`
 - `gemini-flash` → `google/gemini-3-flash-preview`
+- `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`
 
 If you set your own alias with the same name, your value wins.
 
