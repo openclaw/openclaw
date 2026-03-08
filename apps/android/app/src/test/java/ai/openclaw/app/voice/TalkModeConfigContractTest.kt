@@ -38,7 +38,7 @@ class TalkModeConfigContractTest {
   @Test
   fun selectionFixtures() {
     for (fixture in loadFixtures().selectionCases) {
-      val selection = TalkModeManager.selectTalkProviderConfig(fixture.talk)
+      val selection = TalkModeGatewayConfigParser.selectTalkProviderConfig(fixture.talk)
       val expected = fixture.expectedSelection
       if (expected == null) {
         assertNull(fixture.id, selection)

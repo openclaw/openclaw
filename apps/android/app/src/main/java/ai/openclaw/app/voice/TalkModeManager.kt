@@ -64,54 +64,6 @@ class TalkModeManager(
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
     private const val maxCachedRunCompletions = 128
-
-    internal data class TalkProviderConfigSelection(
-      val provider: String,
-      val config: JsonObject,
-      val normalizedPayload: Boolean,
-    )
-
-    private fun normalizeTalkProviderId(raw: String?): String? {
-      val trimmed = raw?.trim()?.lowercase().orEmpty()
-      return trimmed.takeIf { it.isNotEmpty() }
-    }
-
-    private fun selectResolvedTalkProviderConfig(talk: JsonObject): TalkProviderConfigSelection? {
-      val resolved = talk["resolved"].asObjectOrNull() ?: return null
-      val providerId = normalizeTalkProviderId(resolved["provider"].asStringOrNull()) ?: return null
-      return TalkProviderConfigSelection(
-        provider = providerId,
-        config = resolved["config"].asObjectOrNull() ?: buildJsonObject {},
-        normalizedPayload = true,
-      )
-    }
-
-    internal fun selectTalkProviderConfig(talk: JsonObject?): TalkProviderConfigSelection? {
-      if (talk == null) return null
-      selectResolvedTalkProviderConfig(talk)?.let { return it }
-      val rawProvider = talk["provider"].asStringOrNull()
-      val rawProviders = talk["providers"].asObjectOrNull()
-      val hasNormalizedPayload = rawProvider != null || rawProviders != null
-      if (hasNormalizedPayload) {
-        return null
-      }
-      return TalkProviderConfigSelection(
-        provider = defaultTalkProvider,
-        config = talk,
-        normalizedPayload = false,
-      )
-    }
-
-    internal fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {
-      val fallback = TalkDefaults.defaultSilenceTimeoutMs
-      val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return fallback
-      if (primitive.isString) return fallback
-      val timeout = primitive.content.toDoubleOrNull() ?: return fallback
-      if (timeout <= 0 || timeout % 1.0 != 0.0 || timeout > Long.MAX_VALUE.toDouble()) {
-        return fallback
-      }
-      return timeout.toLong()
-    }
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
