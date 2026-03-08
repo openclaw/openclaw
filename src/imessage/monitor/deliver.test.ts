@@ -8,6 +8,7 @@ const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
 const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
 const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
+const emitHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.js", () => ({
   sendMessageIMessage: (to: string, message: string, opts?: unknown) =>
@@ -29,6 +30,10 @@ vi.mock("../../config/markdown-tables.js", () => ({
 
 vi.mock("../../markdown/tables.js", () => ({
   convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
+}));
+
+vi.mock("../../hooks/emit-message-sent.js", () => ({
+  emitMessageSentHook: (...args: unknown[]) => emitHookMock(...args),
 }));
 
 import { deliverReplies } from "./deliver.js";
@@ -148,5 +153,54 @@ describe("deliverReplies", () => {
       text: "second",
       messageId: "imsg-1",
     });
+  });
+
+  it("emits message:sent hook with messageId on success", async () => {
+    await deliverReplies({
+      replies: [{ text: "hi there" }],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 4096,
+      textLimit: 4000,
+      sessionKey: "sess-im",
+    });
+
+    expect(emitHookMock).toHaveBeenCalledWith({
+      to: "chat_id:40",
+      content: "hi there",
+      success: true,
+      messageId: "imsg-1",
+      channelId: "imessage",
+      accountId: "acct-4",
+      sessionKey: "sess-im",
+    });
+  });
+
+  it("emits message:sent failure hook when send throws", async () => {
+    sendMessageIMessageMock.mockRejectedValueOnce(new Error("delivery failed"));
+
+    await expect(
+      deliverReplies({
+        replies: [{ text: "oops" }],
+        target: "chat_id:50",
+        client,
+        accountId: "acct-5",
+        runtime,
+        maxBytes: 4096,
+        textLimit: 4000,
+        sessionKey: "sess-fail",
+      }),
+    ).rejects.toThrow("delivery failed");
+
+    expect(emitHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: "delivery failed",
+        channelId: "imessage",
+        sessionKey: "sess-fail",
+      }),
+    );
   });
 });

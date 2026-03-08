@@ -4,6 +4,7 @@ import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-refere
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { emitMessageSentHook } from "../../hooks/emit-message-sent.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
@@ -18,6 +19,7 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
+  sessionKey?: string;
 }) {
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
@@ -30,30 +32,56 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    if (mediaList.length === 0) {
-      const trimmed = text.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-        continue;
-      }
-      await sendMessageSlack(params.target, trimmed, {
-        token: params.token,
-        threadTs,
-        accountId: params.accountId,
-        ...(params.identity ? { identity: params.identity } : {}),
-      });
-    } else {
-      let first = true;
-      for (const mediaUrl of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSlack(params.target, caption, {
+    const content = text || "";
+    let lastMessageId: string | undefined;
+    try {
+      if (mediaList.length === 0) {
+        const trimmed = text.trim();
+        if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+          continue;
+        }
+        const sent = await sendMessageSlack(params.target, trimmed, {
           token: params.token,
-          mediaUrl,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
         });
+        lastMessageId = sent.messageId;
+      } else {
+        let first = true;
+        for (const mediaUrl of mediaList) {
+          const caption = first ? text : "";
+          first = false;
+          const sent = await sendMessageSlack(params.target, caption, {
+            token: params.token,
+            mediaUrl,
+            threadTs,
+            accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
+          });
+          lastMessageId = sent.messageId;
+        }
       }
+      emitMessageSentHook({
+        to: params.target,
+        content,
+        success: true,
+        messageId: lastMessageId,
+        channelId: "slack",
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+      });
+    } catch (error) {
+      emitMessageSentHook({
+        to: params.target,
+        content,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        channelId: "slack",
+        accountId: params.accountId,
+        sessionKey: params.sessionKey,
+      });
+      throw error;
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);
   }

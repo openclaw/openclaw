@@ -284,6 +284,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+          sessionKey: route.sessionKey,
         });
       },
       onError: (err, info) => {

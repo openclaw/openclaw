@@ -7,7 +7,7 @@ const loadWebMedia = vi.fn();
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
   runMessageSending: vi.fn(),
-  runMessageSent: vi.fn(),
+  runMessageSent: vi.fn(async () => {}),
 }));
 const baseDeliveryParams = {
   chatId: "123",
@@ -112,6 +112,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
     messageHookRunner.runMessageSent.mockReset();
+    messageHookRunner.runMessageSent.mockResolvedValue(undefined);
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
