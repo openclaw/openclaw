@@ -121,3 +121,6 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# OpenClaw debug logs
+openclaw-*.log
