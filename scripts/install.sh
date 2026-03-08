@@ -79,6 +79,7 @@ GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""
 LAST_NPM_INSTALL_CMD=""
+LAST_NPM_INSTALL_EXIT_CODE=0
 
 is_non_interactive_shell() {
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -694,9 +695,9 @@ has_sufficient_swap() {
     if [[ "$OS" != "linux" ]]; then
         return 0  # Only check swap on Linux
     fi
-    local swap_total_kb
-    swap_total_kb="$(awk '/SwapTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")"
-    [[ "$swap_total_kb" -ge 1048576 ]]  # At least 1GB swap
+    local swap_free_kb
+    swap_free_kb="$(awk '/SwapFree/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")"
+    [[ "$swap_free_kb" -ge 1048576 ]]  # At least 1GB free swap
 }
 
 create_swap_file() {
@@ -749,15 +750,18 @@ setup_low_memory_environment() {
 
 npm_log_indicates_oom_killed() {
     local log="$1"
-    # Check if the process was killed (exit code 137 = SIGKILL, often OOM)
-    # The install.sh script will show "Killed" in the error output
+
+    # Exit 137 means the shell observed SIGKILL (commonly OOM killer).
+    if [[ "${LAST_NPM_INSTALL_EXIT_CODE:-0}" -eq 137 ]]; then
+        return 0
+    fi
+
     if [[ ! -f "$log" ]]; then
         return 1
     fi
-    # Empty or very small log files often indicate OOM kill
-    local log_size
-    log_size="$(wc -c < "$log" 2>/dev/null || echo "0")"
-    [[ "$log_size" -lt 100 ]]
+
+    # Look for explicit OOM/SIGKILL indicators from shell/npm output.
+    grep -Eiq '(^|[[:space:]])Killed($|[[:space:]])|npm (ERR!|error) signal SIGKILL|signal SIGKILL|out of memory|oom' "$log" 2>/dev/null
 }
 
 run_npm_global_install() {
@@ -774,9 +778,13 @@ run_npm_global_install() {
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
 
+    local status=0
+
     if [[ "$VERBOSE" == "1" ]]; then
         "${cmd[@]}" 2>&1 | tee "$log"
-        return $?
+        status=$?
+        LAST_NPM_INSTALL_EXIT_CODE=$status
+        return $status
     fi
 
     if [[ -n "$GUM" ]] && gum_is_tty; then
@@ -785,10 +793,15 @@ run_npm_global_install() {
         printf -v cmd_quoted '%q ' "${cmd[@]}"
         printf -v log_quoted '%q' "$log"
         run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}>${log_quoted} 2>&1"
-        return $?
+        status=$?
+        LAST_NPM_INSTALL_EXIT_CODE=$status
+        return $status
     fi
 
     "${cmd[@]}" >"$log" 2>&1
+    status=$?
+    LAST_NPM_INSTALL_EXIT_CODE=$status
+    return $status
 }
 
 extract_npm_debug_log_path() {
@@ -1120,7 +1133,7 @@ USE_BETA=${OPENCLAW_BETA:-0}
 GIT_DIR_DEFAULT="${HOME}/openclaw"
 GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-0}"
+SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
@@ -1163,7 +1176,7 @@ Environment variables:
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 0 (use prebuilt sharp binaries; set to 1 to build from source)
+  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
 
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
