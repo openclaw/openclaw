@@ -183,7 +183,7 @@ describe("NostrConfigSchema relay URL validation", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts ws:// relay URLs for local development", () => {
+  it("accepts ws:// relay URLs", () => {
     const result = NostrConfigSchema.safeParse({
       relays: ["ws://localhost:7777"],
     });
