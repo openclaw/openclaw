@@ -1376,7 +1376,7 @@ private fun PermissionsStep(
     InlineDivider()
     PermissionToggleRow(
       title = "Location",
-      subtitle = "location.get (while app is open unless set to Always later)",
+      subtitle = "location.get (while app is open)",
       checked = enableLocation,
       granted = locationGranted,
       onCheckedChange = onLocationChange,
