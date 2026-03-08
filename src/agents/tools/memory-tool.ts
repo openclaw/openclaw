@@ -55,8 +55,8 @@ async function withMemoryFileLock<T>(absPath: string, action: () => Promise<T>):
   });
   const queued = previous.then(() => current);
   memoryFileLocks.set(lockKey, queued);
-  await previous;
   try {
+    await previous;
     return await action();
   } finally {
     releaseCurrent?.();
