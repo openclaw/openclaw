@@ -16,8 +16,14 @@ export type {
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
+  mergeAllowFromEntries,
   promptSingleChannelSecretInput,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
+  splitOnboardingEntries,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
@@ -53,6 +59,7 @@ export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";

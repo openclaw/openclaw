@@ -184,7 +184,6 @@ export async function finalizeOnboardingWizard(
             {
               env: process.env,
               port: settings.port,
-              token: tokenResolution.token,
               runtime: daemonRuntime,
               warn: (message, title) => prompter.note(message, title),
               config: nextConfig,

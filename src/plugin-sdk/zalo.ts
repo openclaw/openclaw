@@ -16,11 +16,13 @@ export type {
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
   promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
@@ -104,6 +106,8 @@ export type {
 export {
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";

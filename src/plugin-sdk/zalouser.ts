@@ -21,6 +21,7 @@ export {
   mergeAllowFromEntries,
   promptAccountId,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
   applyAccountNameToChannelSection,
@@ -58,6 +59,7 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase } from "./allow-from.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
+export { evaluateGroupRouteAccessForPolicy } from "./group-access.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";

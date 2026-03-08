@@ -223,7 +223,9 @@ export function resolveGatewayCredentialsFromConfig(params: {
     ? undefined
     : trimToUndefined(params.cfg.gateway?.auth?.password);
 
-  const localTokenPrecedence = params.localTokenPrecedence ?? "env-first";
+  const localTokenPrecedence =
+    params.localTokenPrecedence ??
+    (env.OPENCLAW_SERVICE_KIND === "gateway" ? "config-first" : "env-first");
   const localPasswordPrecedence = params.localPasswordPrecedence ?? "env-first";
 
   if (mode === "local") {
@@ -252,6 +254,24 @@ export function resolveGatewayCredentialsFromConfig(params: {
         authMode !== "none" &&
         authMode !== "trusted-proxy" &&
         !localResolved.password);
+    if (
+      localTokenRef &&
+      localTokenPrecedence === "config-first" &&
+      !localToken &&
+      Boolean(envToken) &&
+      localTokenCanWin
+    ) {
+      throwUnresolvedGatewaySecretInput("gateway.auth.token");
+    }
+    if (
+      localPasswordRef &&
+      localPasswordPrecedence === "config-first" && // pragma: allowlist secret
+      !localPassword &&
+      Boolean(envPassword) &&
+      localPasswordCanWin
+    ) {
+      throwUnresolvedGatewaySecretInput("gateway.auth.password");
+    }
     if (localTokenRef && !localResolved.token && !envToken && localTokenCanWin) {
       throwUnresolvedGatewaySecretInput("gateway.auth.token");
     }
