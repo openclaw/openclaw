@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { Readable, Transform } from "node:stream";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -658,6 +659,110 @@ export async function openaiTTS(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export type OpenaiTTSStreamResult = {
+  stream: Readable;
+  cleanup: () => void;
+};
+
+/**
+ * Streaming variant of openaiTTS. Returns a Node.js Readable stream of raw PCM/mp3/opus
+ * bytes instead of buffering the entire response into a Buffer.
+ */
+export async function openaiTTSStream(params: {
+  text: string;
+  apiKey: string;
+  model: string;
+  voice: string;
+  responseFormat: "mp3" | "opus" | "pcm";
+  timeoutMs: number;
+}): Promise<OpenaiTTSStreamResult> {
+  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+
+  if (!isValidOpenAIModel(model)) {
+    throw new Error(`Invalid model: ${model}`);
+  }
+  if (!isValidOpenAIVoice(voice)) {
+    throw new Error(`Invalid voice: ${voice}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) {
+      return;
+    }
+    cleaned = true;
+    clearTimeout(timeout);
+    if (stallTimer !== undefined) {
+      clearTimeout(stallTimer);
+    }
+    controller.abort();
+  };
+
+  const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice,
+      response_format: responseFormat,
+    }),
+    signal: controller.signal,
+  }).catch((err) => {
+    cleanup();
+    throw err;
+  });
+
+  if (!response.ok) {
+    cleanup();
+    throw new Error(`OpenAI TTS API error (${response.status})`);
+  }
+
+  if (!response.body) {
+    cleanup();
+    throw new Error("OpenAI TTS API returned no body");
+  }
+
+  // Clear the connection timeout now that headers have arrived.
+  // Install a read-deadline watchdog: if no data arrives, abort to prevent
+  // a stalled stream from hanging the TTS pipeline indefinitely.
+  // Use the configured timeout (capped at 30s) so operators with shorter
+  // timeouts get faster failure on mid-stream stalls.
+  clearTimeout(timeout);
+  const STALL_DEADLINE_MS = Math.min(timeoutMs, 30_000);
+  stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
+
+  const stream = Readable.fromWeb(
+    response.body as unknown as import("node:stream/web").ReadableStream,
+  );
+
+  // Wrap in a passthrough Transform so the stall watchdog resets on
+  // *consumption*, not on arrival. In the Twilio path OpenAI may buffer all
+  // PCM quickly, after which no further "readable" events fire while the
+  // caller drains at ~real-time (20 ms/frame). Tracking consumption prevents
+  // premature abort while audio is still being played back.
+  const watchdogTransform = new Transform({
+    transform(chunk, _encoding, callback) {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => controller.abort(), STALL_DEADLINE_MS);
+      callback(null, chunk);
+    },
+  });
+  stream.pipe(watchdogTransform);
+  stream.on("error", (err) => watchdogTransform.destroy(err));
+  watchdogTransform.on("end", cleanup);
+  watchdogTransform.on("error", cleanup);
+
+  return { stream: watchdogTransform, cleanup };
 }
 
 export function inferEdgeExtension(outputFormat: string): string {

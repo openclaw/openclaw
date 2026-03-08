@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { deepMergeDefined } from "./deep-merge.js";
@@ -15,10 +16,27 @@ export type TelephonyTtsRuntime = {
     provider?: string;
     error?: string;
   }>;
+  textToSpeechTelephonyStream?: (params: {
+    text: string;
+    cfg: CoreConfig;
+    prefsPath?: string;
+  }) => Promise<{
+    success: boolean;
+    stream?: Readable;
+    sampleRate?: number;
+    provider?: string;
+    error?: string;
+    cleanup?: () => void;
+  }>;
 };
 
 export type TelephonyTtsProvider = {
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
+  synthesizeForTelephonyStream?: (text: string) => Promise<{
+    stream: Readable;
+    sampleRate: number;
+    cleanup: () => void;
+  }>;
 };
 
 export function createTelephonyTtsProvider(params: {
@@ -29,7 +47,7 @@ export function createTelephonyTtsProvider(params: {
   const { coreConfig, ttsOverride, runtime } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
 
-  return {
+  const provider: TelephonyTtsProvider = {
     synthesizeForTelephony: async (text: string) => {
       const result = await runtime.textToSpeechTelephony({
         text,
@@ -43,6 +61,28 @@ export function createTelephonyTtsProvider(params: {
       return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
     },
   };
+
+  if (runtime.textToSpeechTelephonyStream) {
+    const streamFn = runtime.textToSpeechTelephonyStream;
+    provider.synthesizeForTelephonyStream = async (text: string) => {
+      const result = await streamFn({
+        text,
+        cfg: mergedConfig,
+      });
+
+      if (!result.success || !result.stream || !result.sampleRate) {
+        throw new Error(result.error ?? "TTS streaming failed");
+      }
+
+      return {
+        stream: result.stream,
+        sampleRate: result.sampleRate,
+        cleanup: result.cleanup ?? (() => {}),
+      };
+    };
+  }
+
+  return provider;
 }
 
 function applyTtsOverride(coreConfig: CoreConfig, override?: VoiceCallTtsConfig): CoreConfig {
