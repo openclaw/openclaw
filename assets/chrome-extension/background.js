@@ -708,7 +708,8 @@ async function handleForwardCdpCommand(msg) {
     if (!toClose) return { success: false }
     try {
       const allTabs = await chrome.tabs.query({})
-      if (allTabs.length <= 1) {
+      const otherTabs = allTabs.filter((t) => t.id !== toClose)
+      if (otherTabs.length === 0) {
         console.warn('Refusing to close the last tab: this would kill the browser process')
         return { success: false, error: 'Cannot close the last tab' }
       }
