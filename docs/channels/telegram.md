@@ -410,6 +410,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.actions.deleteMessage`
     - `channels.telegram.actions.reactions`
     - `channels.telegram.actions.sticker` (default: disabled)
+    - `channels.telegram.actions.dice` (default: disabled)
 
     Note: `edit` and `topic-create` are currently enabled by default and do not have separate `channels.telegram.actions.*` toggles.
 
@@ -637,6 +638,44 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   limit: 5,
 }
 ```
+
+  </Accordion>
+
+  <Accordion title="Dice">
+    Send animated dice, slot machines, darts, basketball, bowling, or football using Telegram's native `sendDice` API. The result value is server-determined and returned to the agent.
+
+    Enable dice actions:
+
+```json5
+{
+  channels: {
+    telegram: {
+      actions: {
+        dice: true,
+      },
+    },
+  },
+}
+```
+
+    Send dice action:
+
+```json5
+{
+  action: "sendDice",
+  channel: "telegram",
+  to: "123456789",
+  emoji: "🎲", // 🎲 🎯 🏀 ⚽ 🎳 🎰 (default: 🎲)
+}
+```
+
+    Response includes `emoji` and `value` (the random result):
+    - 🎲 → 1–6
+    - 🎯 → 1–6
+    - 🏀 → 1–5
+    - ⚽ → 1–5
+    - 🎳 → 1–6
+    - 🎰 → 1–64
 
   </Accordion>
 
@@ -887,6 +926,7 @@ Primary reference:
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
+- `channels.telegram.actions.dice`: gate Telegram dice actions — send animated dice, slots, darts, etc. (default: false).
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 

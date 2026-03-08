@@ -610,7 +610,7 @@ OpenClaw 使用 Bot API `sendMessageDraft`（不是真实消息），然后将�
 - 工具：`telegram`，使用 `react` 动作（`chatId`、`messageId`、`emoji`）。
 - 工具：`telegram`，使用 `deleteMessage` 动作（`chatId`、`messageId`）。
 - 反应移除语义：参见 [/tools/reactions](/tools/reactions)。
-- 工具门控：`channels.telegram.actions.reactions`、`channels.telegram.actions.sendMessage`、`channels.telegram.actions.deleteMessage`（默认：启用），以及 `channels.telegram.actions.sticker`（默认：禁用）。
+- 工具门控：`channels.telegram.actions.reactions`、`channels.telegram.actions.sendMessage`、`channels.telegram.actions.deleteMessage`（默认：启用），以及 `channels.telegram.actions.sticker`、`channels.telegram.actions.dice`（默认：禁用）。
 
 ## 反应通知
 
@@ -740,6 +740,7 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 - `channels.telegram.actions.sendMessage`：门控 Telegram 工具消息发送。
 - `channels.telegram.actions.deleteMessage`：门控 Telegram 工具消息删除。
 - `channels.telegram.actions.sticker`：门控 Telegram 贴纸动作 — 发送和搜索（默认：false）。
+- `channels.telegram.actions.dice`：门控 Telegram 骰子动作 — 发送动画骰子、老虎机、飞镖等（默认：false）。
 - `channels.telegram.reactionNotifications`：`off | own | all` — 控制哪些反应触发系统事件（未设置时默认：`own`）。
 - `channels.telegram.reactionLevel`：`off | ack | minimal | extensive` — 控制智能体的反应能力（未设置时默认：`minimal`）。
 

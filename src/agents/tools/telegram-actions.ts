@@ -20,6 +20,7 @@ import {
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  sendDiceTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
@@ -408,6 +409,44 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+    });
+  }
+
+  if (action === "sendDice") {
+    if (!isActionEnabled("dice", false)) {
+      throw new Error(
+        "Telegram dice actions are disabled. Set channels.telegram.actions.dice to true.",
+      );
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const emoji = readStringParam(params, "emoji") ?? "🎲";
+    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
+      integer: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      integer: true,
+    });
+    const silentRaw = readStringParam(params, "silent");
+    const silent = silentRaw === "true" || silentRaw === "1";
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await sendDiceTelegram(to, emoji, {
+      token,
+      accountId: accountId ?? undefined,
+      replyToMessageId: replyToMessageId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
+      silent,
+    });
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+      emoji: result.emoji,
+      value: result.value,
     });
   }
 

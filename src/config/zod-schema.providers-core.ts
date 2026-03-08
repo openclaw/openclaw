@@ -234,6 +234,7 @@ export const TelegramAccountSchemaBase = z
         poll: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+        dice: z.boolean().optional(),
       })
       .strict()
       .optional(),

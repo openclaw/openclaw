@@ -19,6 +19,7 @@ const {
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  sendDiceTelegram,
 } = await importTelegramSendModule();
 
 async function expectChatNotFoundWithChatId(
@@ -1394,6 +1395,85 @@ describe("sendStickerTelegram", () => {
         api,
       }),
     ).rejects.toThrow(/returned no message_id/i);
+  });
+});
+
+describe("sendDiceTelegram", () => {
+  it("sends a dice with default emoji 🎲", async () => {
+    const chatId = "123";
+    const sendDice = vi.fn().mockResolvedValue({
+      message_id: 200,
+      chat: { id: chatId },
+      dice: { emoji: "🎲", value: 4 },
+    });
+    const api = { sendDice } as unknown as { sendDice: typeof sendDice };
+
+    const res = await sendDiceTelegram(chatId, undefined, { token: "tok", api });
+
+    expect(sendDice).toHaveBeenCalledWith(chatId, "🎲", undefined);
+    expect(res.messageId).toBe("200");
+    expect(res.chatId).toBe(chatId);
+    expect(res.emoji).toBe("🎲");
+    expect(res.value).toBe(4);
+  });
+
+  it("sends a dice with custom emoji 🎰", async () => {
+    const chatId = "456";
+    const sendDice = vi.fn().mockResolvedValue({
+      message_id: 201,
+      chat: { id: chatId },
+      dice: { emoji: "🎰", value: 64 },
+    });
+    const api = { sendDice } as unknown as { sendDice: typeof sendDice };
+
+    const res = await sendDiceTelegram(chatId, "🎰", { token: "tok", api });
+
+    expect(sendDice).toHaveBeenCalledWith(chatId, "🎰", undefined);
+    expect(res.emoji).toBe("🎰");
+    expect(res.value).toBe(64);
+  });
+
+  it("throws error for invalid dice emoji", async () => {
+    await expect(sendDiceTelegram("123", "🍕", { token: "tok" })).rejects.toThrow(
+      /Invalid dice emoji/,
+    );
+  });
+
+  it("defaults to 🎲 when emoji is empty or whitespace", async () => {
+    const chatId = "123";
+    const sendDice = vi.fn().mockResolvedValue({
+      message_id: 202,
+      chat: { id: chatId },
+      dice: { emoji: "🎲", value: 2 },
+    });
+    const api = { sendDice } as unknown as { sendDice: typeof sendDice };
+
+    for (const emoji of ["", "  ", undefined]) {
+      const res = await sendDiceTelegram(chatId, emoji, { token: "tok", api });
+      expect(res.emoji).toBe("🎲");
+    }
+  });
+
+  it("passes silent and thread params", async () => {
+    const chatId = "-100999";
+    const sendDice = vi.fn().mockResolvedValue({
+      message_id: 203,
+      chat: { id: chatId },
+      dice: { emoji: "🎲", value: 6 },
+    });
+    const api = { sendDice } as unknown as { sendDice: typeof sendDice };
+
+    await sendDiceTelegram(chatId, "🎲", {
+      token: "tok",
+      api,
+      messageThreadId: 42,
+      silent: true,
+    });
+
+    expect(sendDice).toHaveBeenCalledWith(chatId, "🎲", {
+      message_thread_id: 42,
+      disable_notification: true,
+    });
   });
 });
 

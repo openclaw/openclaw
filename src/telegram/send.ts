@@ -1267,3 +1267,107 @@ export async function createForumTopicTelegram(
     chatId: normalizedChatId,
   };
 }
+
+// ─── sendDice ────────────────────────────────────────────────────────────────
+
+const VALID_DICE_EMOJI = new Set(["🎲", "🎯", "🏀", "⚽", "🎳", "🎰"]);
+
+type TelegramDiceOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  /** Message ID to reply to (for threading) */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups) */
+  messageThreadId?: number;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
+};
+
+export type TelegramDiceResult = {
+  messageId: string;
+  chatId: string;
+  emoji: string;
+  value: number;
+};
+
+/**
+ * Send an animated dice (or slot/bowling/etc.) to a Telegram chat.
+ * @param to - Chat ID or username
+ * @param emoji - Dice emoji: 🎲 🎯 🏀 ⚽ 🎳 🎰 (defaults to 🎲)
+ * @param opts - Optional configuration
+ */
+export async function sendDiceTelegram(
+  to: string,
+  emoji?: string,
+  opts: TelegramDiceOpts = {},
+): Promise<TelegramDiceResult> {
+  const resolvedEmoji = emoji?.trim() || "🎲";
+  if (!VALID_DICE_EMOJI.has(resolvedEmoji)) {
+    throw new Error(
+      `Invalid dice emoji "${resolvedEmoji}". Must be one of: ${[...VALID_DICE_EMOJI].join(", ")}`,
+    );
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+  });
+
+  const threadParams = buildTelegramThreadReplyParams({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+    replyToMessageId: opts.replyToMessageId,
+  });
+  const hasThreadParams = Object.keys(threadParams).length > 0;
+
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    useApiErrorLogging: false,
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  const diceParams = {
+    ...(hasThreadParams ? threadParams : {}),
+    ...(opts.silent ? { disable_notification: true } : {}),
+  };
+  const hasDiceParams = Object.keys(diceParams).length > 0;
+
+  const result = await requestWithChatNotFound(
+    () => api.sendDice(chatId, resolvedEmoji, hasDiceParams ? diceParams : undefined),
+    "sendDice",
+  );
+
+  const messageId = String(result?.message_id ?? "unknown");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  if (result?.message_id) {
+    recordSentMessage(chatId, result.message_id);
+  }
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return {
+    messageId,
+    chatId: resolvedChatId,
+    emoji: result?.dice?.emoji ?? resolvedEmoji,
+    value: result?.dice?.value ?? 0,
+  };
+}
