@@ -131,9 +131,6 @@ async function sendChatMessageNow(
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
   }
-  if (ok) {
-  void refreshChat(host as any);
-  }
   return ok;
 }
 

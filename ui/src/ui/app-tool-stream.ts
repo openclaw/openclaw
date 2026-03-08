@@ -407,7 +407,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "chat" || payload.stream === "message") {
-   void refreshChat(host as any);
+    if (payload.data?.sessionId === (host as any).activeSessionId {
+      void refreshChat(host as any);
+    }
    return;
   }
 
@@ -475,8 +477,4 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
-
-  if (phase === "result") {
-    void refreshChat(host as any);
-  }
 }
