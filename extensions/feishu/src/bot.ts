@@ -252,17 +252,27 @@ function resolveFeishuGroupSession(params: {
 
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
-  const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
+  const hasThreadContext = Boolean(normalizedThreadId || normalizedRootId);
+  const configReplyInThread =
+    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
 
+  // Resolve groupSessionScope early so we can use it to gate threadReply.
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
   const groupSessionScope: GroupSessionScope =
     groupConfig?.groupSessionScope ??
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+  const isTopicScope =
+    groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender";
+
+  // Only honor thread context for topic-mode groups or when replyInThread is
+  // explicitly enabled.  In normal groups a user "replying" to the bot's
+  // message sets root_id, but we should NOT push the response into a Feishu
+  // topic thread — that makes the reply invisible in the main chat (#32980).
+  const threadReply = hasThreadContext && (isTopicScope || configReplyInThread);
+  const replyInThread = configReplyInThread || threadReply;
 
   // Keep topic session keys stable across the "first turn creates thread" flow:
   // first turn may only have message_id, while the next turn carries root_id/thread_id.

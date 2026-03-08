@@ -30,16 +30,28 @@ function shouldUseCard(text: string): boolean {
  */
 function isSafeToRender(text: string): boolean {
   if (!text.trim()) return false;
-  // Count code fences (``` at start of line or after whitespace): odd = unclosed
-  let fenceCount = 0;
+  // State-machine fence tracking: track the exact backtick-length of each
+  // opening fence so that 4+ backtick fences (used for nested code blocks)
+  // are only closed by a fence of equal or greater length.
+  let openFenceLen = 0; // 0 = not inside a fenced block
   const lines = text.split("\n");
   for (const line of lines) {
-    if (/^```/.test(line.trimStart())) {
-      fenceCount++;
+    // Strip markdown blockquote prefix (e.g. "> ", ">> ") before checking
+    const stripped = line.trimStart().replace(/^(?:>\s*)+/, "");
+    const match = /^(`{3,})/.exec(stripped);
+    if (!match) continue;
+    const fenceLen = match[1].length;
+    if (openFenceLen === 0) {
+      // Opening a new fenced block
+      openFenceLen = fenceLen;
+    } else if (fenceLen >= openFenceLen) {
+      // Closing the current fenced block (fence must be >= opening length)
+      openFenceLen = 0;
     }
+    // else: shorter fence inside a block — treated as content, not a fence
   }
-  // Odd fence count means there's an unclosed code block — not safe
-  return fenceCount % 2 === 0;
+  // If openFenceLen > 0, there's an unclosed code block — not safe
+  return openFenceLen === 0;
 }
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
@@ -369,6 +381,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               });
               first = false;
             }
+            if (info?.kind === "block") {
+              blockOffset += text.length;
+            }
             if (info?.kind === "final") {
               deliveredFinalTexts.add(text);
             }
@@ -389,6 +404,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 accountId,
               });
               first = false;
+            }
+            if (info?.kind === "block") {
+              blockOffset += text.length;
             }
             if (info?.kind === "final") {
               deliveredFinalTexts.add(text);
