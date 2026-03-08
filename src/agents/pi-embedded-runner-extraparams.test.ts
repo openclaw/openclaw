@@ -845,6 +845,48 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
+  it("normalizes moonshot k2 anthropic tools to OpenAI function format", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: { type: "object", properties: { path: { type: "string" } } },
+          },
+        ],
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "moonshot", "k2-0711", undefined, "low");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "moonshot",
+      id: "k2-0711",
+      baseUrl: "https://api.moonshot.ai/v1",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: { type: "object", properties: { path: { type: "string" } } },
+        },
+      },
+    ]);
+  });
+
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
