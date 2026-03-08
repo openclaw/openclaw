@@ -653,6 +653,8 @@ export const FIELD_LABELS: Record<string, string> = {
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.responsePrefix": "Outbound Response Prefix",
+  "messages.modelEmojiMap": "Model Emoji Map",
+  "messages.thinkEmoji": "Thinking Emoji Pair",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",

@@ -332,6 +332,8 @@ export const ReplyRuntimeConfigSchemaShape = {
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   responsePrefix: z.string().optional(),
+  modelEmojiMap: z.record(z.string(), z.string()).optional(),
+  thinkEmoji: z.tuple([z.string(), z.string()]).optional(),
   mediaMaxMb: z.number().positive().optional(),
 };
 

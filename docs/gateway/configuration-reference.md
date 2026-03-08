@@ -1539,7 +1539,14 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 ```json5
 {
   messages: {
-    responsePrefix: "🦞", // or "auto"
+    responsePrefix: "{modelEmoji}{thinkEmoji}", // or "🦞", or "auto", or "[{model} | think:{thinkingLevel}]"
+    modelEmojiMap: {
+      "claude-opus-4-6": "🧠",
+      "claude-sonnet-4-5": "🎵",
+      "gpt-5.3-codex": "🤖",
+      "kimi-k2.5": "🌙",
+    },
+    thinkEmoji: ["💭", ""], // [active, inactive]
     ackReaction: "👀",
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all
     removeAckAfterReply: false,
@@ -1572,15 +1579,28 @@ Resolution (most specific wins): account → channel → global. `""` disables a
 
 **Template variables:**
 
-| Variable          | Description            | Example                     |
-| ----------------- | ---------------------- | --------------------------- |
-| `{model}`         | Short model name       | `claude-opus-4-6`           |
-| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6` |
-| `{provider}`      | Provider name          | `anthropic`                 |
-| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`        |
-| `{identity.name}` | Agent identity name    | (same as `"auto"`)          |
+| Variable          | Description                       | Example                     |
+| ----------------- | --------------------------------- | --------------------------- |
+| `{model}`         | Short model name                  | `claude-opus-4-6`           |
+| `{modelFull}`     | Full model identifier             | `anthropic/claude-opus-4-6` |
+| `{provider}`      | Provider name                     | `anthropic`                 |
+| `{thinkingLevel}` | Current thinking level            | `high`, `low`, `off`        |
+| `{identity.name}` | Agent identity name               | (same as `"auto"`)          |
+| `{modelEmoji}`    | Emoji from `modelEmojiMap` lookup | `🧠`, `🎵`, `🤖`            |
+| `{thinkEmoji}`    | Emoji from `thinkEmoji` pair      | `💭` or `""`                |
 
 Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
+
+### Model emoji map
+
+Maps model names, provider names, or substrings to emoji for the `{modelEmoji}` variable.
+
+Keys are matched case-insensitively in order: exact short model name → exact full model ID → exact provider → substring match. First match wins. If no match, `{modelEmoji}` resolves to empty string.
+
+### Think emoji pair
+
+A two-element array `[activeEmoji, inactiveEmoji]` for the `{thinkEmoji}` variable.
+When thinking is `"high"` or `"low"`, the first emoji is used. Otherwise the second (typically `""`).
 
 ### Ack reaction
 
