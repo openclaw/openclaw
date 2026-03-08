@@ -1644,7 +1644,7 @@ async function dispatchDiscordCommandInteraction(params: {
       return;
     }
   }
-  const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
+  const configuredBoundSessionKey = configuredRoute?.boundSessionKey?.trim() || undefined;
   const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
   const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
   const effectiveRoute = boundSessionKey
