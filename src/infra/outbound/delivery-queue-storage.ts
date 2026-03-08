@@ -35,6 +35,8 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
+  /** Suppress message:* hook emission when this queued send is replayed. */
+  skipMessageHooks?: boolean;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -155,6 +157,7 @@ export async function enqueueDelivery(
     mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
+    skipMessageHooks: params.skipMessageHooks,
     retryCount: 0,
   });
   return id;

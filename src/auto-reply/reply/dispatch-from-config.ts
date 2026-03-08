@@ -724,13 +724,50 @@ export async function dispatchReplyFromConfig(
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
+    const hookEvent = createInternalHookEvent("message", "received", sessionKey, {
+      ...toInternalMessageReceivedContext(hookContext),
+      timestamp,
+    });
     fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
+      (async () => {
+        await triggerInternalHook(hookEvent);
+        const hookReplyText = hookEvent.messages.join("\n\n").trim();
+        const hookReplyChannel = normalizeMessageChannel(
+          ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+        );
+        const hookReplyTo = ctx.OriginatingTo ?? ctx.From ?? ctx.To;
+        const hookReplyRuntime = routeReplyRuntime ?? (await loadRouteReplyRuntime());
+        if (
+          !hookReplyText ||
+          !hookReplyChannel ||
+          !hookReplyTo ||
+          !hookReplyRuntime.isRoutableChannel(hookReplyChannel as never)
+        ) {
+          return;
+        }
+        await hookReplyRuntime.routeReply({
+          payload: { text: hookReplyText },
+          channel: hookReplyChannel,
+          to: hookReplyTo,
+          sessionKey: ctx.SessionKey,
+          policySessionKey:
+            ctx.CommandSource === "native"
+              ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
+              : ctx.SessionKey,
+          policyConversationType: resolveRoutedPolicyConversationType(ctx),
+          accountId: ctx.AccountId,
+          requesterSenderId: ctx.SenderId,
+          requesterSenderName: ctx.SenderName,
+          requesterSenderUsername: ctx.SenderUsername,
+          requesterSenderE164: ctx.SenderE164,
+          threadId: ctx.MessageThreadId,
+          cfg,
+          mirror: false,
+          isGroup,
+          groupId,
+          skipMessageHooks: true,
+        });
+      })(),
       "dispatch-from-config: message_received internal hook failed",
     );
   }

@@ -1348,6 +1348,38 @@ describe("deliverOutboundPayloads", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers internal message:sent hook messages without re-emitting hooks", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(
+      async (event: { messages: string[] }) => {
+        event.messages.push("Hook echo");
+      },
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      session: { key: "agent:main:main" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(sendMatrix).toHaveBeenNthCalledWith(
+      2,
+      "!room:example",
+      "Hook echo",
+      expect.objectContaining({ cfg: matrixChunkConfig }),
+    );
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
   it("warns when session.agentId is set without a session key", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     hookMocks.runner.hasHooks.mockReturnValue(true);
@@ -1396,6 +1428,7 @@ describe("deliverOutboundPayloads", () => {
       to: "!room:example",
       payloads: rawPayloads,
       deps: { matrix: sendMatrix },
+      skipMessageHooks: true,
     });
 
     expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -1407,6 +1440,7 @@ describe("deliverOutboundPayloads", () => {
           { text: "caption\nMEDIA:https://x.test/a.png" },
           { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
         ],
+        skipMessageHooks: true,
       }),
     );
   });

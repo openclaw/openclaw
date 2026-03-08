@@ -371,6 +371,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Suppress message:* hook emission for this send (used for hook-generated replies). */
+  skipMessageHooks?: boolean;
 };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
@@ -622,14 +624,26 @@ async function renderPresentationForDelivery(
 }
 
 function createMessageSentEmitter(params: {
+  cfg: OpenClawConfig;
+  deps?: OutboundSendDeps;
+  mediaAccess?: OutboundMediaAccess;
+  session?: OutboundSessionContext;
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  threadId?: string | number | null;
+  silent?: boolean;
+  gatewayClientScopes?: readonly string[];
+  skipMessageHooks?: boolean;
   sessionKeyForInternalHooks?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
 }): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
+  if (params.skipMessageHooks) {
+    return { emitMessageSent: () => {}, hasMessageSentHooks: false };
+  }
+
   const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
   const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
   const emitMessageSent = (event: MessageSentEvent) => {
@@ -663,15 +677,35 @@ function createMessageSentEmitter(params: {
     if (!canEmitInternalHook) {
       return;
     }
+    const hookEvent = createInternalHookEvent(
+      "message",
+      "sent",
+      params.sessionKeyForInternalHooks!,
+      toInternalMessageSentContext(canonical),
+    );
     fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "sent",
-          params.sessionKeyForInternalHooks!,
-          toInternalMessageSentContext(canonical),
-        ),
-      ),
+      (async () => {
+        await triggerInternalHook(hookEvent);
+        const text = hookEvent.messages.join("\n\n").trim();
+        if (!text) {
+          return;
+        }
+        await deliverOutboundPayloads({
+          cfg: params.cfg,
+          channel: params.channel,
+          to: params.to,
+          accountId: params.accountId,
+          payloads: [{ text }],
+          threadId: params.threadId,
+          deps: params.deps,
+          mediaAccess: params.mediaAccess,
+          session: params.session,
+          silent: params.silent,
+          gatewayClientScopes: params.gatewayClientScopes,
+          skipQueue: true,
+          skipMessageHooks: true,
+        });
+      })(),
       "deliverOutboundPayloads: message:sent internal hook failed",
       (message) => {
         log.warn(message);
@@ -796,6 +830,7 @@ export async function deliverOutboundPayloads(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
+        skipMessageHooks: params.skipMessageHooks,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   if (!queueId) {
@@ -951,10 +986,18 @@ async function deliverOutboundPayloadsCore(
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
+    cfg,
+    deps,
+    mediaAccess,
+    session: params.session,
     hookRunner,
     channel,
     to,
     accountId,
+    threadId: params.threadId,
+    silent: params.silent,
+    gatewayClientScopes: params.gatewayClientScopes,
+    skipMessageHooks: params.skipMessageHooks,
     sessionKeyForInternalHooks,
     mirrorIsGroup,
     mirrorGroupId,

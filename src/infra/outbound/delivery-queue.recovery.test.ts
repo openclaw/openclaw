@@ -168,6 +168,7 @@ describe("delivery-queue recovery", () => {
         gifPlayback: true,
         silent: true,
         gatewayClientScopes: ["operator.write"],
+        skipMessageHooks: true,
         mirror: {
           sessionKey: "agent:main:main",
           text: "a",
@@ -194,6 +195,7 @@ describe("delivery-queue recovery", () => {
         bestEffort: true,
         gifPlayback: true,
         silent: true,
+        skipMessageHooks: true,
         replyToId: "root-message",
         replyToMode: "first",
         formatting: {
