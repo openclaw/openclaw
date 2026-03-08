@@ -1,9 +1,19 @@
 import chalk from "chalk";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+
+function hasAuthForProvider(provider: string): boolean {
+  if (resolveEnvApiKey(provider)?.apiKey) {
+    return true;
+  }
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  return listProfilesForProvider(store, provider).length > 0;
+}
 
 export function logGatewayStartup(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -23,6 +33,14 @@ export function logGatewayStartup(params: {
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });
+
+  if (!hasAuthForProvider(agentProvider)) {
+    const warning =
+      `No authentication found for provider "${agentProvider}". ` +
+      `The gateway will start but agent requests will fail. ` +
+      `Configure auth with: openclaw auth login ${agentProvider}`;
+    params.log.warn(warning);
+  }
   const scheme = params.tlsEnabled ? "wss" : "ws";
   const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
   const hosts =
