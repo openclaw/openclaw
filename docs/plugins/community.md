@@ -34,6 +34,13 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Plugins
+
+- **Memory LanceDB** — LanceDB-backed long-term memory with auto-recall and auto-capture
+  npm: `@noncelogic/openclaw-memory-lancedb`
+  repo: `https://github.com/noncelogic/openclaw-memory-lancedb`
+  install: `openclaw plugins install @noncelogic/openclaw-memory-lancedb`
+
 ## Candidate format
 
 Use this format when adding entries:
