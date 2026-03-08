@@ -382,6 +382,12 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      if (allMedia.length === 0) {
+        runtime.log?.(
+          warn(`No media could be resolved from media group (${entry.messages.length} messages)`),
+        );
+      }
+
       const storeAllowFrom = await loadStoreAllowFrom();
       const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
