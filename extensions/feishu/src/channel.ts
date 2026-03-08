@@ -186,6 +186,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   config: {
     listAccountIds: (cfg) => listFeishuAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
+    inspectAccount: (cfg, accountId) =>
+      resolveFeishuAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      }),
     defaultAccountId: (cfg) => resolveDefaultFeishuAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
