@@ -146,11 +146,35 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
+  // Direct text field as string
   if (typeof item.text === "string") {
     return item.text;
   }
+  // text as array: [{ text: "..." }]
+  if (Array.isArray(item.text)) {
+    for (const textItem of item.text) {
+      if (typeof textItem === "object" && textItem !== null) {
+        const ti = textItem as Record<string, unknown>;
+        if (typeof ti.text === "string") {
+          return ti.text;
+        }
+      }
+    }
+  }
+  // content as string
   if (typeof item.content === "string") {
     return item.content;
+  }
+  // content as array: [{ text: "..." }]
+  if (Array.isArray(item.content)) {
+    for (const contentItem of item.content) {
+      if (typeof contentItem === "object" && contentItem !== null) {
+        const ci = contentItem as Record<string, unknown>;
+        if (typeof ci.text === "string") {
+          return ci.text;
+        }
+      }
+    }
   }
   return undefined;
 }
