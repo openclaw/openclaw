@@ -20,10 +20,12 @@ vi.mock("./pw-session.js", () => ({
 }));
 
 let snapshotAiViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotAiViaPlaywright;
+let closePageViaPlaywright: typeof import("./pw-tools-core.snapshot.js").closePageViaPlaywright;
 
 describe("snapshotAiViaPlaywright (abort)", () => {
   beforeAll(async () => {
-    ({ snapshotAiViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
+    ({ snapshotAiViaPlaywright, closePageViaPlaywright } =
+      await import("./pw-tools-core.snapshot.js"));
   });
 
   beforeEach(() => {
@@ -100,5 +102,38 @@ describe("snapshotAiViaPlaywright (abort)", () => {
 
     await expect(promise).rejects.toThrow("snapshot abort should win");
     resolveDisconnect();
+  });
+
+  it("disconnects the target when a close is aborted after it starts", async () => {
+    const ctrl = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const pendingClose = new Promise<void>(() => {});
+
+    page = {
+      close: vi.fn(() => {
+        resolveStarted();
+        return pendingClose;
+      }),
+    };
+
+    const promise = closePageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "page-1",
+      signal: ctrl.signal,
+    });
+
+    await started;
+    ctrl.abort(new Error("close aborted"));
+
+    await expect(promise).rejects.toThrow("close aborted");
+    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "page-1",
+      }),
+    );
   });
 });

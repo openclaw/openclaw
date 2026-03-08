@@ -241,20 +241,30 @@ export const browserHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const shouldApplyLocalTimeout =
+      timeoutMs !== undefined && shouldWrapLocalBrowserRequestWithTimeout({ path, body });
+
     let result;
     try {
-      result = await withTimeout(
-        async (signal) =>
-          await dispatcher.dispatch({
+      result = shouldApplyLocalTimeout
+        ? await withTimeout(
+            async (signal) =>
+              await dispatcher.dispatch({
+                method: methodRaw,
+                path,
+                query,
+                body,
+                signal,
+              }),
+            timeoutMs,
+            "browser request",
+          )
+        : await dispatcher.dispatch({
             method: methodRaw,
             path,
             query,
             body,
-            signal,
-          }),
-        timeoutMs,
-        "browser request",
-      );
+          });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
