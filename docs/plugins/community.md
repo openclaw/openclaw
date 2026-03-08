@@ -34,6 +34,13 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Plugins
+
+- **Camofox Browser** — Anti-detection browser for AI agents (Firefox-based via Camoufox). Bypasses bot detection on Google, Amazon, LinkedIn, and other protected sites.
+  npm: `@askjo/camofox-browser`
+  repo: `https://github.com/jo-inc/camofox-browser`
+  install: `openclaw plugins install @askjo/camofox-browser`
+
 ## Candidate format
 
 Use this format when adding entries:
