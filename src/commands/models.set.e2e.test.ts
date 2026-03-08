@@ -3,6 +3,25 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
 const loadConfig = vi.fn().mockReturnValue({});
+const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/main.sessions.json"));
+const updateSessionStore = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _storePath: string,
+      updater: (store: Record<string, Record<string, unknown>>) => unknown,
+    ) => {
+      const store = {
+        "agent:main:main": {
+          sessionId: "s1",
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-5",
+        },
+      };
+      return await updater(store);
+    },
+  ),
+);
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/openclaw.json",
@@ -10,6 +29,15 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile,
   loadConfig,
 }));
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveStorePath,
+    updateSessionStore,
+  };
+});
 
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
   readConfigFileSnapshot.mockResolvedValue({
@@ -55,6 +83,8 @@ describe("models set + fallbacks", () => {
   beforeEach(() => {
     readConfigFileSnapshot.mockClear();
     writeConfigFile.mockClear();
+    resolveStorePath.mockClear();
+    updateSessionStore.mockClear();
   });
 
   it("normalizes z.ai provider in models set", async () => {
@@ -124,5 +154,17 @@ describe("models set + fallbacks", () => {
         models: { "anthropic/claude-opus-4-6": {} },
       },
     });
+  });
+
+  it("clears stale runtime model snapshots for sessions inheriting the old default", async () => {
+    mockConfigSnapshot({ agents: { defaults: { model: "anthropic/claude-opus-4-5" } } });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("openai/gpt-5.4", runtime);
+
+    expect(updateSessionStore).toHaveBeenCalledWith(
+      "/tmp/main.sessions.json",
+      expect.any(Function),
+    );
   });
 });

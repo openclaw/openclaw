@@ -4,6 +4,7 @@ import {
   buildModelAliasIndex,
   modelKey,
   parseModelRef,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -14,6 +15,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
+import { resolveStorePath, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
@@ -163,6 +165,35 @@ export function resolveKnownAgentId(params: {
 
 export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
 
+function hasSessionModelOverride(entry: SessionEntry): boolean {
+  return Boolean(entry.modelOverride?.trim() || entry.providerOverride?.trim());
+}
+
+function clearSessionRuntimeModelSnapshot(entry: SessionEntry): boolean {
+  let changed = false;
+  if (entry.model !== undefined) {
+    delete entry.model;
+    changed = true;
+  }
+  if (entry.modelProvider !== undefined) {
+    delete entry.modelProvider;
+    changed = true;
+  }
+  if (entry.fallbackNoticeSelectedModel !== undefined) {
+    delete entry.fallbackNoticeSelectedModel;
+    changed = true;
+  }
+  if (entry.fallbackNoticeActiveModel !== undefined) {
+    delete entry.fallbackNoticeActiveModel;
+    changed = true;
+  }
+  if (entry.fallbackNoticeReason !== undefined) {
+    delete entry.fallbackNoticeReason;
+    changed = true;
+  }
+  return changed;
+}
+
 export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
@@ -207,6 +238,53 @@ export function applyDefaultModelPrimaryUpdate(params: {
       },
     },
   };
+}
+
+export async function syncSessionStoresForDefaultModelChange(params: {
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+}): Promise<void> {
+  const agentIds = new Set([
+    ...listAgentIds(params.previousConfig),
+    ...listAgentIds(params.nextConfig),
+  ]);
+
+  await Promise.all(
+    [...agentIds].map(async (agentId) => {
+      const previousDefault = resolveDefaultModelForAgent({
+        cfg: params.previousConfig,
+        agentId,
+      });
+      const nextDefault = resolveDefaultModelForAgent({
+        cfg: params.nextConfig,
+        agentId,
+      });
+      if (
+        previousDefault.provider === nextDefault.provider &&
+        previousDefault.model === nextDefault.model
+      ) {
+        return;
+      }
+
+      const storePath = resolveStorePath(params.nextConfig.session?.store, { agentId });
+      await updateSessionStore(storePath, (store) => {
+        let changed = false;
+        const updatedAt = Date.now();
+        for (const entry of Object.values(store)) {
+          // Preserve explicit per-session model choices; only reset inherited runtime snapshots.
+          if (!entry || hasSessionModelOverride(entry)) {
+            continue;
+          }
+          if (!clearSessionRuntimeModelSnapshot(entry)) {
+            continue;
+          }
+          entry.updatedAt = updatedAt;
+          changed = true;
+        }
+        return changed;
+      });
+    }),
+  );
 }
 
 export { modelKey };
