@@ -70,6 +70,41 @@ function formatAcpxExitMessage(params: {
   return stderr || `acpx exited with code ${params.exitCode ?? "unknown"}`;
 }
 
+function parseControlPlainTextSession(stdout: string): AcpxJsonObject[] {
+  const text = stdout.trim();
+  if (!text) {
+    return [];
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return [];
+  }
+
+  const record: AcpxJsonObject = {};
+  let sawStructuredField = false;
+
+  for (const line of lines) {
+    const fieldMatch = line.match(/^(acpxRecordId|acpxSessionId|agentSessionId|status):\s*(.+)$/);
+    if (fieldMatch) {
+      sawStructuredField = true;
+      record[fieldMatch[1]] = fieldMatch[2].trim();
+      continue;
+    }
+
+    if (!sawStructuredField && !record.acpxRecordId && !line.startsWith("[acpx]")) {
+      record.acpxRecordId = line;
+    }
+  }
+
+  return record.acpxRecordId || record.acpxSessionId || record.agentSessionId || record.status
+    ? [record]
+    : [];
+}
+
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
   return `${ACPX_RUNTIME_HANDLE_PREFIX}${payload}`;
@@ -713,7 +748,11 @@ export class AcpxRuntime implements AcpRuntime {
       throw new AcpRuntimeError(params.fallbackCode, result.error.message, { cause: result.error });
     }
 
-    const events = parseJsonLines(result.stdout);
+    let events = parseJsonLines(result.stdout);
+    if (events.length === 0) {
+      events = parseControlPlainTextSession(result.stdout);
+    }
+
     const errorEvent = events.map((event) => toAcpxErrorEvent(event)).find(Boolean) ?? null;
     if (errorEvent) {
       if (params.ignoreNoSession && errorEvent.code === "NO_SESSION") {

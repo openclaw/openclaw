@@ -64,6 +64,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
 import {
+  appendAssistantMessageToSessionTranscript,
   mergeSessionEntry,
   parseSessionThreadInfo,
   resolveAndPersistSessionFile,
@@ -732,8 +733,23 @@ async function agentCommandInternal(
         },
       });
 
+      const finalizedText = visibleTextAccumulator.finalize();
+      if (sessionKey && finalizedText) {
+        const appendResult = await appendAssistantMessageToSessionTranscript({
+          agentId: sessionAgentId,
+          sessionKey,
+          text: finalizedText,
+          storePath,
+        });
+        if (!appendResult.ok) {
+          log.warn(
+            `acp transcript mirror skipped for ${sessionKey}: ${appendResult.reason}`,
+          );
+        }
+      }
+
       const normalizedFinalPayload = normalizeReplyPayload({
-        text: visibleTextAccumulator.finalize(),
+        text: finalizedText,
       });
       const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
