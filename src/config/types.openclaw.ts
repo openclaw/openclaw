@@ -23,6 +23,7 @@ import type {
 } from "./types.messages.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
+import type { ObservabilityConfig } from "./types.observability.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
@@ -62,6 +63,7 @@ export type OpenClawConfig = {
   };
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
+  observability?: ObservabilityConfig;
   cli?: CliConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
