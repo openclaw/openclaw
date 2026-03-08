@@ -8,6 +8,8 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  evaluateGroupRouteAccessForPolicy,
+  issuePairingChallenge,
   resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveMentionGatingWithBypass,
@@ -91,28 +93,6 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
     const normalized = entry.toLowerCase().replace(/^(zalouser|zlu):/i, "");
     return normalized === normalizedSenderId;
   });
-}
-
-function isGroupAllowed(params: {
-  groupId: string;
-  groupName?: string | null;
-  groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
-}): boolean {
-  const groups = params.groups ?? {};
-  const keys = Object.keys(groups);
-  if (keys.length === 0) {
-    return false;
-  }
-  const entry = findZalouserGroupEntry(
-    groups,
-    buildZalouserGroupCandidates({
-      groupId: params.groupId,
-      groupName: params.groupName,
-      includeGroupIdAlias: true,
-      includeWildcard: true,
-    }),
-  );
-  return isZalouserGroupEntryAllowed(entry);
 }
 
 function resolveGroupRequireMention(params: {
@@ -222,16 +202,36 @@ async function processMessage(
 
   const groups = account.config.groups ?? {};
   if (isGroup) {
-    if (groupPolicy === "disabled") {
-      logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
-      return;
-    }
-    if (groupPolicy === "allowlist") {
-      const allowed = isGroupAllowed({ groupId: chatId, groupName, groups });
-      if (!allowed) {
+    const groupEntry = findZalouserGroupEntry(
+      groups,
+      buildZalouserGroupCandidates({
+        groupId: chatId,
+        groupName,
+        includeGroupIdAlias: true,
+        includeWildcard: true,
+      }),
+    );
+    const routeAccess = evaluateGroupRouteAccessForPolicy({
+      groupPolicy,
+      routeAllowlistConfigured: Object.keys(groups).length > 0,
+      routeMatched: Boolean(groupEntry),
+      routeEnabled: isZalouserGroupEntryAllowed(groupEntry),
+    });
+    if (!routeAccess.allowed) {
+      if (routeAccess.reason === "disabled") {
+        logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
+      } else if (routeAccess.reason === "empty_allowlist") {
+        logVerbose(
+          core,
+          runtime,
+          `zalouser: drop group ${chatId} (groupPolicy=allowlist, no allowlist)`,
+        );
+      } else if (routeAccess.reason === "route_not_allowlisted") {
         logVerbose(core, runtime, `zalouser: drop group ${chatId} (not allowlisted)`);
-        return;
+      } else if (routeAccess.reason === "route_disabled") {
+        logVerbose(core, runtime, `zalouser: drop group ${chatId} (group disabled)`);
       }
+      return;
     }
   }
 
@@ -262,32 +262,27 @@ async function processMessage(
       const allowed = senderAllowedForCommands;
       if (!allowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
-            id: senderId,
+          await issuePairingChallenge({
+            channel: "zalouser",
+            senderId,
+            senderIdLine: `Your Zalo user id: ${senderId}`,
             meta: { name: senderName || undefined },
-          });
-
-          if (created) {
-            logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
-            try {
-              await sendMessageZalouser(
-                chatId,
-                core.channel.pairing.buildPairingReply({
-                  channel: "zalouser",
-                  idLine: `Your Zalo user id: ${senderId}`,
-                  code,
-                }),
-                { profile: account.profile },
-              );
+            upsertPairingRequest: pairing.upsertPairingRequest,
+            onCreated: () => {
+              logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
+            },
+            sendPairingReply: async (text) => {
+              await sendMessageZalouser(chatId, text, { profile: account.profile });
               statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
+            },
+            onReplyError: (err) => {
               logVerbose(
                 core,
                 runtime,
                 `zalouser pairing reply failed for ${senderId}: ${String(err)}`,
               );
-            }
-          }
+            },
+          });
         } else {
           logVerbose(
             core,

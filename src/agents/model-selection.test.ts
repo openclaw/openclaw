@@ -114,6 +114,17 @@ describe("model-selection", () => {
       });
     });
 
+    it("normalizes deprecated google flash preview ids to the working model id", () => {
+      expect(parseModelRef("google/gemini-3.1-flash-preview", "openai")).toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+      expect(parseModelRef("gemini-3.1-flash-preview", "google")).toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+    });
+
     it("keeps openai gpt-5.3 codex refs on the openai provider", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
         provider: "openai",
@@ -472,6 +483,39 @@ describe("model-selection", () => {
       }
     });
 
+    it("sanitizes control characters in providerless-model warnings", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "\u001B[31mclaude-3-5-sonnet\nspoof" },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "google",
+          defaultModel: "gemini-pro",
+        });
+
+        expect(result).toEqual({
+          provider: "anthropic",
+          model: "\u001B[31mclaude-3-5-sonnet\nspoof",
+        });
+        const warning = warnSpy.mock.calls[0]?.[0] as string;
+        expect(warning).toContain('Falling back to "anthropic/claude-3-5-sonnet"');
+        expect(warning).not.toContain("\u001B");
+        expect(warning).not.toContain("\n");
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
     it("should use default provider/model if config is empty", () => {
       const cfg: Partial<OpenClawConfig> = {};
       const result = resolveConfiguredModelRef({
@@ -557,6 +601,35 @@ describe("model-selection", () => {
         defaultModel: "claude-opus-4-6",
       });
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("should warn when specified model cannot be resolved and falls back to default", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "openai/" },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+        });
+
+        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to default "anthropic/claude-opus-4-6"'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
     });
   });
 

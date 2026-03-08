@@ -721,6 +721,7 @@ describe("monitorDiscordProvider", () => {
     const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
       .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
       .filter((value): value is string => typeof value === "string");
+    expect(getPluginCommandSpecsMock).toHaveBeenCalledWith("discord");
     expect(commandNames).toContain("cmd");
     expect(commandNames).toContain("cron_jobs");
   });

@@ -863,6 +863,7 @@ Command handler context:
 Command options:
 
 - `name`: Command name (without the leading `/`)
+- `nativeNames`: Optional native-command aliases for slash/menu surfaces. Use `default` for all native providers, or provider-specific keys like `discord`
 - `description`: Help text shown in command lists
 - `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
 - `requireAuth`: Whether to require authorized sender (default: true)

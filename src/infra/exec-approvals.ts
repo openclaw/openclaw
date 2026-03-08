@@ -44,12 +44,19 @@ export type SystemRunApprovalBinding = {
   envHash: string | null;
 };
 
+export type SystemRunApprovalFileOperand = {
+  argvIndex: number;
+  path: string;
+  sha256: string;
+};
+
 export type SystemRunApprovalPlan = {
   argv: string[];
   cwd: string | null;
   rawCommand: string | null;
   agentId: string | null;
   sessionKey: string | null;
+  mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
 export type ExecApprovalRequestPayload = {

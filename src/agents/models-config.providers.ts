@@ -544,6 +544,15 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3-flash") {
     return "gemini-3-flash-preview";
   }
+  if (id === "gemini-3.1-pro") {
+    return "gemini-3.1-pro-preview";
+  }
+  // Preserve compatibility with earlier OpenClaw docs/config that pointed at a
+  // non-existent Gemini Flash preview ID. Google's current Flash text model is
+  // `gemini-3-flash-preview`.
+  if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
+    return "gemini-3-flash-preview";
+  }
   return id;
 }
 
@@ -771,6 +780,12 @@ function buildMinimaxPortalProvider(): ProviderConfig {
     api: "anthropic-messages",
     authHeader: true,
     models: [
+      buildMinimaxModel({
+        id: MINIMAX_DEFAULT_VISION_MODEL_ID,
+        name: "MiniMax VL 01",
+        reasoning: false,
+        input: ["text", "image"],
+      }),
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.5",
@@ -1116,8 +1131,9 @@ export async function resolveImplicitProviders(params: {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
 
+  const minimaxPortalEnvKey = resolveEnvApiKeyVarName("minimax-portal");
   const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
-  if (minimaxOauthProfile.length > 0) {
+  if (minimaxPortalEnvKey || minimaxOauthProfile.length > 0) {
     providers["minimax-portal"] = {
       ...buildMinimaxPortalProvider(),
       apiKey: MINIMAX_OAUTH_MARKER,
