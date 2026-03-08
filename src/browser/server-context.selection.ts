@@ -1,4 +1,4 @@
-import { fetchOk } from "./cdp.helpers.js";
+import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import type { PwAiModule } from "./pw-ai-module.js";
@@ -27,6 +27,8 @@ export function createProfileSelectionOps({
   listTabs,
   openTab,
 }: SelectionDeps): SelectionOps {
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
+
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
     const profileState = getProfileState();
@@ -122,7 +124,7 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
+    await fetchOk(appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
   };
@@ -144,7 +146,7 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
+    await fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`));
   };
 
   return {
