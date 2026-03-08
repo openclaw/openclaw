@@ -17,6 +17,9 @@ type PackageJson = {
     install?: {
       npmSpec?: string;
     };
+    releaseChecks?: {
+      rootDependencyMirrorAllowlist?: string[];
+    };
   };
 };
 
@@ -128,15 +131,6 @@ function normalizePluginSyncVersion(version: string): string {
   return normalized.replace(/[-+].*$/, "");
 }
 
-const ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS: Record<string, string[]> = {
-  googlechat: ["google-auth-library"],
-  matrix: ["@matrix-org/matrix-sdk-crypto-nodejs", "@vector-im/matrix-bot-sdk", "music-metadata"],
-  msteams: ["@microsoft/agents-hosting"],
-  nostr: ["nostr-tools"],
-  tlon: ["@tloncorp/api", "@tloncorp/tlon-skill", "@urbit/aura"],
-  zalouser: ["zca-js"],
-};
-
 export function collectBundledExtensionRootDependencyGapErrors(params: {
   rootPackage: PackageJson;
   extensions: Array<{ id: string; packageJson: PackageJson }>;
@@ -156,7 +150,7 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
       .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
       .toSorted();
     const allowlisted = [
-      ...(ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS[extension.id] ?? []),
+      ...(extension.packageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist ?? []),
     ].toSorted();
     if (missing.join("\n") !== allowlisted.join("\n")) {
       const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
