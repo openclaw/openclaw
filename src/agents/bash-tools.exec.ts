@@ -1418,7 +1418,6 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -1426,6 +1425,9 @@ export function createExecTool(
     accountId: defaults?.accountId,
     threadId: defaults?.currentThreadTs,
   });
+  const notifyOnExitEmptySuccess =
+    defaults?.notifyOnExitEmptySuccess ??
+    Boolean(notifyDeliveryContext?.channel && notifyDeliveryContext.to);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
