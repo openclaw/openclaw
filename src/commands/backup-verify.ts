@@ -187,13 +187,15 @@ async function extractManifest(params: {
 }): Promise<string> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-"));
   try {
-    await tar.x({
-      file: params.archivePath,
-      gzip: true,
-      cwd: tempDir,
-      preservePaths: false,
-      entries: [params.manifestEntryPath],
-    });
+    await tar.x(
+      {
+        file: params.archivePath,
+        gzip: true,
+        cwd: tempDir,
+        preservePaths: false,
+      },
+      [params.manifestEntryPath],
+    );
     const manifestPath = path.join(tempDir, params.manifestEntryPath);
     return await fs.readFile(manifestPath, "utf8");
   } finally {
