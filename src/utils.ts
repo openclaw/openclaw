@@ -30,6 +30,9 @@ export function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * Clamps an integer value between min and max (inclusive).
+ */
 export function clampInt(value: number, min: number, max: number): number {
   return clampNumber(Math.floor(value), min, max);
 }
