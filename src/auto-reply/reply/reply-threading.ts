@@ -45,7 +45,13 @@ export function createReplyToModeFilter(
     if (hasThreaded) {
       return { ...payload, replyToId: undefined };
     }
-    hasThreaded = true;
+    // Compaction notices are transient status messages — they should be
+    // threaded (so they appear in-context), but they must not consume the
+    // "first" slot of the replyToMode=first filter.  Skip advancing
+    // hasThreaded so the real assistant reply still gets replyToId.
+    if (!payload.isCompactionNotice) {
+      hasThreaded = true;
+    }
     return payload;
   };
 }
