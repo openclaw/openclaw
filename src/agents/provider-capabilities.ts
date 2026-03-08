@@ -14,8 +14,8 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 
 const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   "kimi-coding": {
-    anthropicToolSchemaMode: "openai-functions",
-    anthropicToolChoiceMode: "openai-string-modes",
+    anthropicToolSchemaMode: "native",
+    anthropicToolChoiceMode: "native",
     preserveAnthropicThinkingSignatures: false,
   },
 };
