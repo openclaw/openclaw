@@ -39,6 +39,38 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 
 Profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` under `profiles`.
 
+### Example: rotating multiple GPT OAuth accounts
+
+If you authenticate multiple GPT OAuth profiles for the same provider (for example
+`openai-codex:work@example.com` and `openai-codex:personal@example.com`),
+OpenClaw can rotate between them when one profile is rate-limited or out of
+credits/quota.
+
+You can make the order explicit:
+
+```json
+{
+  "auth": {
+    "order": {
+      "openai-codex": [
+        "openai-codex:work@example.com",
+        "openai-codex:personal@example.com"
+      ]
+    }
+  }
+}
+```
+
+Behavior at runtime:
+
+- OpenClaw keeps a session-pinned profile for normal requests.
+- On failover-worthy errors (`429`, rate limit, quota/billing exhaustion), it
+  marks the current profile unavailable and retries with the next eligible
+  profile.
+- If no eligible profile remains, model fallback rules apply.
+
+Use `/model status` to inspect active candidates and the next auth profile.
+
 ## Rotation order
 
 When a provider has multiple profiles, OpenClaw chooses an order like this:
