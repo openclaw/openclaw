@@ -28,7 +28,7 @@ export function resolveBundledExtensionRootDir(
     current = parent;
   }
 
-  return path.resolve(here, "../../assets/chrome-extension");
+  return path.resolve(here, "../assets/chrome-extension");
 }
 
 function installedExtensionRootDir() {
