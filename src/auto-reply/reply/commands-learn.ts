@@ -153,9 +153,7 @@ export const handleLearnCommand = async (
   }
 
   const sessionId = params.sessionEntry.sessionId;
-  const customFocus = extractLearnFocus(
-    params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
-  );
+  const customFocus = extractLearnFocus(params.command.commandBodyNormalized);
 
   if (!params.sessionEntry.sessionFile) {
     return {

@@ -240,7 +240,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
       runLearnForSession({
         sessionId: targetSessionEntry.sessionId,
-        sessionKey: targetSessionKey,
+        sessionKey: "", // Empty to avoid blocking session lane
         messageChannel: params.command.channel,
         groupId: targetSessionEntry.groupId,
         groupChannel: targetSessionEntry.groupChannel,
