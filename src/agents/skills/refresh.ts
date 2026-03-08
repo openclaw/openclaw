@@ -110,8 +110,11 @@ export function bumpSkillsSnapshotVersion(params?: {
   const reason = params?.reason ?? "manual";
   const changedPath = params?.changedPath;
   if (params?.workspaceDir) {
-    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
-    const next = bumpVersion(current);
+    const local = workspaceVersions.get(params.workspaceDir) ?? 0;
+    // Bump from the effective version so the result always exceeds
+    // globalVersion, even after clock skew (NTP correction, VM resume).
+    const effective = Math.max(globalVersion, local);
+    const next = bumpVersion(effective);
     workspaceVersions.set(params.workspaceDir, next);
     emit({ workspaceDir: params.workspaceDir, reason, changedPath });
     return next;
