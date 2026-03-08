@@ -852,6 +852,31 @@ Primary reference:
   - `channels.telegram.accounts.default.allowFrom` and `channels.telegram.accounts.default.groupAllowFrom` apply only to the `default` account.
   - Named accounts inherit `channels.telegram.allowFrom` and `channels.telegram.groupAllowFrom` when account-level values are unset.
   - Named accounts do not inherit `channels.telegram.accounts.default.allowFrom` / `groupAllowFrom`.
+  - **Important:** Multi-account setups require explicit `bindings` entries for non-default accounts. Without bindings, messages to non-default accounts are silently dropped.
+
+    Example config for two Telegram bot accounts:
+
+    ```json5
+    {
+      channels: {
+        telegram: {
+          enabled: true,
+          accounts: {
+            default: { botToken: "123:abc" },
+            parallel: { botToken: "456:def" },
+          },
+          defaultAccount: "default",
+        },
+      },
+      // Required: explicit binding for non-default account
+      bindings: [{
+        agentId: "main",
+        match: { channel: "telegram", accountId: "parallel" }
+      }],
+    }
+    ```
+
+    Without the `bindings` entry, messages to the `parallel` account will be silently discarded.
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
