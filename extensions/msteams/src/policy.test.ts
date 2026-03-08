@@ -76,12 +76,20 @@ describe("msteams policy", () => {
   });
 
   describe("resolveMSTeamsReplyPolicy", () => {
-    it("forces thread replies for direct messages", () => {
+    it("defaults to thread replies for direct messages", () => {
+      const policy = resolveMSTeamsReplyPolicy({
+        isDirectMessage: true,
+        globalConfig: {},
+      });
+      expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
+    });
+
+    it("respects globalConfig replyStyle override for direct messages", () => {
       const policy = resolveMSTeamsReplyPolicy({
         isDirectMessage: true,
         globalConfig: { replyStyle: "top-level", requireMention: false },
       });
-      expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
+      expect(policy).toEqual({ requireMention: false, replyStyle: "top-level" });
     });
 
     it("defaults to requireMention=true and replyStyle=thread", () => {

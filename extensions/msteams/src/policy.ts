@@ -222,7 +222,12 @@ export function resolveMSTeamsReplyPolicy(params: {
   channelConfig?: MSTeamsChannelConfig;
 }): MSTeamsReplyPolicy {
   if (params.isDirectMessage) {
-    return { requireMention: false, replyStyle: "thread" };
+    const replyStyle: MSTeamsReplyStyle =
+      params.channelConfig?.replyStyle ??
+      params.teamConfig?.replyStyle ??
+      params.globalConfig?.replyStyle ??
+      "thread";
+    return { requireMention: false, replyStyle };
   }
 
   const requireMention =
