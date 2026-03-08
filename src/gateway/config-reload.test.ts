@@ -167,6 +167,21 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([]);
   });
 
+  it("requires a gateway restart when provider transport identity changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "models.providers.kimi-coding.api",
+      "models.providers.kimi-coding.baseUrl",
+    ]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(
+      expect.arrayContaining([
+        "models.providers.kimi-coding.api",
+        "models.providers.kimi-coding.baseUrl",
+      ]),
+    );
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);
@@ -220,6 +235,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "unknownField",
       expectRestartGateway: true,
       expectRestartReason: "unknownField",
+    },
+    {
+      path: "models.providers.kimi-coding.api",
+      expectRestartGateway: true,
+      expectRestartReason: "models.providers.kimi-coding.api",
     },
   ])("classifies reload path: $path", (testCase) => {
     const plan = buildGatewayReloadPlan([testCase.path]);
