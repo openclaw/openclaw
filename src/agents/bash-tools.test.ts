@@ -281,6 +281,10 @@ const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
     overrides: { messageProvider: "discord" },
     shouldEmitEvent: true,
   }),
+  withLabel("generic provider labels do not opt into no-op completion events", {
+    overrides: { messageProvider: "openai" },
+    shouldEmitEvent: false,
+  }),
   withLabel("chat contexts respect explicit no-op completion opt-out", {
     notifyOnExitEmptySuccess: false,
     overrides: { messageProvider: "discord" },
