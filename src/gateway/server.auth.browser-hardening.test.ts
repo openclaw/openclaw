@@ -73,6 +73,29 @@ async function createSignedDevice(params: {
 }
 
 describe("gateway auth browser hardening", () => {
+  test("accepts allowlisted chrome extension origins for browser ws clients", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    testState.gatewayControlUi = {
+      allowedOrigins: ["chrome-extension://abcdefghijklmnop"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "chrome-extension://abcdefghijklmnop",
+      });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("rejects non-local browser origins for non-control-ui clients", async () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {

@@ -7,9 +7,19 @@ type OriginCheckResult =
     }
   | { ok: false; reason: string };
 
+function normalizeOriginForMatch(url: URL): string {
+  const normalizedOrigin = url.origin.toLowerCase();
+  if (normalizedOrigin !== "null") {
+    return normalizedOrigin;
+  }
+  // Non-standard schemes like chrome-extension://<id> stringify to origin === "null",
+  // but still have a stable scheme + host that operators can allowlist exactly.
+  return `${url.protocol}//${url.host}`.toLowerCase();
+}
+
 function parseOrigin(
   originRaw?: string,
-): { origin: string; host: string; hostname: string } | null {
+): { matchOrigin: string; host: string; hostname: string } | null {
   const trimmed = (originRaw ?? "").trim();
   if (!trimmed || trimmed === "null") {
     return null;
@@ -17,13 +27,24 @@ function parseOrigin(
   try {
     const url = new URL(trimmed);
     return {
-      origin: url.origin.toLowerCase(),
+      matchOrigin: normalizeOriginForMatch(url),
       host: url.host.toLowerCase(),
       hostname: url.hostname.toLowerCase(),
     };
   } catch {
     return null;
   }
+}
+
+function normalizeAllowedOrigin(originRaw: string): string | null {
+  const trimmed = originRaw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed === "*") {
+    return "*";
+  }
+  return parseOrigin(trimmed)?.matchOrigin ?? null;
 }
 
 export function checkBrowserOrigin(params: {
@@ -39,9 +60,9 @@ export function checkBrowserOrigin(params: {
   }
 
   const allowlist = new Set(
-    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
+    (params.allowedOrigins ?? []).map(normalizeAllowedOrigin).filter(Boolean),
   );
-  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
+  if (allowlist.has("*") || allowlist.has(parsedOrigin.matchOrigin)) {
     return { ok: true, matchedBy: "allowlist" };
   }
 
