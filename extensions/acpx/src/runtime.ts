@@ -12,7 +12,7 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
-import { type ResolvedAcpxPluginConfig } from "./config.js";
+import { type ResolvedAcpxPluginConfig, type McpServerConfig } from "./config.js";
 import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
@@ -222,6 +222,7 @@ export class AcpxRuntime implements AcpRuntime {
         }),
         cwd,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
+        mcpServers: this.config.mcpServers,
       });
       ensuredEvent = events.find(
         (event) =>
@@ -614,11 +615,20 @@ export class AcpxRuntime implements AcpRuntime {
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
     signal?: AbortSignal;
+    mcpServers?: Record<string, McpServerConfig>;
   }): Promise<AcpxJsonObject[]> {
+    let args = params.args;
+    
+    // Add --mcpServers flag if mcpServers are provided and non-empty
+    if (params.mcpServers && Object.keys(params.mcpServers).length > 0) {
+      const mcpServersJson = JSON.stringify(params.mcpServers);
+      args = [...args, "--mcpServers", mcpServersJson];
+    }
+    
     const result = await spawnAndCollect(
       {
         command: this.config.command,
-        args: params.args,
+        args,
         cwd: params.cwd,
       },
       this.spawnCommandOptions,

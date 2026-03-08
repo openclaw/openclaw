@@ -59,8 +59,11 @@ export function createAcpxRuntimeService(
       });
       const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
       const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
+      const mcpServersLabel = Object.keys(pluginConfig.mcpServers).length > 0 
+        ? `, mcpServers: ${Object.keys(pluginConfig.mcpServers).length}` 
+        : "";
       ctx.logger.info(
-        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
+        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel}${mcpServersLabel})`,
       );
 
       lifecycleRevision += 1;

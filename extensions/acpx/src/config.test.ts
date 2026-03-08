@@ -21,6 +21,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.allowPluginLocalInstall).toBe(true);
     expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
+    expect(resolved.mcpServers).toEqual({});
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {
@@ -131,5 +132,227 @@ describe("acpx plugin config parsing", () => {
         workspaceDir: "/tmp/workspace",
       }),
     ).toThrow("strictWindowsCmdWrapper must be a boolean");
+  });
+});
+
+describe("acpx plugin mcpServers config parsing", () => {
+  it("accepts mcpServers with command-only configuration", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        mcpServers: {
+          canva: {
+            command: "npx",
+          },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.mcpServers).toEqual({
+      canva: {
+        command: "npx",
+      },
+    });
+  });
+
+  it("accepts mcpServers with command and args", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        mcpServers: {
+          canva: {
+            command: "npx",
+            args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.mcpServers).toEqual({
+      canva: {
+        command: "npx",
+        args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+      },
+    });
+  });
+
+  it("accepts mcpServers with command, args, and env", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        mcpServers: {
+          canva: {
+            command: "npx",
+            args: ["-y", "mcp-remote@latest"],
+            env: {
+              API_KEY: "secret123",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.mcpServers).toEqual({
+      canva: {
+        command: "npx",
+        args: ["-y", "mcp-remote@latest"],
+        env: {
+          API_KEY: "secret123",
+        },
+      },
+    });
+  });
+
+  it("accepts multiple mcpServers", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        mcpServers: {
+          canva: {
+            command: "npx",
+            args: ["mcp-remote@latest", "https://mcp.canva.com/mcp"],
+          },
+          github: {
+            command: "npx",
+            args: ["-y", "@github/mcp-server"],
+            env: {
+              GITHUB_TOKEN: "token123",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(Object.keys(resolved.mcpServers)).toHaveLength(2);
+    expect(resolved.mcpServers.canva).toBeDefined();
+    expect(resolved.mcpServers.github).toBeDefined();
+  });
+
+  it("rejects mcpServers with missing command", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            canva: {
+              args: ["-y"],
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("mcpServers.canva must have a command string, optional args array, and optional env object");
+  });
+
+  it("rejects mcpServers with non-string command", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            canva: {
+              command: 123,
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("mcpServers.canva must have a command string, optional args array, and optional env object");
+  });
+
+  it("rejects mcpServers with non-array args", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            canva: {
+              command: "npx",
+              args: "-y",
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("mcpServers.canva must have a command string, optional args array, and optional env object");
+  });
+
+  it("rejects mcpServers with non-string args items", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            canva: {
+              command: "npx",
+              args: ["-y", 123],
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("mcpServers.canva must have a command string, optional args array, and optional env object");
+  });
+
+  it("rejects mcpServers with non-object env", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            canva: {
+              command: "npx",
+              env: "API_KEY=secret",
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("mcpServers.canva must have a command string, optional args array, and optional env object");
+  });
+
+  it("rejects mcpServers with non-string env values", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          mcpServers: {
+            canva: {
+              command: "npx",
+              env: {
+                API_KEY: 123,
+              },
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("mcpServers.canva must have a command string, optional args array, and optional env object");
+  });
+
+  it("schema accepts valid mcpServers config", () => {
+    const schema = createAcpxPluginConfigSchema();
+    if (!schema.safeParse) {
+      throw new Error("acpx config schema missing safeParse");
+    }
+    const parsed = schema.safeParse({
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest"],
+          env: {
+            API_KEY: "secret",
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("schema rejects mcpServers with invalid structure", () => {
+    const schema = createAcpxPluginConfigSchema();
+    if (!schema.safeParse) {
+      throw new Error("acpx config schema missing safeParse");
+    }
+    const parsed = schema.safeParse({
+      mcpServers: "invalid",
+    });
+
+    expect(parsed.success).toBe(false);
   });
 });

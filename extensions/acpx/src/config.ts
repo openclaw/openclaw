@@ -18,6 +18,13 @@ export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSI
 }
 export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 
+// MCP server configuration type
+export type McpServerConfig = {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
 export type AcpxPluginConfig = {
   command?: string;
   expectedVersion?: string;
@@ -27,6 +34,7 @@ export type AcpxPluginConfig = {
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
+  mcpServers?: Record<string, McpServerConfig>;
 };
 
 export type ResolvedAcpxPluginConfig = {
@@ -40,6 +48,7 @@ export type ResolvedAcpxPluginConfig = {
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  mcpServers: Record<string, McpServerConfig>;
 };
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
@@ -65,6 +74,30 @@ function isNonInteractivePermissionPolicy(
   return ACPX_NON_INTERACTIVE_POLICIES.includes(value as AcpxNonInteractivePermissionPolicy);
 }
 
+function isMcpServerConfig(value: unknown): value is McpServerConfig {
+  if (!isRecord(value)) return false;
+  const command = value.command;
+  if (typeof command !== "string" || command.trim() === "") return false;
+  
+  // Validate args if present
+  if (value.args !== undefined) {
+    if (!Array.isArray(value.args)) return false;
+    for (const arg of value.args) {
+      if (typeof arg !== "string") return false;
+    }
+  }
+  
+  // Validate env if present
+  if (value.env !== undefined) {
+    if (!isRecord(value.env)) return false;
+    for (const [key, val] of Object.entries(value.env)) {
+      if (typeof val !== "string") return false;
+    }
+  }
+  
+  return true;
+}
+
 function parseAcpxPluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
@@ -81,6 +114,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     "strictWindowsCmdWrapper",
     "timeoutSeconds",
     "queueOwnerTtlSeconds",
+    "mcpServers",
   ]);
   for (const key of Object.keys(value)) {
     if (!allowedKeys.has(key)) {
@@ -152,6 +186,19 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
   }
 
+  // Validate mcpServers if present
+  const mcpServers = value.mcpServers;
+  if (mcpServers !== undefined) {
+    if (!isRecord(mcpServers)) {
+      return { ok: false, message: "mcpServers must be an object" };
+    }
+    for (const [key, serverConfig] of Object.entries(mcpServers)) {
+      if (!isMcpServerConfig(serverConfig)) {
+        return { ok: false, message: `mcpServers.${key} must have a command string, optional args array, and optional env object` };
+      }
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -166,6 +213,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       queueOwnerTtlSeconds:
         typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
+      mcpServers: mcpServers as Record<string, McpServerConfig> | undefined,
     },
   };
 }
@@ -219,6 +267,24 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
         strictWindowsCmdWrapper: { type: "boolean" },
         timeoutSeconds: { type: "number", minimum: 0.001 },
         queueOwnerTtlSeconds: { type: "number", minimum: 0 },
+        mcpServers: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: { type: "string" },
+              args: {
+                type: "array",
+                items: { type: "string" },
+              },
+              env: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
+            },
+            required: ["command"],
+          },
+        },
       },
     },
   };
@@ -260,5 +326,6 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    mcpServers: normalized.mcpServers ?? {},
   };
 }
