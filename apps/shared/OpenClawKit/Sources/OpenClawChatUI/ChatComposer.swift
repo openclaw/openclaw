@@ -417,6 +417,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainerInset = NSSize(width: 2, height: 4)
         textView.focusRingType = .none
+        textView.allowsUndo = true
 
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
