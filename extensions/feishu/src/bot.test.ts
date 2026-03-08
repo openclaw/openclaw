@@ -2016,6 +2016,50 @@ describe("broadcast dispatch", () => {
     );
   });
 
+  it("uses noop group dispatcher when disableGroupReplies is enabled", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          disableGroupReplies: true,
+          groups: {
+            "oc-broadcast-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-no-group-replies",
+        chat_id: "oc-broadcast-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockWithReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcher: expect.objectContaining({
+          sendToolResult: expect.any(Function),
+          sendBlockReply: expect.any(Function),
+          sendFinalReply: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("cross-account broadcast dedup: second account skips dispatch", async () => {
     const cfg: ClawdbotConfig = {
       broadcast: { "oc-broadcast-group": ["susan", "main"] },

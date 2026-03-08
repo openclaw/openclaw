@@ -21,9 +21,20 @@ export function resolveFeishuSendTarget(params: {
   // Preserve explicit routing prefixes (chat/group/user/dm/open_id) when present.
   // normalizeFeishuTarget strips these prefixes, so infer type from the raw target first.
   const withoutProviderPrefix = target.replace(/^(feishu|lark):/i, "");
+  const lowered = withoutProviderPrefix.toLowerCase();
+  const receiveIdType = resolveReceiveIdType(withoutProviderPrefix);
+  const isExplicitGroupTarget =
+    lowered.startsWith("chat:") || lowered.startsWith("group:") || lowered.startsWith("channel:");
+
+  if (account.config?.disableGroupReplies && isExplicitGroupTarget && receiveIdType === "chat_id") {
+    throw new Error(
+      `Feishu group replies are disabled by config for account "${account.accountId}"`,
+    );
+  }
+
   return {
     client,
     receiveId,
-    receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
+    receiveIdType,
   };
 }

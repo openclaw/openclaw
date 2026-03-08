@@ -57,6 +57,43 @@ describe("resolveFeishuSendTarget", () => {
     expect(result.receiveIdType).toBe("user_id");
   });
 
+  it("blocks explicit group targets when disableGroupReplies is enabled", () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      config: {
+        disableGroupReplies: true,
+      },
+    });
+
+    expect(() =>
+      resolveFeishuSendTarget({
+        cfg,
+        to: "feishu:group:oc_123",
+      }),
+    ).toThrow('Feishu group replies are disabled by config for account "default"');
+  });
+
+  it("still allows dm targets when disableGroupReplies is enabled", () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      config: {
+        disableGroupReplies: true,
+      },
+    });
+
+    const result = resolveFeishuSendTarget({
+      cfg,
+      to: "feishu:user:ou_123",
+    });
+
+    expect(result.receiveId).toBe("ou_123");
+    expect(result.receiveIdType).toBe("open_id");
+  });
+
   it("throws when target account is not configured", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "default",

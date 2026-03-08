@@ -1499,20 +1499,42 @@ export async function handleFeishuMessage(params: {
         ctx.mentionedBot,
       );
 
-      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
-        cfg,
-        agentId: route.agentId,
-        runtime: runtime as RuntimeEnv,
-        chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
-        replyInThread,
-        rootId: ctx.rootId,
-        threadReply,
-        mentionTargets: ctx.mentionTargets,
-        accountId: account.accountId,
-        messageCreateTimeMs,
-      });
+      const disableGroupReplies = Boolean(isGroup && feishuCfg?.disableGroupReplies);
+      const noopDispatcher = {
+        sendToolResult: () => false,
+        sendBlockReply: () => false,
+        sendFinalReply: () => false,
+        waitForIdle: async () => {},
+        getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+        markComplete: () => {},
+      };
+
+      const { dispatcher, replyOptions, markDispatchIdle } = disableGroupReplies
+        ? {
+            dispatcher: noopDispatcher,
+            replyOptions: undefined,
+            markDispatchIdle: () => {},
+          }
+        : createFeishuReplyDispatcher({
+            cfg,
+            agentId: route.agentId,
+            runtime: runtime as RuntimeEnv,
+            chatId: ctx.chatId,
+            replyToMessageId: replyTargetMessageId,
+            skipReplyToInMessages: !isGroup,
+            replyInThread,
+            rootId: ctx.rootId,
+            threadReply,
+            mentionTargets: ctx.mentionTargets,
+            accountId: account.accountId,
+            messageCreateTimeMs,
+          });
+
+      if (disableGroupReplies) {
+        log(
+          `feishu[${account.accountId}]: group replies disabled for ${ctx.chatId}; dispatching with noop reply dispatcher`,
+        );
+      }
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
