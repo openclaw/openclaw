@@ -61,7 +61,7 @@ export function extractAssistantText(msg: AgentMessage): string {
   }
   if (Array.isArray(content)) {
     return (content as ContentPart[])
-      .filter((c) => c?.type === "text")
+      .filter((c) => c?.type === "text" || c?.type === "output_text" || c?.type === "input_text")
       .map((c) => c.text ?? "")
       .join("");
   }
@@ -99,17 +99,20 @@ export async function applyBeforeResponseEmitHook(
   // Count actual text-bearing assistant turns in the session (not assistantTexts.length,
   // which can have multiple entries per turn with block-reply chunking). When
   // preRunMessageCount is provided, only count messages added during this run.
+  // If compaction has shrunk the transcript below preRunMessageCount, the index
+  // is stale — fall back to assistantTexts.length to avoid under-scoping.
   const runStart = params.preRunMessageCount ?? 0;
-  const runAssistantTurnCount = activeSession.messages
-    .slice(runStart)
-    .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0).length;
-  // Use the larger of assistantTurnCount and 1 to ensure we always scope at least
-  // the current run. Fall back to assistantTexts.length if no preRunMessageCount
-  // is available (backward compatibility).
-  const scopeCount =
-    params.preRunMessageCount !== undefined
-      ? Math.max(runAssistantTurnCount, 1)
-      : assistantTexts.length;
+  const compactionShiftedIndices = runStart > activeSession.messages.length;
+  let scopeCount: number;
+  if (params.preRunMessageCount !== undefined && !compactionShiftedIndices) {
+    const runAssistantTurnCount = activeSession.messages
+      .slice(runStart)
+      .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0).length;
+    scopeCount = Math.max(runAssistantTurnCount, 1);
+  } else {
+    // No preRunMessageCount or compaction invalidated it — use assistantTexts.length.
+    scopeCount = assistantTexts.length;
+  }
 
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
