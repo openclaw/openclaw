@@ -432,7 +432,17 @@ export async function runAgentTurnWithFallback(params: {
                         replyToCurrent: true,
                         isCompactionNotice: true,
                       });
-                      await params.opts.onBlockReply(noticePayload);
+                      try {
+                        await params.opts.onBlockReply(noticePayload);
+                      } catch (err) {
+                        // Non-critical notice — swallow delivery failures so a downstream
+                        // send/TTS error does not create an unhandled rejection inside the
+                        // fire-and-forget onAgentEvent callback.
+                        params.logger?.warn(
+                          { err },
+                          "compaction start notice delivery failed (non-fatal)",
+                        );
+                      }
                     }
                   } else if (phase === "end") {
                     autoCompactionCompleted = true;
