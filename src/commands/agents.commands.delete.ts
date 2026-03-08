@@ -1,6 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { listAgentIds, normalizePathForComparison, resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -18,17 +16,6 @@ type AgentsDeleteOptions = {
   force?: boolean;
   json?: boolean;
 };
-
-function normalizePathForComparison(input: string): string {
-  const resolved = path.resolve(input);
-  let normalized = resolved;
-  try {
-    normalized = fs.realpathSync.native(resolved);
-  } catch {
-    // Keep lexical path when the directory no longer exists.
-  }
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
 
 function resolveWorkspaceOwners(cfg: OpenClawConfig, workspaceDir: string): string[] {
   const targetWorkspace = normalizePathForComparison(workspaceDir);
@@ -123,6 +110,7 @@ export async function agentsDeleteCommand(
         {
           agentId,
           workspace: workspaceDir,
+          workspaceRemoved: shouldDeleteWorkspace,
           agentDir,
           sessionsDir,
           removedBindings: result.removedBindings,

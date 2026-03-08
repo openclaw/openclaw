@@ -113,4 +113,33 @@ describe("agents delete command", () => {
     expect(trashed).toContain(opsAgentDir);
     expect(trashed).toContain("sessions/ops");
   });
+
+  it("reports workspaceRemoved=false in json mode when workspace cleanup is skipped", async () => {
+    const sharedWorkspace = path.resolve("tmp", "workspace-shared-json");
+    const mainAgentDir = path.resolve("tmp", "agent-main-json");
+    const opsAgentDir = path.resolve("tmp", "agent-ops-json");
+
+    requireValidConfigMock.mockResolvedValue({
+      agents: {
+        defaults: { workspace: sharedWorkspace },
+        list: [
+          { id: "main", workspace: sharedWorkspace, agentDir: mainAgentDir },
+          { id: "ops", workspace: sharedWorkspace, agentDir: opsAgentDir },
+        ],
+      },
+    });
+
+    await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+    const trashed = moveToTrashMock.mock.calls.map((call) => call[0]);
+    expect(trashed).not.toContain(sharedWorkspace);
+    expect(trashed).toContain(opsAgentDir);
+    expect(trashed).toContain("sessions/ops");
+
+    const jsonLog = runtime.log.mock.calls.at(-1)?.[0];
+    expect(typeof jsonLog).toBe("string");
+    const payload = JSON.parse(String(jsonLog));
+    expect(payload.workspace).toBe(sharedWorkspace);
+    expect(payload.workspaceRemoved).toBe(false);
+  });
 });
