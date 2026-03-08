@@ -334,6 +334,9 @@ function createMessageSentEmitter(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  threadId?: string | number | null;
+  agentId?: string;
+  sessionKey?: string;
   sessionKeyForInternalHooks?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
@@ -353,6 +356,9 @@ function createMessageSentEmitter(params: {
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
       messageId: event.messageId,
+      threadId: params.threadId ?? undefined,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
@@ -397,6 +403,9 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  conversationId?: string;
+  threadId?: string | number | null;
+  session?: OutboundSessionContext;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -417,12 +426,17 @@ async function applyMessageSendingHook(params: {
         metadata: {
           channel: params.channel,
           accountId: params.accountId,
+          conversationId: params.conversationId,
+          threadId: params.threadId ?? undefined,
+          sessionKey: params.session?.key,
+          agentId: params.session?.agentId,
           mediaUrls: params.payloadSummary.mediaUrls,
         },
       },
       {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
+        conversationId: params.conversationId,
       },
     );
     if (sendingResult?.cancel) {
@@ -672,6 +686,9 @@ async function deliverOutboundPayloadsCore(
     channel,
     to,
     accountId,
+    threadId: params.threadId ?? undefined,
+    agentId: params.session?.agentId,
+    sessionKey: sessionKeyForInternalHooks,
     sessionKeyForInternalHooks,
     mirrorIsGroup,
     mirrorGroupId,
@@ -701,6 +718,9 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        conversationId: to,
+        threadId: params.threadId ?? undefined,
+        session: params.session,
       });
       if (hookResult.cancelled) {
         continue;
