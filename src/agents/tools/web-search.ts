@@ -664,6 +664,7 @@ function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   if (fromConfig) {
     return fromConfig;
   }
+  // pragma: allowlist secret
   const fromEnv = normalizeApiKey(process.env.GEMINI_API_KEY);
   return fromEnv || undefined;
 }
@@ -671,6 +672,7 @@ function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
 function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
+  // pragma: allowlist secret
   return fromConfig || DEFAULT_GEMINI_MODEL;
 }
 

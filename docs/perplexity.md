@@ -56,6 +56,8 @@ Perplexity Search returns structured results (title, URL, snippet) for fast rese
 **Recommended:** run `openclaw configure --section web`. It stores the key in
 `~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
 
+<!-- pragma: allowlist secret -->
+
 **Environment alternative:** set `PERPLEXITY_API_KEY` in the Gateway process
 environment. For a gateway install, put it in `~/.openclaw/.env` (or your
 service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
