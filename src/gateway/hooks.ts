@@ -12,6 +12,22 @@ import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.j
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 
+const ENV_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+/**
+ * Resolve a config value that may be a `${ENV_VAR}` reference.
+ * Returns the env var value when the entire string matches `${NAME}`,
+ * otherwise returns the original string unchanged.
+ */
+function resolveEnvRef(value: string): string {
+  const match = value.trim().match(ENV_REF_RE);
+  if (!match) {
+    return value;
+  }
+  const envValue = process.env[match[1]];
+  return typeof envValue === "string" ? envValue : value;
+}
+
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
@@ -37,10 +53,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (cfg.hooks?.enabled !== true) {
     return null;
   }
-  const token = cfg.hooks?.token?.trim();
-  if (!token) {
+  const rawToken = cfg.hooks?.token?.trim();
+  if (!rawToken) {
     throw new Error("hooks.enabled requires hooks.token");
   }
+  const token = resolveEnvRef(rawToken);
   const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
   const trimmed = withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
