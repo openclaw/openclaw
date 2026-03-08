@@ -233,9 +233,6 @@ export function createCliStreamFn(params: CliStreamFnParams): StreamFunction {
       const toolNameByCallId = new Map<string, string>();
       // Capture CLI errors so we can report them to the user
       let cliErrorMessage: string | undefined;
-      // Track whether pre-tool narration was discarded so the
-      // result.text fallback doesn't re-introduce it.
-      let didDiscardPreToolText = false;
 
       // Emit the start event
       const partial = buildPartialMessage([], undefined);
@@ -302,14 +299,19 @@ export function createCliStreamFn(params: CliStreamFnParams): StreamFunction {
             break;
           }
           case "tool_start": {
-            // Discard pre-tool narration text ("Let me check...",
-            // "Now let me look at..."). This is internal agent
-            // reasoning between tool calls, not the final response.
-            // Clear accumulated text so only post-tool text is kept.
+            // Flush any accumulated text as a complete content
+            // block so the block-reply pipeline delivers each
+            // pre-tool segment as a separate Discord message.
             if (textStarted) {
+              stream.push({
+                type: "text_end",
+                contentIndex,
+                content: textParts.join(""),
+                partial: buildPartialMessage(textParts, undefined),
+              });
+              contentIndex++;
               textParts.length = 0;
               textStarted = false;
-              didDiscardPreToolText = true;
             }
             // Track name so we can include it in the result event
             toolNameByCallId.set(event.toolCallId, event.toolName);
@@ -390,10 +392,8 @@ export function createCliStreamFn(params: CliStreamFnParams): StreamFunction {
       }
 
       // If we got a result text but no streaming text events, emit
-      // the result as a single text block. Skip when pre-tool text
-      // was intentionally discarded — result.text would re-introduce
-      // the narration we deliberately dropped.
-      if (!textParts.length && result.text && !didDiscardPreToolText) {
+      // the result as a single text block.
+      if (!textParts.length && result.text) {
         stream.push({
           type: "text_start",
           contentIndex,
