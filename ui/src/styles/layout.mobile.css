@@ -127,6 +127,35 @@
     display: none;
   }
 
+  /* Keep content-header visible on chat view for session selector dropdown */
+  .content--chat .content-header {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .content--chat .page-meta {
+    justify-content: flex-start;
+  }
+
+  .content--chat .chat-controls {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .content--chat .chat-controls__session {
+    min-width: 0;
+    flex: 1 1 auto;
+    max-width: 100%;
+  }
+
+  .content--chat .chat-controls__session select {
+    width: 100%;
+    font-size: 13px;
+  }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;
