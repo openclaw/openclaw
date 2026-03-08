@@ -3,6 +3,7 @@ import {
   extractHtmlFromAttachment,
   extractInlineImageCandidates,
   IMG_SRC_RE,
+  isDownloadableAttachment,
   isLikelyImageAttachment,
   safeHostForUrl,
 } from "./shared.js";
@@ -85,6 +86,9 @@ export function buildMSTeamsAttachmentPlaceholder(
   if (totalImages > 0) {
     return `<media:image>${totalImages > 1 ? ` (${totalImages} images)` : ""}`;
   }
-  const count = list.length;
-  return `<media:document>${count > 1 ? ` (${count} files)` : ""}`;
+  const downloadable = list.filter(isDownloadableAttachment);
+  if (downloadable.length === 0) {
+    return "";
+  }
+  return `<media:document>${downloadable.length > 1 ? ` (${downloadable.length} files)` : ""}`;
 }

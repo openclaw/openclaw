@@ -371,6 +371,45 @@ type GraphMediaSuccessCase = LabeledCase & {
 const EMPTY_ATTACHMENT_PLACEHOLDER_CASES: AttachmentPlaceholderCase[] = [
   withLabel("returns empty string when no attachments", { attachments: undefined, expected: "" }),
   withLabel("returns empty string when attachments are empty", { attachments: [], expected: "" }),
+  withLabel("returns empty string for adaptive card attachments", {
+    attachments: [
+      buildAttachment("application/vnd.microsoft.card.adaptive", {
+        content: { type: "AdaptiveCard", body: [] },
+      }),
+    ],
+    expected: "",
+  }),
+  withLabel("returns empty string for hero card attachments", {
+    attachments: [
+      buildAttachment("application/vnd.microsoft.card.hero", {
+        content: { title: "Hero" },
+      }),
+    ],
+    expected: "",
+  }),
+  withLabel("returns empty string for thumbnail card attachments", {
+    attachments: [
+      buildAttachment("application/vnd.microsoft.card.thumbnail", {
+        content: { title: "Thumb" },
+      }),
+    ],
+    expected: "",
+  }),
+  withLabel("returns empty string for multiple non-file attachments", {
+    attachments: [
+      buildAttachment("application/vnd.microsoft.card.adaptive", {
+        content: { type: "AdaptiveCard", body: [] },
+      }),
+      buildAttachment("application/vnd.microsoft.card.hero", {
+        content: { title: "Hero" },
+      }),
+    ],
+    expected: "",
+  }),
+  withLabel("returns empty string for text/html attachment without inline images", {
+    attachments: [createHtmlAttachment("<p>Hello world</p>")],
+    expected: "",
+  }),
 ];
 const COUNTED_ATTACHMENT_PLACEHOLDER_CASE_DEFS: CountedAttachmentPlaceholderCaseDef[] = [
   withLabel("returns image placeholder for one image attachment", {
@@ -410,6 +449,16 @@ const COUNTED_ATTACHMENT_PLACEHOLDER_CASE_DEFS: CountedAttachmentPlaceholderCase
     attachments: createHtmlImageAttachments([TEST_URL_HTML_A, TEST_URL_HTML_B]),
     count: 2,
     formatPlaceholder: formatImagePlaceholder,
+  }),
+  withLabel("counts only downloadable files when mixed with non-file attachments", {
+    attachments: [
+      ...createPdfAttachments(TEST_URL_PDF),
+      buildAttachment("application/vnd.microsoft.card.adaptive", {
+        content: { type: "AdaptiveCard", body: [] },
+      }),
+    ],
+    count: 1,
+    formatPlaceholder: formatDocumentPlaceholder,
   }),
 ];
 const ATTACHMENT_PLACEHOLDER_CASES: AttachmentPlaceholderCase[] = [
