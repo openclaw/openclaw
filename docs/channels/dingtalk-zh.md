@@ -140,7 +140,7 @@ openclaw channels add
       enabled: true,
       dmPolicy: "pairing",
       clientId: "你的-client-id",
-      clientSecret: "你的-client-secret",
+      clientSecret: "你的-client-secret", <!-- pragma: allowlist secret -->
     },
   },
 }
@@ -150,7 +150,7 @@ openclaw channels add
 
 ```bash
 export DINGTALK_CLIENT_ID="你的-client-id"
-export DINGTALK_CLIENT_SECRET="你的-client-secret"
+export DINGTALK_CLIENT_SECRET="你的-client-secret" # pragma: allowlist secret
 ```
 
 ---
@@ -349,12 +349,12 @@ openclaw pairing list dingtalk
       accounts: {
         main: {
           clientId: "app-key-1",
-          clientSecret: "app-secret-1",
+          clientSecret: "app-secret-1", <!-- pragma: allowlist secret -->
           name: "主机器人",
         },
         backup: {
           clientId: "app-key-2",
-          clientSecret: "app-secret-2",
+          clientSecret: "app-secret-2", <!-- pragma: allowlist secret -->
           name: "备用机器人",
           enabled: false,
         },

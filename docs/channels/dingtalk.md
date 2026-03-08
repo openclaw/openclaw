@@ -140,7 +140,7 @@ Edit `~/.openclaw/openclaw.json`:
       enabled: true,
       dmPolicy: "pairing",
       clientId: "your-client-id",
-      clientSecret: "your-client-secret",
+      clientSecret: "your-client-secret", <!-- pragma: allowlist secret -->
     },
   },
 }
@@ -150,7 +150,7 @@ Edit `~/.openclaw/openclaw.json`:
 
 ```bash
 export DINGTALK_CLIENT_ID="your-client-id"
-export DINGTALK_CLIENT_SECRET="your-client-secret"
+export DINGTALK_CLIENT_SECRET="your-client-secret" # pragma: allowlist secret
 ```
 
 ---
@@ -349,12 +349,12 @@ DingTalk has different media support between DM and group chats:
       accounts: {
         main: {
           clientId: "app-key-1",
-          clientSecret: "app-secret-1",
+          clientSecret: "app-secret-1", <!-- pragma: allowlist secret -->
           name: "Primary bot",
         },
         backup: {
           clientId: "app-key-2",
-          clientSecret: "app-secret-2",
+          clientSecret: "app-secret-2", <!-- pragma: allowlist secret -->
           name: "Backup bot",
           enabled: false,
         },
