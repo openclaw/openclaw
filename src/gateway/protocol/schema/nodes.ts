@@ -43,6 +43,13 @@ export const NodeRenameParamsSchema = Type.Object(
 
 export const NodeListParamsSchema = Type.Object({}, { additionalProperties: false });
 
+export const NodePendingAckParamsSchema = Type.Object(
+  {
+    ids: Type.Array(NonEmptyString, { minItems: 1 }),
+  },
+  { additionalProperties: false },
+);
+
 export const NodeDescribeParamsSchema = Type.Object(
   { nodeId: NonEmptyString },
   { additionalProperties: false },
