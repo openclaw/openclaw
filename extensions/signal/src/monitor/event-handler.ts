@@ -860,13 +860,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       placeholder = formatAttachmentSummaryPlaceholder(mediaTypes);
     } else {
       // Only set placeholder when we actually resolved a mediaType.
-      // kindFromMime(undefined) returns "unknown" which is truthy — guard against
-      // that case so null-body messages (e.g. blank reaction envelopes) aren't dispatched
-      // with <media:unknown> as the body.
+      // Guard against undefined kind (e.g. blank reaction envelopes) so null-body
+      // messages aren't dispatched with a spurious <media:…> body.
       const kind = mediaType ? kindFromMime(mediaType) : undefined;
-      if (kind && kind !== "unknown") {
+      if (kind) {
         placeholder = `<media:${kind}>`;
-      } else if (kind === "unknown" || (!kind && dataMessage.attachments?.length)) {
+      } else if (dataMessage.attachments?.length) {
         placeholder = "<media:attachment>";
       }
     }
