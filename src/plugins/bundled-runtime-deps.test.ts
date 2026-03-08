@@ -15,8 +15,11 @@ describe("bundled plugin runtime dependencies", () => {
   it("keeps bundled Feishu runtime deps available from the published root package", () => {
     const rootManifest = readJson<PackageManifest>("package.json");
     const feishuManifest = readJson<PackageManifest>("extensions/feishu/package.json");
+    const feishuSpec = feishuManifest.dependencies?.["@larksuiteoapi/node-sdk"];
+    const rootSpec = rootManifest.dependencies?.["@larksuiteoapi/node-sdk"];
 
-    expect(feishuManifest.dependencies?.["@larksuiteoapi/node-sdk"]).toBeTruthy();
-    expect(rootManifest.dependencies?.["@larksuiteoapi/node-sdk"]).toBeTruthy();
+    expect(feishuSpec).toBeTruthy();
+    expect(rootSpec).toBeTruthy();
+    expect(rootSpec).toBe(feishuSpec);
   });
 });
