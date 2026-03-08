@@ -58,6 +58,60 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("resolves top-level $ENV botToken from environment", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN_REF", "resolved-env-token");
+    const cfg = {
+      channels: { telegram: { botToken: "$TELEGRAM_BOT_TOKEN_REF" } },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("resolved-env-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("resolves account-level $ENV botToken from environment", () => {
+    vi.stubEnv("TELEGRAM_WORK_BOT_TOKEN_REF", "resolved-work-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: { botToken: "$TELEGRAM_WORK_BOT_TOKEN_REF" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("resolved-work-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("falls back to TELEGRAM_BOT_TOKEN when top-level $ENV botToken is unresolved", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN_REF", "");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
+    const cfg = {
+      channels: { telegram: { botToken: "$TELEGRAM_BOT_TOKEN_REF" } },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("fallback-env-token");
+    expect(res.source).toBe("env");
+  });
+
+  it("falls back to top-level token for account when account $ENV botToken is unresolved", () => {
+    vi.stubEnv("TELEGRAM_WORK_BOT_TOKEN_REF", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "top-level-token",
+          accounts: {
+            work: { botToken: "$TELEGRAM_WORK_BOT_TOKEN_REF" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("top-level-token");
+    expect(res.source).toBe("config");
+  });
+
   it("does not fall back to config when tokenFile is missing", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = withTempDir();
