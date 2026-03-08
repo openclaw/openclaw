@@ -451,7 +451,22 @@ function inferPlaceholder(attachment: APIAttachment): string {
   if (["mp3", "wav", "ogg", "m4a", "aac", "flac", "opus"].includes(ext)) {
     return "<media:audio>";
   }
-  if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic", "heif"].includes(ext)) {
+  if (
+    [
+      "jpg",
+      "jpeg",
+      "png",
+      "gif",
+      "webp",
+      "bmp",
+      "svg",
+      "heic",
+      "heif",
+      "avif",
+      "tiff",
+      "tif",
+    ].includes(ext)
+  ) {
     return "<media:image>";
   }
   return "<media:document>";
