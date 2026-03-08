@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { setGlobalChannelChatBroadcast } from "../auto-reply/reply/channel-chat-broadcast.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
@@ -624,6 +625,16 @@ export async function startGatewayServer(
   };
   const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) =>
     nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
+
+  // Register channel chat broadcast + node fan-out so dispatchReplyFromConfig
+  // can notify both web UI clients and paired node subscribers.
+  setGlobalChannelChatBroadcast((event, payload, sk) => {
+    broadcast(event, payload);
+    if (sk) {
+      nodeSendToSession(sk, event, payload);
+    }
+  });
+
   const nodeSendToAllSubscribed = (event: string, payload: unknown) =>
     nodeSubscriptions.sendToAllSubscribed(event, payload, nodeSendEvent);
   const nodeSubscribe = nodeSubscriptions.subscribe;
