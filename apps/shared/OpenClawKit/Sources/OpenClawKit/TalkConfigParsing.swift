@@ -26,28 +26,9 @@ public enum TalkConfigParsing {
         if let resolvedSelection = self.resolvedProviderConfig(talk) {
             return resolvedSelection
         }
-        let rawProvider = talk["provider"]?.stringValue
-        let rawProviders = talk["providers"]
-        let hasNormalizedPayload = rawProvider != nil || rawProviders != nil
+        let hasNormalizedPayload = talk["provider"] != nil || talk["providers"] != nil
         if hasNormalizedPayload {
-            let normalizedProviders = self.normalizedTalkProviders(rawProviders)
-            let explicitProviderID = self.normalizedTalkProviderID(rawProvider)
-            if let explicitProviderID {
-                if !normalizedProviders.isEmpty, normalizedProviders[explicitProviderID] == nil {
-                    return nil
-                }
-                return TalkProviderConfigSelection(
-                    provider: explicitProviderID,
-                    config: normalizedProviders[explicitProviderID] ?? [:],
-                    normalizedPayload: true)
-            }
-            guard normalizedProviders.count == 1, let providerID = normalizedProviders.keys.first else {
-                return nil
-            }
-            return TalkProviderConfigSelection(
-                provider: providerID,
-                config: normalizedProviders[providerID] ?? [:],
-                normalizedPayload: true)
+            return nil
         }
         guard allowLegacyFallback else { return nil }
         return TalkProviderConfigSelection(
@@ -91,16 +72,5 @@ public enum TalkConfigParsing {
             provider: providerID,
             config: resolved["config"]?.dictionaryValue ?? [:],
             normalizedPayload: true)
-    }
-
-    private static func normalizedTalkProviders(_ raw: AnyCodable?) -> [String: [String: AnyCodable]] {
-        guard let providerMap = raw?.dictionaryValue else { return [:] }
-        return providerMap.reduce(into: [String: [String: AnyCodable]]()) { acc, entry in
-            guard
-                let providerID = self.normalizedTalkProviderID(entry.key),
-                let providerConfig = entry.value.dictionaryValue
-            else { return }
-            acc[providerID] = providerConfig
-        }
     }
 }
