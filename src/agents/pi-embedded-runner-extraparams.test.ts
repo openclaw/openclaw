@@ -892,7 +892,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         ],
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
