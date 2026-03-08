@@ -1273,7 +1273,14 @@ OpenClaw memory is just Markdown files in the agent workspace:
 
 OpenClaw also runs a **silent pre-compaction memory flush** to remind the model
 to write durable notes before auto-compaction. This only runs when the workspace
-is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
+is writable (read-only sandboxes skip it).
+
+Important: compaction always persists to session JSONL history, but durable
+memory files (`memory/YYYY-MM-DD.md`, `MEMORY.md`) are only updated when your
+memory workflow writes to them (for example via `/new`/`/reset` hooks or
+compaction-aware plugin hooks).
+
+See [Memory](/concepts/memory).
 
 ### Memory keeps forgetting things How do I make it stick
 
