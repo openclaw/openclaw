@@ -26,7 +26,7 @@ describe("CallManager notify and mapping", () => {
   });
 
   it.each(["plivo", "twilio"] as const)(
-    "speaks initial message on answered for notify mode (%s)",
+    "defers initial TTS until media stream connects for notify mode (%s)",
     async (providerName) => {
       const { manager, provider } = await createManagerHarness({}, new FakeProvider(providerName));
 
@@ -45,6 +45,12 @@ describe("CallManager notify and mapping", () => {
       });
 
       await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // TTS must NOT fire on call.answered - media stream isn't connected yet
+      expect(provider.playTtsCalls).toHaveLength(0);
+
+      // Simulate media stream connect calling speakInitialMessage
+      await manager.speakInitialMessage("call-uuid");
 
       expect(provider.playTtsCalls).toHaveLength(1);
       expect(provider.playTtsCalls[0]?.text).toBe("Hello there");

@@ -256,9 +256,7 @@ export class CallManager {
       activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
-      onCallAnswered: (call) => {
-        this.maybeSpeakInitialMessageOnAnswered(call);
-      },
+      onCallAnswered: undefined,
     };
   }
 
@@ -267,21 +265,6 @@ export class CallManager {
    */
   processEvent(event: NormalizedEvent): void {
     processManagerEvent(this.getContext(), event);
-  }
-
-  private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
-    const initialMessage =
-      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
-
-    if (!initialMessage) {
-      return;
-    }
-
-    if (!this.provider || !call.providerCallId) {
-      return;
-    }
-
-    void this.speakInitialMessage(call.providerCallId);
   }
 
   /**
