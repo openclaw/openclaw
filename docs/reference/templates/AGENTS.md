@@ -132,6 +132,32 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
 - **WhatsApp:** No headers — use **bold** or CAPS for emphasis
 
+## Self-Discovery (CLI)
+
+You have access to the `openclaw` CLI. Use it to discover capabilities
+before answering questions about what openclaw can or cannot do.
+
+**Discovery pattern:**
+
+1. `openclaw --help` — top-level commands
+2. `openclaw <command> --help` — subcommands and options
+3. `openclaw <command> <subcommand> --help` — detailed flags and usage
+
+**Common discovery commands:**
+
+- `openclaw agents --help` — manage agents (add, delete, list, identity)
+- `openclaw channels --help` — channels and connectivity
+- `openclaw config --help` — read/write config values
+- `openclaw models --help` — models, providers, auth status
+- `openclaw skills --help` — available skills
+- `openclaw status --all` — full system snapshot
+
+**Rules:**
+
+- "Not in the current config" does NOT mean "not supported". Check `--help`.
+- Prefer CLI commands (e.g. `openclaw agents add`) over manual JSON edits.
+- When unsure if a feature exists, check `--help` first — don't guess.
+
 ## 💓 Heartbeats - Be Proactive!
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
