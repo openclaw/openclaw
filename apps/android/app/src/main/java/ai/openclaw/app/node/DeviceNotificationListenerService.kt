@@ -152,6 +152,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     super.onNotificationPosted(sbn)
     val entry = sbn?.toEntry() ?: return
     DeviceNotificationStore.upsert(entry)
+    rememberRecentPackage(entry.packageName)
     if (entry.packageName == packageName) {
       return
     }
@@ -180,6 +181,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return
     }
     DeviceNotificationStore.remove(key)
+    rememberRecentPackage(removed.packageName)
     if (removed.packageName == packageName) {
       return
     }
@@ -228,6 +230,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   }
 
   companion object {
+    private const val recentPackagesPref = "notifications.recentPackages"
+    private const val recentPackagesLimit = 64
     @Volatile private var activeService: DeviceNotificationListenerService? = null
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
 
@@ -237,6 +241,16 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
+    }
+
+    fun recentPackages(context: Context): List<String> {
+      val prefs = context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+      val stored = prefs.getString(recentPackagesPref, null).orEmpty()
+      return stored
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
     }
 
     fun isAccessEnabled(context: Context): Boolean {
@@ -275,6 +289,20 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       runCatching {
         nodeEventSink?.invoke(NOTIFICATIONS_CHANGED_EVENT, payloadJson)
       }
+    }
+
+    private fun rememberRecentPackage(packageName: String?) {
+      val service = activeService ?: return
+      val normalized = packageName?.trim().orEmpty()
+      if (normalized.isEmpty() || normalized == service.packageName) return
+      val prefs = service.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+      val existing = prefs.getString(recentPackagesPref, null).orEmpty()
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && it != normalized }
+        .take(recentPackagesLimit - 1)
+      val updated = listOf(normalized) + existing
+      prefs.edit().putString(recentPackagesPref, updated.joinToString(",")).apply()
     }
   }
 
