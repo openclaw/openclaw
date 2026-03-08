@@ -79,26 +79,36 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
+
+  // Always try to derive totalTokens, even if usage is incomplete.
+  // Some providers (e.g., Kimi) only return promptTokens without structured usage.
+  const totalTokens = deriveSessionTotalTokens({
+    usage,
+    contextTokens,
+    promptTokens,
+  });
+
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const totalTokens = deriveSessionTotalTokens({
-      usage,
-      contextTokens,
-      promptTokens,
-    });
     next.inputTokens = input;
     next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-    } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
-    }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
   }
+
+  // Update totalTokens when valid token data is available,
+  // so promptTokens-only responses (e.g., Kimi) still display context usage.
+  // If no token data is available (e.g., aborted runs), preserve the previous value.
+  if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+    next.totalTokens = totalTokens;
+    next.totalTokensFresh = true;
+  } else if (hasNonzeroUsage(usage) || (typeof promptTokens === "number" && Number.isFinite(promptTokens))) {
+    // If we have usage/promptTokens data but totalTokens is still invalid, mark as stale
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
+  }
+  // Otherwise: no token data at all (aborted/failed run) — preserve previous totalTokens
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
