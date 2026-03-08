@@ -155,4 +155,91 @@ describe("createWebSendApi", () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
   });
+
+  it("resolves phone-based participant to LID for group reactions", async () => {
+    const getLIDForPN = vi.fn(async () => "99999@lid");
+    const apiWithLid = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      getLIDForPN,
+    });
+    await apiWithLid.sendReaction("group@g.us", "msg-3", "❤️", false, "+1999");
+    expect(getLIDForPN).toHaveBeenCalledWith("1999@s.whatsapp.net");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "group@g.us",
+      expect.objectContaining({
+        react: {
+          text: "❤️",
+          key: expect.objectContaining({
+            participant: "99999@lid",
+          }),
+        },
+      }),
+    );
+  });
+
+  it("falls back to phone JID when getLIDForPN returns null", async () => {
+    const getLIDForPN = vi.fn(async () => null);
+    const apiWithLid = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      getLIDForPN,
+    });
+    await apiWithLid.sendReaction("group@g.us", "msg-4", "👍", false, "+1999");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "group@g.us",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            participant: "1999@s.whatsapp.net",
+          }),
+        },
+      }),
+    );
+  });
+
+  it("skips LID lookup for non-group reactions", async () => {
+    const getLIDForPN = vi.fn(async () => "99999@lid");
+    const apiWithLid = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      getLIDForPN,
+    });
+    await apiWithLid.sendReaction("+1555", "msg-5", "👍", false, "+1999");
+    expect(getLIDForPN).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            participant: "1999@s.whatsapp.net",
+          }),
+        },
+      }),
+    );
+  });
+
+  it("skips LID lookup when participant is already a LID", async () => {
+    const getLIDForPN = vi.fn(async () => "99999@lid");
+    const apiWithLid = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      getLIDForPN,
+    });
+    await apiWithLid.sendReaction("group@g.us", "msg-6", "👍", false, "12345@lid");
+    expect(getLIDForPN).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "group@g.us",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            participant: "12345@lid",
+          }),
+        },
+      }),
+    );
+  });
 });
