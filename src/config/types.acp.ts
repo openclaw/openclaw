@@ -41,6 +41,11 @@ export type AcpConfig = {
   /** Backend id registered by ACP runtime plugin (for example: acpx). */
   backend?: string;
   defaultAgent?: string;
+  /**
+   * Default run timeout (seconds) for ACP spawns when sessions_spawn(runtime="acp")
+   * omits runTimeoutSeconds.
+   */
+  defaultRunTimeoutSeconds?: number;
   allowedAgents?: string[];
   maxConcurrentSessions?: number;
   stream?: AcpStreamConfig;

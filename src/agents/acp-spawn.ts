@@ -51,6 +51,7 @@ export type SpawnAcpParams = {
   label?: string;
   agentId?: string;
   cwd?: string;
+  runTimeoutSeconds?: number;
   mode?: SpawnAcpMode;
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
@@ -160,6 +161,24 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function resolveAcpRunTimeoutSeconds(params: {
+  requested: number | undefined;
+  cfg: OpenClawConfig;
+}): number {
+  const requested = params.requested;
+  if (typeof requested === "number" && Number.isFinite(requested)) {
+    return Math.max(0, Math.floor(requested));
+  }
+
+  // Config values are schema-validated (`int >= 0`), so keep this path simple.
+  const configured = params.cfg.acp?.defaultRunTimeoutSeconds;
+  if (configured != null) {
+    return configured;
+  }
+
+  return 0;
 }
 
 function resolveConversationIdForThreadBinding(params: {
@@ -429,6 +448,10 @@ export async function spawnAcpDirect(
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
+  const runTimeoutSeconds = resolveAcpRunTimeoutSeconds({
+    requested: params.runTimeoutSeconds,
+    cfg,
+  });
   // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
   const boundThreadIdRaw = binding?.conversation.conversationId;
   const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
@@ -475,6 +498,7 @@ export async function spawnAcpDirect(
         accountId: useInlineDelivery ? (requesterOrigin?.accountId ?? undefined) : undefined,
         threadId: useInlineDelivery ? deliveryThreadId : undefined,
         idempotencyKey: childIdem,
+        timeout: runTimeoutSeconds,
         deliver: useInlineDelivery,
         label: params.label || undefined,
       },
