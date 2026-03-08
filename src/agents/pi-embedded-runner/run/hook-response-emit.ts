@@ -119,7 +119,12 @@ export async function applyBeforeResponseEmitHook(
   // block-reply chunking — multiple chunks per turn) or preRunMessageCount
   // (fragile under compaction — indices shift). The tail-scan is compaction-
   // safe because it only looks at messages that are currently in the session.
-  const scopeCount = countCurrentRunAssistantTurns(activeSession.messages);
+  // Cap at assistantTexts.length to avoid misaligned rewrites when session
+  // messages contain text that sanitization stripped from assistantTexts
+  // (e.g. downgraded tool-call text). Over-counting would cause
+  // rewriteAllAssistantContent to index replacements against extra messages.
+  const rawTurnCount = countCurrentRunAssistantTurns(activeSession.messages);
+  const scopeCount = Math.min(rawTurnCount, assistantTexts.length) || assistantTexts.length;
 
   const emitResult = await hookRunner.runBeforeResponseEmit(
     {
