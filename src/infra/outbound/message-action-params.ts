@@ -71,6 +71,45 @@ export function resolveTelegramAutoThreadId(params: {
   return context.currentThreadTs;
 }
 
+/**
+ * Strip the leading `room:` prefix used internally by the Matrix channel plugin
+ * when building `To` / `currentChannelId` values.  This lets us compare the raw
+ * room id regardless of whether the prefix is present.
+ */
+function stripMatrixRoomPrefix(raw: string): string {
+  const lowered = raw.toLowerCase();
+  if (lowered.startsWith("room:")) {
+    return raw.slice("room:".length);
+  }
+  return raw;
+}
+
+/**
+ * Auto-inject Matrix thread ID when the message tool targets the same room the
+ * session originated from.  Mirrors the Telegram auto-threading pattern so
+ * replies land in the correct thread instead of appearing as new top-level
+ * messages.
+ *
+ * Unlike Slack, we do not gate on `replyToMode`: Matrix threads are persistent
+ * (similar to Telegram forum topics), so auto-injection should always apply
+ * when the target room matches.
+ */
+export function resolveMatrixAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  const normalizedTo = stripMatrixRoomPrefix(params.to.trim());
+  const normalizedChannel = stripMatrixRoomPrefix(context.currentChannelId.trim());
+  if (normalizedTo.toLowerCase() !== normalizedChannel.toLowerCase()) {
+    return undefined;
+  }
+  return context.currentThreadTs;
+}
+
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
