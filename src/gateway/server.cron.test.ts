@@ -548,6 +548,55 @@ describe("gateway server cron", () => {
     }
   }, 45_000);
 
+  test("returns from cron.run immediately while isolated work continues in background", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-run-detached-",
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+    cronIsolatedRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve as (value: { status: "ok"; summary: string }) => void;
+        }),
+    );
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "detached run test",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "do work" },
+        delivery: { mode: "none" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+      expect(jobId.length > 0).toBe(true);
+
+      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
+      expect(runRes.ok).toBe(true);
+      expect(runRes.payload).toEqual({ ok: true, ran: true });
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+
+      resolveRun?.({ status: "ok", summary: "background finished" });
+
+      const logPath = path.join(dir, "cron", "runs", `${jobId}.jsonl`);
+      let raw = "";
+      await waitForCondition(async () => {
+        raw = await fs.readFile(logPath, "utf-8").catch(() => "");
+        return raw.includes("background finished");
+      }, CRON_WAIT_TIMEOUT_MS);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
     const legacyNotifyJob = {
       id: "legacy-notify-job",
