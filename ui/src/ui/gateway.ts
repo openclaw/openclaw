@@ -205,17 +205,22 @@ export class GatewayBrowserClient {
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
-    let authToken = this.opts.token;
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    let authToken = explicitGatewayToken;
     let deviceToken: string | undefined;
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
-      deviceToken = loadDeviceAuthToken({
+      const storedToken = loadDeviceAuthToken({
         deviceId: deviceIdentity.deviceId,
         role,
       })?.token;
-      canFallbackToShared = Boolean(deviceToken && this.opts.token);
+      deviceToken = !(explicitGatewayToken || this.opts.password?.trim())
+        ? (storedToken ?? undefined)
+        : undefined;
+      canFallbackToShared = Boolean(deviceToken && explicitGatewayToken);
     }
+    authToken = explicitGatewayToken ?? deviceToken;
     const auth =
       authToken || this.opts.password
         ? {
@@ -244,7 +249,7 @@ export class GatewayBrowserClient {
         role,
         scopes,
         signedAtMs,
-        token: deviceToken ?? null,
+        token: authToken ?? null,
         nonce,
       });
       const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
