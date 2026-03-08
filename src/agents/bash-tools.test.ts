@@ -265,13 +265,12 @@ type DisallowedElevationCase = LabeledCase & {
   expectedOutputIncludes?: string;
 };
 type NotifyNoopCase = LabeledCase & {
-  notifyOnExitEmptySuccess: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   overrides?: Partial<ExecToolConfig>;
   shouldEmitEvent: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
   withLabel("default behavior skips no-op completion events", {
-    notifyOnExitEmptySuccess: false,
     shouldEmitEvent: false,
   }),
   withLabel("explicitly enabling no-op completion emits completion events", {
@@ -279,9 +278,13 @@ const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
     shouldEmitEvent: true,
   }),
   withLabel("chat contexts emit no-op completion events by default", {
-    notifyOnExitEmptySuccess: false,
     overrides: { messageProvider: "discord" },
     shouldEmitEvent: true,
+  }),
+  withLabel("chat contexts respect explicit no-op completion opt-out", {
+    notifyOnExitEmptySuccess: false,
+    overrides: { messageProvider: "discord" },
+    shouldEmitEvent: false,
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
@@ -411,7 +414,7 @@ const runNotifyNoopCase = async ({
 }: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool({
     ...overrides,
-    ...(notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {}),
+    ...(notifyOnExitEmptySuccess === undefined ? {} : { notifyOnExitEmptySuccess }),
   });
 
   const { status } = await runBackgroundCommandToCompletion(tool, shortDelayCmd);

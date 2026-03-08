@@ -191,11 +191,11 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  // Chat surfaces already rely on exit notifications for background task continuity, so
-  // successful empty-output completions should still wake the session by default there.
-  const notifyOnExitEmptySuccess =
-    defaults?.notifyOnExitEmptySuccess === true ||
-    (typeof defaults?.messageProvider === "string" && defaults.messageProvider.trim().length > 0);
+  const hasChatMessageProvider =
+    typeof defaults?.messageProvider === "string" && defaults.messageProvider.trim().length > 0;
+  // Chat surfaces need a completion ping by default, but an explicit false should still
+  // preserve the existing opt-out semantics for callers that want silence on empty success.
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess ?? hasChatMessageProvider;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
