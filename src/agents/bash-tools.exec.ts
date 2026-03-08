@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-feat/trust-windows-v2
-import { 
-type ExecHost, 
-getTrustWindow, 
-loadExecApprovals,
-maxAsk, 
-minSecurity 
+import {
+  type ExecHost,
+  getTrustWindow,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
 } from "../infra/exec-approvals.js";
-main
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
