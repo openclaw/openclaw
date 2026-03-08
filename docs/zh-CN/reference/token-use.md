@@ -62,6 +62,16 @@ OpenClaw 在每次运行时组装自己的系统提示词。它包括：
 - **CLI：** `openclaw status --usage` 和 `openclaw channels list` 显示
   提供商配额窗口（不是每响应成本）。
 
+### 我该用哪个界面？
+
+- 想看当前会话：模型、上下文占用、上一条回复 token，用 `/status`。
+- 想在聊天里给每条回复都附带 token 或费用页脚，用 `/usage off|tokens|full`。
+- 想看基于会话日志的本地汇总，用 `/usage cost`。
+- 想在 CLI 中看聚焦的提供商配额窗口，用 `openclaw status --usage`。
+- 想在同一个输出里同时看配额快照和更完整的 provider/channel 诊断，用 `openclaw channels list`。
+
+如果你在 CLI 中只想看提供商配额窗口，优先用 `openclaw status --usage`。
+
 ## 成本估算（显示时）
 
 成本从你的模型定价配置估算：

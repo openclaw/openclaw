@@ -29,6 +29,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows**
   (quota snapshots, not per-message costs).
 
+For a quick CLI quota check, prefer `openclaw status --usage`. Use `openclaw channels list`
+when you also want broader provider/channel diagnostics in the same output.
+
 See [Token use & costs](/reference/token-use) for details and examples.
 
 ## How keys are discovered

@@ -20,6 +20,16 @@ x-i18n:
 - 直接从提供商的使用量端点拉取使用量/配额数据。
 - 不提供估算费用；仅展示提供商报告的时间窗口数据。
 
+## 我该用哪个界面？
+
+- 想看当前会话的模型、上下文占用和上一条回复的 token：用 `/status`。
+- 想让每条回复都自动带上 token/费用页脚：用 `/usage tokens` 或 `/usage full`。
+- 想看基于 OpenClaw 会话日志汇总的本地费用：用 `/usage cost`。
+- 想在 CLI 里快速看提供商配额窗口和重置时间：用 `openclaw status --usage`。
+- 想把同一份 usage 快照和更完整的 provider/channel 诊断一起看：用 `openclaw channels list`。
+
+如果你在 CLI 里只是想快速看配额，优先用 `openclaw status --usage`。openclaw channels list 更宽，也通常更慢，因为它会同时输出额外的配置和健康信息。
+
 ## 展示位置
 
 - 聊天中的 `/status`：包含会话 token 数和估算费用的表情符号丰富的状态卡片（仅限 API 密钥）。当可用时，会显示**当前模型提供商**的使用量。

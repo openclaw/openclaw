@@ -13,6 +13,16 @@ title: "Usage Tracking"
 - Pulls provider usage/quota directly from their usage endpoints.
 - No estimated costs; only the provider-reported windows.
 
+## Which surface should I use?
+
+- Use `/status` when you want the current session model, context usage, and the last reply's tokens.
+- Use `/usage tokens` or `/usage full` when you want a usage footer on every reply.
+- Use `/usage cost` when you want a local cost summary from OpenClaw session logs.
+- Use `openclaw status --usage` when you want a quick CLI view of provider quota windows and reset times.
+- Use `openclaw channels list` when you also want broader provider/channel diagnostics alongside the same usage snapshot.
+
+If you only need CLI quota usage, prefer `openclaw status --usage`. `openclaw channels list` is broader and can be slower because it includes additional config/health context.
+
 ## Where it shows up
 
 - `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available.
