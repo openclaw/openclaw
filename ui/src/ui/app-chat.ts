@@ -60,6 +60,21 @@ function isChatResetCommand(text: string) {
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
 }
 
+/** True when the message is /model or /models (session model may change; refresh session list so header updates). */
+function isModelCommand(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  return (
+    normalized === "/model" ||
+    normalized === "/models" ||
+    normalized.startsWith("/model ") ||
+    normalized.startsWith("/models ")
+  );
+}
+
 export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) {
     return;
@@ -180,7 +195,7 @@ export async function handleSendChat(
     return;
   }
 
-  const refreshSessions = isChatResetCommand(message);
+  const refreshSessions = isChatResetCommand(message) || isModelCommand(message);
   if (messageOverride == null) {
     host.chatMessage = "";
     // Clear attachments when sending
