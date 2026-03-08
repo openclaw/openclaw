@@ -322,6 +322,27 @@ describe("loadOpenClawPlugins", () => {
     expectTelegramLoaded(registry);
   });
 
+  it("loads bundled channel plugins when channel config is enabled but allowlist is stale", () => {
+    setupBundledTelegramPlugin();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          allow: ["feishu"],
+        },
+      },
+    });
+
+    expectTelegramLoaded(registry);
+  });
+
   it("still respects explicit disable via plugins.entries for bundled channels", () => {
     setupBundledTelegramPlugin();
 

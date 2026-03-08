@@ -99,6 +99,14 @@ describe("resolveEffectiveEnableState", () => {
     expect(state).toEqual({ enabled: true });
   });
 
+  it("keeps bundled channels enabled when allowlist omits them", () => {
+    const state = resolveBundledTelegramState({
+      enabled: true,
+      allow: ["feishu"],
+    });
+    expect(state).toEqual({ enabled: true });
+  });
+
   it("keeps explicit plugin-level disable authoritative", () => {
     const state = resolveBundledTelegramState({
       enabled: true,
