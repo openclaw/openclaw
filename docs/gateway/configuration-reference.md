@@ -879,6 +879,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
+      pdfOcrMode: "auto",
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
@@ -902,6 +903,10 @@ Time format in system prompt. Default: `auto` (OS preference).
   - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
 - `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
+- `pdfOcrMode`: controls OCR fallback for weak-text PDFs.
+  - `"auto"` (default) attempts Mistral OCR when auth is available.
+  - `"off"` disables OCR fallback.
+  - `"on"` requires OCR readiness when weak-text PDFs need OCR.
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.

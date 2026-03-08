@@ -11,6 +11,10 @@ type PdfInput = {
   filename?: string;
 };
 
+type MistralOcrPage = {
+  markdown?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Anthropic – native PDF via Messages API
 // ---------------------------------------------------------------------------
@@ -176,4 +180,81 @@ export async function geminiAnalyzePdf(params: {
   }
 
   return text.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Mistral OCR – native PDF OCR via /v1/ocr API
+// ---------------------------------------------------------------------------
+
+export async function mistralOcrPdf(params: {
+  apiKey: string;
+  pdf: PdfInput;
+  pageNumbers?: number[];
+  modelId?: string;
+  baseUrl?: string;
+}): Promise<string> {
+  const apiKey = normalizeSecretInput(params.apiKey);
+  if (!apiKey) {
+    throw new Error("Mistral OCR: apiKey required");
+  }
+
+  const trimmedBaseUrl = (params.baseUrl ?? "https://api.mistral.ai").replace(/\/+$/, "");
+  const url = /\/v1$/i.test(trimmedBaseUrl) ? `${trimmedBaseUrl}/ocr` : `${trimmedBaseUrl}/v1/ocr`;
+
+  const zeroBasedPages =
+    params.pageNumbers
+      ?.map((page) => Math.floor(page) - 1)
+      .filter((page) => Number.isFinite(page) && page >= 0) ?? [];
+  const pages =
+    zeroBasedPages.length > 0 ? Array.from(new Set(zeroBasedPages)).toSorted((a, b) => a - b) : [];
+
+  const body: Record<string, unknown> = {
+    model: params.modelId?.trim() || "mistral-ocr-latest",
+    document: {
+      type: "document_url",
+      document_url: `data:application/pdf;base64,${params.pdf.base64}`,
+    },
+    include_image_base64: false,
+  };
+  if (pages.length > 0) {
+    body.pages = pages;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const responseBody = await res.text().catch(() => "");
+    throw new Error(
+      `Mistral OCR request failed (${res.status} ${res.statusText})${responseBody ? `: ${responseBody.slice(0, 400)}` : ""}`,
+    );
+  }
+
+  const json = (await res.json().catch(() => null)) as unknown;
+  if (!isRecord(json)) {
+    throw new Error("Mistral OCR response was not JSON.");
+  }
+
+  const responsePages = json.pages as MistralOcrPage[] | undefined;
+  if (!Array.isArray(responsePages)) {
+    throw new Error("Mistral OCR response missing pages array.");
+  }
+
+  const text = responsePages
+    .map((page) => (typeof page?.markdown === "string" ? page.markdown : ""))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+
+  if (!text) {
+    throw new Error("Mistral OCR returned no text.");
+  }
+
+  return text;
 }

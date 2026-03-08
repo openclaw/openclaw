@@ -980,6 +980,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
+  "agents.defaults.pdfOcrMode":
+    'PDF OCR fallback mode for weak-text PDFs: "auto" (default) tries OCR when Mistral auth is available, "off" disables OCR, and "on" requires OCR readiness.',
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

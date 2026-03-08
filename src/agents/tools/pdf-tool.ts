@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMediaRaw } from "../../web/media.js";
+import { resolveApiKeyForProvider } from "../model-auth.js";
+import { normalizeProviderId } from "../model-selection.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -18,7 +20,7 @@ import {
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
 import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
-import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
+import { anthropicAnalyzePdf, geminiAnalyzePdf, mistralOcrPdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -48,6 +50,41 @@ const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
+const DEFAULT_PDF_OCR_MODE = "auto";
+
+type PdfOcrMode = "auto" | "off" | "on";
+
+function resolvePdfOcrMode(cfg?: OpenClawConfig): PdfOcrMode {
+  const raw = cfg?.agents?.defaults?.pdfOcrMode;
+  if (raw === "off" || raw === "on" || raw === "auto") {
+    return raw;
+  }
+  return DEFAULT_PDF_OCR_MODE;
+}
+
+function resolveProviderBaseUrl(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  const providers = cfg?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return undefined;
+  }
+  const direct = providers[provider] as { baseUrl?: unknown } | undefined;
+  if (typeof direct?.baseUrl === "string" && direct.baseUrl.trim()) {
+    return direct.baseUrl.trim();
+  }
+  const target = normalizeProviderId(provider);
+  for (const [providerKey, providerConfig] of Object.entries(providers)) {
+    if (normalizeProviderId(providerKey) !== target) {
+      continue;
+    }
+    if (typeof providerConfig?.baseUrl === "string" && providerConfig.baseUrl.trim()) {
+      return providerConfig.baseUrl.trim();
+    }
+  }
+  return undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
@@ -326,6 +363,7 @@ export function createPdfTool(options?: {
     typeof maxPagesDefault === "number" && Number.isFinite(maxPagesDefault)
       ? Math.floor(maxPagesDefault)
       : DEFAULT_MAX_PAGES;
+  const pdfOcrMode = resolvePdfOcrMode(options?.config);
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
     workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
@@ -510,18 +548,111 @@ export function createPdfTool(options?: {
       }
 
       const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+      let ocrProviderUsed = false;
+
+      let mistralAuthPromise: Promise<
+        | {
+            ok: true;
+            apiKey: string;
+            baseUrl?: string;
+          }
+        | {
+            ok: false;
+            reason: string;
+          }
+      > | null = null;
+
+      const resolveMistralAuth = async () => {
+        if (!mistralAuthPromise) {
+          mistralAuthPromise = (async () => {
+            try {
+              const auth = await resolveApiKeyForProvider({
+                provider: "mistral",
+                cfg: options?.config,
+                agentDir,
+              });
+              return {
+                ok: true as const,
+                apiKey: auth.apiKey ?? "",
+                baseUrl: resolveProviderBaseUrl(options?.config, "mistral"),
+              };
+            } catch (err) {
+              return {
+                ok: false as const,
+                reason: String(err),
+              };
+            }
+          })();
+        }
+        return mistralAuthPromise;
+      };
 
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
+          const mistralAuth = pdfOcrMode === "off" ? null : await resolveMistralAuth();
+          const ocrReady =
+            mistralAuth !== null && mistralAuth.ok && typeof mistralAuth.apiKey === "string"
+              ? mistralAuth.apiKey.trim().length > 0
+              : false;
+
           const extracted = await extractPdfContent({
             buffer: pdf.buffer,
             maxPages: configuredMaxPages,
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
             pageNumbers,
+            skipImageExtraction: ocrReady,
           });
-          extractedAll.push(extracted);
+
+          if (extracted.text.trim().length >= PDF_MIN_TEXT_CHARS) {
+            extractedAll.push(extracted);
+            continue;
+          }
+
+          let ocrText: string | null = null;
+          if (ocrReady && mistralAuth?.ok && mistralAuth.apiKey) {
+            try {
+              ocrText = await mistralOcrPdf({
+                apiKey: mistralAuth.apiKey,
+                baseUrl: mistralAuth.baseUrl,
+                pdf: {
+                  base64: pdf.base64,
+                  filename: pdf.filename,
+                },
+                pageNumbers,
+              });
+            } catch {
+              ocrText = null;
+            }
+          } else if (pdfOcrMode === "on") {
+            const authReason = mistralAuth && "reason" in mistralAuth ? mistralAuth.reason : "";
+            throw new Error(
+              `PDF OCR mode is "on" but Mistral auth is unavailable${authReason ? `: ${authReason}` : "."}`,
+            );
+          } else {
+            extractedAll.push(extracted);
+            continue;
+          }
+
+          if (ocrText && ocrText.trim().length >= PDF_MIN_TEXT_CHARS) {
+            ocrProviderUsed = true;
+            extractedAll.push({
+              text: ocrText,
+              images: [],
+            });
+            continue;
+          }
+
+          const extractedWithImages = await extractPdfContent({
+            buffer: pdf.buffer,
+            maxPages: configuredMaxPages,
+            maxPixels: PDF_MAX_PIXELS,
+            minTextChars: PDF_MIN_TEXT_CHARS,
+            pageNumbers,
+            skipImageExtraction: false,
+          });
+          extractedAll.push(extractedWithImages);
         }
         return extractedAll;
       };
@@ -552,7 +683,11 @@ export function createPdfTool(options?: {
               })),
             };
 
-      return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+      return buildTextToolResult(result, {
+        native: result.native,
+        ...(ocrProviderUsed ? { ocrProvider: "mistral" } : {}),
+        ...pdfDetails,
+      });
     },
   };
 }

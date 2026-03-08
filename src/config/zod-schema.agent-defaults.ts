@@ -21,6 +21,7 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
+    pdfOcrMode: z.union([z.literal("auto"), z.literal("off"), z.literal("on")]).optional(),
     models: z
       .record(
         z.string(),

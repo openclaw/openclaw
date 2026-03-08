@@ -128,6 +128,8 @@ export type AgentDefaultsConfig = {
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
   pdfMaxPages?: number;
+  /** PDF OCR fallback mode for weak-text PDFs: auto (default), off, or on. */
+  pdfOcrMode?: "auto" | "off" | "on";
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
