@@ -7,6 +7,8 @@ import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
 
 const trackedTempDirs: string[] = [];
+// Prefix each temporary directory with a run marker so cleanup assertions can
+// verify we only remove temp dirs created by this test run.
 const cleanupRunPrefix = `hooks-mapping-test-${Date.now()}-${process.pid}-`;
 
 function trackedMkdtempSync(prefix: string): string {
