@@ -42,23 +42,27 @@ In the Coolify resource settings, go to **Environment Variables** and set:
 
 See `.env.coolify.example` in the repo for the full list.
 
-### 3. Configure domain and proxy
+### 3. Configure domain and proxy (critical for avoiding Bad Gateway)
 
 In the Coolify resource settings:
 
-1. Go to **General** settings
-2. Set your domain (e.g. `openclaw.yourdomain.com`)
-3. Coolify auto-configures the reverse proxy (Traefik) with HTTPS via Let's Encrypt
-4. Set the exposed port to **18789** (the OpenClaw gateway port)
+1. Go to the **openclaw-gateway** service settings
+2. Under **Network**, set the **Port** to `18789` (the port the gateway listens on inside the container)
+3. Set your domain (e.g. `openclaw.yourdomain.com`)
+4. Coolify auto-configures the reverse proxy (Traefik/Caddy) with HTTPS via Let's Encrypt
+
+**Important:** Coolify needs to know which container port to proxy to. If the port is not set to `18789`, you will get a **Bad Gateway** (502) error.
 
 ### 4. Deploy
 
 Click **Deploy**. Coolify will:
 
 1. Clone the repository
-2. Build the Docker image from the `Dockerfile`
+2. Build the Docker image from the `Dockerfile` (this can take several minutes)
 3. Start the container with your environment variables
 4. Set up the reverse proxy and TLS certificate
+
+**Note:** The first build takes longer because it compiles the full project. Subsequent builds use Docker layer caching.
 
 ## Post-deployment
 
@@ -124,10 +128,16 @@ For pre-built images, change the tag or use `latest` to get the newest stable re
 
 ## Troubleshooting
 
-- **Build fails with exit 137**: your VPS does not have enough RAM. Use at least 2 GB, or switch to a pre-built image.
-- **Cannot reach the gateway**: verify the port mapping (18789) and that Coolify's proxy is routing to the correct port.
-- **Permission errors**: the container runs as `node` (uid 1000). Ensure host-mounted directories are owned by uid 1000: `sudo chown -R 1000:1000 /data/openclaw`.
-- **Health check failing**: check container logs in Coolify dashboard or run `docker logs <container-id>`.
+- **Bad Gateway (502)**: This is the most common issue. Check these in order:
+  1. In Coolify, verify the **Port** is set to `18789` on the openclaw-gateway service
+  2. Check container logs in Coolify dashboard — if the container is crashing, fix the underlying error first
+  3. Verify the container is running: SSH into VPS and run `docker ps | grep openclaw`
+  4. Test from inside the VPS: `curl http://127.0.0.1:18789/healthz` — if this fails, the gateway is not starting
+  5. If using a domain, ensure DNS is pointed to your VPS IP
+- **Build fails with exit 137**: your VPS does not have enough RAM. Use at least 2 GB, or switch to a pre-built image (`ghcr.io/openclaw/openclaw:latest`)
+- **Permission errors**: the container runs as `node` (uid 1000). Ensure host-mounted directories are owned by uid 1000: `sudo chown -R 1000:1000 /data/openclaw`
+- **Container starts but health check fails**: increase `start_period` — the gateway needs time to initialize. Check logs with `docker logs <container-id> --tail 50`
+- **WebSocket connection refused**: ensure Coolify's proxy is configured for WebSocket support (Traefik does this by default; Caddy may need explicit config)
 
 ## Security notes
 

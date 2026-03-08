@@ -5,18 +5,11 @@
 ##
 ## Required environment variables (set in Coolify dashboard):
 ##   OPENCLAW_GATEWAY_TOKEN   - auth token for the gateway API
-##   OPENCLAW_CONFIG_DIR      - host path for config persistence (e.g. /data/openclaw/config)
-##   OPENCLAW_WORKSPACE_DIR   - host path for workspace persistence (e.g. /data/openclaw/workspace)
 ##
 ## Optional:
 ##   OPENCLAW_IMAGE           - custom image (default: build from source)
-##   OPENAI_API_KEY           - OpenAI provider key
-##   ANTHROPIC_API_KEY        - Anthropic provider key
-##   GEMINI_API_KEY           - Google Gemini key
-##   TELEGRAM_BOT_TOKEN       - Telegram channel
-##   DISCORD_BOT_TOKEN        - Discord channel
-##   SLACK_BOT_TOKEN          - Slack bot token
-##   SLACK_APP_TOKEN          - Slack app token
+##   OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY - model provider keys
+##   TELEGRAM_BOT_TOKEN / DISCORD_BOT_TOKEN - channel tokens
 
 services:
   openclaw-gateway:
@@ -43,22 +36,22 @@ services:
       # Tools
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-      # Web session (optional)
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-openclaw-config}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR:-openclaw-workspace}:/home/node/.openclaw/workspace
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - openclaw-config:/home/node/.openclaw
+      - openclaw-workspace:/home/node/.openclaw/workspace
+    # Coolify manages the reverse proxy — expose the container port so
+    # Coolify/Traefik can route to it. Do NOT use host port mapping (ports:)
+    # as Coolify handles that via its proxy configuration.
+    expose:
+      - "18789"
     init: true
     restart: unless-stopped
+    # Override CMD to bind to 0.0.0.0 (lan) so the Coolify reverse proxy
+    # can reach the gateway inside the Docker network.
     command:
       [
         "node",
-        "dist/index.js",
+        "openclaw.mjs",
         "gateway",
         "--bind",
         "lan",
@@ -77,7 +70,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     deploy:
       resources:
         limits:
