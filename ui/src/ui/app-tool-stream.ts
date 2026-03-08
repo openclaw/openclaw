@@ -406,11 +406,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream === "chat" || payload.stream === "message") {
-    if (payload.data?.sessionId === (host as any).activeSessionId {
+  if (payload.stream === "assistant") {
+    if (payload.data?.sessionId === (host as any).activeSessionId) {
       void refreshChat(host as any);
     }
-   return;
+    return;
   }
 
   if (payload.stream !== "tool") {
