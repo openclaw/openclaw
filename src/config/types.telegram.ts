@@ -217,6 +217,8 @@ export type TelegramGroupConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this group. */
   disableAudioPreflight?: boolean;
+  /** If true, ignore messages that are replies to the bot's own messages (default: false). */
+  ignoreReplyToBot?: boolean;
 };
 
 export type TelegramDirectConfig = {
