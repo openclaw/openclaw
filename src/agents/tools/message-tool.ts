@@ -28,6 +28,20 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
 
+// Permanent messaging errors that will never succeed on retry.
+// Covers Slack API error codes and similar channel-level permanent failures.
+const PERMANENT_MESSAGING_ERROR_PATTERNS: readonly RegExp[] = [
+  /message_not_found/i,
+  /channel_not_found/i,
+  /not_in_channel/i,
+  /file_not_found/i,
+  /fileId required/i,
+];
+
+function isPermanentMessagingError(error: string): boolean {
+  return PERMANENT_MESSAGING_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
@@ -766,21 +780,33 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      const result = await runMessageAction({
-        cfg,
-        action,
-        params,
-        defaultAccountId: accountId ?? undefined,
-        requesterSenderId: options?.requesterSenderId,
-        gateway,
-        toolContext,
-        sessionKey: options?.agentSessionKey,
-        agentId: options?.agentSessionKey
-          ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
-          : undefined,
-        sandboxRoot: options?.sandboxRoot,
-        abortSignal: signal,
-      });
+      let result;
+      try {
+        result = await runMessageAction({
+          cfg,
+          action,
+          params,
+          defaultAccountId: accountId ?? undefined,
+          requesterSenderId: options?.requesterSenderId,
+          gateway,
+          toolContext,
+          sessionKey: options?.agentSessionKey,
+          agentId: options?.agentSessionKey
+            ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
+            : undefined,
+          sandboxRoot: options?.sandboxRoot,
+          abortSignal: signal,
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (isPermanentMessagingError(errMsg)) {
+          throw new Error(
+            `${errMsg} — this is a permanent error that will not resolve on retry. Do not retry this action with the same parameters.`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
 
       const toolResult = getToolResult(result);
       if (toolResult) {

@@ -212,6 +212,11 @@ describe("delivery-queue", () => {
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
       "Outbound not configured for channel: msteams",
+      "An API error occurred: message_not_found",
+      "An API error occurred: channel_not_found",
+      "An API error occurred: not_in_channel",
+      "An API error occurred: file_not_found",
+      "fileId required",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });

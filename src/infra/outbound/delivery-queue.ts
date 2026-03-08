@@ -432,6 +432,12 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // Slack permanent API errors — retrying these will never succeed.
+  /message_not_found/i,
+  /channel_not_found/i,
+  /not_in_channel/i,
+  /file_not_found/i,
+  /fileId required/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {

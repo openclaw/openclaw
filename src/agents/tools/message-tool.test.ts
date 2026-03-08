@@ -467,4 +467,28 @@ describe("message tool sandbox passthrough", () => {
 
     expect(call?.requesterSenderId).toBe("1234567890");
   });
+
+  describe("permanent messaging errors", () => {
+    it.each([
+      "An API error occurred: message_not_found",
+      "An API error occurred: channel_not_found",
+      "An API error occurred: not_in_channel",
+      "An API error occurred: file_not_found",
+      "fileId required",
+    ])("enhances permanent error with do-not-retry guidance: %s", async (errorMsg) => {
+      mocks.runMessageAction.mockRejectedValueOnce(new Error(errorMsg));
+      const tool = createMessageTool({ config: {} as never });
+      await expect(
+        tool.execute("1", { action: "send", target: "slack:123", message: "hi" }),
+      ).rejects.toThrow(/permanent error.*will not resolve on retry/i);
+    });
+
+    it("does not alter transient error messages", async () => {
+      mocks.runMessageAction.mockRejectedValueOnce(new Error("rate limited"));
+      const tool = createMessageTool({ config: {} as never });
+      await expect(
+        tool.execute("1", { action: "send", target: "slack:123", message: "hi" }),
+      ).rejects.toThrow("rate limited");
+    });
+  });
 });
