@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
@@ -46,6 +47,97 @@ type PluginHandledResult = {
   payload: unknown;
   toolResult: AgentToolResult<unknown>;
 };
+
+class OutboundCircuitBreakerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OutboundCircuitBreakerError";
+  }
+}
+
+type OutboundSendWindow = {
+  windowStartedAt: number;
+  sentCount: number;
+  lastFingerprint?: string;
+  lastSentAt?: number;
+  consecutiveDuplicateCount: number;
+};
+
+const OUTBOUND_CIRCUIT_WINDOW_MS = 3 * 60_000;
+const OUTBOUND_CIRCUIT_MAX_SENT_PER_WINDOW = 20;
+const OUTBOUND_CIRCUIT_MAX_CONSECUTIVE_DUPLICATES = 3;
+
+const outboundCircuitBreaker = new Map<string, OutboundSendWindow>();
+
+export function __resetOutboundCircuitBreakerForTest() {
+  outboundCircuitBreaker.clear();
+}
+
+function fingerprintOutboundSend(params: {
+  message: string;
+  mediaUrls?: string[];
+  replyToId?: string;
+}): string {
+  const payload = JSON.stringify({
+    message: params.message,
+    mediaUrls: params.mediaUrls ?? [],
+    replyToId: params.replyToId ?? null,
+  });
+  return crypto.createHash("sha1").update(payload).digest("hex");
+}
+
+function maybeTripOutboundCircuitBreaker(params: {
+  key: string;
+  fingerprint: string;
+  now: number;
+}): void {
+  const existing = outboundCircuitBreaker.get(params.key);
+  const next: OutboundSendWindow = existing
+    ? { ...existing }
+    : {
+        windowStartedAt: params.now,
+        sentCount: 0,
+        consecutiveDuplicateCount: 0,
+      };
+
+  if (params.now - next.windowStartedAt >= OUTBOUND_CIRCUIT_WINDOW_MS) {
+    next.windowStartedAt = params.now;
+    next.sentCount = 0;
+    next.lastFingerprint = undefined;
+    next.lastSentAt = undefined;
+    next.consecutiveDuplicateCount = 0;
+  }
+
+  next.sentCount += 1;
+
+  const isDuplicate = next.lastFingerprint === params.fingerprint;
+  if (isDuplicate) {
+    next.consecutiveDuplicateCount += 1;
+  } else {
+    next.consecutiveDuplicateCount = 1;
+  }
+
+  next.lastFingerprint = params.fingerprint;
+  next.lastSentAt = params.now;
+
+  outboundCircuitBreaker.set(params.key, next);
+
+  if (next.sentCount > OUTBOUND_CIRCUIT_MAX_SENT_PER_WINDOW) {
+    throw new OutboundCircuitBreakerError(
+      `Outbound circuit breaker tripped: sent ${next.sentCount} messages within ${
+        OUTBOUND_CIRCUIT_WINDOW_MS / 1000
+      }s for key ${params.key}`,
+    );
+  }
+
+  if (next.consecutiveDuplicateCount > OUTBOUND_CIRCUIT_MAX_CONSECUTIVE_DUPLICATES) {
+    throw new OutboundCircuitBreakerError(
+      `Outbound circuit breaker tripped: detected ${next.consecutiveDuplicateCount} consecutive duplicate messages within ${
+        OUTBOUND_CIRCUIT_WINDOW_MS / 1000
+      }s for key ${params.key}`,
+    );
+  }
+}
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
@@ -98,6 +190,26 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+
+  if (!params.ctx.dryRun) {
+    const sessionKeyHint =
+      (params.ctx.params as { __sessionKey?: string }).__sessionKey ??
+      params.ctx.mirror?.sessionKey ??
+      "global";
+    const threadKey = params.threadId == null ? "" : String(params.threadId);
+    const breakerKey = `${sessionKeyHint}:${params.ctx.channel}:${params.to}:${threadKey}`;
+    const fingerprint = fingerprintOutboundSend({
+      message: params.message.trim(),
+      mediaUrls: params.mediaUrls ?? (params.mediaUrl ? [params.mediaUrl] : undefined),
+      replyToId: params.replyToId,
+    });
+    maybeTripOutboundCircuitBreaker({
+      key: breakerKey,
+      fingerprint,
+      now: Date.now(),
+    });
+  }
+
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
