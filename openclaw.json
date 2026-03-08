@@ -30,7 +30,7 @@
         }
       },
       "model": {
-        "primary": "deepseek/deepseek-chat"
+        "primary": "${OPENCLAW_AGENT_MODEL}"
       }
     }
   }
