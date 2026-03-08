@@ -356,6 +356,14 @@ export function resolveModelAuthMode(
     return "api-key";
   }
 
+  // Mirror the synthetic local auth check from resolveApiKeyForProvider so that
+  // local providers (e.g. ollama with baseUrl/models but no apiKey) are not
+  // incorrectly reported as "unknown".
+  const syntheticLocal = resolveSyntheticLocalProviderAuth({ cfg, provider: resolved });
+  if (syntheticLocal) {
+    return "api-key";
+  }
+
   return "unknown";
 }
 

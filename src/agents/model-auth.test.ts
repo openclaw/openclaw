@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
 
@@ -88,6 +89,38 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
+  });
+
+  it("returns api-key for ollama with baseUrl and models but no apiKey", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            models: [
+              {
+                id: "llama3",
+                name: "Llama 3",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(
+      resolveModelAuthMode("ollama", cfg as OpenClawConfig, { version: 1, profiles: {} }),
+    ).toBe("api-key");
+  });
+
+  it("returns unknown for provider with no auth and no local config", () => {
+    expect(
+      resolveModelAuthMode("anthropic", {} as OpenClawConfig, { version: 1, profiles: {} }),
+    ).toBe("unknown");
   });
 });
 
