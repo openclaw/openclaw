@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -294,9 +295,23 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
+  const nativeTargetSessionKey = params.ctx.CommandTargetSessionKey?.trim();
+  const effectiveCommandAgentId = resolveSessionAgentId({
+    sessionKey: nativeTargetSessionKey || params.sessionKey,
+    config: params.cfg,
+  });
+  const handlerParams =
+    effectiveCommandAgentId === params.agentId
+      ? params
+      : { ...params, agentId: effectiveCommandAgentId };
+  if (handlerParams.agentId !== params.agentId) {
+    logVerbose(
+      `commands: overriding agent from ${params.agentId ?? "<unset>"} to ${handlerParams.agentId} (session=${nativeTargetSessionKey || params.sessionKey})`,
+    );
+  }
 
   for (const handler of HANDLERS) {
-    const result = await handler(params, allowTextCommands);
+    const result = await handler(handlerParams, allowTextCommands);
     if (result) {
       return result;
     }

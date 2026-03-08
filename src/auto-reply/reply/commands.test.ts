@@ -27,6 +27,14 @@ import { parseInlineDirectives } from "./directive-handling.js";
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
+const textToSpeechMock = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => ({
+    success: true as const,
+    audioPath: "/tmp/test-tts.opus",
+    provider: "elevenlabs" as const,
+    voiceCompatible: true,
+  })),
+);
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -62,6 +70,14 @@ vi.mock("../../channels/plugins/pairing.js", async () => {
   return {
     ...actual,
     listPairingChannels: () => ["telegram"],
+  };
+});
+
+vi.mock("../../tts/tts.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/tts.js")>("../../tts/tts.js");
+  return {
+    ...actual,
+    textToSpeech: (params: unknown) => textToSpeechMock(params),
   };
 });
 
@@ -1141,6 +1157,68 @@ describe("handleCommands hooks", () => {
       }),
     );
     spy.mockRestore();
+  });
+
+  it("prefers CommandTargetSessionKey agent for native TTS commands when params.agentId is stale", async () => {
+    textToSpeechMock.mockClear();
+    const agentId = "voiceagent";
+    const agentVoiceId = "J0I9H8G7F6E5D4C3B2A1";
+    const globalVoiceId = "A1B2C3D4E5F6G7H8I9J0";
+    const accountId = "discord-bot-test";
+    const cfg = {
+      commands: { text: true },
+      channels: { discord: { allowFrom: ["*"] } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-4o-mini" } },
+        list: [
+          {
+            id: agentId,
+            tts: {
+              elevenlabs: {
+                voiceId: agentVoiceId,
+              },
+            },
+          },
+        ],
+      },
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: globalVoiceId,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/tts audio hello there", cfg, {
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandTargetSessionKey: `agent:${agentId}:discord:channel:123`,
+      SessionKey: "agent:main:discord:slash:user-1",
+      SenderId: "user-1",
+      From: "discord:channel:123",
+      To: "slash:user-1",
+      CommandAuthorized: true,
+      AccountId: accountId,
+    });
+    params.agentId = "main";
+    params.sessionKey = "agent:main:discord:slash:user-1";
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(textToSpeechMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId,
+        config: expect.objectContaining({
+          elevenlabs: expect.objectContaining({
+            voiceId: agentVoiceId,
+          }),
+        }),
+      }),
+    );
   });
 });
 

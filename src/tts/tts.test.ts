@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+import path from "node:path";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -41,11 +43,11 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
+const { _test, resolveTtsConfig, resolveTtsPrefsPath, maybeApplyTtsToPayload, getTtsProvider } =
+  tts;
 vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
-
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
   isValidVoiceId,
@@ -554,6 +556,108 @@ describe("tts", () => {
     });
   });
 
+  describe("agent-scoped TTS", () => {
+    const agentId = "voiceagent";
+    const globalVoiceId = "A1B2C3D4E5F6G7H8I9J0";
+    const agentVoiceId = "J0I9H8G7F6E5D4C3B2A1";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-4o-mini" } },
+        list: [
+          {
+            id: agentId,
+            tts: {
+              elevenlabs: {
+                voiceId: agentVoiceId,
+              },
+            },
+          },
+        ],
+      },
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: globalVoiceId,
+          },
+        },
+      },
+    };
+
+    it("merges agent TTS overrides on top of global settings", () => {
+      const globalConfig = resolveTtsConfig(cfg);
+      const agentConfig = resolveTtsConfig(cfg, agentId);
+
+      expect(globalConfig.elevenlabs.voiceId).toBe(globalVoiceId);
+      expect(agentConfig.elevenlabs.voiceId).toBe(agentVoiceId);
+    });
+
+    it("applies agent overrides when the configured agent id is not normalized", () => {
+      const cfgWithMixedCaseId: OpenClawConfig = {
+        ...cfg,
+        agents: {
+          ...cfg.agents!,
+          list: [
+            {
+              id: "VoiceAgent",
+              tts: {
+                elevenlabs: {
+                  voiceId: agentVoiceId,
+                },
+              },
+            },
+          ],
+        },
+      };
+
+      const agentConfig = resolveTtsConfig(cfgWithMixedCaseId, "voiceagent");
+
+      expect(agentConfig.elevenlabs.voiceId).toBe(agentVoiceId);
+    });
+
+    it("uses the agent-specific ElevenLabs voice during synthesis", async () => {
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      const prefsPath = `/tmp/tts-agent-${Date.now()}.json`;
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      try {
+        const result = await tts.textToSpeech({
+          text: "Hello from the agent-specific voice.",
+          cfg,
+          agentId,
+          prefsPath,
+        });
+
+        expect(result.success).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const requestUrl = String((fetchMock.mock.calls as Array<Array<unknown>>)[0]?.[0]);
+        expect(requestUrl).toContain(`/v1/text-to-speech/${agentVoiceId}`);
+
+        if (result.success && result.audioPath) {
+          rmSync(path.dirname(result.audioPath), { recursive: true, force: true });
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+        rmSync(prefsPath, { force: true });
+      }
+    });
+
+    it("uses agent-scoped prefs files by default", () => {
+      const globalConfig = resolveTtsConfig(cfg);
+      const agentConfig = resolveTtsConfig(cfg, agentId);
+
+      expect(resolveTtsPrefsPath(globalConfig)).toMatch(/settings[\\/]+tts\.json$/);
+      expect(resolveTtsPrefsPath(agentConfig, agentId)).toMatch(
+        /settings[\\/]+tts\.voiceagent\.json$/,
+      );
+    });
+  });
+
   describe("maybeApplyTtsToPayload", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -661,6 +765,62 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("uses the agent-specific ElevenLabs voice for auto-TTS final replies", async () => {
+      const agentId = "voiceagent";
+      const globalVoiceId = "A1B2C3D4E5F6G7H8I9J0";
+      const agentVoiceId = "J0I9H8G7F6E5D4C3B2A1";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-4o-mini" } },
+          list: [
+            {
+              id: agentId,
+              tts: {
+                elevenlabs: {
+                  voiceId: agentVoiceId,
+                },
+              },
+            },
+          ],
+        },
+        messages: {
+          tts: {
+            auto: "always",
+            provider: "elevenlabs",
+            elevenlabs: {
+              apiKey: "test-key",
+              voiceId: globalVoiceId,
+            },
+          },
+        },
+      };
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      try {
+        const result = await maybeApplyTtsToPayload({
+          payload: {
+            text: "This is a sufficiently long payload for automatic TTS synthesis on Discord.",
+          },
+          cfg,
+          channel: "discord",
+          kind: "final",
+          agentId,
+        });
+
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const requestUrl = String((fetchMock.mock.calls as Array<Array<unknown>>)[0]?.[0]);
+        expect(requestUrl).toContain(`/v1/text-to-speech/${agentVoiceId}`);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

@@ -4,6 +4,7 @@ import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pluginCommandsModule from "../../plugins/commands.js";
+import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
@@ -283,6 +284,73 @@ describe("Discord native plugin command dispatch", () => {
     );
     expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).toHaveBeenCalledTimes(1);
     expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
+  });
+
+  it("uses the routed Discord target session as SessionKey for non-ACP native commands", async () => {
+    const guildId = "guild-1";
+    const channelId = "channel-1";
+    const accountId = "discord-bot-test";
+    const agentId = "voiceagent";
+    const routedSessionKey = buildAgentSessionKey({
+      agentId,
+      channel: "discord",
+      accountId,
+      peer: { kind: "channel", id: channelId },
+    });
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      bindings: [
+        {
+          agentId,
+          match: {
+            channel: "discord",
+            accountId,
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "status",
+      description: "Status",
+      acceptsArgs: false,
+    };
+    const command = createDiscordNativeCommand({
+      command: commandSpec,
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId,
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager(accountId),
+    });
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId,
+      guildId,
+      guildName: "Test Guild",
+    });
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
+      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
+    };
+    expect(dispatchCall.ctx?.SessionKey).toBe(routedSessionKey);
+    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(routedSessionKey);
   });
 
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {

@@ -1,4 +1,6 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -18,6 +20,8 @@ import {
 } from "../../tts/tts.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler } from "./commands-types.js";
+
+const log = createSubsystemLogger("tts/command");
 
 type ParsedTtsCommand = {
   action: string;
@@ -84,8 +88,16 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim();
+  const effectiveAgentId =
+    targetSessionKey || params.sessionKey
+      ? resolveSessionAgentId({
+          sessionKey: targetSessionKey || params.sessionKey,
+          config: params.cfg,
+        })
+      : params.agentId;
+  const config = resolveTtsConfig(params.cfg, effectiveAgentId);
+  const prefsPath = resolveTtsPrefsPath(config, effectiveAgentId);
   const action = parsed.action;
   const args = parsed.args;
 
@@ -117,11 +129,28 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     const start = Date.now();
+    const provider = getTtsProvider(config, prefsPath);
+    log.info("tts audio requested", {
+      surface: params.command.surface,
+      channel: params.command.channel,
+      channelId: params.command.channelId,
+      accountId: typeof params.ctx.AccountId === "string" ? params.ctx.AccountId : undefined,
+      agentId: effectiveAgentId,
+      provider,
+      elevenlabsVoiceId: provider === "elevenlabs" ? config.elevenlabs.voiceId : undefined,
+      elevenlabsModelId: provider === "elevenlabs" ? config.elevenlabs.modelId : undefined,
+      openaiVoice: provider === "openai" ? config.openai.voice : undefined,
+      openaiModel: provider === "openai" ? config.openai.model : undefined,
+      edgeVoice: provider === "edge" ? config.edge.voice : undefined,
+      textLength: args.length,
+    });
     const result = await textToSpeech({
       text: args,
       cfg: params.cfg,
+      config,
       channel: params.command.channel,
       prefsPath,
+      agentId: effectiveAgentId,
     });
 
     if (result.success && result.audioPath) {

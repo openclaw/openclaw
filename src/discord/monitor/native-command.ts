@@ -1645,13 +1645,20 @@ async function dispatchDiscordCommandInteraction(params: {
     configuredRoute,
     matchedBy: configuredBinding ? "binding.channel" : undefined,
   });
-  const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
+  const defaultSessionTargets = resolveNativeCommandSessionTargets({
     agentId: effectiveRoute.agentId,
     sessionPrefix,
     userId: user.id,
     targetSessionKey: effectiveRoute.sessionKey,
     boundSessionKey,
   });
+  const useRoutedSessionKey = !boundSessionKey && effectiveRoute.matchedBy === "binding.account";
+  const sessionKey = useRoutedSessionKey
+    ? effectiveRoute.sessionKey
+    : defaultSessionTargets.sessionKey;
+  const commandTargetSessionKey = useRoutedSessionKey
+    ? effectiveRoute.sessionKey
+    : defaultSessionTargets.commandTargetSessionKey;
   const ctxPayload = buildDiscordNativeCommandContext({
     prompt,
     commandArgs: commandArgs ?? {},
@@ -1677,6 +1684,22 @@ async function dispatchDiscordCommandInteraction(params: {
       globalName: user.globalName,
     },
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
+  });
+  log.info("native command routed", {
+    commandName: command.nativeName ?? command.key,
+    promptChars: prompt.length,
+    accountId,
+    applicationId:
+      typeof interaction.rawData.application_id === "string"
+        ? interaction.rawData.application_id
+        : undefined,
+    guildId: interaction.guild?.id ?? undefined,
+    channelId,
+    routeAgentId: route.agentId,
+    effectiveAgentId: effectiveRoute.agentId,
+    effectiveSessionKey: effectiveRoute.sessionKey,
+    boundSessionKey: boundSessionKey || undefined,
+    matchedBy: effectiveRoute.matchedBy,
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
