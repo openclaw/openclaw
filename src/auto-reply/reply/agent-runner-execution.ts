@@ -430,7 +430,15 @@ export async function runAgentTurnWithFallback(params: {
                           replyToCurrent: true,
                           isCompactionNotice: true,
                         });
-                        await params.opts.onBlockReply(noticePayload);
+                        try {
+                          await params.opts.onBlockReply(noticePayload);
+                        } catch (err) {
+                          // Non-critical notice delivery failure should not
+                          // bubble out of the fire-and-forget event handler.
+                          logVerbose(
+                            `compaction start notice delivery failed (non-fatal): ${String(err)}`,
+                          );
+                        }
                       }
                     }
                     const completed = evt.data?.completed === true;
