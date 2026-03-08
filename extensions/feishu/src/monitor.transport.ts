@@ -6,6 +6,7 @@ import {
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk/feishu";
 import { createFeishuWSClient } from "./client.js";
+import type { FeishuStatusSink } from "./monitor.account.js";
 import {
   botNames,
   botOpenIds,
@@ -16,7 +17,6 @@ import {
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
-import type { FeishuStatusSink } from "./monitor.account.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorTransportParams = {
