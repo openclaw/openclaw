@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 
 // Ensure Vitest environment is properly set
@@ -19,9 +22,25 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
-import { withIsolatedTestHome } from "./test-env.js";
+import { trackTempDir, withIsolatedTestHome } from "./test-env.js";
+
+function installTrackedMkdtempHooks() {
+  const originalMkdtempSync = fs.mkdtempSync.bind(fs);
+  fs.mkdtempSync = ((...args: Parameters<typeof fs.mkdtempSync>) =>
+    trackTempDir(originalMkdtempSync(...args))) as typeof fs.mkdtempSync;
+  syncBuiltinESMExports();
+
+  const originalPromisesMkdtemp = fs.promises.mkdtemp.bind(fs.promises);
+  fs.promises.mkdtemp = (async (...args: Parameters<typeof fs.promises.mkdtemp>) =>
+    trackTempDir(await originalPromisesMkdtemp(...args))) as typeof fs.promises.mkdtemp;
+
+  const originalFsPromisesMkdtemp = fsPromises.mkdtemp.bind(fsPromises);
+  fsPromises.mkdtemp = (async (...args: Parameters<typeof fsPromises.mkdtemp>) =>
+    trackTempDir(await originalFsPromisesMkdtemp(...args))) as typeof fsPromises.mkdtemp;
+}
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
+installTrackedMkdtempHooks();
 const testEnv = withIsolatedTestHome();
 afterAll(() => testEnv.cleanup());
 
