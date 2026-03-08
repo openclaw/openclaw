@@ -70,6 +70,13 @@ Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowl
 - Keep routing deterministic: replies always go back to the channel they arrived on.
 - Default to safe channel behavior (mentions required unless configured otherwise).
 
+## Host-side recipe for academic chat MVP
+
+For a practical DM-first academic assistant pattern that uses an external Canvas LMS community plugin with host automation, see:
+
+- [Teams Academic Chat Canvas MVP](/automation/teams-academic-chat-canvas-mvp)
+- [Teams Academic Chat MVP Example](/automation/teams-academic-chat-mvp-example)
+
 ## Config writes
 
 By default, Microsoft Teams is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
