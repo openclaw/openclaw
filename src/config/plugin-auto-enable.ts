@@ -302,9 +302,25 @@ function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string
   return map;
 }
 
+function resolvePluginIdFromConfig(cfg: OpenClawConfig, channelKey: string): string | null {
+  const suffix = `-${channelKey}`;
+  const knownIds: string[] = [
+    ...Object.keys(cfg.plugins?.installs ?? {}),
+    ...Object.keys(cfg.plugins?.entries ?? {}),
+    ...(Array.isArray(cfg.plugins?.allow) ? cfg.plugins.allow : []),
+  ];
+  for (const id of knownIds) {
+    if (typeof id === "string" && id.endsWith(suffix)) {
+      return id;
+    }
+  }
+  return null;
+}
+
 function resolvePluginIdForChannel(
   channelId: string,
   channelToPluginId: ReadonlyMap<string, string>,
+  cfg: OpenClawConfig,
 ): string {
   // Third-party plugins can expose a channel id that differs from their
   // manifest id; plugins.entries must always be keyed by manifest id.
@@ -312,7 +328,11 @@ function resolvePluginIdForChannel(
   if (builtInId) {
     return builtInId;
   }
-  return channelToPluginId.get(channelId) ?? channelId;
+  // Prefer the manifest registry mapping (authoritative, read from plugin
+  // manifests on disk). Fall back to matching against config-known plugin
+  // ids when the registry has no entry – e.g. the plugin is recorded in
+  // plugins.installs but the extensions dir hasn't been scanned yet.
+  return channelToPluginId.get(channelId) ?? resolvePluginIdFromConfig(cfg, channelId) ?? channelId;
 }
 
 function collectCandidateChannelIds(cfg: OpenClawConfig): string[] {
@@ -340,7 +360,7 @@ function resolveConfiguredPlugins(
   // Build reverse map: channel ID → plugin ID from installed plugin manifests.
   const channelToPluginId = buildChannelToPluginIdMap(registry);
   for (const channelId of collectCandidateChannelIds(cfg)) {
-    const pluginId = resolvePluginIdForChannel(channelId, channelToPluginId);
+    const pluginId = resolvePluginIdForChannel(channelId, channelToPluginId, cfg);
     if (isChannelConfigured(cfg, channelId, env)) {
       changes.push({ pluginId, reason: `${channelId} configured` });
     }
