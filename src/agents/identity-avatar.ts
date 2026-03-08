@@ -25,10 +25,17 @@ function normalizeAvatarValue(value: string | undefined | null): string | null {
 }
 
 function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | null {
+  // Check ui.assistant.avatar first (matches resolveAssistantIdentity priority)
+  const fromUiConfig = normalizeAvatarValue(cfg.ui?.assistant?.avatar);
+  if (fromUiConfig) {
+    return fromUiConfig;
+  }
+  // Then check agents.list[].identity.avatar
   const fromConfig = normalizeAvatarValue(resolveAgentIdentity(cfg, agentId)?.avatar);
   if (fromConfig) {
     return fromConfig;
   }
+  // Finally check workspace identity file
   const workspace = resolveAgentWorkspaceDir(cfg, agentId);
   const fromIdentity = normalizeAvatarValue(loadAgentIdentityFromWorkspace(workspace)?.avatar);
   return fromIdentity;

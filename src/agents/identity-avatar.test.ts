@@ -164,4 +164,41 @@ describe("resolveAgentAvatar", () => {
     const data = resolveAgentAvatar(cfg, "data");
     expect(data.kind).toBe("data");
   });
+
+  it("prioritizes ui.assistant.avatar over agents.list[].identity.avatar", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const workspace = path.join(root, "work");
+    const uiAvatarPath = path.join(workspace, "avatars", "ui-avatar.png");
+    const agentAvatarPath = path.join(workspace, "avatars", "agent-avatar.png");
+    await writeFile(uiAvatarPath);
+    await writeFile(agentAvatarPath);
+
+    const cfg: OpenClawConfig = {
+      ui: {
+        assistant: {
+          avatar: "avatars/ui-avatar.png",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace,
+            identity: { avatar: "avatars/agent-avatar.png" },
+          },
+        ],
+      },
+    };
+
+    const workspaceReal = await fs.realpath(workspace);
+    const resolved = resolveAgentAvatar(cfg, "main");
+    expect(resolved.kind).toBe("local");
+    if (resolved.kind === "local") {
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      // Should use ui.assistant.avatar, not agents.list[].identity.avatar
+      expect(path.relative(workspaceReal, resolvedReal)).toBe(
+        path.join("avatars", "ui-avatar.png"),
+      );
+    }
+  });
 });
