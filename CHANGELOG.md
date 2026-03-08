@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost replies: keep `root_id` pinned to the existing thread root when an agent replies inside a thread, while still using reply-target threading for top-level posts. (#27744) thanks @hnykda.
 - Agents/failover: detect Amazon Bedrock `Too many tokens per day` quota errors as rate limits across fallback, cron retry, and memory embeddings while keeping context-window `too many tokens per request` errors out of the rate-limit lane. (#39377) Thanks @gambletan.
 - Android/Play distribution: remove self-update, background location, `screen.record`, and background mic capture from the Android app, narrow the foreground service to `dataSync` only, and clean up the legacy `location.enabledMode=always` preference migration. (#39660) Thanks @obviyus.
+- Agents/background exec chat notifications: treat chat-context background exec completions as notify-on-empty-success by default so `exit 0` tasks without stdout/stderr stop looking like "started, then silence" on chat surfaces.
 
 ## 2026.3.7
 

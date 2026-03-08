@@ -191,7 +191,11 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  // Chat surfaces already rely on exit notifications for background task continuity, so
+  // successful empty-output completions should still wake the session by default there.
+  const notifyOnExitEmptySuccess =
+    defaults?.notifyOnExitEmptySuccess === true ||
+    (typeof defaults?.messageProvider === "string" && defaults.messageProvider.trim().length > 0);
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
