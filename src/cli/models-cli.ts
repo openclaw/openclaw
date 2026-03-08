@@ -118,9 +118,15 @@ export function registerModelsCli(program: Command) {
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .option(
+      "--agent <id>",
+      "Agent id to configure (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
+    )
+    .action(async (model: string, opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
-        await modelsSetCommand(model, defaultRuntime);
+        await modelsSetCommand(model, defaultRuntime, { agent });
       });
     });
 
