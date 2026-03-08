@@ -120,7 +120,6 @@ describe("createMattermostClient", () => {
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
   });
-
 });
 
 // ── createMattermostPost ─────────────────────────────────────────────

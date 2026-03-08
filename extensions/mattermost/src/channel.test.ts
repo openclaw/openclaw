@@ -307,5 +307,4 @@ describe("mattermostPlugin", () => {
       expect(prefixContext.responsePrefix).toBe("[Account]");
     });
   });
-
 });
