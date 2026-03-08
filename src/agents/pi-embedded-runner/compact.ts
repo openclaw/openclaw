@@ -907,13 +907,14 @@ export async function compactEmbeddedPiSession(
 ): Promise<EmbeddedPiCompactResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
       loadOpenClawPlugins({
         config: params.config,
-        workspaceDir: params.agentDir,
+        workspaceDir: resolvedWorkspace,
       });
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);

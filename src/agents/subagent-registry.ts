@@ -17,6 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   captureSubagentCompletionReply,
@@ -317,7 +318,9 @@ async function notifyContextEngineSubagentEnded(params: {
 }) {
   try {
     const cfg = loadConfig();
-    loadOpenClawPlugins({ config: cfg });
+    const childAgentId = resolveAgentIdFromSessionKey(params.childSessionKey);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, childAgentId);
+    loadOpenClawPlugins({ config: cfg, workspaceDir });
     ensureContextEnginesInitialized();
     const engine = await resolveContextEngine(cfg);
     if (!engine.onSubagentEnded) {

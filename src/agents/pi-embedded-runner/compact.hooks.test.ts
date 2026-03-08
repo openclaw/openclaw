@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   hookRunner,
+  loadOpenClawPluginsMock,
+  ensureContextEnginesInitializedMock,
+  resolveContextEngineMock,
+  contextEngineCompactMock,
   resolveModelMock,
   sessionCompactImpl,
   triggerInternalHook,
@@ -12,6 +16,20 @@ const {
     runBeforeCompaction: vi.fn(),
     runAfterCompaction: vi.fn(),
   },
+  loadOpenClawPluginsMock: vi.fn(),
+  ensureContextEnginesInitializedMock: vi.fn(),
+  contextEngineCompactMock: vi.fn(async () => ({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "context summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+    },
+  })),
+  resolveContextEngineMock: vi.fn(async () => ({
+    compact: contextEngineCompactMock,
+  })),
   resolveModelMock: vi.fn(() => ({
     model: { provider: "openai", api: "responses", id: "fake", input: [] },
     error: null,
@@ -30,6 +48,15 @@ const {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
+}));
+
+vi.mock("../../plugins/loader.js", () => ({
+  loadOpenClawPlugins: loadOpenClawPluginsMock,
+}));
+
+vi.mock("../../context-engine/index.js", () => ({
+  ensureContextEnginesInitialized: ensureContextEnginesInitializedMock,
+  resolveContextEngine: resolveContextEngineMock,
 }));
 
 vi.mock("../../hooks/internal-hooks.js", async () => {
@@ -245,7 +272,7 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { compactEmbeddedPiSession, compactEmbeddedPiSessionDirect } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
@@ -258,6 +285,22 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
     hookRunner.runAfterCompaction.mockReset();
+    loadOpenClawPluginsMock.mockReset();
+    ensureContextEnginesInitializedMock.mockReset();
+    contextEngineCompactMock.mockReset();
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "context summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+      },
+    });
+    resolveContextEngineMock.mockReset();
+    resolveContextEngineMock.mockResolvedValue({
+      compact: contextEngineCompactMock,
+    });
     resolveModelMock.mockReset();
     resolveModelMock.mockReturnValue({
       model: { provider: "openai", api: "responses", id: "fake", input: [] },
@@ -277,6 +320,31 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       return params.messages;
     });
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
+  });
+
+  it("loads plugins from the workspace before resolving the context engine", async () => {
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace-local-plugin",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace-local-plugin",
+    });
+    expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngineMock).toHaveBeenCalledWith(undefined);
+    expect(contextEngineCompactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          workspaceDir: "/tmp/workspace-local-plugin",
+        }),
+      }),
+    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {

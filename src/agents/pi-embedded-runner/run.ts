@@ -793,7 +793,7 @@ export async function runEmbeddedPiAgent(
       // Ensure plugin-provided context engines are registered before resolution.
       loadOpenClawPlugins({
         config: params.config,
-        workspaceDir: params.agentDir,
+        workspaceDir: resolvedWorkspace,
       });
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
