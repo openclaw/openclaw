@@ -6,6 +6,23 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 export type { BrowserTab };
 
 /**
+ * Metadata tracked per tab for ownership and lifecycle management.
+ * The `ownerId` field is an opaque string supplied by callers (e.g. an agent
+ * session id).  The browser server never interprets it — it simply stores and
+ * returns it so that callers can query and clean up tabs they own.
+ */
+export type TabMeta = {
+  targetId: string;
+  url: string;
+  openedAt: number;
+  lastAccessedAt: number;
+  /** Opaque caller-supplied identifier for the owner of this tab. */
+  ownerId?: string;
+  /** Opaque caller-supplied identifier for whoever last accessed this tab. */
+  lastAccessedBy?: string;
+};
+
+/**
  * Runtime state for a single profile's Chrome instance.
  */
 export type ProfileRuntimeState = {
@@ -13,6 +30,8 @@ export type ProfileRuntimeState = {
   running: RunningChrome | null;
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
+  /** Registry tracking ownership and access metadata for managed tabs. */
+  tabRegistry?: Map<string, TabMeta>;
 };
 
 export type BrowserServerState = {
@@ -28,11 +47,14 @@ type BrowserProfileActions = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, ownerId?: string) => Promise<BrowserTab>;
   focusTab: (targetId: string) => Promise<void>;
   closeTab: (targetId: string) => Promise<void>;
+  closeTabsByOwner: (ownerId: string) => Promise<{ closed: string[] }>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
+  getTabRegistry: () => Map<string, TabMeta>;
+  touchTab: (targetId: string, accessedBy?: string) => void;
 };
 
 export type BrowserRouteContext = {

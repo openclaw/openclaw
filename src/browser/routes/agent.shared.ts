@@ -1,7 +1,7 @@
 import type { PwAiModule } from "../pw-ai-module.js";
-import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
+import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import { getProfileContext, jsonError } from "./utils.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
@@ -95,6 +95,17 @@ type RouteWithTabParams<T> = {
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
+export function resolveOwnerIdFromRequest(req: BrowserRequest): string | undefined {
+  // Check body first, then query string.
+  const body = req.body as Record<string, unknown> | undefined;
+  const fromBody = typeof body?.ownerId === "string" ? body.ownerId.trim() : "";
+  if (fromBody) {
+    return fromBody;
+  }
+  const fromQuery = typeof req.query.ownerId === "string" ? req.query.ownerId.trim() : "";
+  return fromQuery || undefined;
+}
+
 export async function withRouteTabContext<T>(
   params: RouteWithTabParams<T>,
 ): Promise<T | undefined> {
@@ -104,6 +115,11 @@ export async function withRouteTabContext<T>(
   }
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    // Update access metadata when an ownerId is present on the request.
+    const accessedBy = resolveOwnerIdFromRequest(params.req);
+    if (accessedBy) {
+      profileCtx.touchTab(tab.targetId, accessedBy);
+    }
     return await params.run({
       profileCtx,
       tab,

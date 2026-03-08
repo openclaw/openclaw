@@ -106,13 +106,34 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           return res.json({ running: false, tabs: [] as unknown[] });
         }
         const tabs = await profileCtx.listTabs();
-        res.json({ running: true, tabs });
+        const registry = profileCtx.getTabRegistry();
+        const ownerIdFilter = toStringOrEmpty(req.query.ownerId) || undefined;
+
+        const enriched = tabs.map((tab) => {
+          const meta = registry.get(tab.targetId);
+          return {
+            ...tab,
+            openedAt: meta?.openedAt,
+            lastAccessedAt: meta?.lastAccessedAt,
+            ownerId: meta?.ownerId,
+            lastAccessedBy: meta?.lastAccessedBy,
+            managed: Boolean(meta),
+          };
+        });
+
+        const filtered = ownerIdFilter
+          ? enriched.filter((t) => t.ownerId === ownerIdFilter)
+          : enriched;
+
+        res.json({ running: true, tabs: filtered });
       },
     });
   });
 
   app.post("/tabs/open", async (req, res) => {
-    const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
+    const body = req.body as Record<string, unknown> | undefined;
+    const url = toStringOrEmpty(body?.url);
+    const ownerId = toStringOrEmpty(body?.ownerId) || undefined;
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
@@ -124,7 +145,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       mapTabError: true,
       run: async (profileCtx) => {
         await profileCtx.ensureBrowserAvailable();
-        const tab = await profileCtx.openTab(url);
+        const tab = await profileCtx.openTab(url, ownerId);
         res.json(tab);
       },
     });
@@ -142,6 +163,25 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       targetId,
       mutate: async (profileCtx, id) => {
         await profileCtx.focusTab(id);
+      },
+    });
+  });
+
+  // Register the more specific path first so it is not shadowed by the
+  // parametric `/tabs/:targetId` route.
+  app.delete("/tabs/by-owner/:ownerId", async (req, res) => {
+    const ownerId = toStringOrEmpty(req.params.ownerId);
+    if (!ownerId) {
+      return jsonError(res, 400, "ownerId is required");
+    }
+    await withTabsProfileRoute({
+      req,
+      res,
+      ctx,
+      mapTabError: true,
+      run: async (profileCtx) => {
+        const result = await profileCtx.closeTabsByOwner(ownerId);
+        res.json({ ok: true, closed: result.closed });
       },
     });
   });
