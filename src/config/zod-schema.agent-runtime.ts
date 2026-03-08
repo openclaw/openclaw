@@ -372,9 +372,12 @@ export const ToolPolicyWithProfileSchema = z
   });
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
-export const ElevatedAllowFromSchema = z
-  .record(z.string(), z.array(z.union([z.string(), z.number()])))
-  .optional();
+// Accepts both the canonical record format {"discord": [...]} and a legacy shorthand array
+// ["userId", ...] which is coerced to {"*": ["userId", ...]} for backward-compat (#39500).
+export const ElevatedAllowFromSchema = z.preprocess(
+  (val) => (Array.isArray(val) ? { "*": val } : val),
+  z.record(z.string(), z.array(z.union([z.string(), z.number()]))).optional(),
+);
 
 const ToolExecApplyPatchSchema = z
   .object({
