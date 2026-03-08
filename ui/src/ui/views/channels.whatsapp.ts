@@ -20,7 +20,7 @@ export function renderWhatsAppCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "WhatsApp",
-    subtitle: "Link WhatsApp Web and monitor connection health.",
+    subtitle: t("channels.subtitles.whatsapp"),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

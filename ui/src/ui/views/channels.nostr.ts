@@ -194,7 +194,7 @@ export function renderNostrCard(params: {
   return html`
     <div class="card">
       <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
+      <div class="card-sub">${t("channels.subtitles.nostr")}</div>
       ${accountCountLabel}
       ${hasMultipleAccounts
         ? html`

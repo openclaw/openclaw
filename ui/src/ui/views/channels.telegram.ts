@@ -59,7 +59,7 @@ export function renderTelegramCard(params: {
     return html`
       <div class="card">
         <div class="card-title">Telegram</div>
-        <div class="card-sub">Bot status and channel configuration.</div>
+        <div class="card-sub">${t("channels.subtitles.botConfig")}</div>
         ${accountCountLabel}
 
         <div class="account-card-list">
@@ -86,7 +86,7 @@ export function renderTelegramCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Telegram",
-    subtitle: "Bot status and channel configuration.",
+    subtitle: t("channels.subtitles.botConfig"),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },
