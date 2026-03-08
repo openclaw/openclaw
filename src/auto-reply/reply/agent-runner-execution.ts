@@ -100,7 +100,33 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
-  const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+  const TRANSIENT_HTTP_RETRY_DELAY_MS = 5_000;
+
+  const sleepWithAbort = async (ms: number, abortSignal?: AbortSignal): Promise<boolean> => {
+    if (!abortSignal) {
+      await new Promise<void>((resolve) => setTimeout(resolve, ms));
+      return false;
+    }
+    if (abortSignal.aborted) {
+      return true;
+    }
+    return await new Promise<boolean>((resolve) => {
+      const onAbort = () => {
+        cleanup();
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, ms);
+      const cleanup = () => {
+        clearTimeout(timer);
+        abortSignal.removeEventListener("abort", onAbort);
+      };
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    });
+  };
+
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -598,9 +624,15 @@ export async function runAgentTurnWithFallback(params: {
         defaultRuntime.error(
           `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
-        });
+        const aborted = await sleepWithAbort(TRANSIENT_HTTP_RETRY_DELAY_MS, params.opts?.abortSignal);
+        if (aborted) {
+          return {
+            kind: "final",
+            payload: {
+              text: "⚙️ Agent was aborted.",
+            },
+          };
+        }
         continue;
       }
 
