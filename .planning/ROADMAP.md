@@ -45,11 +45,11 @@ Plans:
 1. A request to a blocked domain through `resolvePinnedHostnameWithPolicy()` throws a blocklist error before DNS resolution
 2. An integration test proves that a blocked hostname causes a deterministic error through the SSRF pipeline
 3. Non-blocked domains continue to resolve and connect normally (no regression)
-   **Plans**: TBD
+   **Plans**: 1 plan
 
 Plans:
 
-- [ ] 02-01: Wire blocklist into SSRF Phase 1 and add integration tests
+- [ ] 02-01-PLAN.md -- Wire blocklist guard into resolvePinnedHostnameWithPolicy and add integration tests
 
 ### Phase 3: Outbound Surface Catalog
 
