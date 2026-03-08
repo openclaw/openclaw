@@ -1430,6 +1430,7 @@ export async function runEmbeddedPiAgent(
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
+                toolMetas: attempt.toolMetas,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
               },
@@ -1462,6 +1463,7 @@ export async function runEmbeddedPiAgent(
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
+              toolMetas: attempt.toolMetas,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)

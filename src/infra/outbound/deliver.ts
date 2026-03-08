@@ -41,6 +41,7 @@ import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import type { MessageSendingAgentContext } from "../../plugins/types.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -237,6 +238,8 @@ type DeliverOutboundPayloadsCoreParams = {
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
+  /** Agent reasoning context threaded from the embedded runner for `message_sending` hooks. */
+  agentContext?: MessageSendingAgentContext;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -397,6 +400,7 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  agentContext?: MessageSendingAgentContext;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -419,6 +423,7 @@ async function applyMessageSendingHook(params: {
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
         },
+        agentContext: params.agentContext,
       },
       {
         channelId: params.channel,
@@ -701,6 +706,7 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        agentContext: params.agentContext,
       });
       if (hookResult.cancelled) {
         continue;

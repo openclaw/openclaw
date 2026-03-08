@@ -571,10 +571,56 @@ export type PluginHookMessageReceivedEvent = {
 };
 
 // message_sending hook
+/**
+ * Context from the agent reasoning pipeline, threaded through the delivery
+ * layer so `message_sending` hooks can make informed pre-delivery decisions.
+ *
+ * Available when the outbound message originates from an agent run.
+ * `undefined` for non-agent deliveries (cron, heartbeat, restart sentinel).
+ */
+export type MessageSendingAgentContext = {
+  /** Tools invoked during this agent turn. */
+  toolCalls: Array<{
+    tool: string;
+    /** Whether the tool call completed without error. */
+    success: boolean;
+  }>;
+  /** Convenience: `toolCalls.length`. */
+  toolCallCount: number;
+  /** Token usage for this turn (from the provider's usage report). */
+  tokenUsage?: {
+    input: number;
+    output: number;
+    total: number;
+  };
+  /** Model context window size in tokens, when known. */
+  contextWindow?: number;
+  /**
+   * Approximate context utilization as a percentage (0–100).
+   * Derived from `lastCallUsage.total / contextWindow` when both are available.
+   */
+  contextFillPercent?: number;
+  /** Active agent id (from OutboundSessionContext). */
+  agentId?: string;
+  /** Session key for correlation. */
+  sessionKey?: string;
+  /** Whether this message targets a group/channel (vs DM). */
+  isGroup?: boolean;
+  /** Outbound channel type (telegram, discord, slack, etc). */
+  channel?: string;
+  /** Character count of the agent response text. */
+  responseLength: number;
+};
+
 export type PluginHookMessageSendingEvent = {
   to: string;
   content: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Agent reasoning context for the current turn.
+   * Present when the message originates from an agent run; `undefined` otherwise.
+   */
+  agentContext?: MessageSendingAgentContext;
 };
 
 export type PluginHookMessageSendingResult = {

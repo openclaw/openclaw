@@ -17,6 +17,7 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
+import type { MessageSendingAgentContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -219,6 +220,11 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
+      // Build agent reasoning context for message_sending plugin hooks.
+      const agentContext: MessageSendingAgentContext | undefined = result.meta
+        ? buildAgentContextFromMeta(result, outboundSession, deliveryChannel, deliveryPayloads)
+        : undefined;
+
       await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
@@ -226,6 +232,7 @@ export async function deliverAgentCommandResult(params: {
         accountId: resolvedAccountId,
         payloads: deliveryPayloads,
         session: outboundSession,
+        agentContext,
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
@@ -237,4 +244,59 @@ export async function deliverAgentCommandResult(params: {
   }
 
   return { payloads: normalizedPayloads, meta: result.meta };
+}
+
+/**
+ * Build `MessageSendingAgentContext` from the embedded-pi run result metadata.
+ * Returns `undefined` when there is no meaningful agent metadata to expose.
+ */
+function buildAgentContextFromMeta(
+  result: RunResult,
+  outboundSession: OutboundSessionContext | undefined,
+  channel: string,
+  payloads: Array<{ text?: string }>,
+): MessageSendingAgentContext | undefined {
+  const meta = result.meta;
+  if (!meta) return undefined;
+
+  const agentMeta = meta.agentMeta;
+  const toolMetas = meta.toolMetas ?? [];
+
+  const toolCalls = toolMetas.map((t) => ({
+    tool: t.toolName,
+    // toolMeta.meta contains a freeform string; absence of "error" is a
+    // reasonable heuristic for success. Hook authors who need more detail
+    // can inspect `content` for tool-error patterns.
+    success: !t.meta?.toLowerCase().includes("error"),
+  }));
+
+  const usage = agentMeta?.usage;
+  const lastCallUsage = agentMeta?.lastCallUsage;
+
+  // contextFillPercent and contextWindow are not available from the run result
+  // metadata today — the model's contextWindow is known at run time but not
+  // propagated through EmbeddedPiAgentMeta. These fields are left undefined
+  // until a future change threads contextWindow through agentMeta.
+  const contextWindow: number | undefined = undefined;
+  const contextFillPercent: number | undefined = undefined;
+
+  const responseLength = payloads.reduce((sum, p) => sum + (p.text?.length ?? 0), 0);
+
+  return {
+    toolCalls,
+    toolCallCount: toolCalls.length,
+    tokenUsage: usage
+      ? {
+          input: usage.input ?? 0,
+          output: usage.output ?? 0,
+          total: usage.total ?? 0,
+        }
+      : undefined,
+    contextWindow,
+    contextFillPercent,
+    agentId: outboundSession?.agentId,
+    sessionKey: outboundSession?.key,
+    channel,
+    responseLength,
+  };
 }
