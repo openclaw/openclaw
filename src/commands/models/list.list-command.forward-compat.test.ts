@@ -67,6 +67,8 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
+  getRuntimeConfigSnapshot: vi.fn().mockReturnValue(null),
+  getRuntimeConfigSourceSnapshot: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
@@ -182,25 +184,29 @@ describe("modelsListCommand forward-compat", () => {
       availableKeys: new Set(),
       registry: {},
     });
-    mocks.listProfilesForProvider.mockImplementationOnce((_: unknown, provider: string) =>
+    mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
       provider === "openai-codex" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
     );
     const runtime = { log: vi.fn(), error: vi.fn() };
 
-    await modelsListCommand({ json: true }, runtime as never);
+    try {
+      await modelsListCommand({ json: true }, runtime as never);
 
-    expect(mocks.printModelTable).toHaveBeenCalled();
-    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
-      key: string;
-      available: boolean;
-    }>;
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
+        key: string;
+        available: boolean;
+      }>;
 
-    expect(rows).toContainEqual(
-      expect.objectContaining({
-        key: "openai-codex/gpt-5.4",
-        available: true,
-      }),
-    );
+      expect(rows).toContainEqual(
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.4",
+          available: true,
+        }),
+      );
+    } finally {
+      mocks.listProfilesForProvider.mockReturnValue([]);
+    }
   });
 
   it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
@@ -238,7 +244,7 @@ describe("modelsListCommand forward-compat", () => {
         contextWindow: 272000,
       },
     ]);
-    mocks.listProfilesForProvider.mockImplementationOnce((_: unknown, provider: string) =>
+    mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
       provider === "openai-codex" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
     );
     mocks.resolveModelWithRegistry.mockImplementation(
@@ -277,23 +283,30 @@ describe("modelsListCommand forward-compat", () => {
     );
     const runtime = { log: vi.fn(), error: vi.fn() };
 
-    await modelsListCommand({ all: true, provider: "openai-codex", json: true }, runtime as never);
+    try {
+      await modelsListCommand(
+        { all: true, provider: "openai-codex", json: true },
+        runtime as never,
+      );
 
-    expect(mocks.printModelTable).toHaveBeenCalled();
-    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
-      key: string;
-      available: boolean;
-    }>;
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
+        key: string;
+        available: boolean;
+      }>;
 
-    expect(rows).toEqual([
-      expect.objectContaining({
-        key: "openai-codex/gpt-5.3-codex",
-      }),
-      expect.objectContaining({
-        key: "openai-codex/gpt-5.4",
-        available: true,
-      }),
-    ]);
+      expect(rows).toEqual([
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.3-codex",
+        }),
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.4",
+          available: true,
+        }),
+      ]);
+    } finally {
+      mocks.listProfilesForProvider.mockReturnValue([]);
+    }
   });
 
   it("keeps discovered rows in --all output when catalog lookup is empty", async () => {
