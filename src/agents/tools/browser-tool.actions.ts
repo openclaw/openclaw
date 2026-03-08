@@ -74,6 +74,17 @@ function stripTargetIdFromActRequest(
   return retryRequest as Parameters<typeof browserAct>[1];
 }
 
+function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>[1]): boolean {
+  const typedRequest = request as Partial<Record<"kind" | "action", unknown>>;
+  const kind =
+    typeof typedRequest.kind === "string"
+      ? typedRequest.kind
+      : typeof typedRequest.action === "string"
+        ? typedRequest.action
+        : "";
+  return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
+}
+
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
@@ -304,9 +315,18 @@ export async function executeActAction(params: {
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const retryRequest = stripTargetIdFromActRequest(request);
+      const tabs = proxyRequest
+        ? ((
+            (await proxyRequest({
+              method: "GET",
+              path: "/tabs",
+              profile,
+            })) as { tabs?: unknown[] }
+          ).tabs ?? [])
+        : await browserTabs(baseUrl, { profile }).catch(() => []);
       // Some Chrome relay targetIds can go stale between snapshots and actions.
-      // Retry once without targetId to let relay use the currently attached tab.
-      if (retryRequest) {
+      // Only retry safe read-only actions, and only when exactly one tab remains attached.
+      if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {
           const retryResult = proxyRequest
             ? await proxyRequest({
@@ -323,15 +343,6 @@ export async function executeActAction(params: {
           // Fall through to explicit stale-target guidance.
         }
       }
-      const tabs = proxyRequest
-        ? ((
-            (await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            })) as { tabs?: unknown[] }
-          ).tabs ?? [])
-        : await browserTabs(baseUrl, { profile }).catch(() => []);
       if (!tabs.length) {
         throw new Error(
           "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
