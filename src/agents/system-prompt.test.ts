@@ -571,6 +571,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("uses feishu-specific inline button guidance when inline buttons are unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "feishu",
+        capabilities: [],
+      },
+    });
+
+    expect(prompt).toContain("Inline buttons not enabled for feishu");
+    expect(prompt).toContain("supports rich interactive cards");
+    expect(prompt).not.toContain("feishu.capabilities.inlineButtons");
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

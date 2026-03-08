@@ -146,7 +146,9 @@ function buildMessagingSection(params: {
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
+              ? params.runtimeChannel === "feishu"
+                ? "- Inline buttons not enabled for feishu. Feishu currently supports rich interactive cards instead of message-tool inline buttons."
+                : `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
           ...(params.messageToolHints ?? []),
         ]

@@ -238,6 +238,55 @@ function redactUrlForDebugLog(rawUrl: string): string {
   }
 }
 
+function detectVerificationGate(params: {
+  html: string;
+  finalUrl: string;
+}): { provider: "wechat" | "generic"; reason: string } | null {
+  const lowerHtml = params.html.toLowerCase();
+  const lowerUrl = params.finalUrl.toLowerCase();
+
+  const looksLikeWeChatVerify =
+    lowerUrl.includes("mp.weixin.qq.com") &&
+    (lowerHtml.includes("secitptpage/verify") ||
+      (params.html.includes("环境异常") && params.html.includes("去验证")));
+
+  if (looksLikeWeChatVerify) {
+    return {
+      provider: "wechat",
+      reason:
+        "WeChat returned an interactive verification page (环境异常 / 去验证), so the article body is unavailable to headless fetch.",
+    };
+  }
+
+  const titleMatch = params.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const lowerTitle = (titleMatch?.[1] ?? "").toLowerCase();
+
+  const hasChallengeScript =
+    lowerHtml.includes("cf-chl") ||
+    lowerHtml.includes("g-recaptcha") ||
+    lowerHtml.includes("hcaptcha") ||
+    lowerHtml.includes("turnstile");
+
+  const hasHumanCheckCopy =
+    lowerHtml.includes("verify you are human") ||
+    lowerHtml.includes("captcha") ||
+    lowerHtml.includes("security check") ||
+    lowerHtml.includes("access denied") ||
+    lowerTitle.includes("attention required");
+
+  const looksLikeGenericVerify = hasChallengeScript && hasHumanCheckCopy;
+
+  if (looksLikeGenericVerify) {
+    return {
+      provider: "generic",
+      reason:
+        "The target page requires interactive verification (CAPTCHA/human check), so content extraction is blocked.",
+    };
+  }
+
+  return null;
+}
+
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
 const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
@@ -595,6 +644,47 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const responseTruncatedWarning = bodyResult.truncated
       ? `Response body truncated after ${params.maxResponseBytes} bytes.`
       : undefined;
+
+    const verificationGate =
+      contentType.includes("text/html") && body
+        ? detectVerificationGate({ html: body, finalUrl })
+        : null;
+
+    if (verificationGate) {
+      const rawMessage =
+        verificationGate.provider === "wechat"
+          ? `${verificationGate.reason}\nOpen the article in a real browser/WeChat app and share the text (or screenshots) for analysis.`
+          : `${verificationGate.reason}\nOpen the page in a real browser and complete verification before retrying.`;
+      const wrapped = wrapWebFetchContent(
+        params.extractMode === "text" ? markdownToText(rawMessage) : rawMessage,
+        params.maxChars,
+      );
+      const warningParts = [responseTruncatedWarning, verificationGate.reason].filter(Boolean);
+      const payload = {
+        url: params.url,
+        finalUrl,
+        status: res.status,
+        contentType: normalizeContentType(contentType) ?? "text/html",
+        title: undefined,
+        extractMode: params.extractMode,
+        extractor: "blocked-verification",
+        externalContent: {
+          untrusted: true,
+          source: "web_fetch",
+          wrapped: true,
+        },
+        truncated: wrapped.truncated,
+        length: wrapped.wrappedLength,
+        rawLength: wrapped.rawLength,
+        wrappedLength: wrapped.wrappedLength,
+        fetchedAt: new Date().toISOString(),
+        tookMs: Date.now() - start,
+        text: wrapped.text,
+        warning: warningParts.length ? wrapWebFetchField(warningParts.join(" ")) : undefined,
+      };
+      writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+      return payload;
+    }
 
     let title: string | undefined;
     let extractor = "raw";
