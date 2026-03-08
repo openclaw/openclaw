@@ -89,9 +89,9 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
     info("WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…"),
   );
   closeSocket(login.sock);
-  // Wait for any pending creds.update writes to flush to disk before creating
-  // a new socket — otherwise useMultiFileAuthState reads stale/empty creds.
-  await waitForCredsSaveQueue();
+  // Wait for this account's pending creds.update writes to flush to disk before
+  // creating a new socket — otherwise useMultiFileAuthState reads stale/empty creds.
+  await waitForCredsSaveQueue(login.authDir);
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
