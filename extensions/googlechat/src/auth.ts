@@ -25,6 +25,30 @@ function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   return "none";
 }
 
+/**
+ * Creates a GoogleAuth instance configured to use the native `globalThis.fetch` when available
+ * (Node.js 18+), bypassing gaxios's fallback to node-fetch v3 which is ESM-only and fails
+ * to load from a CJS context on Node.js 22+.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/33468
+ */
+function createGoogleAuth(options: ConstructorParameters<typeof GoogleAuth>[0]): GoogleAuth {
+  const auth = new GoogleAuth(options);
+  // Inject globalThis.fetch as the fetchImplementation so gaxios does not attempt
+  // to dynamically import node-fetch v3 (ESM-only), which breaks on Node.js 22+
+  // when loaded from a CJS bundle.
+  if (typeof globalThis.fetch === "function" && auth.transporter) {
+    const transporter = auth.transporter as {
+      defaults?: Record<string, unknown>;
+    };
+    transporter.defaults = {
+      ...transporter.defaults,
+      fetchImplementation: globalThis.fetch,
+    };
+  }
+  return auth;
+}
+
 function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
   const key = buildAuthKey(account);
   const cached = authCache.get(account.accountId);
@@ -42,20 +66,20 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
   };
 
   if (account.credentialsFile) {
-    const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
+    const auth = createGoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
     authCache.set(account.accountId, { key, auth });
     evictOldest();
     return auth;
   }
 
   if (account.credentials) {
-    const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
+    const auth = createGoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
     authCache.set(account.accountId, { key, auth });
     evictOldest();
     return auth;
   }
 
-  const auth = new GoogleAuth({ scopes: [CHAT_SCOPE] });
+  const auth = createGoogleAuth({ scopes: [CHAT_SCOPE] });
   authCache.set(account.accountId, { key, auth });
   evictOldest();
   return auth;
