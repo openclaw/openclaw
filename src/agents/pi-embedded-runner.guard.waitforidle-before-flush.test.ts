@@ -97,6 +97,33 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
+  it("clears pending without synthetic flush when timeout cleanup is requested", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+    const agent = { waitForIdle: () => new Promise<void>(() => {}) };
+
+    appendMessage(assistantToolCall("call_orphan_2"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 30,
+      clearPendingOnTimeout: true,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+
+    appendMessage({
+      role: "user",
+      content: "still there?",
+      timestamp: Date.now(),
+    } as AgentMessage);
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "user"]);
+  });
+
   it("clears timeout handle when waitForIdle resolves first", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     vi.useFakeTimers();

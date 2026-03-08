@@ -1,11 +1,19 @@
-import type { ChannelOnboardingAdapter, OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import {
+  buildSingleChannelSecretPromptState,
+  hasConfiguredSecretInput,
+  promptSingleChannelSecretInput,
+  type ChannelOnboardingAdapter,
+  type OpenClawConfig,
+  type SecretInput,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/mattermost";
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
 } from "./mattermost/accounts.js";
-import { promptAccountId } from "./onboarding-helpers.js";
+import { resolveAccountIdForConfigure } from "./onboarding-helpers.js";
 
 const channel = "mattermost" as const;
 
@@ -22,31 +30,32 @@ async function noteMattermostSetup(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-async function promptMattermostCredentials(prompter: WizardPrompter): Promise<{
-  botToken: string;
-  baseUrl: string;
-}> {
-  const botToken = String(
-    await prompter.text({
-      message: "Enter Mattermost bot token",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
+async function promptMattermostBaseUrl(params: {
+  prompter: WizardPrompter;
+  initialValue?: string;
+}): Promise<string> {
   const baseUrl = String(
-    await prompter.text({
+    await params.prompter.text({
       message: "Enter Mattermost base URL",
+      initialValue: params.initialValue,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     }),
   ).trim();
-  return { botToken, baseUrl };
+  return baseUrl;
 }
 
 export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
     const configured = listMattermostAccountIds(cfg).some((accountId) => {
-      const account = resolveMattermostAccount({ cfg, accountId });
-      return Boolean(account.botToken && account.baseUrl);
+      const account = resolveMattermostAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
+      const tokenConfigured =
+        Boolean(account.botToken) || hasConfiguredSecretInput(account.config.botToken);
+      return tokenConfigured && Boolean(account.baseUrl);
     });
     return {
       channel,
@@ -57,79 +66,62 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const override = accountOverrides.mattermost?.trim();
     const defaultAccountId = resolveDefaultMattermostAccountId(cfg);
-    let accountId = override ? normalizeAccountId(override) : defaultAccountId;
-    if (shouldPromptAccountIds && !override) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Mattermost",
-        currentId: accountId,
-        listAccountIds: listMattermostAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Mattermost",
+      accountOverride: accountOverrides.mattermost,
+      shouldPromptAccountIds,
+      listAccountIds: listMattermostAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const resolvedAccount = resolveMattermostAccount({
       cfg: next,
       accountId,
+      allowUnresolvedSecretRef: true,
     });
     const accountConfigured = Boolean(resolvedAccount.botToken && resolvedAccount.baseUrl);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv =
-      allowEnv &&
-      Boolean(process.env.MATTERMOST_BOT_TOKEN?.trim()) &&
-      Boolean(process.env.MATTERMOST_URL?.trim());
-    const hasConfigValues =
-      Boolean(resolvedAccount.config.botToken) || Boolean(resolvedAccount.config.baseUrl);
+    const hasConfigToken = hasConfiguredSecretInput(resolvedAccount.config.botToken);
+    const hasConfigValues = hasConfigToken || Boolean(resolvedAccount.config.baseUrl);
+    const tokenPromptState = buildSingleChannelSecretPromptState({
+      accountConfigured,
+      hasConfigToken,
+      allowEnv: allowEnv && !hasConfigValues,
+      envValue:
+        process.env.MATTERMOST_BOT_TOKEN?.trim() && process.env.MATTERMOST_URL?.trim()
+          ? process.env.MATTERMOST_BOT_TOKEN
+          : undefined,
+    });
 
-    let botToken: string | null = null;
+    let botToken: SecretInput | null = null;
     let baseUrl: string | null = null;
 
     if (!accountConfigured) {
       await noteMattermostSetup(prompter);
     }
 
-    if (canUseEnv && !hasConfigValues) {
-      const keepEnv = await prompter.confirm({
-        message: "MATTERMOST_BOT_TOKEN + MATTERMOST_URL detected. Use env vars?",
-        initialValue: true,
-      });
-      if (keepEnv) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            mattermost: {
-              ...next.channels?.mattermost,
-              enabled: true,
-            },
-          },
-        };
-      } else {
-        const entered = await promptMattermostCredentials(prompter);
-        botToken = entered.botToken;
-        baseUrl = entered.baseUrl;
-      }
-    } else if (accountConfigured) {
-      const keep = await prompter.confirm({
-        message: "Mattermost credentials already configured. Keep them?",
-        initialValue: true,
-      });
-      if (!keep) {
-        const entered = await promptMattermostCredentials(prompter);
-        botToken = entered.botToken;
-        baseUrl = entered.baseUrl;
-      }
-    } else {
-      const entered = await promptMattermostCredentials(prompter);
-      botToken = entered.botToken;
-      baseUrl = entered.baseUrl;
+    const botTokenResult = await promptSingleChannelSecretInput({
+      cfg: next,
+      prompter,
+      providerHint: "mattermost",
+      credentialLabel: "bot token",
+      accountConfigured: tokenPromptState.accountConfigured,
+      canUseEnv: tokenPromptState.canUseEnv,
+      hasConfigToken: tokenPromptState.hasConfigToken,
+      envPrompt: "MATTERMOST_BOT_TOKEN + MATTERMOST_URL detected. Use env vars?",
+      keepPrompt: "Mattermost bot token already configured. Keep it?",
+      inputPrompt: "Enter Mattermost bot token",
+      preferredEnvVar: "MATTERMOST_BOT_TOKEN",
+    });
+    if (botTokenResult.action === "keep") {
+      return { cfg: next, accountId };
     }
 
-    if (botToken || baseUrl) {
+    if (botTokenResult.action === "use-env") {
       if (accountId === DEFAULT_ACCOUNT_ID) {
         next = {
           ...next,
@@ -138,32 +130,52 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
             mattermost: {
               ...next.channels?.mattermost,
               enabled: true,
-              ...(botToken ? { botToken } : {}),
-              ...(baseUrl ? { baseUrl } : {}),
-            },
-          },
-        };
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            mattermost: {
-              ...next.channels?.mattermost,
-              enabled: true,
-              accounts: {
-                ...next.channels?.mattermost?.accounts,
-                [accountId]: {
-                  ...next.channels?.mattermost?.accounts?.[accountId],
-                  enabled: next.channels?.mattermost?.accounts?.[accountId]?.enabled ?? true,
-                  ...(botToken ? { botToken } : {}),
-                  ...(baseUrl ? { baseUrl } : {}),
-                },
-              },
             },
           },
         };
       }
+      return { cfg: next, accountId };
+    }
+
+    botToken = botTokenResult.value;
+    baseUrl = await promptMattermostBaseUrl({
+      prompter,
+      initialValue: resolvedAccount.baseUrl ?? process.env.MATTERMOST_URL?.trim(),
+    });
+
+    if (accountId === DEFAULT_ACCOUNT_ID) {
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          mattermost: {
+            ...next.channels?.mattermost,
+            enabled: true,
+            botToken,
+            baseUrl,
+          },
+        },
+      };
+    } else {
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          mattermost: {
+            ...next.channels?.mattermost,
+            enabled: true,
+            accounts: {
+              ...next.channels?.mattermost?.accounts,
+              [accountId]: {
+                ...next.channels?.mattermost?.accounts?.[accountId],
+                enabled: next.channels?.mattermost?.accounts?.[accountId]?.enabled ?? true,
+                botToken,
+                baseUrl,
+              },
+            },
+          },
+        },
+      };
     }
 
     return { cfg: next, accountId };

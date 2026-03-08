@@ -1,14 +1,20 @@
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  readBestEffortConfig,
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+} from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
+import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -28,6 +34,7 @@ import { buildChannelsTable } from "./status-all/channels.js";
 import { formatDurationPrecise, formatGatewayAuthUsed } from "./status-all/format.js";
 import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
+import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
 
 export async function statusAllCommand(
@@ -36,7 +43,13 @@ export async function statusAllCommand(
 ): Promise<void> {
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     progress.setLabel("Loading config…");
-    const cfg = loadConfig();
+    const loadedRaw = await readBestEffortConfig();
+    const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
+      config: loadedRaw,
+      commandName: "status --all",
+      targetIds: getStatusCommandSecretTargetIds(),
+      mode: "summary",
+    });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);
     progress.tick();
@@ -109,9 +122,11 @@ export async function statusAllCommand(
     const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
     const gatewayMode = isRemoteMode ? "remote" : "local";
 
-    const localFallbackAuth = resolveGatewayProbeAuth({ cfg, mode: "local" });
-    const remoteAuth = resolveGatewayProbeAuth({ cfg, mode: "remote" });
-    const probeAuth = isRemoteMode && !remoteUrlMissing ? remoteAuth : localFallbackAuth;
+    const localProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "local" });
+    const remoteProbeAuthResolution = resolveGatewayProbeAuthSafe({ cfg, mode: "remote" });
+    const probeAuthResolution =
+      isRemoteMode && !remoteUrlMissing ? remoteProbeAuthResolution : localProbeAuthResolution;
+    const probeAuth = probeAuthResolution.auth;
 
     const gatewayProbe = await probeGateway({
       url: connection.url,
@@ -125,18 +140,14 @@ export async function statusAllCommand(
     progress.setLabel("Checking services…");
     const readServiceSummary = async (service: GatewayService) => {
       try {
-        const [loaded, runtimeInfo, command] = await Promise.all([
-          service.isLoaded({ env: process.env }).catch(() => false),
-          service.readRuntime(process.env).catch(() => undefined),
-          service.readCommand(process.env).catch(() => null),
-        ]);
-        const installed = command != null;
+        const summary = await readServiceStatusSummary(service, service.label);
         return {
-          label: service.label,
-          installed,
-          loaded,
-          loadedText: loaded ? service.loadedText : service.notLoadedText,
-          runtime: runtimeInfo,
+          label: summary.label,
+          installed: summary.installed,
+          managedByOpenClaw: summary.managedByOpenClaw,
+          loaded: summary.loaded,
+          loadedText: summary.loadedText,
+          runtime: summary.runtime,
         };
       } catch {
         return null;
@@ -150,7 +161,10 @@ export async function statusAllCommand(
     const agentStatus = await getAgentLocalStatuses(cfg);
     progress.tick();
     progress.setLabel("Summarizing channels…");
-    const channels = await buildChannelsTable(cfg, { showSecrets: false });
+    const channels = await buildChannelsTable(cfg, {
+      showSecrets: false,
+      sourceConfig: loadedRaw,
+    });
     progress.tick();
 
     const connectionDetailsForReport = (() => {
@@ -172,14 +186,15 @@ export async function statusAllCommand(
     const callOverrides = remoteUrlMissing
       ? {
           url: connection.url,
-          token: localFallbackAuth.token,
-          password: localFallbackAuth.password,
+          token: localProbeAuthResolution.auth.token,
+          password: localProbeAuthResolution.auth.password,
         }
       : {};
 
     progress.setLabel("Querying gateway…");
     const health = gatewayReachable
       ? await callGateway({
+          config: cfg,
           method: "health",
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
           ...callOverrides,
@@ -188,6 +203,7 @@ export async function statusAllCommand(
 
     const channelsStatus = gatewayReachable
       ? await callGateway({
+          config: cfg,
           method: "channels.status",
           params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
@@ -285,6 +301,9 @@ export async function statusAllCommand(
         Item: "Gateway",
         Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
       },
+      ...(probeAuthResolution.warning
+        ? [{ Item: "Gateway auth warning", Value: probeAuthResolution.warning }]
+        : []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       gatewaySelfLine
         ? { Item: "Gateway self", Value: gatewaySelfLine }
@@ -294,7 +313,7 @@ export async function statusAllCommand(
             Item: "Gateway service",
             Value: !daemon.installed
               ? `${daemon.label} not installed`
-              : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
+              : `${daemon.label} ${daemon.managedByOpenClaw ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
         : { Item: "Gateway service", Value: "unknown" },
       nodeService
@@ -302,7 +321,7 @@ export async function statusAllCommand(
             Item: "Node service",
             Value: !nodeService.installed
               ? `${nodeService.label} not installed`
-              : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
+              : `${nodeService.label} ${nodeService.managedByOpenClaw ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
           }
         : { Item: "Node service", Value: "unknown" },
       {

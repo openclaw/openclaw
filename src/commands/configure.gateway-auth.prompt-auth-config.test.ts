@@ -51,83 +51,71 @@ function makeRuntime(): RuntimeEnv {
 
 const noopPrompter = {} as WizardPrompter;
 
-describe("promptAuthConfig", () => {
-  it("keeps Kilo provider models while applying allowlist defaults", async () => {
-    mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
-    mocks.applyAuthChoice.mockResolvedValue({
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "kilocode/anthropic/claude-opus-4.6" },
-          },
-        },
-        models: {
-          providers: {
-            kilocode: {
-              baseUrl: "https://api.kilo.ai/api/gateway/",
-              api: "openai-completions",
-              models: [
-                { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6" },
-                { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5 (Free)" },
-              ],
-            },
-          },
+function createKilocodeProvider() {
+  return {
+    baseUrl: "https://api.kilo.ai/api/gateway/",
+    api: "openai-completions",
+    models: [
+      { id: "kilo/auto", name: "Kilo Auto" },
+      { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
+    ],
+  };
+}
+
+function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
+  return {
+    config: {
+      agents: {
+        defaults: {
+          model: { primary: "kilocode/kilo/auto" },
         },
       },
-    });
-    mocks.promptModelAllowlist.mockResolvedValue({
-      models: ["kilocode/anthropic/claude-opus-4.6"],
-    });
+      models: {
+        providers: {
+          kilocode: createKilocodeProvider(),
+          ...(includeMinimaxProvider
+            ? {
+                minimax: {
+                  baseUrl: "https://api.minimax.io/anthropic",
+                  api: "anthropic-messages",
+                  models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5" }],
+                },
+              }
+            : {}),
+        },
+      },
+    },
+  };
+}
 
-    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) {
+  mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
+  mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
+  mocks.promptModelAllowlist.mockResolvedValue({
+    models: ["kilocode/kilo/auto"],
+  });
+
+  return promptAuthConfig({}, makeRuntime(), noopPrompter);
+}
+
+describe("promptAuthConfig", () => {
+  it("keeps Kilo provider models while applying allowlist defaults", async () => {
+    const result = await runPromptAuthConfigWithAllowlist();
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
+      "kilo/auto",
+      "anthropic/claude-sonnet-4",
     ]);
-    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
-      "kilocode/anthropic/claude-opus-4.6",
-    ]);
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["kilocode/kilo/auto"]);
   });
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
-    mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
-    mocks.applyAuthChoice.mockResolvedValue({
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "kilocode/anthropic/claude-opus-4.6" },
-          },
-        },
-        models: {
-          providers: {
-            kilocode: {
-              baseUrl: "https://api.kilo.ai/api/gateway/",
-              api: "openai-completions",
-              models: [
-                { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6" },
-                { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5 (Free)" },
-              ],
-            },
-            minimax: {
-              baseUrl: "https://api.minimax.io/anthropic",
-              api: "anthropic-messages",
-              models: [{ id: "MiniMax-M2.1", name: "MiniMax M2.1" }],
-            },
-          },
-        },
-      },
-    });
-    mocks.promptModelAllowlist.mockResolvedValue({
-      models: ["kilocode/anthropic/claude-opus-4.6"],
-    });
-
-    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+    const result = await runPromptAuthConfigWithAllowlist(true);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
+      "kilo/auto",
+      "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
-      "MiniMax-M2.1",
+      "MiniMax-M2.5",
     ]);
   });
 });
