@@ -90,6 +90,7 @@ describe("OllamaRepository", () => {
         prompt: "classify this",
         stream: false,
         format,
+        think: false,
       }),
     });
   });

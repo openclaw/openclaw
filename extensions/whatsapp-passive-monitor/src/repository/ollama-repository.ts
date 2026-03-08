@@ -40,6 +40,7 @@ export class OllamaRepositoryImpl implements OllamaRepository {
           prompt: params.prompt,
           stream: false,
           format: params.format,
+          think: false,
         }),
       });
 
