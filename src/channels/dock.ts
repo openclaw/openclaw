@@ -351,7 +351,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
       buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
+        // DMs can arrive without a stable `To` in some paths. Fall back to `From`
+        // for direct chats so message tool sends can still infer a valid target.
+        currentChannelId: resolveDirectOrGroupChannelId(context),
         currentThreadTs: context.ReplyToId,
         hasRepliedRef,
       }),

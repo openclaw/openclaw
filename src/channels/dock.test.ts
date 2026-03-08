@@ -59,6 +59,27 @@ describe("channels dock", () => {
     });
   });
 
+  it("discord threading falls back to From for direct chats", () => {
+    const hasRepliedRef = { value: false };
+    const discordDock = getChannelDock("discord");
+    const context = discordDock?.threading?.buildToolContext?.({
+      cfg: emptyConfig(),
+      context: {
+        ChatType: "direct",
+        From: "discord:1234567890",
+        To: "",
+        ReplyToId: "msg-1",
+      },
+      hasRepliedRef,
+    });
+
+    expect(context).toEqual({
+      currentChannelId: "discord:1234567890",
+      currentThreadTs: "msg-1",
+      hasRepliedRef,
+    });
+  });
+
   it("irc resolveDefaultTo matches account id case-insensitively", () => {
     const ircDock = getChannelDock("irc");
     const cfg = {
