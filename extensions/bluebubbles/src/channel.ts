@@ -1,9 +1,3 @@
-import {
-  buildAccountScopedDmSecurityPolicy,
-  collectOpenGroupPolicyRestrictSendersWarnings,
-  formatNormalizedAllowFromEntries,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk";
 import type {
   ChannelAccountSnapshot,
   ChannelPlugin,
@@ -24,6 +18,12 @@ import {
   resolveBlueBubblesGroupToolPolicy,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/bluebubbles";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  formatNormalizedAllowFromEntries,
+  mapAllowFromEntries,
+} from "openclaw/plugin-sdk/compat";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
