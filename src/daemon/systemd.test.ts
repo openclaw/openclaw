@@ -12,6 +12,7 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
@@ -41,6 +42,19 @@ const createWritableStreamMock = () => {
     stdout: { write } as unknown as NodeJS.WritableStream,
   };
 };
+
+function pathLikeToString(pathname: unknown): string {
+  if (typeof pathname === "string") {
+    return pathname;
+  }
+  if (pathname instanceof URL) {
+    return pathname.pathname;
+  }
+  if (pathname instanceof Uint8Array) {
+    return Buffer.from(pathname).toString("utf8");
+  }
+  return "";
+}
 
 const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   const { write, stdout } = createWritableStreamMock();
@@ -294,6 +308,173 @@ describe("parseSystemdExecStart", () => {
       "--name",
       "My Bot",
     ]);
+  });
+});
+
+describe("readSystemdServiceExecStart", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("loads OPENCLAW_GATEWAY_TOKEN from EnvironmentFile", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/.env",
+        ].join("\n");
+      }
+      if (pathValue === "/home/test/.openclaw/.env") {
+        return "OPENCLAW_GATEWAY_TOKEN=env-file-token\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("env-file-token");
+    expect(readFileSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets inline Environment override EnvironmentFile values", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/.env",
+          'Environment="OPENCLAW_GATEWAY_TOKEN=inline-token"',
+        ].join("\n");
+      }
+      if (pathValue === "/home/test/.openclaw/.env") {
+        return "OPENCLAW_GATEWAY_TOKEN=env-file-token\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-token");
+  });
+
+  it("ignores missing optional EnvironmentFile entries", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=-%h/.openclaw/missing.env",
+        ].join("\n");
+      }
+      throw new Error(`missing: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.programArguments).toEqual(["/usr/bin/openclaw", "gateway", "run"]);
+    expect(command?.environment).toBeUndefined();
+  });
+
+  it("keeps parsing when non-optional EnvironmentFile entries are missing", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/missing.env",
+        ].join("\n");
+      }
+      throw new Error(`missing: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.programArguments).toEqual(["/usr/bin/openclaw", "gateway", "run"]);
+    expect(command?.environment).toBeUndefined();
+  });
+
+  it("supports multiple EnvironmentFile entries and quoted paths", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          'EnvironmentFile=%h/.openclaw/first.env "%h/.openclaw/second env.env"',
+        ].join("\n");
+      }
+      if (pathValue === "/home/test/.openclaw/first.env") {
+        return "OPENCLAW_GATEWAY_TOKEN=first-token\n";
+      }
+      if (pathValue === "/home/test/.openclaw/second env.env") {
+        return 'OPENCLAW_GATEWAY_PASSWORD="second password"\n';
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment).toEqual({
+      OPENCLAW_GATEWAY_TOKEN: "first-token",
+      OPENCLAW_GATEWAY_PASSWORD: "second password", // pragma: allowlist secret
+    });
+  });
+
+  it("resolves relative EnvironmentFile paths from the unit directory", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=./gateway.env ./override.env",
+        ].join("\n");
+      }
+      if (pathValue.endsWith("/.config/systemd/user/gateway.env")) {
+        return [
+          "OPENCLAW_GATEWAY_TOKEN=relative-token",
+          "OPENCLAW_GATEWAY_PASSWORD=relative-password",
+        ].join("\n");
+      }
+      if (pathValue.endsWith("/.config/systemd/user/override.env")) {
+        return "OPENCLAW_GATEWAY_TOKEN=override-token\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment).toEqual({
+      OPENCLAW_GATEWAY_TOKEN: "override-token",
+      OPENCLAW_GATEWAY_PASSWORD: "relative-password", // pragma: allowlist secret
+    });
+  });
+
+  it("parses EnvironmentFile content with comments and quoted values", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue.endsWith("/openclaw-gateway.service")) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "EnvironmentFile=%h/.openclaw/gateway.env",
+        ].join("\n");
+      }
+      if (pathValue === "/home/test/.openclaw/gateway.env") {
+        return [
+          "# comment",
+          "; another comment",
+          'OPENCLAW_GATEWAY_TOKEN="quoted token"',
+          "OPENCLAW_GATEWAY_PASSWORD=quoted-password",
+        ].join("\n");
+      }
+      throw new Error(`unexpected readFile path: ${pathValue}`);
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+    expect(command?.environment).toEqual({
+      OPENCLAW_GATEWAY_TOKEN: "quoted token",
+      OPENCLAW_GATEWAY_PASSWORD: "quoted-password", // pragma: allowlist secret
+    });
   });
 });
 
