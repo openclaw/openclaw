@@ -120,7 +120,9 @@ export async function emitResetCommandHooks(params: {
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
           {
-            agentId: params.sessionKey?.split(":")[0] ?? "main",
+            agentId: params.sessionKey?.startsWith("agent:")
+              ? params.sessionKey.split(":")[1]
+              : "main",
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,
