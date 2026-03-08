@@ -63,6 +63,7 @@ import {
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import { matchPluginCommand } from "../plugins/commands.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -1135,8 +1136,18 @@ export const registerTelegramHandlers = ({
       }
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
-      const authorizationMode: TelegramEventAuthorizationMode =
+      let authorizationMode: TelegramEventAuthorizationMode =
         inlineButtonsScope === "allowlist" ? "callback-allowlist" : "callback-scope";
+
+      // Respect plugin command requireAuth: false for inline button callbacks.
+      // When a plugin explicitly opts out of auth, its inline buttons should
+      // also work without DM authorization (matching typed-command behavior).
+      if (authorizationMode === "callback-allowlist" && data.startsWith("/")) {
+        const pluginMatch = matchPluginCommand(data);
+        if (pluginMatch?.command.requireAuth === false) {
+          authorizationMode = "callback-scope";
+        }
+      }
       const senderAuthorization = authorizeTelegramEventSender({
         chatId,
         chatTitle: callbackMessage.chat.title,
