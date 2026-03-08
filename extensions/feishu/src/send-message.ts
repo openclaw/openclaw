@@ -1,4 +1,5 @@
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 
 type FeishuMessageClient = {
   im: {
@@ -32,10 +33,13 @@ export async function sendFeishuMessageWithOptionalReply(params: {
     content: params.content,
     msg_type: params.msgType,
   };
+  const normalizedReplyToMessageId = params.replyToMessageId
+    ? stripFeishuReactionSuffix(params.replyToMessageId)
+    : undefined;
 
-  if (params.replyToMessageId) {
+  if (normalizedReplyToMessageId) {
     const response = await params.client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
+      path: { message_id: normalizedReplyToMessageId },
       data: {
         ...data,
         ...(params.replyInThread ? { reply_in_thread: true } : {}),
