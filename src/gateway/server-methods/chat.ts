@@ -169,17 +169,30 @@ function resolveChatSendOriginatingRoute(params: {
   const isConfiguredMainSessionScope =
     normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
 
+  // True only when the session entry carries a full, explicit external delivery
+  // target set by an inbound channel handler (e.g. Slack DM). This is distinct
+  // from lastChannel/lastTo which can be stale and must not be inherited by
+  // webchat callers. See #7663.
+  const hasExplicitDeliveryContext = Boolean(
+    params.entry?.deliveryContext?.channel && params.entry?.deliveryContext?.to,
+  );
+
   // Webchat/Control UI clients never inherit external delivery routes, even when
   // accessing channel-scoped sessions. External routes are only for non-webchat
   // clients where the session key explicitly encodes an external target.
   // Preserve the old configured-main contract: any connected non-webchat client
   // may inherit the last external route even when client metadata is absent.
+  // Exception: a main session with an explicit inbound delivery context (e.g. set
+  // by a Slack DM handler) may be inherited even by webchat clients when
+  // deliver=true is requested, so embedded agent replies reach the originating
+  // channel. Requires deliveryContext (not just stale lastChannel) to stay safe.
   const canInheritDeliverableRoute = Boolean(
-    !isFromWebchatClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      (isConfiguredMainSessionScope && params.hasConnectedClient)),
+    ((!isFromWebchatClient &&
+      ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+        (isConfiguredMainSessionScope && params.hasConnectedClient))) ||
+      (isConfiguredMainSessionScope && hasExplicitDeliveryContext)),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&

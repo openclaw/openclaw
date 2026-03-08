@@ -843,6 +843,90 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send inherits Slack delivery route for main session when webchat client uses deliver:true with explicit delivery context", async () => {
+    createTranscriptFixture("openclaw-chat-send-slack-main-webchat-deliver-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "slack",
+        to: "slack:U1234567890",
+        accountId: "default",
+      },
+      lastChannel: "slack",
+      lastTo: "slack:U1234567890",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    // Webchat client sending deliver:true on a main session backed by a Slack DM
+    // deliveryContext should route replies back to Slack, not stay in webchat. #7663
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-slack-main-webchat-deliver",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            id: "openclaw-webchat",
+          },
+        },
+      } as unknown,
+      sessionKey: "main",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "slack",
+        OriginatingTo: "slack:U1234567890",
+        ExplicitDeliverRoute: true,
+        AccountId: "default",
+      }),
+    );
+  });
+
+  it("chat.send does not inherit external route for main session when webchat client sends without explicit delivery context", async () => {
+    createTranscriptFixture("openclaw-chat-send-slack-main-webchat-no-ctx-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      // Only stale lastChannel/lastTo — no explicit deliveryContext
+      lastChannel: "slack",
+      lastTo: "slack:U1234567890",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-slack-main-webchat-no-ctx",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            id: "openclaw-webchat",
+          },
+        },
+      } as unknown,
+      sessionKey: "main",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
+        AccountId: undefined,
+      }),
+    );
+  });
+
   it("chat.send still inherits external routes for UI clients on channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-ui-channel-scoped-inherit-");
     mockState.finalText = "ok";
