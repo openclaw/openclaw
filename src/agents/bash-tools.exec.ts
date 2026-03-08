@@ -23,6 +23,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -1427,7 +1428,11 @@ export function createExecTool(
   });
   const notifyOnExitEmptySuccess =
     defaults?.notifyOnExitEmptySuccess ??
-    Boolean(notifyDeliveryContext?.channel && notifyDeliveryContext.to);
+    Boolean(
+      notifyDeliveryContext?.channel &&
+      notifyDeliveryContext.to &&
+      isDeliverableMessageChannel(notifyDeliveryContext.channel),
+    );
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
