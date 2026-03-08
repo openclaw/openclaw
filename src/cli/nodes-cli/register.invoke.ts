@@ -7,8 +7,11 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  loadExecApprovals,
   maxAsk,
   minSecurity,
+  normalizeExecAsk,
+  normalizeExecSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
@@ -42,22 +45,6 @@ type ExecDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
 };
-
-function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return null;
-}
-
-function normalizeExecAsk(value?: string | null): ExecAsk | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized as ExecAsk;
-  }
-  return null;
-}
 
 function resolveExecDefaults(
   cfg: ReturnType<typeof loadConfig>,
@@ -110,7 +97,9 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
   }
-  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
+  // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
+  const configuredAsk =
+    normalizeExecAsk(execDefaults?.ask) ?? loadExecApprovals().defaults?.ask ?? "on-miss";
   const requestedAsk = normalizeExecAsk(opts.ask);
   if (opts.ask && !requestedAsk) {
     throw new Error("invalid --ask (use off|on-miss|always)");
@@ -228,7 +217,7 @@ async function maybeRequestNodesRunApproval(params: {
       id: approvalId,
       command: params.preparedCmdText,
       commandArgv: params.approvalPlan.argv,
-      systemRunPlanV2: params.approvalPlan,
+      systemRunPlan: params.approvalPlan,
       cwd: params.approvalPlan.cwd,
       nodeId: params.nodeId,
       host: "node",

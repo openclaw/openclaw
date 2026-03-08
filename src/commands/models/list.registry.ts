@@ -94,8 +94,13 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
   }
 }
 
-export async function loadModelRegistry(cfg: OpenClawConfig) {
-  await ensureOpenClawModelsJson(cfg);
+export async function loadModelRegistry(
+  cfg: OpenClawConfig,
+  opts?: { sourceConfig?: OpenClawConfig },
+) {
+  // Persistence must be based on source config (pre-resolution) so SecretRef-managed
+  // credentials remain markers in models.json for command paths too.
+  await ensureOpenClawModelsJson(opts?.sourceConfig ?? cfg);
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
@@ -129,8 +134,18 @@ export function toModelRow(params: {
   availableKeys?: Set<string>;
   cfg?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  allowProviderAvailabilityFallback?: boolean;
 }): ModelRow {
-  const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
+  const {
+    model,
+    key,
+    tags,
+    aliases = [],
+    availableKeys,
+    cfg,
+    authStore,
+    allowProviderAvailabilityFallback = false,
+  } = params;
   if (!model) {
     return {
       key,
@@ -146,14 +161,15 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
+  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
   // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available.
+  // Fall back to provider-level auth heuristics only if registry availability isn't available,
+  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
   const available =
-    availableKeys !== undefined
-      ? availableKeys.has(modelKey(model.provider, model.id))
-      : cfg && authStore
-        ? hasAuthForProvider(model.provider, cfg, authStore)
-        : false;
+    availableKeys !== undefined && !allowProviderAvailabilityFallback
+      ? modelIsAvailable
+      : modelIsAvailable ||
+        (cfg && authStore ? hasAuthForProvider(model.provider, cfg, authStore) : false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

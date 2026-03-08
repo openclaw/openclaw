@@ -6,12 +6,49 @@ import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   buildModelAliasIndex,
-  modelKey,
+  normalizeModelSelection,
   normalizeProviderId,
+  normalizeProviderIdForAuth,
+  modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
+
+const EXPLICIT_ALLOWLIST_CONFIG = {
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.2" },
+      models: {
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      },
+    },
+  },
+} as OpenClawConfig;
+
+const BUNDLED_ALLOWLIST_CATALOG = [
+  { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+  { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+];
+
+const ANTHROPIC_OPUS_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    reasoning: true,
+  },
+];
+
+function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    catalog: ANTHROPIC_OPUS_CATALOG,
+  });
+}
 
 describe("model-selection", () => {
   describe("normalizeProviderId", () => {
@@ -25,6 +62,14 @@ describe("model-selection", () => {
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
+    });
+  });
+
+  describe("normalizeProviderIdForAuth", () => {
+    it("maps coding-plan variants to base provider for auth lookup", () => {
+      expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
+      expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
+      expect(normalizeProviderIdForAuth("openai")).toBe("openai");
     });
   });
 
@@ -69,17 +114,39 @@ describe("model-selection", () => {
       });
     });
 
-    it("normalizes openai gpt-5.3 codex refs to openai-codex provider", () => {
+    it("normalizes deprecated google flash preview ids to the working model id", () => {
+      expect(parseModelRef("google/gemini-3.1-flash-preview", "openai")).toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+      expect(parseModelRef("gemini-3.1-flash-preview", "google")).toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+    });
+
+    it("normalizes gemini 3.1 flash-lite to the preview model id", () => {
+      expect(parseModelRef("google/gemini-3.1-flash-lite", "openai")).toEqual({
+        provider: "google",
+        model: "gemini-3.1-flash-lite-preview",
+      });
+      expect(parseModelRef("gemini-3.1-flash-lite", "google")).toEqual({
+        provider: "google",
+        model: "gemini-3.1-flash-lite-preview",
+      });
+    });
+
+    it("keeps openai gpt-5.3 codex refs on the openai provider", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex",
       });
       expect(parseModelRef("gpt-5.3-codex", "openai")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex",
       });
       expect(parseModelRef("openai/gpt-5.3-codex-codex", "anthropic")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex-codex",
       });
     });
@@ -243,25 +310,9 @@ describe("model-selection", () => {
 
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = buildAllowedModelSet({
-        cfg,
-        catalog,
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
         defaultProvider: "anthropic",
       });
 
@@ -275,25 +326,9 @@ describe("model-selection", () => {
 
   describe("resolveAllowedModelRef", () => {
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = resolveAllowedModelRef({
-        cfg,
-        catalog,
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
         raw: "anthropic/claude-sonnet-4-6",
         defaultProvider: "openai",
         defaultModel: "gpt-5.2",
@@ -459,6 +494,39 @@ describe("model-selection", () => {
       }
     });
 
+    it("sanitizes control characters in providerless-model warnings", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "\u001B[31mclaude-3-5-sonnet\nspoof" },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "google",
+          defaultModel: "gemini-pro",
+        });
+
+        expect(result).toEqual({
+          provider: "anthropic",
+          model: "\u001B[31mclaude-3-5-sonnet\nspoof",
+        });
+        const warning = warnSpy.mock.calls[0]?.[0] as string;
+        expect(warning).toContain('Falling back to "anthropic/claude-3-5-sonnet"');
+        expect(warning).not.toContain("\u001B");
+        expect(warning).not.toContain("\n");
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
     it("should use default provider/model if config is empty", () => {
       const cfg: Partial<OpenClawConfig> = {};
       const result = resolveConfiguredModelRef({
@@ -468,5 +536,196 @@ describe("model-selection", () => {
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
     });
+
+    it("should prefer configured custom provider when default provider is not in models.providers", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            n1n: {
+              baseUrl: "https://n1n.example.com",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT 5.4",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "n1n", model: "gpt-5.4" });
+    });
+
+    it("should keep default provider when it is in models.providers", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  name: "Claude Opus 4.6",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("should fall back to hardcoded default when no custom providers have models", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        models: {
+          providers: {
+            "empty-provider": {
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("should warn when specified model cannot be resolved and falls back to default", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "openai/" },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+        });
+
+        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to default "anthropic/claude-opus-4-6"'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+  });
+
+  describe("resolveThinkingDefault", () => {
+    it("prefers per-model params.thinking over global thinkingDefault", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { thinking: "high" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("high");
+    });
+
+    it("accepts per-model params.thinking=adaptive", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { thinking: "adaptive" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+    });
+
+    it("defaults Anthropic Claude 4.6 models to adaptive", () => {
+      const cfg = {} as OpenClawConfig;
+
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6-v1:0",
+          catalog: [
+            {
+              provider: "amazon-bedrock",
+              id: "us.anthropic.claude-sonnet-4-6-v1:0",
+              name: "Claude Sonnet 4.6",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("adaptive");
+    });
+  });
+});
+
+describe("normalizeModelSelection", () => {
+  it("returns trimmed string for string input", () => {
+    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe("ollama/llama3.2:3b");
+  });
+
+  it("returns undefined for empty/whitespace string", () => {
+    expect(normalizeModelSelection("")).toBeUndefined();
+    expect(normalizeModelSelection("   ")).toBeUndefined();
+  });
+
+  it("extracts primary from object", () => {
+    expect(normalizeModelSelection({ primary: "google/gemini-2.5-flash" })).toBe(
+      "google/gemini-2.5-flash",
+    );
+  });
+
+  it("returns undefined for object without primary", () => {
+    expect(normalizeModelSelection({ fallbacks: ["a"] })).toBeUndefined();
+    expect(normalizeModelSelection({})).toBeUndefined();
+  });
+
+  it("returns undefined for null/undefined/number", () => {
+    expect(normalizeModelSelection(undefined)).toBeUndefined();
+    expect(normalizeModelSelection(null)).toBeUndefined();
+    expect(normalizeModelSelection(42)).toBeUndefined();
   });
 });

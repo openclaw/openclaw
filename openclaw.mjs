@@ -2,6 +2,39 @@
 
 import module from "node:module";
 
+const MIN_NODE_MAJOR = 22;
+const MIN_NODE_MINOR = 12;
+const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
+
+const parseNodeVersion = (rawVersion) => {
+  const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
+  return {
+    major: Number(majorRaw),
+    minor: Number(minorRaw),
+  };
+};
+
+const isSupportedNodeVersion = (version) =>
+  version.major > MIN_NODE_MAJOR ||
+  (version.major === MIN_NODE_MAJOR && version.minor >= MIN_NODE_MINOR);
+
+const ensureSupportedNodeVersion = () => {
+  if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
+    return;
+  }
+
+  process.stderr.write(
+    `openclaw: Node.js v${MIN_NODE_VERSION}+ is required (current: v${process.versions.node}).\n` +
+      "If you use nvm, run:\n" +
+      `  nvm install ${MIN_NODE_MAJOR}\n` +
+      `  nvm use ${MIN_NODE_MAJOR}\n` +
+      `  nvm alias default ${MIN_NODE_MAJOR}\n`,
+  );
+  process.exit(1);
+};
+
+ensureSupportedNodeVersion();
+
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
   try {

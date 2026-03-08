@@ -72,7 +72,7 @@ vi.mock("./session-updates.js", () => ({
     systemSent,
     skillsSnapshot: undefined,
   })),
-  prependSystemEvents: vi.fn().mockImplementation(async ({ prefixedBodyBase }) => prefixedBodyBase),
+  drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -81,6 +81,7 @@ vi.mock("./typing-mode.js", () => ({
 
 import { runReplyAgent } from "./agent-runner.js";
 import { routeReply } from "./route-reply.js";
+import { drainFormattedSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 function baseParams(
@@ -280,6 +281,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
   });
 
+  it("prefers Provider over Surface when origin channel is missing", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+          Provider: "feishu",
+          Surface: "webchat",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "webchat",
+          ChatType: "group",
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.messageProvider).toBe("feishu");
+  });
+
   it("passes suppressTyping through typing mode resolution", async () => {
     await runPreparedReply(
       baseParams({
@@ -293,5 +325,75 @@ describe("runPreparedReply media-only handling", () => {
       | { suppressTyping?: boolean }
       | undefined;
     expect(call?.suppressTyping).toBe(true);
+  });
+
+  it("routes queued system events into user prompt text, not system prompt context", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
+
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.commandBody).toContain("System: [t] Model switched.");
+    expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
+  });
+
+  it("preserves first-token think hint when system events are prepended", async () => {
+    // drainFormattedSystemEvents returns just the events block; the caller prepends it.
+    // The hint must be extracted from the user body BEFORE prepending, so "System:"
+    // does not shadow the low|medium|high shorthand.
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+
+    await runPreparedReply(
+      baseParams({
+        ctx: { Body: "low tell me about cats", RawBody: "low tell me about cats" },
+        sessionCtx: { Body: "low tell me about cats", BodyStripped: "low tell me about cats" },
+        resolvedThinkLevel: undefined,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    // Think hint extracted before events arrived — level must be "low", not the model default.
+    expect(call?.followupRun.run.thinkLevel).toBe("low");
+    // The stripped user text (no "low" token) must still appear after the event block.
+    expect(call?.commandBody).toContain("tell me about cats");
+    expect(call?.commandBody).not.toMatch(/^low\b/);
+    // System events are still present in the body.
+    expect(call?.commandBody).toContain("System: [t] Node connected.");
+  });
+
+  it("carries system events into followupRun.prompt for deferred turns", async () => {
+    // drainFormattedSystemEvents returns the events block; the caller prepends it to
+    // effectiveBaseBody for the queue path so deferred turns see events.
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain("System: [t] Node connected.");
+  });
+
+  it("does not strip think-hint token from deferred queue body", async () => {
+    // In steer mode the inferred thinkLevel is never consumed, so the first token
+    // must not be stripped from the queue/steer body (followupRun.prompt).
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
+
+    await runPreparedReply(
+      baseParams({
+        ctx: { Body: "low steer this conversation", RawBody: "low steer this conversation" },
+        sessionCtx: {
+          Body: "low steer this conversation",
+          BodyStripped: "low steer this conversation",
+        },
+        resolvedThinkLevel: undefined,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    // Queue body (used by steer mode) must keep the full original text.
+    expect(call?.followupRun.prompt).toContain("low steer this conversation");
   });
 });

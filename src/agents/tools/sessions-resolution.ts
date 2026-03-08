@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import { looksLikeSessionId } from "../../sessions/session-id.js";
 
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
@@ -112,11 +113,7 @@ export async function isResolvedSessionVisibleToRequester(params: {
   });
 }
 
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function looksLikeSessionId(value: string): boolean {
-  return SESSION_ID_RE.test(value.trim());
-}
+export { looksLikeSessionId };
 
 export function looksLikeSessionKey(value: string): boolean {
   const raw = value.trim();
@@ -158,6 +155,19 @@ export type SessionReferenceResolution =
       resolvedViaSessionId: boolean;
     }
   | { ok: false; status: "error" | "forbidden"; error: string };
+
+export type VisibleSessionReferenceResolution =
+  | {
+      ok: true;
+      key: string;
+      displayKey: string;
+    }
+  | {
+      ok: false;
+      status: "forbidden";
+      error: string;
+      displayKey: string;
+    };
 
 async function resolveSessionKeyFromSessionId(params: {
   sessionId: string;
@@ -287,6 +297,31 @@ export async function resolveSessionReference(params: {
     mainKey: params.mainKey,
   });
   return { ok: true, key: resolvedKey, displayKey, resolvedViaSessionId: false };
+}
+
+export async function resolveVisibleSessionReference(params: {
+  resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
+  requesterSessionKey: string;
+  restrictToSpawned: boolean;
+  visibilitySessionKey: string;
+}): Promise<VisibleSessionReferenceResolution> {
+  const resolvedKey = params.resolvedSession.key;
+  const displayKey = params.resolvedSession.displayKey;
+  const visible = await isResolvedSessionVisibleToRequester({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: resolvedKey,
+    restrictToSpawned: params.restrictToSpawned,
+    resolvedViaSessionId: params.resolvedSession.resolvedViaSessionId,
+  });
+  if (!visible) {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `Session not visible from this sandboxed agent session: ${params.visibilitySessionKey}`,
+      displayKey,
+    };
+  }
+  return { ok: true, key: resolvedKey, displayKey };
 }
 
 export function normalizeOptionalKey(value?: string) {

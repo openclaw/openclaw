@@ -179,6 +179,12 @@ Security note:
 
 - `--token` and `--password` can be visible in local process listings on some systems.
 - Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
+- Gateway auth resolution follows the shared contract used by other Gateway clients:
+  - local mode: env (`OPENCLAW_GATEWAY_*`) -> `gateway.auth.*` -> `gateway.remote.*` fallback when `gateway.auth.*` is unset
+  - remote mode: `gateway.remote.*` with env/config fallback per remote precedence rules
+  - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
+- ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.
+- `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process.
 
 ### `acp client` options
 
