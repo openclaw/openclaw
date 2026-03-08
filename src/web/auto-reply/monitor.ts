@@ -268,7 +268,16 @@ export async function monitorWebChannel(
     };
 
     if (keepAlive) {
-      heartbeat = setInterval(() => {
+      heartbeat = setInterval(async () => {
+        // Verify socket is alive via round-trip presence update.
+        try {
+          await listener.pingPresence();
+          status.lastEventAt = Date.now();
+          emitStatus();
+        } catch {
+          // Socket didn't respond — let health monitor detect stale-socket.
+        }
+
         const authAgeMs = getWebAuthAgeMs(account.authDir);
         const minutesSinceLastMessage = lastMessageAt
           ? Math.floor((Date.now() - lastMessageAt) / 60000)
