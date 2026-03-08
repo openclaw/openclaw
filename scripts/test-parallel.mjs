@@ -86,6 +86,8 @@ const unitIsolatedFilesRaw = [
   "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
+  // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
+  "src/infra/git-commit.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
