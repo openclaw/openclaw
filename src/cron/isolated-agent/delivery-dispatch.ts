@@ -421,10 +421,14 @@ export async function dispatchCronDelivery(
     return null;
   };
 
+  const needAnnounceForHeartbeatCleanup =
+    params.skipHeartbeatDelivery &&
+    params.job.delivery?.mode === "announce" &&
+    (params.job.delivery as { channel?: string }).channel === "last";
   if (
     params.deliveryRequested &&
-    !params.skipHeartbeatDelivery &&
-    !params.skipMessagingToolDelivery
+    !params.skipMessagingToolDelivery &&
+    (!params.skipHeartbeatDelivery || needAnnounceForHeartbeatCleanup)
   ) {
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {
@@ -463,13 +467,13 @@ export async function dispatchCronDelivery(
     // often hits "gateway timeout after 60000ms". Direct delivery sends
     // straight to the channel and does not use the session lane.
     //
-    // Keep direct for structured payloads (media/channel data) and
-    // forum/topic (threadId). Announce can be swallowed by ANNOUNCE_SKIP/
-    // NO_REPLY for topic-bound sessions.
+    // When skipHeartbeatDelivery (heartbeat-only response), use announce path
+    // so cleanup/keep/delete and suppression are handled there.
     const useDirectDelivery =
-      params.deliveryPayloadHasStructuredContent ||
-      params.resolvedDelivery.threadId != null ||
-      (params.resolvedDelivery.ok && !params.deliveryPayloadHasStructuredContent);
+      !params.skipHeartbeatDelivery &&
+      (params.deliveryPayloadHasStructuredContent ||
+        params.resolvedDelivery.threadId != null ||
+        (params.resolvedDelivery.ok && !params.deliveryPayloadHasStructuredContent));
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {

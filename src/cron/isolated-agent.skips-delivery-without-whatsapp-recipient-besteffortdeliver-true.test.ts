@@ -186,22 +186,9 @@ async function assertExplicitTelegramTargetAnnounce(params: {
   });
 
   expectDeliveredOk(res);
-  expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-  const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-    | {
-        requesterOrigin?: { channel?: string; to?: string };
-        roundOneReply?: string;
-        bestEffortDeliver?: boolean;
-      }
-    | undefined;
-  expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
-  expect(announceArgs?.requesterOrigin?.to).toBe("123");
-  expect(announceArgs?.roundOneReply).toBe(params.expectedText);
-  expect(announceArgs?.bestEffortDeliver).toBe(false);
-  expect((announceArgs as { expectsCompletionMessage?: boolean })?.expectsCompletionMessage).toBe(
-    true,
-  );
-  expect(params.deps.sendMessageTelegram).not.toHaveBeenCalled();
+  // Text-only cron output uses direct delivery to avoid announce path 60s timeout.
+  expectDirectTelegramDelivery(params.deps, { chatId: "123", text: params.expectedText });
+  expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
 }
 
 describe("runCronIsolatedAgentTurn", () => {
@@ -255,16 +242,10 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | {
-            requesterSessionKey?: string;
-            requesterOrigin?: { channel?: string; to?: string };
-          }
-        | undefined;
-      expect(announceArgs?.requesterSessionKey).toBe("agent:main:telegram:direct:123");
-      expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
-      expect(announceArgs?.requesterOrigin?.to).toBe("123");
+      expect(res.delivered).toBe(true);
+      // Plain text with resolved target uses direct delivery, not announce flow.
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expectDirectTelegramDelivery(deps, { chatId: "123", text: "hello from cron" });
     });
   });
 
@@ -392,7 +373,8 @@ describe("runCronIsolatedAgentTurn", () => {
     expect(res.status).toBe("ok");
     expect(res.delivered).toBe(true);
     expect(res.deliveryAttempted).toBe(true);
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    // Plain text uses direct delivery path, so announce flow is not invoked.
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
   });
 
@@ -401,7 +383,8 @@ describe("runCronIsolatedAgentTurn", () => {
     expect(res.status).toBe("ok");
     expect(res.delivered).toBe(true);
     expect(res.deliveryAttempted).toBe(true);
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    // Plain text uses direct delivery path, so announce flow is not invoked.
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(deps.sendMessageSignal).toHaveBeenCalledTimes(1);
   });
 

@@ -158,7 +158,8 @@ describe("runCronIsolatedAgentTurn", () => {
 
       vi.mocked(runSubagentAnnounceFlow).mockClear();
       vi.mocked(deps.sendMessageTelegram).mockClear();
-      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
+      // Pure HEARTBEAT_OK so isHeartbeatOnlyResponse is true and we take announce path for cleanup.
+      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK" }]);
 
       const cfg = makeCfg(home, storePath);
       cfg.agents = {
@@ -297,16 +298,20 @@ describe("runCronIsolatedAgentTurn", () => {
         nowSpy.mockRestore();
       }
 
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-      const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { childRunId?: string }
-        | undefined;
-      const secondArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[1]?.[0] as
-        | { childRunId?: string }
-        | undefined;
-      expect(firstArgs?.childRunId).toBeTruthy();
-      expect(secondArgs?.childRunId).toBeTruthy();
-      expect(secondArgs?.childRunId).not.toBe(firstArgs?.childRunId);
+      // Text-only output uses direct delivery; each run delivers once.
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(2);
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        1,
+        "123",
+        "final summary",
+        expect.any(Object),
+      );
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        2,
+        "123",
+        "final summary",
+        expect.any(Object),
+      );
     });
   });
 });
