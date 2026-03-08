@@ -189,4 +189,30 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
   });
+
+  it("accepts partial nested TTS overrides and preserves nested objects", () => {
+    const normalized = normalizeVoiceCallConfig({
+      tts: {
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: {
+            source: "env",
+            provider: "elevenlabs",
+            id: "ELEVENLABS_API_KEY",
+          },
+          voiceSettings: {
+            speed: 1.1,
+          },
+        },
+      },
+    });
+
+    expect(normalized.tts?.provider).toBe("elevenlabs");
+    expect(normalized.tts?.elevenlabs?.apiKey).toEqual({
+      source: "env",
+      provider: "elevenlabs",
+      id: "ELEVENLABS_API_KEY",
+    });
+    expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
+  });
 });
