@@ -2,39 +2,49 @@ import type { Detector } from "../interfaces/detector.ts";
 import type { AgentRepository } from "../repository/agent-repository.ts";
 import type { MessageRepository } from "../repository/message-repository.ts";
 import type { OllamaRepository } from "../repository/ollama-repository.ts";
-import type { Logger, StoredMessage } from "../types.ts";
+import type { EscalationAction, Logger, MeetingClassification, StoredMessage } from "../types.ts";
+
+export type MeetingDetectorAgent = {
+  name: string;
+  ollama: OllamaRepository;
+  buildPrompt: (conversation: string) => string;
+};
 
 export type MeetingDetectorDeps = {
   messageRepo: MessageRepository;
-  ollama: OllamaRepository;
+  agents: MeetingDetectorAgent[];
   agentRepo: AgentRepository;
   logger: Logger;
 };
 
 export type MeetingDetectorResult = {
-  meetingDetected: boolean;
+  escalation: EscalationAction;
   agentNotified: boolean;
+  classifications: Array<MeetingClassification | null>;
 };
 
 /**
  * Meeting detector command.
- * Queries the message repository for the last 20 messages, classifies via Ollama,
- * and escalates positive detections to the main agent for confirmation.
+ * Queries the message repository for the last 20 messages, classifies via
+ * multiple Ollama agents sequentially, and uses consensus logic to determine
+ * the escalation action.
  *
- * NOTE: There is no cooldown — the agent is re-notified every time the debounce fires
- * and Ollama detects a meeting. This is intentional: subsequent messages may add context
- * (time, location) that the agent should see. The trade-off is duplicate notifications
- * when new messages are unrelated to the meeting. Debounce gating (only fires after
- * conversation silence) keeps this manageable.
+ * Consensus rules:
+ * - Any null result → "none" (error = do nothing)
+ * - Both T+T → "add_calendar_event"
+ * - Exactly one T+T → "confirm_with_customer"
+ * - All other combinations → "none"
  */
 export const meetingDetector: Detector<MeetingDetectorDeps, MeetingDetectorResult> = (deps) => {
-  // Structured output schema — Ollama guarantees the response matches this shape
-  const MEETING_FORMAT = {
+  // Structured output schema for classification
+  const CLASSIFICATION_FORMAT = {
     type: "object",
     properties: {
-      meetingDetected: { type: "boolean" },
+      has_agreed_to_meet: { type: "boolean" },
+      has_agreed_date: { type: "boolean" },
+      reason: { type: "string" },
     },
-    required: ["meetingDetected"],
+    required: ["has_agreed_to_meet", "has_agreed_date", "reason"],
   };
 
   // How many messages the meeting detector pulls from the repository
@@ -62,68 +72,92 @@ export const meetingDetector: Detector<MeetingDetectorDeps, MeetingDetectorResul
       .join("\n");
 
   /**
-   * Build the Ollama classification prompt with conversation embedded.
-   * v3 prompt — 97% accuracy with llama3.1:8b (7 rules)
+   * Determine the escalation action based on consensus of classification results.
+   * Any null → "none"; both T+T → "add_calendar_event";
+   * exactly one T+T → "confirm_with_customer"; else → "none".
    */
-  const buildPrompt = (conversation: string): string =>
-    `You are a classifier. Read the following WhatsApp conversation and determine whether the participants in the conversation are arranging to meet each other in person.
+  const determineEscalation = (results: Array<MeetingClassification | null>): EscalationAction => {
+    // Any null means an error occurred — do nothing
+    if (results.some((r) => r === null)) return "none";
 
-Rules:
-- "Meeting up" means physically being in the same place together. Online calls, video chats, gaming sessions, and virtual meetings do NOT count.
-- Both parties must agree or confirm. Vague intentions like "we should catch up soon" without a specific plan do NOT count.
-- If someone initially declines but then changes their mind and agrees, that COUNTS as meeting up.
-- Sarcastic or joking arrangements (e.g. "meet on the moon") do NOT count.
-- If they are arranging something for OTHER people (not themselves), that does NOT count.
-- A cancelled meetup does NOT count, even if they say "maybe next week".
-- Picking up an item from a doorstep without face-to-face interaction does NOT count.
+    const isTT = (r: MeetingClassification) => r.has_agreed_to_meet && r.has_agreed_date;
+    const ttCount = results.filter((r) => isTT(r!)).length;
 
---- Conversation ---
-${conversation}
-
-Respond with JSON only: {"meetingDetected": true or false}`;
+    if (ttCount === results.length) return "add_calendar_event";
+    if (ttCount === 1) return "confirm_with_customer";
+    return "none";
+  };
 
   /**
-   * Build the prompt sent to the main agent when Ollama detects a meeting.
-   * The agent double-checks the conversation and asks the user about creating a calendar event.
+   * Build the prompt sent to the main agent when both models agree (add calendar event).
    */
-  const buildAgentPrompt = (conversation: string): string =>
-    `A local classifier has flagged the following WhatsApp conversation as containing arrangements to meet up in person. Please review it carefully.
+  const buildCalendarAgentPrompt = (conversation: string): string =>
+    `Two independent classifiers have both confirmed that the following WhatsApp conversation contains arrangements to meet up in person. Please process this as a calendar event.
 
-If the participants are genuinely arranging to meet in person:
-- If the calendar-guard skill is available, use it process this event.
-- Otherwise, ask me if I'd like to create a calendar event. Provide a brief summary including who is meeting, when, and where (if mentioned).
-
-If you determine this is NOT actually an arrangement to meet in person, do nothing.
+If the calendar-guard skill is available, use it to process this event.
+Otherwise, ask me if I'd like to create a calendar event. Provide a brief summary including who is meeting, when, and where (if mentioned).
 
 --- Conversation ---
 ${conversation}`;
 
-  const { messageRepo, ollama, agentRepo, logger } = deps;
+  /**
+   * Build the prompt sent to the main agent when models disagree (confirm with customer).
+   */
+  const buildConfirmationAgentPrompt = (conversation: string, reasons: string[]): string =>
+    `A classifier has flagged the following WhatsApp conversation as potentially containing arrangements to meet up in person, but there is disagreement between models. Please confirm with me whether this is actually a meeting arrangement.
+
+Model reasons:
+${reasons.map((r) => `- ${r}`).join("\n")}
+
+Please review the conversation and ask me to confirm whether I'd like to create a calendar event.
+
+--- Conversation ---
+${conversation}`;
+
+  const { messageRepo, agents, agentRepo, logger } = deps;
 
   return async (ctx) => {
     const { conversationId } = ctx;
 
     const messages = messageRepo.getConversation(conversationId, { limit: CONTEXT_LIMIT });
     const conversation = formatConversation(messages);
-    const prompt = buildPrompt(conversation);
 
-    const result = await ollama.generate<{ meetingDetected: boolean }>({
-      prompt,
-      format: MEETING_FORMAT,
-    });
-
-    const meetingDetected = result?.meetingDetected === true;
-
-    // No meeting detected — log and return
-    if (!meetingDetected) {
-      logger.info(`meeting-detector: no meeting detected for ${conversationId}`);
-      return { meetingDetected: false, agentNotified: false };
+    // Run agents sequentially — each gets its own prompt and model
+    const classifications: Array<MeetingClassification | null> = [];
+    for (const agent of agents) {
+      const prompt = agent.buildPrompt(conversation);
+      const result = await agent.ollama.generate<MeetingClassification>({
+        prompt,
+        format: CLASSIFICATION_FORMAT,
+      });
+      classifications.push(result);
     }
 
-    // Meeting detected — escalate to main agent for confirmation
-    const agentPrompt = buildAgentPrompt(conversation);
+    const escalation = determineEscalation(classifications);
+
+    // No escalation — log and return
+    if (escalation === "none") {
+      logger.info(`meeting-detector: no escalation for ${conversationId}`);
+      return { escalation, agentNotified: false, classifications };
+    }
+
+    // Build the appropriate agent prompt based on escalation type
+    let agentPrompt: string;
+    if (escalation === "add_calendar_event") {
+      agentPrompt = buildCalendarAgentPrompt(conversation);
+    } else {
+      // confirm_with_customer — include reasons from T+T models
+      const reasons = classifications
+        .filter(
+          (c): c is MeetingClassification =>
+            c !== null && c.has_agreed_to_meet && c.has_agreed_date,
+        )
+        .map((c) => c.reason);
+      agentPrompt = buildConfirmationAgentPrompt(conversation, reasons);
+    }
+
     const agentResult = await agentRepo.send(agentPrompt);
 
-    return { meetingDetected: true, agentNotified: agentResult.success };
+    return { escalation, agentNotified: agentResult.success, classifications };
   };
 };

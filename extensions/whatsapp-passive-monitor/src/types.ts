@@ -20,9 +20,19 @@ export type Logger = {
 // Plugin configuration with defaults
 export type PluginConfig = {
   ollamaUrl: string;
-  model: string;
+  agents: Array<{ name: string; model: string }>;
   debounceMs: number;
   contextMessageLimit: number;
   dbPath: string;
   outputDir: string;
 };
+
+// Classification result from a single model
+export type MeetingClassification = {
+  has_agreed_to_meet: boolean;
+  has_agreed_date: boolean;
+  reason: string;
+};
+
+// Consensus escalation action
+export type EscalationAction = "add_calendar_event" | "confirm_with_customer" | "none";
