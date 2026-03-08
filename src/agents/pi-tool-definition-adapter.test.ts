@@ -107,7 +107,7 @@ describe("pi tool definition adapter", () => {
       parameters: Type.Object({ key: Type.String() }),
       execute: async (_callId: string, params: unknown) => {
         receivedParams = params;
-        return { content: [{ type: "text" as const, text: "ok" }] };
+        return { content: [{ type: "text" as const, text: "ok" }], details: {} };
       },
     } satisfies AgentTool;
 
