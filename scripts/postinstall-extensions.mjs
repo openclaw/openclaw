@@ -65,12 +65,15 @@ for (const entry of extensions) {
 
   console.log(`[postinstall] Installing dependencies for extension "${entry.name}"…`);
   try {
-    // Use npm.cmd on Windows; strip inherited npm_config_global so the child
-    // install targets the extension directory instead of the global prefix.
+    // Use npm.cmd on Windows; strip inherited npm config so the child install
+    // targets the extension directory instead of the global prefix.
+    // npm_config_global and npm_config_location=global (npm v7+) both force
+    // global mode; npm_config_prefix overrides the target directory.
     const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
     const env = { ...process.env };
     delete env.npm_config_global;
     delete env.npm_config_prefix;
+    delete env.npm_config_location;
     execFileSync(npmBin, ["install", "--omit=dev", "--silent"], {
       cwd: extDir,
       stdio: "pipe",
