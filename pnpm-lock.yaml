@@ -70,6 +70,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.95
+      '@oxfmt/binding-darwin-arm64':
+        specifier: 0.36.0
+        version: 0.36.0
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -498,6 +501,8 @@ importers:
         version: 4.3.6
 
   extensions/whatsapp: {}
+
+  extensions/wikioracle: {}
 
   extensions/zalo:
     dependencies:
@@ -8935,8 +8940,7 @@ snapshots:
   '@oxfmt/binding-android-arm64@0.36.0':
     optional: true
 
-  '@oxfmt/binding-darwin-arm64@0.36.0':
-    optional: true
+  '@oxfmt/binding-darwin-arm64@0.36.0': {}
 
   '@oxfmt/binding-darwin-x64@0.36.0':
     optional: true

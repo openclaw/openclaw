@@ -347,6 +347,7 @@
     "@mariozechner/pi-coding-agent": "0.55.3",
     "@mariozechner/pi-tui": "0.55.3",
     "@mozilla/readability": "^0.6.0",
+    "@oxfmt/binding-darwin-arm64": "0.36.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.14.1",
