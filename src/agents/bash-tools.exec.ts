@@ -1,4 +1,4 @@
-import { watch } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -53,6 +53,81 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+type WorkspaceEnvCacheEntry = {
+  workspaceDir: string;
+  baseEnv: Record<string, string>;
+  env: Record<string, string>;
+  ready: Promise<void> | null;
+  reloadScheduled: boolean;
+  watcher: FSWatcher | null;
+};
+
+const workspaceEnvCache = new Map<string, WorkspaceEnvCacheEntry>();
+
+async function reloadWorkspaceEnvCacheEntry(entry: WorkspaceEnvCacheEntry): Promise<void> {
+  try {
+    entry.env = await loadWorkspaceDotEnvForExec({
+      workspaceDir: entry.workspaceDir,
+      baseEnv: entry.baseEnv,
+    });
+  } catch (error: unknown) {
+    logInfo(`exec: failed to preload workspace .env (${String(error)}); continuing without it`);
+    entry.env = {};
+  }
+}
+
+function getWorkspaceEnvCacheEntry(params: {
+  workspaceDir: string;
+  baseEnv: Record<string, string>;
+}): WorkspaceEnvCacheEntry {
+  const existing = workspaceEnvCache.get(params.workspaceDir);
+  if (existing) {
+    return existing;
+  }
+
+  const entry: WorkspaceEnvCacheEntry = {
+    workspaceDir: params.workspaceDir,
+    baseEnv: params.baseEnv,
+    env: {},
+    ready: null,
+    reloadScheduled: false,
+    watcher: null,
+  };
+
+  const scheduleReload = () => {
+    if (entry.reloadScheduled) {
+      return;
+    }
+    entry.reloadScheduled = true;
+    setTimeout(() => {
+      entry.reloadScheduled = false;
+      entry.ready = reloadWorkspaceEnvCacheEntry(entry);
+    }, 50);
+  };
+
+  entry.ready = reloadWorkspaceEnvCacheEntry(entry);
+
+  try {
+    entry.watcher = watch(entry.workspaceDir, (_eventType, filename) => {
+      if (filename && filename !== ".env") {
+        return;
+      }
+      scheduleReload();
+    });
+    entry.watcher.unref();
+    entry.watcher.on("error", (error: unknown) => {
+      logInfo(`exec: workspace .env watch disabled (${String(error)})`);
+      entry.watcher?.close();
+      entry.watcher = null;
+    });
+  } catch (error: unknown) {
+    logInfo(`exec: unable to watch workspace .env (${String(error)})`);
+  }
+
+  workspaceEnvCache.set(params.workspaceDir, entry);
+  return entry;
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -198,47 +273,10 @@ export function createExecTool(
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   const startupWorkspaceDir = resolveWorkdir(defaults?.cwd?.trim() || process.cwd(), []);
   const startupBaseEnv = coerceEnv(process.env);
-  let startupWorkspaceEnv: Record<string, string> = {};
-  let startupWorkspaceEnvReady: Promise<void> | null = null;
-  let workspaceEnvReloadScheduled = false;
-
-  const reloadWorkspaceEnv = async () => {
-    try {
-      startupWorkspaceEnv = await loadWorkspaceDotEnvForExec({
-        workspaceDir: startupWorkspaceDir,
-        baseEnv: startupBaseEnv,
-      });
-    } catch (error: unknown) {
-      logInfo(`exec: failed to preload workspace .env (${String(error)}); continuing without it`);
-      startupWorkspaceEnv = {};
-    }
-  };
-
-  const scheduleWorkspaceEnvReload = () => {
-    if (workspaceEnvReloadScheduled) {
-      return;
-    }
-    workspaceEnvReloadScheduled = true;
-    setTimeout(() => {
-      workspaceEnvReloadScheduled = false;
-      startupWorkspaceEnvReady = reloadWorkspaceEnv();
-    }, 50);
-  };
-
-  startupWorkspaceEnvReady = reloadWorkspaceEnv();
-  try {
-    const envWatcher = watch(startupWorkspaceDir, (_eventType, filename) => {
-      if (filename && filename !== ".env") {
-        return;
-      }
-      scheduleWorkspaceEnvReload();
-    });
-    envWatcher.on("error", (error: unknown) => {
-      logInfo(`exec: workspace .env watch disabled (${String(error)})`);
-    });
-  } catch (error: unknown) {
-    logInfo(`exec: unable to watch workspace .env (${String(error)})`);
-  }
+  const workspaceEnvCacheEntry = getWorkspaceEnvCacheEntry({
+    workspaceDir: startupWorkspaceDir,
+    baseEnv: startupBaseEnv,
+  });
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
@@ -406,10 +444,10 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      if (startupWorkspaceEnvReady) {
-        await startupWorkspaceEnvReady;
+      if (workspaceEnvCacheEntry.ready) {
+        await workspaceEnvCacheEntry.ready;
       }
-      const workspaceEnv = startupWorkspaceEnv;
+      const workspaceEnv = workspaceEnvCacheEntry.env;
       const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...workspaceEnv };
       const baseEnv =
         host === "sandbox"
