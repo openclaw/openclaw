@@ -35,7 +35,10 @@ describe("resolveAgentRoute", () => {
 
   test("dmScope controls direct-message session key isolation", () => {
     const cases = [
-      { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
+      {
+        dmScope: "per-peer" as const,
+        expected: "agent:main:direct:+15551234567",
+      },
       {
         dmScope: "per-channel-peer" as const,
         expected: "agent:main:whatsapp:direct:+15551234567",
@@ -437,7 +440,10 @@ test("dmScope=per-account-channel-peer uses default accountId when not provided"
 
 describe("parentPeer binding inheritance (thread support)", () => {
   const threadPeer = { kind: "channel" as const, id: "thread-456" };
-  const defaultParentPeer = { kind: "channel" as const, id: "parent-channel-123" };
+  const defaultParentPeer = {
+    kind: "channel" as const,
+    id: "parent-channel-123",
+  };
 
   function makeDiscordPeerBinding(agentId: string, peerId: string) {
     return {
@@ -523,7 +529,10 @@ describe("parentPeer binding inheritance (thread support)", () => {
     const cfg: OpenClawConfig = {
       bindings: [makeDiscordPeerBinding("parent-agent", defaultParentPeer.id)],
     };
-    const route = resolveDiscordThreadRoute({ cfg, parentPeer: { kind: "channel", id: "" } });
+    const route = resolveDiscordThreadRoute({
+      cfg,
+      parentPeer: { kind: "channel", id: "" },
+    });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");
   });
@@ -735,7 +744,10 @@ describe("role-based agent routing", () => {
   test("peer binding still beats guild+roles", () => {
     expectDiscordRoleRoute({
       bindings: [
-        makeDiscordRoleBinding("peer-agent", { peerId: "c1", includeGuildId: false }),
+        makeDiscordRoleBinding("peer-agent", {
+          peerId: "c1",
+          includeGuildId: false,
+        }),
         makeDiscordRoleBinding("roles-agent", { roles: ["r1"] }),
       ],
       memberRoleIds: ["r1"],
@@ -781,6 +793,15 @@ describe("role-based agent routing", () => {
     });
   });
 
+  test("multiple roles match when any role matches", () => {
+    expectDiscordRoleRoute({
+      bindings: [makeDiscordRoleBinding("opus", { roles: ["r1", "r2"] })],
+      memberRoleIds: ["r2"],
+      expectedAgentId: "opus",
+      expectedMatchedBy: "binding.guild+roles",
+    });
+  });
+
   test("empty roles array treated as no role restriction", () => {
     expectDiscordRoleRoute({
       bindings: [makeDiscordRoleBinding("opus", { roles: [] })],
@@ -802,7 +823,10 @@ describe("role-based agent routing", () => {
   test("peer+guild+roles binding does not act as guild+roles fallback when peer mismatches", () => {
     expectDiscordRoleRoute({
       bindings: [
-        makeDiscordRoleBinding("peer-roles", { peerId: "c-target", roles: ["r1"] }),
+        makeDiscordRoleBinding("peer-roles", {
+          peerId: "c-target",
+          roles: ["r1"],
+        }),
         makeDiscordRoleBinding("guild-roles", { roles: ["r1"] }),
       ],
       memberRoleIds: ["r1"],

@@ -2,9 +2,9 @@ import type { Guild, User } from "@buape/carbon";
 import type { AllowlistMatch } from "../../channels/allowlist-match.js";
 import {
   buildChannelKeyCandidates,
+  type ChannelMatchSource,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
-  type ChannelMatchSource,
 } from "../../channels/channel-config.js";
 import { evaluateGroupRouteAccessForPolicy } from "../../plugin-sdk/group-access.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -239,7 +239,12 @@ export function resolveDiscordMemberAccessState(params: {
     userTag: params.sender.tag,
     allowNameMatching: params.allowNameMatching,
   });
-  return { channelUsers, channelRoles, hasAccessRestrictions, memberAllowed } as const;
+  return {
+    channelUsers,
+    channelRoles,
+    hasAccessRestrictions,
+    memberAllowed,
+  } as const;
 }
 
 export function resolveDiscordOwnerAllowFrom(params: {
@@ -295,6 +300,61 @@ export function resolveDiscordOwnerAccess(params: {
       )
     : false;
   return { ownerAllowList, ownerAllowed };
+}
+
+/**
+ * Check owner-level allowFrom with role awareness for guild context.
+ * Combines user-based matching (discord:, user:, pk: prefixes) with
+ * role-based matching (role: prefix) using OR logic.
+ * Returns {configured, allowed} to integrate with resolveControlCommandGate.
+ */
+export function resolveDiscordOwnerAllowedWithRoles(params: {
+  allowFrom?: string[];
+  userId: string;
+  userName?: string;
+  userTag?: string;
+  memberRoleIds?: string[];
+  allowNameMatching?: boolean;
+}): { configured: boolean; allowed: boolean } {
+  if (!params.allowFrom || params.allowFrom.length === 0) {
+    return { configured: false, allowed: false };
+  }
+  // Separate role: entries from user entries to prevent cross-contamination:
+  // - role: entries must not leak into name matching (name matching bypass)
+  // - bare numeric entries must not match as role IDs (privilege escalation)
+  const userEntries: string[] = [];
+  const roleEntries: string[] = [];
+  for (const entry of params.allowFrom) {
+    const trimmed = entry.trim();
+    if (trimmed.startsWith("role:")) {
+      roleEntries.push(trimmed);
+    } else {
+      userEntries.push(trimmed);
+    }
+  }
+  // Check user-based match (discord:, user:, pk: prefixes + bare IDs)
+  const userAllowList = normalizeDiscordAllowList(userEntries, ["discord:", "user:", "pk:"]);
+  if (userAllowList) {
+    const userOk = allowListMatches(
+      userAllowList,
+      { id: params.userId, name: params.userName, tag: params.userTag },
+      { allowNameMatching: params.allowNameMatching },
+    );
+    if (userOk) {
+      return { configured: true, allowed: true };
+    }
+  }
+  // Check role-based entries (guild context only)
+  if (roleEntries.length > 0 && params.memberRoleIds && params.memberRoleIds.length > 0) {
+    const roleAllowList = normalizeDiscordAllowList(roleEntries, ["role:"]);
+    if (roleAllowList && roleAllowList.ids.size > 0) {
+      const roleOk = params.memberRoleIds.some((roleId) => roleAllowList.ids.has(roleId));
+      if (roleOk) {
+        return { configured: true, allowed: true };
+      }
+    }
+  }
+  return { configured: true, allowed: false };
 }
 
 export function resolveDiscordCommandAuthorized(params: {
@@ -466,7 +526,11 @@ export function resolveDiscordChannelConfigWithFallback(params: {
         }
       : undefined,
   );
-  return resolveChannelMatchConfig(match, resolveDiscordChannelConfigEntry) ?? { allowed: false };
+  return (
+    resolveChannelMatchConfig(match, resolveDiscordChannelConfigEntry) ?? {
+      allowed: false,
+    }
+  );
 }
 
 export function resolveDiscordShouldRequireMention(params: {
