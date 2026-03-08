@@ -11,6 +11,7 @@ export type UninstallActions = {
   allowlist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  channelConfig: boolean;
   directory: boolean;
 };
 
@@ -72,6 +73,7 @@ export function removePluginFromConfig(
     allowlist: false,
     loadPath: false,
     memorySlot: false,
+    channelConfig: false,
   };
 
   const pluginsConfig = cfg.plugins ?? {};
@@ -128,6 +130,14 @@ export function removePluginFromConfig(
     slots = undefined;
   }
 
+  // Remove channel config for this plugin (prevents validation errors after uninstall)
+  let channels = cfg.channels;
+  if (channels && pluginId in channels) {
+    const { [pluginId]: _, ...rest } = channels;
+    channels = Object.keys(rest).length > 0 ? rest : undefined;
+    actions.channelConfig = true;
+  }
+
   const newPlugins = {
     ...pluginsConfig,
     entries,
@@ -158,6 +168,7 @@ export function removePluginFromConfig(
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    channels,
   };
 
   return { config, actions };

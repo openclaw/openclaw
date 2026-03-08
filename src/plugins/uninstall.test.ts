@@ -292,6 +292,61 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.entries).toBeUndefined();
   });
 
+  it("removes channel config for uninstalled plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+      },
+      channels: {
+        "my-plugin": { enabled: true, botToken: "tok" },
+        telegram: { botToken: "tg-tok" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.channels).toEqual({ telegram: { botToken: "tg-tok" } });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("cleans up channels object when removing the only channel config", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+      },
+      channels: {
+        "my-plugin": { enabled: true },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.channels).toBeUndefined();
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not touch channels when plugin has no channel config", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+      },
+      channels: {
+        telegram: { botToken: "tg-tok" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+    expect(result.channels).toEqual({ telegram: { botToken: "tg-tok" } });
+    expect(actions.channelConfig).toBe(false);
+  });
+
   it("preserves other config values", () => {
     const config: OpenClawConfig = {
       plugins: {
