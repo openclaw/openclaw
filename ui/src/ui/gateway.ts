@@ -1,4 +1,4 @@
-import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "../../../src/gateway/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -102,10 +102,12 @@ type Pending = {
 export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
+  deviceToken?: string;
   password?: string;
   clientName?: GatewayClientName;
   clientVersion?: string;
   platform?: string;
+  deviceFamily?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
@@ -205,22 +207,29 @@ export class GatewayBrowserClient {
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
-    let authToken = this.opts.token;
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
+    const authPassword = this.opts.password?.trim() || undefined;
     let deviceToken: string | undefined;
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
-      deviceToken = loadDeviceAuthToken({
+      const storedToken = loadDeviceAuthToken({
         deviceId: deviceIdentity.deviceId,
         role,
       })?.token;
+      deviceToken =
+        explicitDeviceToken ??
+        (!(explicitGatewayToken || authPassword) ? (storedToken ?? undefined) : undefined);
       canFallbackToShared = Boolean(deviceToken && this.opts.token);
     }
+    const authToken = explicitGatewayToken ?? deviceToken;
     const auth =
-      authToken || this.opts.password
+      authToken || authPassword || deviceToken
         ? {
             token: authToken,
-            password: this.opts.password,
+            deviceToken,
+            password: authPassword,
           }
         : undefined;
 
@@ -237,15 +246,18 @@ export class GatewayBrowserClient {
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
       const nonce = this.connectNonce ?? "";
-      const payload = buildDeviceAuthPayload({
+      const platform = this.opts.platform ?? navigator.platform ?? "web";
+      const payload = buildDeviceAuthPayloadV3({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
         clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
         role,
         scopes,
         signedAtMs,
-        token: deviceToken ?? null,
+        token: authToken ?? null,
         nonce,
+        platform,
+        deviceFamily: this.opts.deviceFamily,
       });
       const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
       device = {
@@ -263,6 +275,7 @@ export class GatewayBrowserClient {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
         version: this.opts.clientVersion ?? "control-ui",
         platform: this.opts.platform ?? navigator.platform ?? "web",
+        deviceFamily: this.opts.deviceFamily,
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
         instanceId: this.opts.instanceId,
       },
