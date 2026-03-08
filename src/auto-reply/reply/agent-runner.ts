@@ -433,6 +433,7 @@ export async function runReplyAgent(params: {
         text: completionText,
         replyToId: currentMessageId,
         replyToCurrent: true,
+        isCompactionNotice: true,
       });
       // Fire-and-forget with timeout — best-effort delivery; failure must not
       // propagate to the caller.
