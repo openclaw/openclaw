@@ -298,7 +298,7 @@ struct GeneralSettings: View {
                 Text("Gateway token")
                     .font(.callout.weight(.semibold))
                     .frame(width: self.remoteLabelWidth, alignment: .leading)
-                SecureField("remote gateway auth token (gateway.auth.token)", text: self.$state.remoteToken)
+                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
             }
@@ -306,6 +306,13 @@ struct GeneralSettings: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
+            if self.state.remoteTokenUnsupported {
+                Text(
+                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, self.remoteLabelWidth + 10)
+            }
         }
     }
 

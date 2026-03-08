@@ -2,6 +2,28 @@ import Foundation
 import OpenClawKit
 
 enum GatewayRemoteConfig {
+    enum TokenValue: Equatable {
+        case missing
+        case plaintext(String)
+        case unsupportedNonString
+
+        var textFieldValue: String {
+            switch self {
+            case let .plaintext(token):
+                token
+            case .missing, .unsupportedNonString:
+                ""
+            }
+        }
+
+        var isUnsupportedNonString: Bool {
+            if case .unsupportedNonString = self {
+                return true
+            }
+            return false
+        }
+    }
+
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
@@ -24,15 +46,27 @@ enum GatewayRemoteConfig {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    static func resolveTokenString(root: [String: Any]) -> String? {
+    static func resolveTokenValue(root: [String: Any]) -> TokenValue {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
-              let tokenRaw = remote["token"] as? String
+              let tokenRaw = remote["token"]
         else {
-            return nil
+            return .missing
         }
-        let trimmed = tokenRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        guard let tokenString = tokenRaw as? String else {
+            return .unsupportedNonString
+        }
+        let trimmed = tokenString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? .missing : .plaintext(trimmed)
+    }
+
+    static func resolveTokenString(root: [String: Any]) -> String? {
+        switch self.resolveTokenValue(root: root) {
+        case let .plaintext(token):
+            token
+        case .missing, .unsupportedNonString:
+            nil
+        }
     }
 
     static func resolveGatewayUrl(root: [String: Any]) -> URL? {
