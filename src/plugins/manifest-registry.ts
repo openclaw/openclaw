@@ -169,7 +169,10 @@ export function loadPluginManifestRegistry(params: {
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
-    const manifestRes = loadPluginManifest(candidate.rootDir, rejectHardlinks);
+    // Reuse the manifest loaded during discovery when available;
+    // fall back to reading from disk for candidates without a cached result.
+    const manifestRes =
+      candidate.pluginManifestResult ?? loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",

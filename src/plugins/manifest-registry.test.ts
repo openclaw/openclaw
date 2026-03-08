@@ -130,6 +130,44 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
+  it("does not emit mismatch warning when idHint matches manifest id", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "groupme", configSchema: { type: "object" } });
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "groupme",
+        rootDir: dir,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    const mismatchWarnings = registry.diagnostics.filter(
+      (d) => d.level === "warn" && d.message?.includes("plugin id mismatch"),
+    );
+    expect(mismatchWarnings).toHaveLength(0);
+  });
+
+  it("emits mismatch warning when idHint genuinely differs from manifest id", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "groupme", configSchema: { type: "object" } });
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "totally-wrong",
+        rootDir: dir,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    const mismatchWarnings = registry.diagnostics.filter(
+      (d) => d.level === "warn" && d.message?.includes("plugin id mismatch"),
+    );
+    expect(mismatchWarnings).toHaveLength(1);
+  });
+
   it("emits duplicate warning for truly distinct plugins with same id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
