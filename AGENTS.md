@@ -219,6 +219,7 @@
 ## NPM + 1Password (publish/verify)
 
 - Use the 1password skill; all `op` commands must run inside a fresh tmux session.
+- Correct 1Password path for npm release auth: `op://Private/Npmjs` (use that item; OTP stays `op://Private/Npmjs/one-time password?attribute=otp`).
 - Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
 - OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
