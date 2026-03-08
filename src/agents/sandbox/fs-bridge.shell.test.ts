@@ -1,41 +1,54 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
-  findCallByScriptFragment,
-  getDockerPathArg,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
 describe("sandbox fs bridge shell compatibility", () => {
   installFsBridgeTestHarness();
 
   it("uses POSIX-safe shell prologue in all bridge commands", async () => {
-    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    await withTempDir("openclaw-fs-bridge-shell-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "a.txt"), "hello");
+      await fs.writeFile(path.join(workspaceDir, "b.txt"), "bye");
 
-    await bridge.readFile({ filePath: "a.txt" });
-    await bridge.writeFile({ filePath: "b.txt", data: "hello" });
-    await bridge.mkdirp({ filePath: "nested" });
-    await bridge.remove({ filePath: "b.txt" });
-    await bridge.rename({ from: "a.txt", to: "c.txt" });
-    await bridge.stat({ filePath: "c.txt" });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
 
-    expect(mockedExecDockerRaw).toHaveBeenCalled();
+      await bridge.readFile({ filePath: "a.txt" });
+      await bridge.writeFile({ filePath: "b.txt", data: "hello" });
+      await bridge.mkdirp({ filePath: "nested" });
+      await bridge.remove({ filePath: "b.txt" });
+      await bridge.rename({ from: "a.txt", to: "c.txt" });
+      await bridge.stat({ filePath: "c.txt" });
 
-    const scripts = getScriptsFromCalls();
-    const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
+      expect(mockedExecDockerRaw).toHaveBeenCalled();
 
-    expect(executables.every((shell) => shell === "sh")).toBe(true);
-    expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
-    expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+      const scripts = getScriptsFromCalls();
+      const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
+
+      expect(executables.every((shell) => shell === "sh")).toBe(true);
+      expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
+      expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+    });
   });
 
   it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
-    await bridge.readFile({ filePath: "a.txt" });
+    await bridge.mkdirp({ filePath: "nested" });
 
     const scripts = getScriptsFromCalls();
     const canonicalScript = scripts.find((script) => script.includes("allow_final"));
@@ -45,44 +58,69 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("reads inbound media-style filenames with triple-dash ids", async () => {
-    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
-    const inboundPath = "media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.ogg";
+    await withTempDir("openclaw-fs-bridge-read-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const inboundPath = "media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.ogg";
+      await fs.mkdir(path.join(workspaceDir, "media", "inbound"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, inboundPath), "voice");
 
-    await bridge.readFile({ filePath: inboundPath });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
 
-    const readCall = findCallByScriptFragment('cat -- "$1"');
-    expect(readCall).toBeDefined();
-    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
-    expect(readPath).toContain("file_1095---");
+      await expect(bridge.readFile({ filePath: inboundPath })).resolves.toEqual(
+        Buffer.from("voice"),
+      );
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
   });
 
   it("resolves dash-leading basenames into absolute container paths", async () => {
-    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    await withTempDir("openclaw-fs-bridge-read-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "--leading.txt"), "dash");
 
-    await bridge.readFile({ filePath: "--leading.txt" });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
 
-    const readCall = findCallByScriptFragment('cat -- "$1"');
-    expect(readCall).toBeDefined();
-    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
-    expect(readPath).toBe("/workspace/--leading.txt");
+      await expect(bridge.readFile({ filePath: "--leading.txt" })).resolves.toEqual(
+        Buffer.from("dash"),
+      );
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {
-    const sandbox = createSandbox({
-      docker: {
-        ...createSandbox().docker,
-        binds: ["/tmp/workspace-two:/workspace-two:ro"],
-      },
+    await withTempDir("openclaw-fs-bridge-bind-read-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const bindRoot = path.join(stateDir, "workspace-two");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(bindRoot, { recursive: true });
+      await fs.writeFile(path.join(bindRoot, "README.md"), "bind-read");
+
+      const sandbox = createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        docker: {
+          ...createSandbox().docker,
+          binds: [`${bindRoot}:/workspace-two:ro`],
+        },
+      });
+      const bridge = createSandboxFsBridge({ sandbox });
+
+      await expect(bridge.readFile({ filePath: "/workspace-two/README.md" })).resolves.toEqual(
+        Buffer.from("bind-read"),
+      );
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
     });
-    const bridge = createSandboxFsBridge({ sandbox });
-
-    await bridge.readFile({ filePath: "/workspace-two/README.md" });
-
-    const args = mockedExecDockerRaw.mock.calls.at(-1)?.[0] ?? [];
-    expect(args).toEqual(
-      expect.arrayContaining(["moltbot-sbx-test", "sh", "-c", 'set -eu; cat -- "$1"']),
-    );
-    expect(getDockerPathArg(args)).toBe("/workspace-two/README.md");
   });
 
   it("writes via temp file + atomic rename (never direct truncation)", async () => {

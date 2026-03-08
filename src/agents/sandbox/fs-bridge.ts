@@ -1,7 +1,7 @@
+import fs from "node:fs";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
   buildMkdirpPlan,
-  buildReadFilePlan,
   buildRemovePlan,
   buildRenamePlan,
   buildStatPlan,
@@ -99,8 +99,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    const result = await this.runPlannedCommand(buildReadFilePlan(target), params.signal);
-    return result.stdout;
+    const opened = await this.pathGuard.openReadableFile(target);
+    try {
+      return fs.readFileSync(opened.fd);
+    } finally {
+      fs.closeSync(opened.fd);
+    }
   }
 
   async writeFile(params: {
