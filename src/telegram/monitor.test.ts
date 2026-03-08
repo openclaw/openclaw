@@ -71,6 +71,14 @@ const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
   sleepWithAbort: vi.fn(async () => undefined),
 }));
+
+const { makeProxyFetchSpy, resolveProxyFetchFromEnvSpy } = vi.hoisted(() => ({
+  makeProxyFetchSpy: vi.fn((_url: string) => (() => {}) as unknown as typeof fetch),
+  resolveProxyFetchFromEnvSpy: vi.fn(() => undefined as typeof fetch | undefined),
+}));
+
+/** proxyFetch values captured from createTelegramBot calls */
+const capturedBotProxyFetches: Array<typeof fetch | undefined> = [];
 const { readTelegramUpdateOffsetSpy } = vi.hoisted(() => ({
   readTelegramUpdateOffsetSpy: vi.fn(async () => null as number | null),
 }));
@@ -141,8 +149,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./proxy.js", () => ({
+  makeProxyFetch: makeProxyFetchSpy,
+  resolveProxyFetchFromEnv: resolveProxyFetchFromEnvSpy,
+}));
+
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts: { proxyFetch?: typeof fetch }) => {
+    capturedBotProxyFetches.push(opts.proxyFetch);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -224,6 +238,9 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    capturedBotProxyFetches.length = 0;
+    makeProxyFetchSpy.mockReset();
+    resolveProxyFetchFromEnvSpy.mockReset();
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -627,6 +644,67 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
     expect(pollingCycle).toBe(2);
     expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  describe("proxy resolution precedence", () => {
+    it("falls back to resolveProxyFetchFromEnv when no explicit proxy is configured", async () => {
+      const envFetch = (() => {}) as unknown as typeof fetch;
+      resolveProxyFetchFromEnvSpy.mockReturnValueOnce(envFetch);
+
+      await monitorWithAutoAbort();
+
+      expect(resolveProxyFetchFromEnvSpy).toHaveBeenCalledTimes(1);
+      expect(capturedBotProxyFetches[0]).toBe(envFetch);
+    });
+
+    it("uses explicit proxy config over resolveProxyFetchFromEnv", async () => {
+      const configFetch = (() => {}) as unknown as typeof fetch;
+      makeProxyFetchSpy.mockReturnValueOnce(configFetch);
+
+      await monitorWithAutoAbort({
+        config: {
+          agents: { defaults: { maxConcurrent: 2 } },
+          channels: { telegram: { proxy: "socks5://proxy:1080" } },
+        },
+      });
+
+      expect(makeProxyFetchSpy).toHaveBeenCalledWith("socks5://proxy:1080");
+      expect(resolveProxyFetchFromEnvSpy).not.toHaveBeenCalled();
+      expect(capturedBotProxyFetches[0]).toBe(configFetch);
+    });
+
+    it("uses opts.proxyFetch over both proxy config and env", async () => {
+      const optsFetch = (() => {}) as unknown as typeof fetch;
+
+      await monitorWithAutoAbort({
+        proxyFetch: optsFetch,
+        config: {
+          agents: { defaults: { maxConcurrent: 2 } },
+          channels: { telegram: { proxy: "socks5://proxy:1080" } },
+        },
+      });
+
+      expect(makeProxyFetchSpy).not.toHaveBeenCalled();
+      expect(resolveProxyFetchFromEnvSpy).not.toHaveBeenCalled();
+      expect(capturedBotProxyFetches[0]).toBe(optsFetch);
+    });
+
+    it("passes env proxy fetch to webhook startup when no explicit proxy is configured", async () => {
+      const envFetch = (() => {}) as unknown as typeof fetch;
+      resolveProxyFetchFromEnvSpy.mockReturnValueOnce(envFetch);
+
+      await monitorTelegramProvider({
+        token: "tok",
+        useWebhook: true,
+        webhookUrl: "https://example.test/telegram",
+        webhookSecret: "secret",
+      });
+
+      expect(resolveProxyFetchFromEnvSpy).toHaveBeenCalledTimes(1);
+      expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ fetch: envFetch }),
+      );
+    });
   });
 
   it("falls back to configured webhookSecret when not passed explicitly", async () => {
