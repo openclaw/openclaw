@@ -114,6 +114,32 @@ export type ScheduledTaskInfo = {
   lastRunResult?: string;
 };
 
+// Try multiple known key names; schtasks output varies by Windows version and locale.
+// Win 10 English: "Last Run Result", Win 11 English: "Last Result",
+// German: "Letztes Ergebnis", French: "Dernier résultat", etc.
+function findEntry(entries: Record<string, string>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = entries[key];
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+// Locale-independent fallback: the result code is the only schtasks /V /FO LIST
+// value that is purely numeric (decimal or 0x-prefixed hex).
+const RESULT_CODE_RE = /^(?:0x[0-9a-f]+|\d{1,10})$/i;
+
+function findResultCodeFallback(entries: Record<string, string>): string | undefined {
+  for (const value of Object.values(entries)) {
+    if (RESULT_CODE_RE.test(value.trim())) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
@@ -121,11 +147,12 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   if (status) {
     info.status = status;
   }
-  const lastRunTime = entries["last run time"];
+  const lastRunTime = findEntry(entries, "last run time", "last run");
   if (lastRunTime) {
     info.lastRunTime = lastRunTime;
   }
-  const lastRunResult = entries["last run result"];
+  const lastRunResult =
+    findEntry(entries, "last run result", "last result") ?? findResultCodeFallback(entries);
   if (lastRunResult) {
     info.lastRunResult = lastRunResult;
   }
