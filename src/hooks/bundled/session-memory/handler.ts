@@ -446,7 +446,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       const entryParts = [
         `# Session: ${dateStr} ${timeStr} UTC`,
         "",
-        `- **Session Key**: ${event.sessionKey}`,
+        `- **Session Key**: ${displaySessionKey}`,
         `- **Session ID**: ${sessionId}`,
         `- **Source**: ${source}`,
         "",
