@@ -23,28 +23,92 @@ const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
 // Cloud instance metadata service (IMDS) endpoints that must remain blocked
 // even when allowPrivateNetwork is enabled to prevent credential harvesting.
 const IMDS_HOSTNAMES = new Set(["metadata.google.internal"]);
-const IMDS_IP_ADDRESSES = new Set(["169.254.169.254", "fd00:ec2::254", "::ffff:169.254.169.254"]);
 
-/** Check whether an address (after normalization) matches a known IMDS IP. */
+// Store IMDS IPs in canonical form for reliable matching regardless of
+// how the address is spelled (e.g. fd00:ec2::254 vs fd00:ec2:0:0:0:0:0:254).
+const IMDS_IPV4_ADDRESSES = new Set(["169.254.169.254"]);
+const IMDS_IPV6_GROUPS: number[][] = [
+  [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254], // fd00:ec2::254
+];
+
+/**
+ * Parse an IPv6 address string into 8 16-bit groups.
+ * Handles :: expansion and returns null on invalid input.
+ */
+function parseIpv6Groups(address: string): number[] | null {
+  // Handle IPv4-mapped suffix (::ffff:1.2.3.4)
+  const lastColon = address.lastIndexOf(":");
+  const tail = lastColon >= 0 ? address.slice(lastColon + 1) : "";
+  if (tail.includes(".")) {
+    const v4 = parseIpv4(tail);
+    if (!v4) return null;
+    const prefix = address.slice(0, lastColon);
+    const prefixGroups = parseIpv6Groups(prefix + ":0:0");
+    if (!prefixGroups) return null;
+    // Replace last two groups with the IPv4 octets
+    prefixGroups[6] = (v4[0] << 8) | v4[1];
+    prefixGroups[7] = (v4[2] << 8) | v4[3];
+    return prefixGroups;
+  }
+
+  const halves = address.split("::");
+  if (halves.length > 2) return null;
+
+  const parseHalf = (half: string): number[] | null => {
+    if (!half) return [];
+    const parts = half.split(":");
+    const groups: number[] = [];
+    for (const p of parts) {
+      if (p.length === 0 || p.length > 4) return null;
+      const val = Number.parseInt(p, 16);
+      if (Number.isNaN(val) || val < 0 || val > 0xffff) return null;
+      groups.push(val);
+    }
+    return groups;
+  };
+
+  if (halves.length === 1) {
+    const groups = parseHalf(halves[0]);
+    if (!groups || groups.length !== 8) return null;
+    return groups;
+  }
+
+  const left = parseHalf(halves[0]);
+  const right = parseHalf(halves[1]);
+  if (!left || !right) return null;
+  const fill = 8 - left.length - right.length;
+  if (fill < 0) return null;
+  return [...left, ...Array(fill).fill(0), ...right];
+}
+
+/** Check whether an address matches a known IMDS IP. */
 function isImdsAddress(address: string): boolean {
   let normalized = address.trim().toLowerCase();
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
     normalized = normalized.slice(1, -1);
   }
-  if (IMDS_IP_ADDRESSES.has(normalized)) return true;
-  // Handle IPv6-mapped IPv4 in both dotted (::ffff:169.254.169.254) and
-  // hex (::ffff:a9fe:a9fe) forms: extract the v4 tail and re-check.
+
+  // Direct IPv4 match
+  if (IMDS_IPV4_ADDRESSES.has(normalized)) return true;
+
+  // Extract IPv4 from IPv6-mapped forms (::ffff:169.254.169.254 or ::ffff:a9fe:a9fe)
   if (normalized.startsWith("::ffff:")) {
     const mapped = normalized.slice("::ffff:".length);
-    // Dotted form
-    if (IMDS_IP_ADDRESSES.has(mapped)) return true;
-    // Hex form (e.g. a9fe:a9fe) — parse back to dotted IPv4
+    if (IMDS_IPV4_ADDRESSES.has(mapped)) return true;
     const v4 = parseIpv4FromMappedIpv6(mapped);
-    if (v4) {
-      const dotted = v4.join(".");
-      if (IMDS_IP_ADDRESSES.has(dotted)) return true;
+    if (v4 && IMDS_IPV4_ADDRESSES.has(v4.join("."))) return true;
+  }
+
+  // Canonical IPv6 group comparison to handle any spelling variant
+  if (normalized.includes(":")) {
+    const groups = parseIpv6Groups(normalized);
+    if (groups && groups.length === 8) {
+      for (const imdsGroups of IMDS_IPV6_GROUPS) {
+        if (groups.every((g, i) => g === imdsGroups[i])) return true;
+      }
     }
   }
+
   return false;
 }
 

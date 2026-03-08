@@ -249,6 +249,13 @@ describe("web_fetch SSRF protection", () => {
       }),
     ).rejects.toThrow(/blocked|metadata/i);
 
+    // Expanded form of fd00:ec2::254
+    await expect(
+      ssrf.resolvePinnedHostname("fd00:ec2:0:0:0:0:0:254", lookupMock, {
+        allowPrivateNetwork: true,
+      }),
+    ).rejects.toThrow(/blocked|metadata/i);
+
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
