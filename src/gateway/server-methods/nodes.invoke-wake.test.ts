@@ -127,6 +127,30 @@ async function pullPending(nodeId: string) {
   return respond;
 }
 
+async function ackPending(nodeId: string, ids: string[]) {
+  const respond = vi.fn();
+  await nodeHandlers["node.pending.ack"]({
+    params: { ids },
+    respond: respond as never,
+    context: {} as never,
+    client: {
+      connect: {
+        role: "node",
+        client: {
+          id: nodeId,
+          mode: "node",
+          name: "ios-test",
+          platform: "iOS 26.4.0",
+          version: "test",
+        },
+      },
+    } as never,
+    req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 function mockSuccessfulWakeConfig(nodeId: string) {
   mocks.loadApnsRegistration.mockResolvedValue({
     nodeId,
@@ -255,7 +279,7 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
-  it("queues iOS foreground-only command failures and returns them via node.pending.pull", async () => {
+  it("queues iOS foreground-only command failures and keeps them until acked", async () => {
     mocks.loadApnsRegistration.mockResolvedValue(null);
 
     const nodeRegistry = {
@@ -301,6 +325,32 @@ describe("node.invoke APNs wake path", () => {
       ],
     });
 
+    const repeatedPullRespond = await pullPending("ios-node-queued");
+    const repeatedPullCall = repeatedPullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(repeatedPullCall?.[0]).toBe(true);
+    expect(repeatedPullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-queued",
+      actions: [
+        expect.objectContaining({
+          command: "canvas.navigate",
+          paramsJSON: JSON.stringify({ url: "http://example.com/" }),
+        }),
+      ],
+    });
+
+    const queuedActionId = (pullCall?.[1] as { actions?: Array<{ id?: string }> } | undefined)
+      ?.actions?.[0]?.id;
+    expect(queuedActionId).toBeTruthy();
+
+    const ackRespond = await ackPending("ios-node-queued", [queuedActionId!]);
+    const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
+    expect(ackCall?.[0]).toBe(true);
+    expect(ackCall?.[1]).toMatchObject({
+      nodeId: "ios-node-queued",
+      ackedIds: [queuedActionId],
+      remainingCount: 0,
+    });
+
     const emptyPullRespond = await pullPending("ios-node-queued");
     const emptyPullCall = emptyPullRespond.mock.calls[0] as RespondCall | undefined;
     expect(emptyPullCall?.[0]).toBe(true);
@@ -308,5 +358,58 @@ describe("node.invoke APNs wake path", () => {
       nodeId: "ios-node-queued",
       actions: [],
     });
+  });
+
+  it("dedupes queued foreground actions by idempotency key", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "ios-node-dedupe",
+        commands: ["canvas.navigate"],
+        platform: "iPadOS 26.4.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: false,
+        error: {
+          code: "NODE_BACKGROUND_UNAVAILABLE",
+          message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+        },
+      }),
+    };
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-dedupe",
+        command: "canvas.navigate",
+        params: { url: "http://example.com/first" },
+        idempotencyKey: "idem-dedupe",
+      },
+    });
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-dedupe",
+        command: "canvas.navigate",
+        params: { url: "http://example.com/first" },
+        idempotencyKey: "idem-dedupe",
+      },
+    });
+
+    const pullRespond = await pullPending("ios-node-dedupe");
+    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(pullCall?.[0]).toBe(true);
+    expect(pullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-dedupe",
+      actions: [
+        expect.objectContaining({
+          command: "canvas.navigate",
+          paramsJSON: JSON.stringify({ url: "http://example.com/first" }),
+        }),
+      ],
+    });
+    const actions = (pullCall?.[1] as { actions?: unknown[] } | undefined)?.actions ?? [];
+    expect(actions).toHaveLength(1);
   });
 });

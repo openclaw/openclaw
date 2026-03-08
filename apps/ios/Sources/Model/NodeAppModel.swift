@@ -2115,6 +2115,10 @@ extension NodeAppModel {
         var actions: [PendingForegroundNodeAction]
     }
 
+    private struct PendingForegroundNodeActionsAckRequest: Encodable {
+        var ids: [String]
+    }
+
     private func refreshShareRouteFromGateway() async {
         struct Params: Codable {
             var includeGlobal: Bool
@@ -2260,6 +2264,34 @@ extension NodeAppModel {
                 "Pending action replay trigger=\(trigger, privacy: .public) "
                     + "id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) "
                     + "ok=\(result.ok, privacy: .public)")
+            guard result.ok else { return }
+            let acked = await self.ackPendingForegroundNodeAction(
+                id: action.id,
+                trigger: trigger,
+                command: action.command)
+            guard acked else { return }
+        }
+    }
+
+    private func ackPendingForegroundNodeAction(
+        id: String,
+        trigger: String,
+        command: String) async -> Bool
+    {
+        do {
+            let payload = try JSONEncoder().encode(PendingForegroundNodeActionsAckRequest(ids: [id]))
+            let paramsJSON = String(decoding: payload, as: UTF8.self)
+            _ = try await self.nodeGateway.request(
+                method: "node.pending.ack",
+                paramsJSON: paramsJSON,
+                timeoutSeconds: 6)
+            return true
+        } catch {
+            self.pendingActionLogger.error(
+                "Pending action ack failed trigger=\(trigger, privacy: .public) "
+                    + "id=\(id, privacy: .public) command=\(command, privacy: .public) "
+                    + "error=\(String(describing: error), privacy: .public)")
+            return false
         }
     }
 

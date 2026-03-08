@@ -29,6 +29,7 @@ import {
   validateNodeEventParams,
   validateNodeInvokeParams,
   validateNodeListParams,
+  validateNodePendingAckParams,
   validateNodePairApproveParams,
   validateNodePairListParams,
   validateNodePairRejectParams,
@@ -85,6 +86,7 @@ type PendingNodeAction = {
   nodeId: string;
   command: string;
   paramsJSON?: string;
+  idempotencyKey: string;
   enqueuedAtMs: number;
 };
 
@@ -121,7 +123,7 @@ function shouldQueueAsPendingForegroundAction(params: {
   error: unknown;
 }): boolean {
   const platform = (params.platform ?? "").trim().toLowerCase();
-  if (!platform.startsWith("ios")) {
+  if (!platform.startsWith("ios") && !platform.startsWith("ipados")) {
     return false;
   }
   if (!isForegroundRestrictedIosCommand(params.command)) {
@@ -152,14 +154,20 @@ function enqueuePendingNodeAction(params: {
   nodeId: string;
   command: string;
   paramsJSON?: string;
+  idempotencyKey: string;
 }): PendingNodeAction {
   const nowMs = Date.now();
   const queue = prunePendingNodeActions(params.nodeId, nowMs);
+  const existing = queue.find((entry) => entry.idempotencyKey === params.idempotencyKey);
+  if (existing) {
+    return existing;
+  }
   const entry: PendingNodeAction = {
     id: randomUUID(),
     nodeId: params.nodeId,
     command: params.command,
     paramsJSON: params.paramsJSON,
+    idempotencyKey: params.idempotencyKey,
     enqueuedAtMs: nowMs,
   };
   queue.push(entry);
@@ -170,10 +178,23 @@ function enqueuePendingNodeAction(params: {
   return entry;
 }
 
-function takePendingNodeActions(nodeId: string): PendingNodeAction[] {
-  const queue = prunePendingNodeActions(nodeId, Date.now());
-  pendingNodeActionsById.delete(nodeId);
-  return queue;
+function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
+  return prunePendingNodeActions(nodeId, Date.now());
+}
+
+function ackPendingNodeActions(nodeId: string, ids: string[]): PendingNodeAction[] {
+  if (ids.length === 0) {
+    return listPendingNodeActions(nodeId);
+  }
+  const pending = prunePendingNodeActions(nodeId, Date.now());
+  const idSet = new Set(ids);
+  const remaining = pending.filter((entry) => !idSet.has(entry.id));
+  if (remaining.length === 0) {
+    pendingNodeActionsById.delete(nodeId);
+    return [];
+  }
+  pendingNodeActionsById.set(nodeId, remaining);
+  return remaining;
 }
 
 function toPendingParamsJSON(params: unknown): string | undefined {
@@ -708,7 +729,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const pending = takePendingNodeActions(trimmedNodeId);
+    const pending = listPendingNodeActions(trimmedNodeId);
     respond(
       true,
       {
@@ -719,6 +740,35 @@ export const nodeHandlers: GatewayRequestHandlers = {
           paramsJSON: entry.paramsJSON ?? null,
           enqueuedAtMs: entry.enqueuedAtMs,
         })),
+      },
+      undefined,
+    );
+  },
+  "node.pending.ack": async ({ params, respond, client }) => {
+    if (!validateNodePendingAckParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pending.ack",
+        validator: validateNodePendingAckParams,
+      });
+      return;
+    }
+    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const trimmedNodeId = String(nodeId ?? "").trim();
+    if (!trimmedNodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const ackIds = Array.from(
+      new Set((params.ids ?? []).map((value) => String(value ?? "").trim()).filter(Boolean)),
+    );
+    const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
+    respond(
+      true,
+      {
+        nodeId: trimmedNodeId,
+        ackedIds: ackIds,
+        remainingCount: remaining.length,
       },
       undefined,
     );
@@ -899,6 +949,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             nodeId,
             command,
             paramsJSON,
+            idempotencyKey: p.idempotencyKey,
           });
           const wake = await maybeWakeNodeWithApns(nodeId);
           context.logGateway.info(
