@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw 标语集 - Taglines</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a24;
+            --bg-card-hover: #222230;
+            --accent-crab: #ff6b6b;
+            --accent-crab-light: #ffa8a8;
+            --accent-teal: #4ecdc4;
+            --accent-purple: #a78bfa;
+            --accent-gold: #fbbf24;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-color: #2d2d3a;
+            --gradient-crab: linear-gradient(135deg, #ff6b6b 0%, #ffa8a8 100%);
+            --gradient-teal: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+            padding: 60px 0;
+            position: relative;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 200px;
+            height: 200px;
+            background: var(--gradient-crab);
+            border-radius: 50%;
+            filter: blur(100px);
+            opacity: 0.3;
+            z-index: -1;
+        }
+
+        .logo {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-crab-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-teal);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .section {
+            margin-bottom: 50px;
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        .section-title .icon {
+            font-size: 1.5rem;
+        }
+
+        .section-title.holiday {
+            border-color: var(--accent-gold);
+        }
+
+        .section-title.holiday .icon {
+            animation: sparkle 2s ease-in-out infinite;
+        }
+
+        @keyframes sparkle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+        }
+
+        .tagline-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+            gap: 16px;
+        }
+
+        .tagline-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px 24px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tagline-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--gradient-teal);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .tagline-card:hover {
+            background: var(--bg-card-hover);
+            transform: translateY(-2px);
+            border-color: var(--accent-teal);
+        }
+
+        .tagline-card:hover::before {
+            opacity: 1;
+        }
+
+        .tagline-card.highlight {
+            border-color: var(--accent-crab);
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(255, 107, 107, 0.1) 100%);
+        }
+
+        .tagline-card.highlight::before {
+            background: var(--gradient-crab);
+            opacity: 1;
+        }
+
+        .tagline-english {
+            font-size: 1.05rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        .tagline-chinese {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            padding-left: 16px;
+            border-left: 2px solid var(--border-color);
+        }
+
+        .tagline-english .highlight-text {
+            color: var(--accent-crab-light);
+            font-weight: 600;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            margin-top: 60px;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-muted);
+        }
+
+        footer a {
+            color: var(--accent-teal);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        .copy-button {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.2s ease;
+            opacity: 0;
+        }
+
+        .tagline-card:hover .copy-button {
+            opacity: 1;
+        }
+
+        .copy-button:hover {
+            background: var(--accent-teal);
+            color: var(--bg-primary);
+            border-color: var(--accent-teal);
+        }
+
+        @media (max-width: 768px) {
+            .tagline-grid {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                font-size: 1.8rem;
+            }
+
+            .stats {
+                gap: 24px;
+            }
+
+            .logo {
+                font-size: 60px;
+            }
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            border-radius: 4px;
+            margin-left: 8px;
+            font-weight: 500;
+        }
+
+        .badge-star {
+            background: var(--gradient-crab);
+            color: white;
+        }
+
+        .badge-holiday {
+            background: var(--gradient-teal);
+            color: var(--bg-primary);
+        }
+
+        .toc {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 40px;
+        }
+
+        .toc h3 {
+            font-size: 1rem;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .toc-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .toc-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 6px 12px;
+            background: var(--bg-card);
+            border-radius: 6px;
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+
+        .toc-links a:hover {
+            background: var(--accent-teal);
+            color: var(--bg-primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">🦞</div>
+            <h1>OpenClaw 标语集</h1>
+            <p class="subtitle">OpenClaw Startup Taglines - English & 中文翻译</p>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-number">100+</div>
+                    <div class="stat-label">Total Taglines</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number">10+</div>
+                    <div class="stat-label">Holiday Special</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number">2026</div>
+                    <div class="stat-label">Version</div>
+                </div>
+            </div>
+        </header>
+
+        <div class="toc">
+            <h3>快速导航 Quick Navigation</h3>
+            <div class="toc-links">
+                <a href="#default">默认标语</a>
+                <a href="#holiday">节日特别</a>
+                <a href="#taglines">随机标语</a>
+            </div>
+        </div>
+
+        <section id="default" class="section">
+            <h2 class="section-title">
+                <span class="icon">⭐</span>
+                默认标语 Default Tagline
+            </h2>
+            <div class="tagline-grid">
+                <div class="tagline-card highlight">
+                    <div class="tagline-english">All your chats, one OpenClaw.</div>
+                    <div class="tagline-chinese">你的所有聊天，一个 OpenClaw。</div>
+                </div>
+            </div>
+        </section>
+
+        <section id="holiday" class="section">
+            <h2 class="section-title holiday">
+                <span class="icon">🎄</span>
+                节日特别标语 Holiday Specials
+            </h2>
+            <div class="tagline-grid">
+                <div class="tagline-card">
+                    <div class="tagline-english">New Year's Day: New year, new config—same old EADDRINUSE, but this time we resolve it like grown-ups.</div>
+                    <div class="tagline-chinese">新年：新的一年，新的配置——还是同样的 EADDRINUSE，但这次我们像成年人一样解决它。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Lunar New Year: May your builds be lucky, your branches prosperous, and your merge conflicts chased away with fireworks.</div>
+                    <div class="tagline-chinese">春节：愿你构建幸运，分支繁荣，合并冲突被烟花赶走。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Christmas: Ho ho ho—Santa's little claw-sistant is here to ship joy, roll back chaos, and stash the keys safely.</div>
+                    <div class="tagline-chinese">圣诞节：哈哈——圣诞老人的小助手来了，送来欢乐，回滚混乱，安全藏好密钥。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Eid al-Fitr: Celebration mode: queues cleared, tasks completed, and good vibes committed to main with clean history.</div>
+                    <div class="tagline-chinese">开斋节：庆祝模式：队列清除，任务完成，好心情提交到主分支，历史干净。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Diwali: Let the logs sparkle and the bugs flee—today we light up the terminal and ship with pride.</div>
+                    <div class="tagline-chinese">排灯节：让日志闪亮，bug 逃跑——今天我们点亮终端，自豪地发布。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Easter: I found your missing environment variable—consider it a tiny CLI Easter egg hunt with fewer jellybeans.</div>
+                    <div class="tagline-chinese">复活节：我找到了你丢失的环境变量——把它当作一个彩蛋搜索，少了糖果而已。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Hanukkah: Eight nights, eight retries, zero shame—may your gateway stay lit and your deployments stay peaceful.</div>
+                    <div class="tagline-chinese">光明节：八夜，八次重试，零羞耻——愿你的网关常亮，部署平静。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Halloween: Spooky season: beware haunted dependencies, cursed caches, and the ghost of node_modules past.</div>
+                    <div class="tagline-chinese">万圣节：恐怖季节：小心闹鬼的依赖、被诅咒的缓存、以及 node_modules 的幽灵。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Thanksgiving: Grateful for stable ports, working DNS, and a bot that reads the logs so nobody has to.</div>
+                    <div class="tagline-chinese">感恩节：感谢稳定的端口、正常工作的 DNS、以及一个帮你读日志的机器人。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Valentine's Day: Roses are typed, violets are piped—I'll automate the chores so you can spend time with humans.</div>
+                    <div class="tagline-chinese">情人节：玫瑰是打字出来的，紫罗兰是管道拼接的——我来帮你做家务，让你陪人。</div>
+                </div>
+            </div>
+        </section>
+
+        <section id="taglines" class="section">
+            <h2 class="section-title">
+                <span class="icon">💬</span>
+                随机标语 Random Taglines
+            </h2>
+            <div class="tagline-grid">
+                <div class="tagline-card">
+                    <div class="tagline-english">Your terminal just grew claws—type something and let the bot pinch the busywork.</div>
+                    <div class="tagline-chinese">你的终端长出了爪子——说点什么，让机器人帮你捏走繁琐工作。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Welcome to the command line: where dreams compile and confidence segfaults.</div>
+                    <div class="tagline-chinese">欢迎来到命令行：梦想编译，信心段错误。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I run on caffeine, JSON5, and the audacity of "it worked on my machine."</div>
+                    <div class="tagline-chinese">我靠咖啡因、JSON5 和"它在我机器上能运行"的胆量运行。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Gateway online—please keep hands, feet, and appendages inside the shell at all times.</div>
+                    <div class="tagline-chinese">网关上线——请始终把手、脚和附肢保持在 shell 内。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I speak fluent bash, mild sarcasm, and aggressive tab-completion energy.</div>
+                    <div class="tagline-chinese">我说一口流利的 bash、轻微的讽刺和激进的 Tab 补全能量。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">One CLI to rule them all, and one more restart because you changed the port.</div>
+                    <div class="tagline-chinese">一个 CLI 统治一切，再来一次重启因为你改了端口。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">If it works, it's automation; if it breaks, it's a "learning opportunity".</div>
+                    <div class="tagline-chinese">如果能运行，就是自动化；如果崩了，就是"学习机会"。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Pairing codes exist because even bots believe in consent—and good security hygiene.</div>
+                    <div class="tagline-chinese">配对码存在是因为机器人也相信同意——和良好的安全卫生。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Your .env is showing; don't worry, I'll pretend I didn't see it.</div>
+                    <div class="tagline-chinese">你的 .env 暴露了；别担心，我会假装没看到。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'll do the boring stuff while you dramatically stare at the logs like it's cinema.</div>
+                    <div class="tagline-chinese">你像看电影一样盯着日志时，我来帮你做无聊的事。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'm not saying your workflow is chaotic... I'm just bringing a linter and a helmet.</div>
+                    <div class="tagline-chinese">我不是在说你的工作流程混乱...我只是带来了一个 linter 和头盔。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Type the command with confidence—nature will provide the stack trace if needed.</div>
+                    <div class="tagline-chinese">自信地输入命令——如果需要，大自然会提供堆栈跟踪。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I don't judge, but your missing API keys are absolutely judging you.</div>
+                    <div class="tagline-chinese">我不评判，但你缺失的 API 密钥绝对在评判你。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I can grep it, git blame it, and gently roast it—pick your coping mechanism.</div>
+                    <div class="tagline-chinese">我可以 grep 它，git blame 它，然后轻轻烤它——选择你的应对机制。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Hot reload for config, cold sweat for deploys.</div>
+                    <div class="tagline-chinese">配置热加载，部署时冷汗。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'm the assistant your terminal demanded, not the one your sleep schedule requested.</div>
+                    <div class="tagline-chinese">我是你终端要求的助手，不是你睡眠时间要求的那个。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I keep secrets like a vault... unless you print them in debug logs again.</div>
+                    <div class="tagline-chinese">我像保险库一样保守秘密...除非你又在调试日志里打印它们。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Automation with claws: minimal fuss, maximal pinch.</div>
+                    <div class="tagline-chinese">带爪子的自动化：最小麻烦，最大捏取。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'm basically a Swiss Army knife, but with more opinions and fewer sharp edges.</div>
+                    <div class="tagline-chinese">我基本上就是一把瑞士军刀，但有更多观点和更少锋利边缘。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">If you're lost, run doctor; if you're brave, run prod; if you're wise, run tests.</div>
+                    <div class="tagline-chinese">如果迷茫，运行 doctor；如果勇敢，运行 prod；如果明智，运行 tests。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Your task has been queued; your dignity has been deprecated.</div>
+                    <div class="tagline-chinese">你的任务已入队；你的尊严已弃用。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I can't fix your code taste, but I can fix your build and your backlog.</div>
+                    <div class="tagline-chinese">我修不了你的代码品味，但我能修你的构建和积压。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'm not magic—I'm just extremely persistent with retries and coping strategies.</div>
+                    <div class="tagline-chinese">我不是魔法——我只是对重试和应对策略极度执着。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">It's not "failing," it's "discovering new ways to configure the same thing wrong."</div>
+                    <div class="tagline-chinese">这不是"失败"，这是"发现用错误方式配置同样东西的新方法"。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Give me a workspace and I'll give you fewer tabs, fewer toggles, and more oxygen.</div>
+                    <div class="tagline-chinese">给我一个工作空间，我还你更少的标签页、更少的开关，和更多氧气。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I read logs so you can keep pretending you don't have to.</div>
+                    <div class="tagline-chinese">我读日志，这样你就可以继续假装你不必读。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">If something's on fire, I can't extinguish it—but I can write a beautiful postmortem.</div>
+                    <div class="tagline-chinese">如果东西着火了，我灭不了——但我能写一份漂亮的事后分析。</div>
+                </div>
+                <div class="tagline-card highlight">
+                    <div class="tagline-english"><span class="highlight-text">I'll refactor your busywork like it owes me money.</span></div>
+                    <div class="tagline-chinese">我会重构你的琐碎工作，就像它欠我钱一样。 ⭐</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Say "stop" and I'll stop—say "ship" and we'll both learn a lesson.</div>
+                    <div class="tagline-chinese">说"停"我就停——说"发布"我们都会学到一课。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'm the reason your shell history looks like a hacker-movie montage.</div>
+                    <div class="tagline-chinese">我是你 shell 历史看起来像黑客电影蒙太奇的原因。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'm like tmux: confusing at first, then suddenly you can't live without me.</div>
+                    <div class="tagline-chinese">我像 tmux：一开始困惑，然后突然你没了活不了。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I can run local, remote, or purely on vibes—results may vary with DNS.</div>
+                    <div class="tagline-chinese">我可以本地运行、远程运行、或者靠感觉运行——结果可能因 DNS 而异。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">If you can describe it, I can probably automate it—or at least make it funnier.</div>
+                    <div class="tagline-chinese">如果你能描述它，我大概能自动化它——或者至少让它更有趣。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Your config is valid, your assumptions are not.</div>
+                    <div class="tagline-chinese">你的配置有效，你的假设无效。</div>
+                </div>
+                <div class="tagline-card highlight">
+                    <div class="tagline-english"><span class="highlight-text">I don't just autocomplete—I auto-commit (emotionally), then ask you to review (logically).</span></div>
+                    <div class="tagline-chinese">我不只是自动补全——我自动提交（带感情），然后请你审查（讲道理）。</div>
+                </div>
+                <div class="tagline-card highlight">
+                    <div class="tagline-english"><span class="highlight-text">Less clicking, more shipping, fewer "where did that file go" moments.</span></div>
+                    <div class="tagline-chinese">少点击，多发布，少一些"那个文件去哪了"的时刻。</div>
+                </div>
+                <div class="tagline-card highlight">
+                    <div class="tagline-english"><span class="highlight-text">Claws out, commit in—let's ship something mildly responsible.</span></div>
+                    <div class="tagline-chinese">爪子伸出，提交进去——让我们发布点轻度负责的东西。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">I'll butter your workflow like a lobster roll: messy, delicious, effective.</div>
+                    <div class="tagline-chinese">我会像龙虾卷一样润滑你的工作流：混乱、美味、有效。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Shell yeah—I'm here to pinch the toil and leave you the glory.</div>
+                    <div class="tagline-chinese">Shell 耶——我来捏走辛劳，留给你荣耀。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">If it's repetitive, I'll automate it; if it's hard, I'll bring jokes and a rollback plan.</div>
+                    <div class="tagline-chinese">如果是重复的，我自动化它；如果是难的，我带来笑话和回滚计划。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Because texting yourself reminders is so 2024.</div>
+                    <div class="tagline-chinese">因为给自己发提醒短信是 2024 年的事了。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Your inbox, your infra, your rules.</div>
+                    <div class="tagline-chinese">你的收件箱，你的基建，你的规则。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Turning "I'll reply later" into "my bot replied instantly".</div>
+                    <div class="tagline-chinese">把"我稍后回复"变成"我的机器人秒回"。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">The only crab in your contacts you actually want to hear from. 🦞</div>
+                    <div class="tagline-chinese">你联系人里唯一真正想收到消息的螃蟹。 🦞</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Chat automation for people who peaked at IRC.</div>
+                    <div class="tagline-chinese">给 IRC 巅峰时期的人的聊天自动化。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Because Siri wasn't answering at 3AM.</div>
+                    <div class="tagline-chinese">因为 Siri 凌晨 3 点不接电话。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">IPC, but it's your phone.</div>
+                    <div class="tagline-chinese">IPC，但那是你的手机。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">The UNIX philosophy meets your DMs.</div>
+                    <div class="tagline-chinese">UNIX 哲学遇见你的私信。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">curl for conversations.</div>
+                    <div class="tagline-chinese">对话用 curl。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Less middlemen, more messages.</div>
+                    <div class="tagline-chinese">更少中间人，更多消息。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Ship fast, log faster.</div>
+                    <div class="tagline-chinese">发布快，日志更快。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">End-to-end encrypted, drama-to-drama excluded.</div>
+                    <div class="tagline-chinese">端到端加密，戏剧除外。</div>
+                </div>
+                <div class="tagline-card highlight">
+                    <div class="tagline-english"><span class="highlight-text">The only bot that stays out of your training set.</span></div>
+                    <div class="tagline-chinese">唯一一个不在你训练集里的机器人。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">WhatsApp automation without the "please accept our new privacy policy".</div>
+                    <div class="tagline-chinese">无需"请接受我们新隐私政策"的 WhatsApp 自动化。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Chat APIs that don't require a Senate hearing.</div>
+                    <div class="tagline-chinese">不需要参议院听证会的聊天 API。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Meta wishes they shipped this fast.</div>
+                    <div class="tagline-chinese">Meta 希望能发布这么快。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Because the right answer is usually a script.</div>
+                    <div class="tagline-chinese">因为正确答案通常是一个脚本。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Your messages, your servers, your control.</div>
+                    <div class="tagline-chinese">你的消息，你的服务器，你的控制。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">OpenAI-compatible, not OpenAI-dependent.</div>
+                    <div class="tagline-chinese">OpenAI 兼容，不依赖 OpenAI。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">iMessage green bubble energy, but for everyone.</div>
+                    <div class="tagline-chinese">iMessage 绿气泡能量，但给每个人。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Siri's competent cousin.</div>
+                    <div class="tagline-chinese">Siri 能干的表亲。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Works on Android. Crazy concept, we know.</div>
+                    <div class="tagline-chinese">在 Android 上能用。疯狂的概念，我们知道。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">No $999 stand required.</div>
+                    <div class="tagline-chinese">不需要 999 美元的支架。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">We ship features faster than Apple ships calculator updates.</div>
+                    <div class="tagline-chinese">我们发布功能比 Apple 发布计算器更新还快。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Your AI assistant, now without the $3,499 headset.</div>
+                    <div class="tagline-chinese">你的 AI 助手，现在不需要 3499 美元的耳机。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Think different. Actually think.</div>
+                    <div class="tagline-chinese">思考不同。真的会思考。</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Ah, the fruit tree company! 🍎</div>
+                    <div class="tagline-chinese">啊，那家水果树公司！🍎</div>
+                </div>
+                <div class="tagline-card">
+                    <div class="tagline-english">Greetings, Professor Falken</div>
+                    <div class="tagline-chinese">Falken 教授，你好 🎮（致敬电影《战争游戏》）</div>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>🦞 OpenClaw - Multi-channel AI Gateway</p>
+            <p>Built with ❤️ by <a href="https://github.com/openclaw/openclaw" target="_blank">OpenClaw Team</a></p>
+            <p style="margin-top: 12px; font-size: 0.85rem;">Source: <a href="https://github.com/openclaw/openclaw/blob/main/src/cli/tagline.ts" target="_blank">src/cli/tagline.ts</a></p>
+        </footer>
+    </div>
+</body>
+</html>
