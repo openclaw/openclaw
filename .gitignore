@@ -7,6 +7,8 @@ pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+.openclaw-env/
+**/.openclaw-env/
 __pycache__/
 *.pyc
 .tsbuildinfo

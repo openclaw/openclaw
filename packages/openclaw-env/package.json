@@ -1,0 +1,34 @@
+{
+  "name": "openclaw-env",
+  "version": "0.1.0",
+  "description": "Hardened Docker sandbox generator for OpenClaw",
+  "license": "MIT",
+  "bin": {
+    "openclaw-env": "bin/openclaw-env.js"
+  },
+  "files": [
+    "bin/**",
+    "dist/**",
+    "README.md",
+    "openclaw.env.example.yml"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --import tsx src/cli.ts",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "yaml": "^2.8.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
