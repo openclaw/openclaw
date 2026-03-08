@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveSessionFilePath } from "./paths.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
@@ -25,13 +26,17 @@ export async function resolveAndPersistSessionFile(params: {
     agentId: params.agentId,
     sessionsDir: params.sessionsDir,
   });
+  // Persist only the filename (not the absolute path) so that session entries
+  // remain portable across agents and survive path-validation on restart.
+  // resolveSessionFilePath() reconstructs the full path from the filename + agentId.
+  const persistedSessionFile = path.basename(sessionFile);
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
     updatedAt: Date.now(),
-    sessionFile,
+    sessionFile: persistedSessionFile,
   };
-  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
+  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== persistedSessionFile) {
     sessionStore[sessionKey] = persistedEntry;
     await updateSessionStore(
       storePath,
