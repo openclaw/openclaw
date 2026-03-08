@@ -93,11 +93,12 @@ function resolveSyntheticLocalProviderAuth(params: {
   }
 
   // Any provider configured with api=local-server needs no real API key.
-  // Return a synthetic no-op key so the auth check passes.
+  // Return a synthetic auth result with no key so the auth check passes
+  // without injecting a spurious Authorization header.
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (providerConfig?.api === "local-server") {
     return {
-      apiKey: "local-server-no-auth",
+      apiKey: undefined,
       source: `models.providers.${params.provider} (local-server, no auth required)`,
       mode: "api-key",
     };

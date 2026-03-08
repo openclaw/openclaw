@@ -17,12 +17,12 @@ const EXAMPLE_BODY_TEMPLATE = `{
 }`;
 
 const PLACEHOLDER_HELP = [
-  "Available placeholders:",
-  "  {{prompt}}     — last user message as plain text",
-  "  {{messages}}   — full conversation as JSON array",
-  "  {{system}}     — system prompt text",
-  "  {{model}}      — model ID string",
-  "  {{max_tokens}} — max tokens number",
+  "Available placeholders (string placeholders must be inside quotes in the template):",
+  '  "{{prompt}}"     — last user message as plain text',
+  '  "{{system}}"     — system prompt text',
+  '  "{{model}}"      — model ID string',
+  "  {{max_tokens}}   — max tokens number (no quotes needed)",
+  "  {{messages}}     — full conversation as JSON array (no quotes needed)",
 ].join("\n");
 
 function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefined {
@@ -32,12 +32,20 @@ function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefine
   return normalizeOptionalSecretInput(value);
 }
 
+/**
+ * Validate the template by substituting placeholders with unquoted sentinels
+ * that match what substituteTemplate produces at runtime (i.e. the raw escaped
+ * content, not a pre-quoted string).  This means string placeholders like
+ * {{prompt}} must already be surrounded by quotes in the template:
+ *   correct:   {"input": "{{prompt}}"}
+ *   incorrect: {"input": {{prompt}}}
+ */
 function isValidJsonTemplate(value: string): boolean {
   const stripped = value
-    .replace(/\{\{prompt\}\}/g, '"__placeholder__"')
+    .replace(/\{\{prompt\}\}/g, "__placeholder__")
     .replace(/\{\{messages\}\}/g, "[]")
-    .replace(/\{\{system\}\}/g, '"__placeholder__"')
-    .replace(/\{\{model\}\}/g, '"__placeholder__"')
+    .replace(/\{\{system\}\}/g, "__placeholder__")
+    .replace(/\{\{model\}\}/g, "__placeholder__")
     .replace(/\{\{max_tokens\}\}/g, "512");
   try {
     JSON.parse(stripped);
@@ -50,8 +58,23 @@ function isValidJsonTemplate(value: string): boolean {
 export async function promptAndConfigureLocalServer(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
+  setDefaultModel?: boolean;
 }): Promise<{ config: OpenClawConfig; modelId: string; modelRef: string }> {
   const { prompter, cfg } = params;
+
+  const providerId = await prompter.text({
+    message: "Provider ID (unique name for this endpoint, e.g. my-server)",
+    placeholder: "my-server",
+    validate: (val) => {
+      if (!val.trim()) {
+        return "Provider ID is required";
+      }
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(val.trim())) {
+        return "Use lowercase letters, digits, and hyphens only (e.g. my-server)";
+      }
+      return undefined;
+    },
+  });
 
   const endpointUrl = await prompter.text({
     message: "Server endpoint URL (full path)",
@@ -84,7 +107,7 @@ export async function promptAndConfigureLocalServer(params: {
         return "Body template is required";
       }
       if (!isValidJsonTemplate(val)) {
-        return "Must be valid JSON (placeholders like {{prompt}} are OK)";
+        return 'Must be valid JSON. String placeholders must be quoted: {"input": "{{prompt}}"}';
       }
       return undefined;
     },
@@ -107,9 +130,10 @@ export async function promptAndConfigureLocalServer(params: {
     placeholder: '{"X-Custom-Header": "value"}',
   });
 
+  const trimmedProviderId = providerId.trim();
   const baseUrl = endpointUrl.trim().replace(/\/+$/, "");
   const trimmedModelId = modelId.trim();
-  const modelRef = `local-server/${trimmedModelId}`;
+  const modelRef = `${trimmedProviderId}/${trimmedModelId}`;
   const apiKey = normalizeOptionalProviderApiKey(apiKeyRaw?.trim() || undefined);
 
   let customHeaders: Record<string, string> | undefined;
@@ -117,6 +141,10 @@ export async function promptAndConfigureLocalServer(params: {
     try {
       customHeaders = JSON.parse(headersRaw.trim()) as Record<string, string>;
     } catch {
+      await prompter.note(
+        "Could not parse headers as JSON — extra headers have been skipped.",
+        "Warning",
+      );
       customHeaders = undefined;
     }
   }
@@ -133,7 +161,7 @@ export async function promptAndConfigureLocalServer(params: {
       mode: cfg.models?.mode ?? "merge",
       providers: {
         ...cfg.models?.providers,
-        "local-server": {
+        [trimmedProviderId]: {
           baseUrl,
           api: "local-server",
           ...(apiKey ? { apiKey } : {}),
@@ -155,7 +183,9 @@ export async function promptAndConfigureLocalServer(params: {
     },
   };
 
-  nextConfig = applyPrimaryModel(nextConfig, modelRef);
+  if (params.setDefaultModel !== false) {
+    nextConfig = applyPrimaryModel(nextConfig, modelRef);
+  }
 
   return { config: nextConfig, modelId: trimmedModelId, modelRef };
 }
