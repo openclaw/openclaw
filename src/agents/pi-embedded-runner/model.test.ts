@@ -641,14 +641,12 @@ describe("resolveModel", () => {
   it("uses codex fallback when inline model omits api (#39682)", () => {
     mockOpenAICodexTemplateModel();
 
-    // When a user lists gpt-5.4 under openai-codex models without specifying
-    // an api, the inline match must not shadow the forward-compat resolver
-    // that supplies "openai-codex-responses".
     const cfg: OpenClawConfig = {
       models: {
         providers: {
           "openai-codex": {
             baseUrl: "https://custom.example.com",
+            headers: { "X-Custom-Auth": "token-123" },
             models: [{ id: "gpt-5.4" }],
           },
         },
@@ -659,6 +657,8 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       api: "openai-codex-responses",
+      baseUrl: "https://custom.example.com",
+      headers: { "X-Custom-Auth": "token-123" },
       id: "gpt-5.4",
       provider: "openai-codex",
     });
