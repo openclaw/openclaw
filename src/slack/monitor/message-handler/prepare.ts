@@ -260,8 +260,10 @@ function resolveSlackRoutingContext(params: {
   isGroupDm: boolean;
   isRoom: boolean;
   isRoomish: boolean;
+  channelConfig: ReturnType<typeof resolveSlackChannelConfig> | null;
 }): SlackRoutingContext {
-  const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish } = params;
+  const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish, channelConfig } =
+    params;
   const route = resolveAgentRoute({
     cfg: ctx.cfg,
     channel: "slack",
@@ -274,7 +276,8 @@ function resolveSlackRoutingContext(params: {
   });
 
   const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
-  const replyToMode = resolveSlackReplyToMode(account, chatType);
+  const accountReplyToMode = resolveSlackReplyToMode(account, chatType);
+  const replyToMode = channelConfig?.replyToMode ?? accountReplyToMode;
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
@@ -351,6 +354,7 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
+    channelConfig,
   });
   const {
     route,

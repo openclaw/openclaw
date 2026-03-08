@@ -244,7 +244,30 @@ Reply threading controls:
 
 - `channels.slack.replyToMode`: `off|first|all` (default `off`)
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
+- per-channel override: `channels.slack.channels.<id|name>.replyToMode`
 - legacy fallback for direct chats: `channels.slack.dm.replyToMode`
+
+Per-channel `replyToMode` takes highest priority, then falls through the account-level resolution chain:
+
+```json5
+{
+  channels: {
+    slack: {
+      replyToMode: "off", // account default
+      channels: {
+        "#support": {
+          allow: true,
+          replyToMode: "all", // thread all replies in #support
+        },
+        "#general": {
+          allow: true,
+          replyToMode: "first", // thread only first reply in #general
+        },
+      },
+    },
+  },
+}
+```
 
 Manual reply tags are supported:
 

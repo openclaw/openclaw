@@ -42,6 +42,8 @@ export type SlackChannelConfig = {
   skills?: string[];
   /** Optional system prompt for this channel. */
   systemPrompt?: string;
+  /** Per-channel reply threading override (overrides account-level replyToMode). */
+  replyToMode?: ReplyToMode;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
