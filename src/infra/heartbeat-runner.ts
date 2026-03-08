@@ -60,6 +60,7 @@ import {
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import { resolveOutboundSessionRoute } from "./outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -250,7 +251,7 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
   );
 }
 
-function resolveHeartbeatSession(
+async function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
   heartbeat?: HeartbeatConfig,
@@ -299,6 +300,33 @@ function resolveHeartbeatSession(
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed) {
+    const target = heartbeat?.target?.trim().toLowerCase() ?? "";
+    const explicitTo = heartbeat?.to?.trim() ?? "";
+    if (target && target !== "none" && target !== "last" && explicitTo) {
+      const delivery = resolveHeartbeatDeliveryTarget({
+        cfg,
+        entry: mainEntry,
+        heartbeat,
+      });
+      if (delivery.channel !== "none" && delivery.to) {
+        const route = await resolveOutboundSessionRoute({
+          cfg,
+          channel: delivery.channel,
+          agentId: resolvedAgentId,
+          accountId: delivery.accountId,
+          target: delivery.to,
+          threadId: delivery.threadId,
+        });
+        if (route) {
+          return {
+            sessionKey: route.sessionKey,
+            storePath,
+            store,
+            entry: store[route.sessionKey],
+          };
+        }
+      }
+    }
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
@@ -508,7 +536,8 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const resolvedSession = await session;
+  const pendingEventEntries = peekSystemEventEntries(resolvedSession.sessionKey);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -521,7 +550,7 @@ async function resolveHeartbeatPreflight(params: {
     hasTaggedCronEvents;
   const basePreflight = {
     ...reasonFlags,
-    session,
+    session: resolvedSession,
     pendingEventEntries,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
