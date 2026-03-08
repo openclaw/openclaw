@@ -443,6 +443,12 @@ export async function dispatchReplyFromConfig(params: {
           };
           return run();
         },
+        onCompactionNotice: (payload: ReplyPayload) => {
+          if (shouldRouteToOriginating) {
+            return sendPayloadAsync(payload, undefined, false);
+          }
+          dispatcher.sendBlockReply(payload);
+        },
       },
       cfg,
     );

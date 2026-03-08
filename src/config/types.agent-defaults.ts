@@ -314,6 +314,12 @@ export type AgentCompactionConfig = {
   identifierInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
+  /**
+   * Send a notice to the active channel when auto-compaction starts.
+   * Helps users understand why the agent goes quiet for a moment.
+   * Default: true.
+   */
+  notify?: boolean;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
   /**

@@ -15,7 +15,7 @@ export async function dispatchReplyWithBufferedBlockDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply" | "onCompactionNotice">;
   replyResolver?: typeof import("../reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithBufferedDispatcher({
@@ -31,7 +31,7 @@ export async function dispatchReplyWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply" | "onCompactionNotice">;
   replyResolver?: typeof import("../reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithDispatcher({
