@@ -9,7 +9,12 @@ import {
 import { applyConfigEnvVars } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import {
+  mergeProviders,
+  mergeProviderModels,
+  mergeWithExistingProviderSecrets,
+  type ExistingProviderConfig,
+} from "./models-config.merge.js";
 import {
   normalizeProviders,
   type ProviderConfig,
@@ -19,120 +24,9 @@ import {
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
-type ExistingProviderConfig = NonNullable<ModelsConfig["providers"]>[string] & {
-  apiKey?: string;
-  baseUrl?: string;
-  api?: string;
-};
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
-
-function isPositiveFiniteTokenLimit(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function resolvePreferredTokenLimit(params: {
-  explicitPresent: boolean;
-  explicitValue: unknown;
-  implicitValue: unknown;
-}): number | undefined {
-  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
-    return params.explicitValue;
-  }
-  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
-    return params.implicitValue;
-  }
-  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
-}
-
-function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
-  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
-  const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
-  if (implicitModels.length === 0) {
-    return { ...implicit, ...explicit };
-  }
-
-  const getId = (model: unknown): string => {
-    if (!model || typeof model !== "object") {
-      return "";
-    }
-    const id = (model as { id?: unknown }).id;
-    return typeof id === "string" ? id.trim() : "";
-  };
-  const implicitById = new Map(
-    implicitModels.map((model) => [getId(model), model] as const).filter(([id]) => Boolean(id)),
-  );
-  const seen = new Set<string>();
-
-  const mergedModels = explicitModels.map((explicitModel) => {
-    const id = getId(explicitModel);
-    if (!id) {
-      return explicitModel;
-    }
-    seen.add(id);
-    const implicitModel = implicitById.get(id);
-    if (!implicitModel) {
-      return explicitModel;
-    }
-
-    // Refresh capability metadata from the implicit catalog while preserving
-    // user-specific fields (cost, headers, compat, etc.) on explicit entries.
-    // reasoning is treated as user-overridable: if the user has explicitly set
-    // it in their config (key present), honour that value; otherwise fall back
-    // to the built-in catalog default so new reasoning models work out of the
-    // box without requiring every user to configure it.
-    const contextWindow = resolvePreferredTokenLimit({
-      explicitPresent: "contextWindow" in explicitModel,
-      explicitValue: explicitModel.contextWindow,
-      implicitValue: implicitModel.contextWindow,
-    });
-    const maxTokens = resolvePreferredTokenLimit({
-      explicitPresent: "maxTokens" in explicitModel,
-      explicitValue: explicitModel.maxTokens,
-      implicitValue: implicitModel.maxTokens,
-    });
-
-    return {
-      ...explicitModel,
-      input: implicitModel.input,
-      reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      ...(contextWindow === undefined ? {} : { contextWindow }),
-      ...(maxTokens === undefined ? {} : { maxTokens }),
-    };
-  });
-
-  for (const implicitModel of implicitModels) {
-    const id = getId(implicitModel);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    mergedModels.push(implicitModel);
-  }
-
-  return {
-    ...implicit,
-    ...explicit,
-    models: mergedModels,
-  };
-}
-
-function mergeProviders(params: {
-  implicit?: Record<string, ProviderConfig> | null;
-  explicit?: Record<string, ProviderConfig> | null;
-}): Record<string, ProviderConfig> {
-  const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
-  for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = key.trim();
-    if (!providerKey) {
-      continue;
-    }
-    const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
-  }
-  return out;
-}
 
 async function readJson(pathname: string): Promise<unknown> {
   try {
@@ -168,112 +62,6 @@ async function resolveProvidersForModelsJson(params: {
     providers["github-copilot"] = implicitCopilot;
   }
   return providers;
-}
-
-function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  if (typeof entry?.api !== "string") {
-    return undefined;
-  }
-  const api = entry.api.trim();
-  return api || undefined;
-}
-
-function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
-  if (!Array.isArray(entry?.models)) {
-    return undefined;
-  }
-
-  const apis = entry.models
-    .flatMap((model) => {
-      if (!model || typeof model !== "object") {
-        return [];
-      }
-      const api = (model as { api?: unknown }).api;
-      return typeof api === "string" && api.trim() ? [api.trim()] : [];
-    })
-    .toSorted();
-
-  if (apis.length === 0) {
-    return undefined;
-  }
-  return JSON.stringify(apis);
-}
-
-function resolveProviderApiSurface(
-  entry: ({ api?: unknown; models?: unknown } & Record<string, unknown>) | undefined,
-): string | undefined {
-  return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
-}
-
-function shouldPreserveExistingApiKey(params: {
-  providerKey: string;
-  existing: ExistingProviderConfig;
-  secretRefManagedProviders: ReadonlySet<string>;
-}): boolean {
-  const { providerKey, existing, secretRefManagedProviders } = params;
-  return (
-    !secretRefManagedProviders.has(providerKey) &&
-    typeof existing.apiKey === "string" &&
-    existing.apiKey.length > 0 &&
-    !isNonSecretApiKeyMarker(existing.apiKey, { includeEnvVarName: false })
-  );
-}
-
-function shouldPreserveExistingBaseUrl(params: {
-  providerKey: string;
-  existing: ExistingProviderConfig;
-  nextEntry: ProviderConfig;
-  explicitBaseUrlProviders: ReadonlySet<string>;
-}): boolean {
-  const { providerKey, existing, nextEntry, explicitBaseUrlProviders } = params;
-  if (
-    explicitBaseUrlProviders.has(providerKey) ||
-    typeof existing.baseUrl !== "string" ||
-    existing.baseUrl.length === 0
-  ) {
-    return false;
-  }
-
-  const existingApi = resolveProviderApiSurface(existing);
-  const nextApi = resolveProviderApiSurface(nextEntry);
-  return !existingApi || !nextApi || existingApi === nextApi;
-}
-
-function mergeWithExistingProviderSecrets(params: {
-  nextProviders: Record<string, ProviderConfig>;
-  existingProviders: Record<string, ExistingProviderConfig>;
-  secretRefManagedProviders: ReadonlySet<string>;
-  explicitBaseUrlProviders: ReadonlySet<string>;
-}): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
-    params;
-  const mergedProviders: Record<string, ProviderConfig> = {};
-  for (const [key, entry] of Object.entries(existingProviders)) {
-    mergedProviders[key] = entry;
-  }
-  for (const [key, newEntry] of Object.entries(nextProviders)) {
-    const existing = existingProviders[key];
-    if (!existing) {
-      mergedProviders[key] = newEntry;
-      continue;
-    }
-    const preserved: Record<string, unknown> = {};
-    if (shouldPreserveExistingApiKey({ providerKey: key, existing, secretRefManagedProviders })) {
-      preserved.apiKey = existing.apiKey;
-    }
-    if (
-      shouldPreserveExistingBaseUrl({
-        providerKey: key,
-        existing,
-        nextEntry: newEntry,
-        explicitBaseUrlProviders,
-      })
-    ) {
-      preserved.baseUrl = existing.baseUrl;
-    }
-    mergedProviders[key] = { ...newEntry, ...preserved };
-  }
-  return mergedProviders;
 }
 
 async function resolveProvidersForMode(params: {
