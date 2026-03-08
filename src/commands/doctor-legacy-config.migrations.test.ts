@@ -297,4 +297,34 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
     );
   });
+
+  it("removes stale google-antigravity-auth plugin config references", () => {
+    const res = normalizeCompatibilityConfigValues({
+      plugins: {
+        entries: {
+          "google-antigravity-auth": { enabled: true },
+          "voice-call": { enabled: true },
+        },
+        installs: {
+          "google-antigravity-auth": {
+            source: "path",
+            sourcePath: "/tmp/google-antigravity-auth",
+          },
+        },
+        allow: ["google-antigravity-auth", "voice-call"],
+        load: { paths: ["/tmp/google-antigravity-auth"] },
+        slots: { memory: "google-antigravity-auth" },
+      },
+    });
+
+    expect(res.config.plugins?.entries?.["google-antigravity-auth"]).toBeUndefined();
+    expect(res.config.plugins?.installs?.["google-antigravity-auth"]).toBeUndefined();
+    expect(res.config.plugins?.allow).toEqual(["voice-call"]);
+    expect(res.config.plugins?.load).toBeUndefined();
+    expect(res.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(res.config.plugins?.entries?.["voice-call"]).toEqual({ enabled: true });
+    expect(res.changes).toContain(
+      'Removed stale plugin "google-antigravity-auth" from plugins.entries, plugins.installs, plugins.allow, plugins.load.paths, plugins.slots.memory.',
+    );
+  });
 });
