@@ -49,11 +49,13 @@ async function checkRelayReachable(port, token) {
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['relayPort', 'gatewayToken'])
+  const stored = await chrome.storage.local.get(['relayPort', 'gatewayToken', 'autoAttach'])
   const port = clampPort(stored.relayPort)
   const token = String(stored.gatewayToken || '').trim()
   document.getElementById('port').value = String(port)
   document.getElementById('token').value = token
+  // Auto-attach defaults to true when no value is stored.
+  document.getElementById('autoAttach').checked = stored.autoAttach !== false
   updateRelayUrl(port)
   await checkRelayReachable(port, token)
 }
@@ -71,4 +73,11 @@ async function save() {
 }
 
 document.getElementById('save').addEventListener('click', () => void save())
+
+// Persist auto-attach toggle immediately on change — no save button needed.
+document.getElementById('autoAttach').addEventListener('change', async () => {
+  const checked = document.getElementById('autoAttach').checked
+  await chrome.storage.local.set({ autoAttach: checked })
+})
+
 void load()
