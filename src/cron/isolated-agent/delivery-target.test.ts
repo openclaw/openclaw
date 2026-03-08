@@ -11,6 +11,7 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
   resolveMessageChannelSelection: vi
     .fn()
     .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
+  listConfiguredMessageChannels: vi.fn().mockResolvedValue(["telegram"]),
 }));
 
 vi.mock("../../pairing/pairing-store.js", () => ({
@@ -22,7 +23,10 @@ vi.mock("../../web/accounts.js", () => ({
 }));
 
 import { loadSessionStore } from "../../config/sessions.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  listConfiguredMessageChannels,
+  resolveMessageChannelSelection,
+} from "../../infra/outbound/channel-selection.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -233,17 +237,21 @@ describe("resolveDeliveryTarget", () => {
     expect(result.error.message).toContain("requires target");
   });
 
-  it("returns an error when channel selection is ambiguous", async () => {
+  it("returns an error with first configured channel when selection is ambiguous", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+      new Error("Channel is required when multiple channels are configured: telegram, discord"),
     );
+    vi.mocked(listConfiguredMessageChannels).mockResolvedValueOnce(["telegram", "discord"]);
 
     const result = await resolveForAgent({
       cfg: makeCfg({ bindings: [] }),
       target: { channel: "last", to: undefined },
     });
-    expect(result.channel).toBeUndefined();
+    // channel is now set to the first configured channel so that explicit
+    // message tool calls within the agent still work, even though delivery
+    // fails (no `to` can be resolved).
+    expect(result.channel).toBe("telegram");
     expect(result.to).toBeUndefined();
     expect(result.ok).toBe(false);
     if (result.ok) {
