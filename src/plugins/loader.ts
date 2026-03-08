@@ -41,6 +41,12 @@ export type PluginLoadOptions = {
   runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
+  /**
+   * Additional module names to load via Node's native require instead of
+   * jiti's transpiler. Useful for plugins that depend on native addons not
+   * covered by the built-in list (e.g. "sharp", "canvas", "node-hid").
+   */
+  additionalNativeModules?: string[];
 };
 
 const registryCache = new Map<string, PluginRegistry>();
@@ -224,9 +230,11 @@ export const __testing = {
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  additionalNativeModules?: string[];
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  const nativeModulesKey = JSON.stringify([...(params.additionalNativeModules ?? [])].sort());
+  return `${workspaceKey}::${JSON.stringify(params.plugins)}::${nativeModulesKey}`;
 }
 
 function validatePluginConfig(params: {
@@ -511,6 +519,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
+    additionalNativeModules: options.additionalNativeModules,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -605,6 +614,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      // Native addon resolver packages locate .node binaries relative to
+      // module.filename/__dirname. When jiti transpiles these modules it sets
+      // module.filename to its own path, so the lookup fails. Listing the
+      // resolvers here delegates them to Node's native require, preserving
+      // correct path resolution for any addon that depends on them.
+      // See: https://github.com/openclaw/openclaw/issues/21676
+      nativeModules: ["bindings", "node-gyp-build", ...(options.additionalNativeModules ?? [])],
       ...(Object.keys(aliasMap).length > 0
         ? {
             alias: aliasMap,
