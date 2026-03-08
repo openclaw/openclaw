@@ -638,6 +638,32 @@ describe("resolveModel", () => {
     });
   });
 
+  it("uses codex fallback when inline model omits api (#39682)", () => {
+    mockOpenAICodexTemplateModel();
+
+    // When a user lists gpt-5.4 under openai-codex models without specifying
+    // an api, the inline match must not shadow the forward-compat resolver
+    // that supplies "openai-codex-responses".
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "openai-codex-responses",
+      id: "gpt-5.4",
+      provider: "openai-codex",
+    });
+  });
+
   it("includes auth hint for unknown ollama models (#17328)", () => {
     // resetMockDiscoverModels() in beforeEach already sets find → null
     const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
