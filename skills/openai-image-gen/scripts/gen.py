@@ -163,6 +163,8 @@ def request_images(
     background: str = "",
     output_format: str = "",
     style: str = "",
+    stream: bool = False,
+    moderation: str = "",
 ) -> dict:
     url = "https://api.openai.com/v1/images/generations"
     args = {
@@ -184,6 +186,10 @@ def request_images(
             args["background"] = background
         if output_format:
             args["output_format"] = output_format
+        if stream:
+            args["stream"] = True
+        if moderation:
+            args["moderation"] = moderation
 
     if model == "dall-e-3" and style:
         args["style"] = style
@@ -249,6 +255,8 @@ def main() -> int:
     ap.add_argument("--quality", default="", help="Image quality (e.g. high, standard). Defaults based on model if not specified.")
     ap.add_argument("--background", default="", help="Background transparency (GPT models only): transparent, opaque, or auto.")
     ap.add_argument("--output-format", default="", help="Output format (GPT models only): png, jpeg, or webp.")
+    ap.add_argument("--stream", action="store_true", help="Enable API streaming responses (GPT image models only).")
+    ap.add_argument("--moderation", default="", help="Moderation level (GPT image models only): low or auto.")
     ap.add_argument("--style", default="", help="Image style (dall-e-3 only): vivid or natural.")
     ap.add_argument("--out-dir", default="", help="Output directory (default: ./tmp/openai-image-gen-<ts>).")
     args = ap.parse_args()

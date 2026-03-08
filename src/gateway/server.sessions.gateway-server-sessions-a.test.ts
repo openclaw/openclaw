@@ -1160,10 +1160,15 @@ describe("gateway server sessions", () => {
       reason: "new",
     });
     expect(reset.ok).toBe(true);
-    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const event = (
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalled();
+    const events = (
       sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    ).map((call) => call[0]) as Array<{
+      type?: string;
+      action?: string;
+      context?: { previousSessionEntry?: unknown; reason?: string };
+    }>;
+    const event = events.find((candidate) => candidate.type === "command" && candidate.action === "new");
     if (!event) {
       throw new Error("expected session hook event");
     }
@@ -1176,6 +1181,55 @@ describe("gateway server sessions", () => {
       },
     });
     expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+
+    const sessionEnd = events.find(
+      (candidate) => candidate.type === "session" && candidate.action === "end",
+    );
+    const sessionStart = events.find(
+      (candidate) => candidate.type === "session" && candidate.action === "start",
+    );
+    expect(sessionEnd).toBeDefined();
+    expect(sessionStart).toBeDefined();
+    expect(sessionEnd?.context?.reason).toBe("reset");
+    expect(sessionStart?.context?.reason).toBe("reset");
+    ws.close();
+  });
+
+  test("sessions.delete emits internal session:end hook", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-delete", "bye");
+    await writeSessionStore({
+      entries: {
+        "discord:group:dev": {
+          sessionId: "sess-delete",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "discord:group:dev",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+
+    const events = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    ).map((call) => call[0]) as Array<{
+      type?: string;
+      action?: string;
+      sessionKey?: string;
+      context?: { reason?: string; previousSessionEntry?: { sessionId?: string } };
+    }>;
+    const sessionEnd = events.find(
+      (candidate) => candidate.type === "session" && candidate.action === "end",
+    );
+    expect(sessionEnd).toBeDefined();
+    expect(sessionEnd?.sessionKey).toBe("agent:main:discord:group:dev");
+    expect(sessionEnd?.context?.reason).toBe("delete");
+    expect(sessionEnd?.context?.previousSessionEntry?.sessionId).toBe("sess-delete");
+
     ws.close();
   });
 

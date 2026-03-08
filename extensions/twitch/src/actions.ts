@@ -129,7 +129,9 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
     }
 
     const message = readStringParam(ctx.params, "message", { required: true });
-    const to = readStringParam(ctx.params, "to", { required: false });
+    const to =
+      readStringParam(ctx.params, "to", { required: false }) ??
+      readStringParam(ctx.params, "channel", { required: false });
     const accountId = ctx.accountId ?? DEFAULT_ACCOUNT_ID;
 
     const account = getAccountConfig(ctx.cfg, accountId);
@@ -164,7 +166,11 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
             text: JSON.stringify(result),
           },
         ],
-        details: { ok: true },
+        details: {
+          ok: true,
+          messageId: result.messageId,
+          channel: result.channel,
+        },
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

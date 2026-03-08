@@ -1,7 +1,9 @@
 """Tests for openai-image-gen helpers."""
 
+import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from gen import (

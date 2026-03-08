@@ -583,6 +583,17 @@ export async function dispatchReplyFromConfig(params: {
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    const hookSessionKey = sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown";
+    const message = err instanceof Error ? err.message : String(err);
+    await triggerInternalHook(
+      createInternalHookEvent("agent", "error", hookSessionKey, {
+        error: message,
+        stack: err instanceof Error ? err.stack : undefined,
+        channelId,
+        accountId: ctx.AccountId,
+        conversationId,
+      }),
+    );
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;

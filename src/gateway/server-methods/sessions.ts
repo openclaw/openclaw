@@ -182,6 +182,21 @@ async function emitSessionUnboundLifecycleEvent(params: {
   );
 }
 
+async function emitSessionLifecycleInternalHook(params: {
+  action: "start" | "end";
+  sessionKey: string;
+  reason: "reset" | "delete";
+  sessionEntry?: SessionEntry;
+  previousSessionEntry?: SessionEntry;
+}) {
+  const hookEvent = createInternalHookEvent("session", params.action, params.sessionKey, {
+    reason: params.reason,
+    sessionEntry: params.sessionEntry,
+    previousSessionEntry: params.previousSessionEntry,
+  });
+  await triggerInternalHook(hookEvent);
+}
+
 async function ensureSessionRuntimeCleanup(params: {
   cfg: ReturnType<typeof loadConfig>;
   key: string;
@@ -489,6 +504,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     await triggerInternalHook(hookEvent);
+    if (hadExistingEntry) {
+      await emitSessionLifecycleInternalHook({
+        action: "end",
+        sessionKey: target.canonicalKey ?? key,
+        reason: "reset",
+        previousSessionEntry: entry,
+      });
+    }
     const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key,
@@ -554,6 +577,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reason: "session-reset",
       });
     }
+    await emitSessionLifecycleInternalHook({
+      action: "start",
+      sessionKey: target.canonicalKey ?? key,
+      reason: "reset",
+      sessionEntry: next,
+      previousSessionEntry: entry,
+    });
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
@@ -622,6 +652,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         targetSessionKey: target.canonicalKey ?? key,
         reason: "session-delete",
         emitHooks: emitLifecycleHooks,
+      });
+      await emitSessionLifecycleInternalHook({
+        action: "end",
+        sessionKey: target.canonicalKey ?? key,
+        reason: "delete",
+        previousSessionEntry: entry,
       });
     }
 

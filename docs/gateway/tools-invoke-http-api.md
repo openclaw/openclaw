@@ -45,7 +45,43 @@ Fields:
 - `action` (string, optional): mapped into args if the tool schema supports `action` and the args payload omitted it.
 - `args` (object, optional): tool-specific arguments.
 - `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and default agent, or `global` in global scope).
-- `dryRun` (boolean, optional): reserved for future use; currently ignored.
+- `dryRun` (boolean, optional): when `true`, validates routing/policy and normalized args without executing the tool.
+
+### Dry-run behavior
+
+When `dryRun: true`, the endpoint still performs auth, policy checks, session resolution, and argument normalization (including action-to-args mapping), then returns a preview payload:
+
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "result": {
+    "tool": "sessions_list",
+    "sessionKey": "agent:main:main",
+    "args": { "action": "json" },
+    "policyTrace": {
+      "initialToolCount": 123,
+      "afterPolicyCount": 45,
+      "afterGatewayDenyCount": 44,
+      "steps": [
+        {
+          "label": "tools.profile (coding)",
+          "applied": true,
+          "beforeCount": 123,
+          "afterCount": 82
+        }
+      ]
+    },
+    "toolSchema": {
+      "hasSchema": true,
+      "parameterKeys": ["action", "args"],
+      "requiredKeys": []
+    }
+  }
+}
+```
+
+If `dryRun` is present, it must be a boolean.
 
 ## Policy + routing behavior
 

@@ -595,4 +595,62 @@ describe("POST /tools/invoke", () => {
     expect(body.result?.observedFormat).toBe("pdf");
     expect(body.result?.observedFileFormat).toBeUndefined();
   });
+
+  it("supports dryRun without executing the target tool", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["gateway"] } }],
+      },
+      gateway: { tools: { allow: ["gateway"] } },
+    };
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: {
+        tool: "gateway",
+        action: "status",
+        args: {},
+        sessionKey: "main",
+        dryRun: true,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.dryRun).toBe(true);
+    expect(body.result?.tool).toBe("gateway");
+    expect(body.result?.args).toEqual({});
+    expect(body.result?.policyTrace?.steps).toBeInstanceOf(Array);
+    expect(body.result?.policyTrace?.initialToolCount).toBeGreaterThan(0);
+    expect(body.result?.policyTrace?.afterGatewayDenyCount).toBeGreaterThanOrEqual(1);
+    expect(body.result?.toolSchema).toEqual({
+      hasSchema: true,
+      parameterKeys: [],
+      requiredKeys: [],
+    });
+  });
+
+  it("rejects non-boolean dryRun values", async () => {
+    allowAgentsListForMain();
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: {
+        tool: "agents_list",
+        action: "json",
+        args: {},
+        sessionKey: "main",
+        dryRun: "true",
+      },
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error?.type).toBe("invalid_request_error");
+    expect(body.error?.message).toContain("dryRun must be a boolean");
+  });
 });

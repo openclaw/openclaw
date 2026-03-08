@@ -1644,6 +1644,44 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
+  it("emits internal agent:error hook when reply processing throws", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:main",
+    });
+
+    const boom = new Error("resolver exploded");
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver: async () => {
+          throw boom;
+        },
+      }),
+    ).rejects.toThrow("resolver exploded");
+
+    const calls = internalHookMocks.createInternalHookEvent.mock.calls as Array<
+      [string, string, string, Record<string, unknown>]
+    >;
+    const agentErrorCall = calls.find(
+      (call) => call[0] === "agent" && call[1] === "error",
+    );
+    expect(agentErrorCall).toBeDefined();
+    expect(agentErrorCall?.[2]).toBe("agent:main:main");
+    expect(agentErrorCall?.[3]).toEqual(
+      expect.objectContaining({
+        error: "resolver exploded",
+        channelId: "telegram",
+      }),
+    );
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
