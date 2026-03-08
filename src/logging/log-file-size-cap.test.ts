@@ -27,6 +27,11 @@ describe("log file size cap", () => {
     vi.restoreAllMocks();
     try {
       fs.rmSync(logPath, { force: true });
+      const formattedPath = path.join(
+        path.dirname(logPath),
+        `${path.basename(logPath, path.extname(logPath))}-formatted${path.extname(logPath)}`,
+      );
+      fs.rmSync(formattedPath, { force: true });
     } catch {
       // ignore cleanup errors
     }
