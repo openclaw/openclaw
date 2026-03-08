@@ -5,6 +5,7 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let jitiLoader = null;
+let jitiOverrideForTest = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -62,6 +63,9 @@ function resolveControlCommandGate(params) {
 }
 
 function getJiti() {
+  if (jitiOverrideForTest) {
+    return jitiOverrideForTest;
+  }
   if (jitiLoader) {
     return jitiLoader;
   }
@@ -74,24 +78,26 @@ function getJiti() {
   return jitiLoader;
 }
 
+function loadWithJiti(modulePath) {
+  return getJiti()(modulePath);
+}
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
-  const jiti = getJiti();
-
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = loadWithJiti(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = loadWithJiti(path.join(__dirname, "index.ts"));
   return monolithicSdk;
 }
 
@@ -106,6 +112,16 @@ function tryLoadMonolithicSdk() {
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
+  __unsafeIsMonolithicLoadedForTest: () => monolithicSdk !== null,
+  __unsafeResetMonolithicForTest: () => {
+    monolithicSdk = null;
+    jitiLoader = null;
+    jitiOverrideForTest = null;
+  },
+  __unsafeSetJitiOverrideForTest: (loader) => {
+    jitiOverrideForTest = loader;
+    monolithicSdk = null;
+  },
 };
 
 const rootProxy = new Proxy(fastExports, {
@@ -129,12 +145,13 @@ const rootProxy = new Proxy(fastExports, {
       return true;
     }
     const monolithic = tryLoadMonolithicSdk();
-    return monolithic ? prop in monolithic : false;
+    if (!monolithic) {
+      return false;
+    }
+    return prop in monolithic;
   },
   ownKeys(target) {
     const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
-    // Keep Object.keys/property reflection fast and deterministic.
-    // Only expose monolithic keys if it was already loaded by direct access.
     if (monolithicSdk) {
       for (const key of Reflect.ownKeys(monolithicSdk)) {
         keys.add(key);

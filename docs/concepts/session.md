@@ -71,6 +71,95 @@ All session state is **owned by the gateway** (the “master” OpenClaw). UI cl
 - Session entries include `origin` metadata (label + routing hints) so UIs can explain where a session came from.
 - OpenClaw does **not** read legacy Pi/Tau session folders.
 
+## Shared workspace locking
+
+OpenClaw has two lock layers for shared-workspace concurrency:
+
+1. **Session transcript locking** (always on): protects JSONL/session-store writes.
+2. **Workspace mutation locking** (optional): serializes `write`/`edit` tool mutations per target path.
+
+Enable optional workspace mutation locking:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "sharedWorkspaceLocking": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+When multiple runs can touch the same session transcript (for example queued followups, compaction, or concurrent workers on a shared workspace), OpenClaw uses a per-session lock file to serialize writes.
+
+- Lock file path: `<sessionFile>.lock` (for example `.../sessions/<SessionId>.jsonl.lock`).
+- Lock payload: JSON with `pid` and `createdAt`.
+- Lock scope: one lock per normalized session file path (symlink/realpath-aware), with in-process reentrant reference counting by default.
+
+### Behavior
+
+- Lock acquisition uses exclusive create (`wx`): only one writer process can hold the lock file.
+- While held, writes are serialized for that session transcript.
+- Reentrant calls in the same process (same normalized file) share the held lock and increment a counter.
+- The lock file is removed only after the final `release()` for that in-process lock owner.
+
+### Contention behavior
+
+If a lock already exists:
+
+1. OpenClaw inspects lock metadata (`pid`, `createdAt`).
+2. If the lock appears stale, it reclaims the file and retries immediately.
+3. Otherwise it backs off (`min(1000ms, 50ms * attempt)`) and retries until timeout.
+
+Timeout error format:
+
+- `session file locked (timeout <timeoutMs>ms): pid=<pid>|unknown <lockPath>`
+
+### TTL / timeout defaults
+
+Current defaults in `session-write-lock` are:
+
+- Acquire timeout: **10s** (`timeoutMs`, unless caller overrides)
+- Stale threshold: **30m** (`staleMs`)
+- In-process max hold watchdog threshold: **5m** (`maxHoldMs`)
+- Watchdog check interval: **60s**
+- Max-hold grace helper: `resolveSessionLockMaxHoldFromTimeout(timeoutMs + 2m grace, min 5m)`
+
+In the main run/compaction paths, OpenClaw derives `maxHoldMs` from the agent timeout to reduce false stale releases during long runs.
+
+### Stale lock cleanup
+
+OpenClaw cleans stale `.jsonl.lock` files in two places:
+
+- **Gateway startup**: scans all agent `sessions/` dirs and removes stale lock files.
+- **Doctor checks**: `openclaw doctor` reports lock health; `openclaw doctor --fix` removes stale lock files.
+
+Stale criteria include:
+
+- missing `pid`
+- dead `pid`
+- invalid `createdAt`
+- lock older than `staleMs`
+
+For lock files with weak metadata (for example missing pid + invalid timestamp), OpenClaw falls back to lock-file `mtime` age before reclaiming.
+
+### Knobs (for integrators / internal callers)
+
+`acquireSessionWriteLock(...)` supports:
+
+- `timeoutMs`
+- `staleMs`
+- `maxHoldMs`
+- `allowReentrant` (default `true`)
+
+`cleanStaleLockFiles(...)` supports:
+
+- `staleMs`
+- `removeStale` (dry-run vs repair)
+- `nowMs` and optional logging hooks
+
 ## Maintenance
 
 OpenClaw applies session-store maintenance to keep `sessions.json` and transcript artifacts bounded over time.
