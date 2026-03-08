@@ -51,12 +51,15 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
       expect(select.ok).toBe(true);
-      expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        ref: "5",
-        values: ["a", "b"],
-      });
+      expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          ref: "5",
+          values: ["a", "b"],
+          signal: expect.any(AbortSignal),
+        }),
+      );
 
       const fillCases: Array<{
         input: Record<string, unknown>;
@@ -81,11 +84,14 @@ describe("browser control server", () => {
           fields: [input],
         });
         expect(fill.ok).toBe(true);
-        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
-          cdpUrl: state.cdpBaseUrl,
-          targetId: "abcd1234",
-          fields: [expected],
-        });
+        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cdpUrl: state.cdpBaseUrl,
+            targetId: "abcd1234",
+            fields: [expected],
+            signal: expect.any(AbortSignal),
+          }),
+        );
       }
 
       const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -106,13 +112,16 @@ describe("browser control server", () => {
         timeMs: 5,
       });
       expect(wait.ok).toBe(true);
-      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        timeMs: 5,
-        text: undefined,
-        textGone: undefined,
-      });
+      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          timeMs: 5,
+          text: undefined,
+          textGone: undefined,
+          signal: expect.any(AbortSignal),
+        }),
+      );
 
       const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",

@@ -68,6 +68,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               ref,
               doubleClick,
+              signal: req.signal,
             };
             if (button) {
               clickRequest.button = button;
@@ -100,6 +101,7 @@ export function registerBrowserAgentActRoutes(
               text,
               submit,
               slowly,
+              signal: req.signal,
             };
             if (timeoutMs) {
               typeRequest.timeoutMs = timeoutMs;
@@ -118,6 +120,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               key,
               delayMs: delayMs ?? undefined,
+              signal: req.signal,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -132,6 +135,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               ref,
               timeoutMs: timeoutMs ?? undefined,
+              signal: req.signal,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -145,6 +149,7 @@ export function registerBrowserAgentActRoutes(
               cdpUrl,
               targetId: tab.targetId,
               ref,
+              signal: req.signal,
             };
             if (timeoutMs) {
               scrollRequest.timeoutMs = timeoutMs;
@@ -165,6 +170,7 @@ export function registerBrowserAgentActRoutes(
               startRef,
               endRef,
               timeoutMs: timeoutMs ?? undefined,
+              signal: req.signal,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -181,6 +187,7 @@ export function registerBrowserAgentActRoutes(
               ref,
               values,
               timeoutMs: timeoutMs ?? undefined,
+              signal: req.signal,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -203,6 +210,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               fields,
               timeoutMs: timeoutMs ?? undefined,
+              signal: req.signal,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -271,6 +279,7 @@ export function registerBrowserAgentActRoutes(
               loadState,
               fn,
               timeoutMs,
+              signal: req.signal,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }

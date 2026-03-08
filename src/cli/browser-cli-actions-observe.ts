@@ -2,7 +2,11 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
 function runBrowserObserve(action: () => Promise<void>) {
@@ -36,7 +40,11 @@ export function registerBrowserActionObserveCommands(
               profile,
             },
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -62,7 +70,11 @@ export function registerBrowserActionObserveCommands(
             query: profile ? { profile } : undefined,
             body: { targetId: opts.targetId?.trim() || undefined },
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -104,7 +116,12 @@ export function registerBrowserActionObserveCommands(
               maxChars,
             },
           },
-          { timeoutMs: timeoutMs ?? 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              explicitMs: timeoutMs,
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));

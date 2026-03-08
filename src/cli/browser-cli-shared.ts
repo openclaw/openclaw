@@ -27,21 +27,37 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
+function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? Math.max(1, Math.floor(timeoutMs))
+    : undefined;
+}
+
+function parseParentTimeoutMs(opts: BrowserParentOpts): number | undefined {
+  return typeof opts.timeout === "string"
+    ? normalizeTimeoutMs(Number.parseInt(opts.timeout, 10))
+    : undefined;
+}
+
+export function resolveBrowserRequestTimeoutMs(
+  opts: BrowserParentOpts,
+  params?: { explicitMs?: number; fallbackMs?: number },
+): number | undefined {
+  return (
+    normalizeTimeoutMs(params?.explicitMs) ??
+    parseParentTimeoutMs(opts) ??
+    normalizeTimeoutMs(params?.fallbackMs)
+  );
+}
+
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
   extra?: { timeoutMs?: number; progress?: boolean },
 ): Promise<T> {
-  const resolvedTimeoutMs =
-    typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
-      ? Math.max(1, Math.floor(extra.timeoutMs))
-      : typeof opts.timeout === "string"
-        ? Number.parseInt(opts.timeout, 10)
-        : undefined;
-  const resolvedTimeout =
-    typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
-      ? resolvedTimeoutMs
-      : undefined;
+  const resolvedTimeout = resolveBrowserRequestTimeoutMs(opts, {
+    explicitMs: extra?.timeoutMs,
+  });
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
   const payload = await callGatewayFromCli(
     "browser.request",

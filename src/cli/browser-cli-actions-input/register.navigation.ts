@@ -2,7 +2,11 @@ import type { Command } from "commander";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runBrowserResizeWithOutput } from "../browser-cli-resize.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  resolveBrowserRequestTimeoutMs,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import { requireRef, resolveBrowserActionContext } from "./shared.js";
 
 export function registerBrowserNavigationCommands(
@@ -28,7 +32,11 @@ export function registerBrowserNavigationCommands(
               targetId: opts.targetId?.trim() || undefined,
             },
           },
-          { timeoutMs: 20000 },
+          {
+            timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+              fallbackMs: 20_000,
+            }),
+          },
         );
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -56,7 +64,9 @@ export function registerBrowserNavigationCommands(
           width,
           height,
           targetId: opts.targetId,
-          timeoutMs: 20000,
+          timeoutMs: resolveBrowserRequestTimeoutMs(parent, {
+            fallbackMs: 20_000,
+          }),
           successMessage: `resized to ${width}x${height}`,
         });
       } catch (err) {
