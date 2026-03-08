@@ -36,6 +36,7 @@ import {
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
@@ -416,10 +417,9 @@ function runAgentAttempt(params: {
   });
 }
 
-async function agentCommandInternal(
+async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
-  runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+  runtime: RuntimeEnv,
 ) {
   const message = (opts.message ?? "").trim();
   if (!message) {
@@ -448,6 +448,13 @@ async function agentCommandInternal(
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
   setRuntimeConfigSnapshot(cfg, sourceConfig);
+  const normalizedSpawned = normalizeSpawnedRunMetadata({
+    spawnedBy: opts.spawnedBy,
+    groupId: opts.groupId,
+    groupChannel: opts.groupChannel,
+    groupSpace: opts.groupSpace,
+    workspaceDir: opts.workspaceDir,
+  });
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
@@ -521,7 +528,7 @@ async function agentCommandInternal(
   const {
     sessionId,
     sessionKey,
-    sessionEntry: resolvedSessionEntry,
+    sessionEntry: sessionEntryRaw,
     sessionStore,
     storePath,
     isNewSession,
@@ -539,14 +546,15 @@ async function agentCommandInternal(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Internal callers (for example subagent spawns) may pin workspace inheritance.
+  const workspaceDirRaw =
+    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
-  let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
@@ -555,6 +563,65 @@ async function agentCommandInternal(
         sessionKey,
       })
     : null;
+
+  return {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionEntry: sessionEntryRaw,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  };
+}
+
+async function agentCommandInternal(
+  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  } = prepared;
+  let sessionEntry = prepared.sessionEntry;
 
   try {
     if (opts.deliver === true) {
@@ -917,7 +984,7 @@ async function agentCommandInternal(
         runContext.messageChannel,
         opts.replyChannel ?? opts.channel,
       );
-      const spawnedBy = opts.spawnedBy ?? sessionEntry?.spawnedBy;
+      const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({

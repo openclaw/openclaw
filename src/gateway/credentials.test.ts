@@ -120,6 +120,26 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expectEnvGatewayCredentials(resolved);
   });
 
+  it("uses config-first local token precedence inside gateway service runtime", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
+        },
+      }),
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+        OPENCLAW_SERVICE_KIND: "gateway",
+      } as NodeJS.ProcessEnv,
+    });
+    expect(resolved).toEqual({
+      token: "config-token",
+      password: "env-password", // pragma: allowlist secret
+    });
+  });
+
   it("falls back to remote credentials in local mode when local auth is missing", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
@@ -480,5 +500,27 @@ describe("resolveGatewayCredentialsFromValues", () => {
       token: "env-token",
       password: "env-password", // pragma: allowlist secret
     });
+  });
+
+  it("rejects unresolved env var placeholders in config credentials", () => {
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "${OPENCLAW_GATEWAY_TOKEN}",
+      configPassword: "${OPENCLAW_GATEWAY_PASSWORD}",
+      env: {} as NodeJS.ProcessEnv,
+      tokenPrecedence: "config-first",
+      passwordPrecedence: "config-first", // pragma: allowlist secret
+    });
+    expect(resolved).toEqual({ token: undefined, password: undefined });
+  });
+
+  it("accepts config credentials that do not contain env var references", () => {
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "real-token-value",
+      configPassword: "real-password", // pragma: allowlist secret
+      env: {} as NodeJS.ProcessEnv,
+      tokenPrecedence: "config-first",
+      passwordPrecedence: "config-first", // pragma: allowlist secret
+    });
+    expect(resolved).toEqual({ token: "real-token-value", password: "real-password" }); // pragma: allowlist secret
   });
 });

@@ -4,9 +4,11 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   evictOldHistoryKeys,
+  issuePairingChallenge,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
+  mapAllowFromEntries,
   readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   resolveAckReaction,
@@ -509,7 +511,7 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configuredAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
+  const configuredAllowFrom = mapAllowFromEntries(account.config.allowFrom);
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "bluebubbles",
     accountId: account.accountId,
@@ -595,25 +597,24 @@ export async function processMessage(
     }
 
     if (accessDecision.decision === "pairing") {
-      const { code, created } = await pairing.upsertPairingRequest({
-        id: message.senderId,
+      await issuePairingChallenge({
+        channel: "bluebubbles",
+        senderId: message.senderId,
+        senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
         meta: { name: message.senderName },
-      });
-      runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=${created}`);
-      if (created) {
-        logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
-        try {
-          await sendMessageBlueBubbles(
-            message.senderId,
-            core.channel.pairing.buildPairingReply({
-              channel: "bluebubbles",
-              idLine: `Your BlueBubbles sender id: ${message.senderId}`,
-              code,
-            }),
-            { cfg: config, accountId: account.accountId },
-          );
+        upsertPairingRequest: pairing.upsertPairingRequest,
+        onCreated: () => {
+          runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
+          logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessageBlueBubbles(message.senderId, text, {
+            cfg: config,
+            accountId: account.accountId,
+          });
           statusSink?.({ lastOutboundAt: Date.now() });
-        } catch (err) {
+        },
+        onReplyError: (err) => {
           logVerbose(
             core,
             runtime,
@@ -622,8 +623,8 @@ export async function processMessage(
           runtime.error?.(
             `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
           );
-        }
-      }
+        },
+      });
       return;
     }
 
