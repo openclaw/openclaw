@@ -6,6 +6,7 @@ import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
+  isSharpAvailable,
   resizeToJpeg,
 } from "../media/image-ops.js";
 import {
@@ -180,6 +181,18 @@ async function resizeImageBase64IfNeeded(params: {
       width,
       height,
     };
+  }
+
+  // When sharp is unavailable (getImageMetadata already attempted the load), pass through
+  // images that are already within the byte cap. We cannot verify dimensions, but the byte
+  // limit is safe. Images that actually need resizing will surface an actionable error below.
+  if (!overBytes && !hasDimensions && !isSharpAvailable()) {
+    log.info("Image passed through without optimization: sharp backend unavailable", {
+      label: params.label,
+      fileName: params.fileName,
+      sourceBytes: buf.byteLength,
+    });
+    return { base64: params.base64, mimeType: params.mimeType, resized: false };
   }
 
   const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
