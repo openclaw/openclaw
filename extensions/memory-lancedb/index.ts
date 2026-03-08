@@ -551,7 +551,13 @@ const memoryPlugin = {
         }
 
         try {
-          const vector = await embeddings.embed(event.prompt);
+          // Truncate to stay within embedding model token limits (~8192 tokens ≈ 30k chars).
+          const MAX_EMBED_CHARS = 30_000;
+          const promptForEmbed =
+            event.prompt.length > MAX_EMBED_CHARS
+              ? event.prompt.slice(0, MAX_EMBED_CHARS)
+              : event.prompt;
+          const vector = await embeddings.embed(promptForEmbed);
           const results = await db.search(vector, 3, 0.3);
 
           if (results.length === 0) {
