@@ -86,6 +86,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
+  const suppressMetadataBlocks = ctx.OmitMessageMetadataBlocks === true;
   const includeDirectConversationInfo = Boolean(
     directChannelValue && directChannelValue !== "webchat",
   );
@@ -124,7 +125,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
         ? ctx.InboundHistory.length
         : undefined,
   };
-  if (Object.values(conversationInfo).some((v) => v !== undefined)) {
+  if (!suppressMetadataBlocks && Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
       [
         "Conversation info (untrusted metadata):",
@@ -149,7 +150,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     tag: safeTrim(ctx.SenderTag),
     e164: safeTrim(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (!suppressMetadataBlocks && senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
         "\n",

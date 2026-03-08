@@ -331,4 +331,26 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
   });
+
+  it("omits conversation and sender metadata blocks when OmitMessageMetadataBlocks is set", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ConversationLabel: "discord-guild",
+      GroupSubject: "#general",
+      SenderName: "Alice",
+      SenderId: "123",
+      MessageSid: "msg-1",
+      WasMentioned: true,
+      OmitMessageMetadataBlocks: true,
+      ReplyToBody: "quoted",
+    } as TemplateContext);
+
+    // Conversation / sender metadata blocks are suppressed.
+    expect(text).not.toContain("Conversation info (untrusted metadata):");
+    expect(text).not.toContain("Sender (untrusted metadata):");
+
+    // Other untrusted context blocks (e.g., replied message) are still present.
+    expect(text).toContain("Replied message (untrusted, for context):");
+    expect(text).toContain("quoted");
+  });
 });

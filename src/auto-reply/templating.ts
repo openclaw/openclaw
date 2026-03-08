@@ -117,6 +117,12 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /**
+   * When true, omit per-message untrusted metadata blocks (conversation info / sender)
+   * from the inbound user context prefix. Used by providers that already encode this
+   * information in trusted metadata and want to save tokens.
+   */
+  OmitMessageMetadataBlocks?: boolean;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;

@@ -58,6 +58,36 @@ describe("config discord", () => {
     );
   });
 
+  it("accepts omitMessageMetadata at guild and channel level", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          guilds: {
+            "g1": {
+              omitMessageMetadata: true,
+              channels: {
+                "general": { allow: true },
+                "dev": { allow: true, omitMessageMetadata: false },
+              },
+            },
+            "g2": {
+              channels: {
+                "support": { omitMessageMetadata: true },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const guilds = res.config.channels?.discord?.guilds;
+    expect(guilds?.["g1"]?.omitMessageMetadata).toBe(true);
+    expect(guilds?.["g1"]?.channels?.general?.omitMessageMetadata).toBeUndefined();
+    expect(guilds?.["g1"]?.channels?.dev?.omitMessageMetadata).toBe(false);
+    expect(guilds?.["g2"]?.channels?.support?.omitMessageMetadata).toBe(true);
+  });
+
   it("rejects numeric discord allowlist entries", () => {
     const res = validateConfigObject({
       channels: {

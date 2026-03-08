@@ -346,6 +346,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }))
       : undefined;
 
+  const omitMessageMetadataBlocks =
+    channelConfig?.omitMessageMetadata ?? guildInfo?.omitMessageMetadata ?? false;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: baseText ?? text,
@@ -380,6 +383,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
+    OmitMessageMetadataBlocks: omitMessageMetadataBlocks,
     ...mediaPayload,
     CommandAuthorized: commandAuthorized,
     CommandSource: "text" as const,
