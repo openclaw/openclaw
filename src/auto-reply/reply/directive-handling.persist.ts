@@ -3,7 +3,6 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -210,10 +209,24 @@ export async function persistInlineDirectives(params: {
     }
   }
 
+  // Recalculate contextTokens using the newly selected model to ensure the
+  // session's stored contextTokens reflects the current model's actual limit.
+  // This prevents contextTokens from getting stuck at a lower model's limit
+  // after switching models (fixes #35372).
+  const { resolveContextTokensForModel } = await import("../../agents/context.js");
+  const contextTokens =
+    resolveContextTokensForModel({
+      cfg,
+      provider,
+      model,
+      contextTokensOverride: agentCfg?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
+
   return {
     provider,
     model,
-    contextTokens: agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens,
   };
 }
 

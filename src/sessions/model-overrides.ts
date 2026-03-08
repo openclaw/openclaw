@@ -61,6 +61,14 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // Clear stale contextTokens when model selection changes so the new model's
+  // context window will be looked up fresh. This prevents contextTokens from
+  // getting stuck at a previous model's limit (fixes #35372).
+  if (selectionUpdated && entry.contextTokens !== undefined) {
+    delete entry.contextTokens;
+    updated = true;
+  }
+
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;

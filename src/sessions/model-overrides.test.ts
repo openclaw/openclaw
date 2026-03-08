@@ -85,4 +85,56 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.model).toBe("gpt-5.2");
     expect(entry.updatedAt).toBe(before);
   });
+
+  it("clears stale contextTokens when model selection changes (fixes #35372)", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-4",
+      updatedAt: before,
+      modelProvider: "anthropic",
+      model: "claude-haiku-4-5",
+      providerOverride: "anthropic",
+      modelOverride: "claude-haiku-4-5",
+      contextTokens: 160000, // Stuck at haiku's limit
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.contextTokens).toBeUndefined();
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("does not clear contextTokens when model selection is unchanged", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: before,
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      contextTokens: 200000,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+
+    expect(result.updated).toBe(false);
+    expect(entry.contextTokens).toBe(200000);
+    expect(entry.updatedAt).toBe(before);
+  });
 });
