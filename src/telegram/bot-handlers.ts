@@ -111,6 +111,18 @@ function resolveInboundMediaFileId(msg: Message): string | undefined {
   );
 }
 
+function buildRelaySyntheticSenderId(accountId: string): number {
+  // Use a stable negative identifier derived from accountId when source bot identity
+  // is temporarily unavailable. This avoids treating per-chat message IDs as user IDs.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < accountId.length; i += 1) {
+    hash ^= accountId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const unsignedHash = hash >>> 0;
+  return -1_000_000_000 - (unsignedHash % 1_000_000_000);
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -1489,18 +1501,26 @@ export const registerTelegramHandlers = ({
     }
   };
 
-  let cachedRelayBotMe: UserFromGetMe | null | undefined;
+  let cachedRelayBotMe: UserFromGetMe | undefined;
+  let relayBotMeLookupPromise: Promise<UserFromGetMe | undefined> | undefined;
   const resolveRelayBotMe = async (): Promise<UserFromGetMe | undefined> => {
     if (cachedRelayBotMe !== undefined) {
-      return cachedRelayBotMe ?? undefined;
-    }
-    try {
-      cachedRelayBotMe = await bot.api.getMe();
       return cachedRelayBotMe;
-    } catch {
-      cachedRelayBotMe = null;
-      return undefined;
     }
+    if (!relayBotMeLookupPromise) {
+      relayBotMeLookupPromise = (async () => {
+        try {
+          const me = await bot.api.getMe();
+          cachedRelayBotMe = me;
+          return me;
+        } catch {
+          return undefined;
+        } finally {
+          relayBotMeLookupPromise = undefined;
+        }
+      })();
+    }
+    return relayBotMeLookupPromise;
   };
   const unregisterGroupRelay = registerTelegramGroupRelayEndpoint({
     accountId,
@@ -1525,7 +1545,8 @@ export const registerTelegramHandlers = ({
         return;
       }
       const relayBotMe = await resolveRelayBotMe();
-      const relayFromId = relay.source.botUserId ?? relay.messageId;
+      const relayFromId =
+        relay.source.botUserId ?? buildRelaySyntheticSenderId(relay.source.accountId);
       const replyToMessage =
         relay.replyTargetsRecipient &&
         relay.replyToMessageId != null &&
@@ -1540,7 +1561,6 @@ export const registerTelegramHandlers = ({
                 first_name: relay.target.botDisplayName || relay.target.botUsername || "Bot",
                 ...(relay.target.botUsername ? { username: relay.target.botUsername } : {}),
               },
-              text: relay.text,
             }
           : undefined;
       const syntheticMessage = attachTelegramRelayMeta(
@@ -1564,7 +1584,6 @@ export const registerTelegramHandlers = ({
       );
       const syntheticDedupeContext = {
         update: {
-          update_id: relay.messageId,
           message: syntheticMessage,
         },
       } as TelegramUpdateKeyContext;
