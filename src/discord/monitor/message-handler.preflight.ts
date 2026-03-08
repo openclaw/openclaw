@@ -72,6 +72,8 @@ export type {
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 const DISCORD_NATIVE_MENTION_ENTITY_REGEX = /<@[!&]?\d+>/g;
+const DISCORD_BROADCAST_MENTION_REGEX =
+  /(^|[\s([{"'.,;:!?<`])@(everyone|here)\b(?=$|[^a-zA-Z0-9_-])/gi;
 
 function isPreflightAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
@@ -84,7 +86,10 @@ function resolveDiscordRouteText(message: import("@buape/carbon").Message): stri
   }
   // Keep literal `@agent` text routable, but ignore Discord-native mention entities such as
   // `<@123>`, `<@!123>`, and `<@&123>` so human/role mentions never masquerade as agent aliases.
-  return rawText.replace(DISCORD_NATIVE_MENTION_ENTITY_REGEX, " ").trim();
+  const withMentionsRemoved = rawText.replace(DISCORD_NATIVE_MENTION_ENTITY_REGEX, " ");
+  // Broadcast mentions are always platform-wide mass notifications and should not be interpreted
+  // as explicit agent aliases (for example, in environments with agents named `everyone`/`here`).
+  return withMentionsRemoved.replace(DISCORD_BROADCAST_MENTION_REGEX, "$1").trim();
 }
 
 function isBoundThreadBotSystemMessage(params: {
