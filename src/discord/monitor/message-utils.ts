@@ -442,6 +442,18 @@ function inferPlaceholder(attachment: APIAttachment): string {
   if (mime.startsWith("audio/")) {
     return "<media:audio>";
   }
+  // Fallback: infer from file extension when Discord omits or sends a generic content-type.
+  // This happens with file uploads where the MIME type is not populated by the client.
+  const ext = (attachment.filename ?? "").split(".").pop()?.toLowerCase() ?? "";
+  if (["mp4", "mov", "avi", "webm", "mkv", "m4v", "wmv"].includes(ext)) {
+    return "<media:video>";
+  }
+  if (["mp3", "wav", "ogg", "m4a", "aac", "flac", "opus"].includes(ext)) {
+    return "<media:audio>";
+  }
+  if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic", "heif"].includes(ext)) {
+    return "<media:image>";
+  }
   return "<media:document>";
 }
 
