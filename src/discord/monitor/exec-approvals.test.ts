@@ -27,24 +27,26 @@ const writeStore = (store: Record<string, unknown>) => {
 beforeEach(() => {
   writeStore({});
   mockGatewayClientCtor.mockClear();
-  mockResolveGatewayConnectionAuth.mockReset().mockImplementation(async (params: {
-    config?: {
-      gateway?: {
-        auth?: {
-          token?: string;
-          password?: string;
+  mockResolveGatewayConnectionAuth.mockReset().mockImplementation(
+    async (params: {
+      config?: {
+        gateway?: {
+          auth?: {
+            token?: string;
+            password?: string;
+          };
         };
       };
-    };
-    env: NodeJS.ProcessEnv;
-  }) => {
-    const configToken = params.config?.gateway?.auth?.token;
-    const configPassword = params.config?.gateway?.auth?.password;
-    const envToken = params.env.OPENCLAW_GATEWAY_TOKEN ?? params.env.CLAWDBOT_GATEWAY_TOKEN;
-    const envPassword =
-      params.env.OPENCLAW_GATEWAY_PASSWORD ?? params.env.CLAWDBOT_GATEWAY_PASSWORD;
-    return { token: envToken ?? configToken, password: envPassword ?? configPassword };
-  });
+      env: NodeJS.ProcessEnv;
+    }) => {
+      const configToken = params.config?.gateway?.auth?.token;
+      const configPassword = params.config?.gateway?.auth?.password;
+      const envToken = params.env.OPENCLAW_GATEWAY_TOKEN ?? params.env.CLAWDBOT_GATEWAY_TOKEN;
+      const envPassword =
+        params.env.OPENCLAW_GATEWAY_PASSWORD ?? params.env.CLAWDBOT_GATEWAY_PASSWORD;
+      return { token: envToken ?? configToken, password: envPassword ?? configPassword };
+    },
+  );
 });
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
