@@ -94,6 +94,7 @@ function makeChromeTestProc(overrides?: Partial<{ killed: boolean; exitCode: num
   return {
     killed: overrides?.killed ?? false,
     exitCode: overrides?.exitCode ?? null,
+    signalCode: null,
     kill: vi.fn(),
   };
 }
@@ -360,6 +361,7 @@ describe("browser chrome helpers", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     const proc = makeChromeTestProc();
     await stopChromeWithProc(proc, 10);
+    expect(proc.kill).toHaveBeenCalledTimes(1);
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
