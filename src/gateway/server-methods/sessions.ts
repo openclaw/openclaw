@@ -290,6 +290,7 @@ export function buildSessionResetAuditMetadata(params: {
   triggeredBy?: string;
   triggerReason?: string;
   triggerRunId?: string;
+  lastResetAt?: number;
 }) {
   const clean = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
@@ -304,8 +305,12 @@ export function buildSessionResetAuditMetadata(params: {
   const triggerReason =
     clean(params.triggerReason) ?? (mode === "new" ? "new-session" : "manual-reset");
   const triggerRunId = clean(params.triggerRunId);
+  const lastResetAt =
+    typeof params.lastResetAt === "number" && Number.isFinite(params.lastResetAt)
+      ? params.lastResetAt
+      : Date.now();
   return {
-    lastResetAt: Date.now(),
+    lastResetAt,
     lastResetMode: mode,
     lastResetSource: source,
     lastResetBy: triggeredBy,
@@ -463,7 +468,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const hadExistingEntry = Boolean(entry);
     const commandReason = p.reason === "new" ? "new" : "reset";
-    const resetAudit = buildSessionResetAuditMetadata(p);
+    const resetAuditAt = Date.now();
+    const resetAudit = buildSessionResetAuditMetadata({ ...p, lastResetAt: resetAuditAt });
     const hookEvent = createInternalHookEvent(
       "command",
       commandReason,
@@ -510,7 +516,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         systemSent: false,
         abortedLastRun: false,
         ...resetAudit,
-        lastResetAt: now,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,

@@ -1142,6 +1142,7 @@ describe("gateway server sessions", () => {
       ok: true;
       key: string;
       entry: {
+        lastResetAt?: number;
         lastResetMode?: string;
         lastResetSource?: string;
         lastResetBy?: string;
@@ -1149,6 +1150,7 @@ describe("gateway server sessions", () => {
         lastResetRunId?: string;
       };
       reset?: {
+        lastResetAt?: number;
         lastResetMode?: string;
         lastResetSource?: string;
         lastResetBy?: string;
@@ -1178,10 +1180,12 @@ describe("gateway server sessions", () => {
       lastResetReason: "watchdog-timeout",
       lastResetRunId: "run_123",
     });
+    expect(reset.payload?.reset?.lastResetAt).toBe(reset.payload?.entry?.lastResetAt);
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       {
+        lastResetAt?: number;
         lastResetMode?: string;
         lastResetSource?: string;
         lastResetBy?: string;
@@ -1196,10 +1200,24 @@ describe("gateway server sessions", () => {
       lastResetReason: "watchdog-timeout",
       lastResetRunId: "run_123",
     });
+    expect(store["agent:main:main"]?.lastResetAt).toBe(reset.payload?.entry?.lastResetAt);
 
     const event = (
       sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { context?: { resetAudit?: unknown } } | undefined;
+    )[0]?.[0] as
+      | {
+          context?: {
+            resetAudit?: {
+              lastResetAt?: number;
+              lastResetMode?: string;
+              lastResetSource?: string;
+              lastResetBy?: string;
+              lastResetReason?: string;
+              lastResetRunId?: string;
+            };
+          };
+        }
+      | undefined;
     expect(event?.context?.resetAudit).toMatchObject({
       lastResetMode: "reset",
       lastResetSource: "gateway:watchdog",
@@ -1207,6 +1225,7 @@ describe("gateway server sessions", () => {
       lastResetReason: "watchdog-timeout",
       lastResetRunId: "run_123",
     });
+    expect(event?.context?.resetAudit?.lastResetAt).toBe(reset.payload?.entry?.lastResetAt);
 
     ws.close();
   });
