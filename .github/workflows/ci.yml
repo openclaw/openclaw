@@ -267,6 +267,13 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -297,6 +304,9 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
@@ -314,6 +324,11 @@ jobs:
               [ -f "$path" ] || continue
               changed_files+=("$path")
             done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+          fi
+
+          if [ "${#changed_files[@]}" -eq 0 ] && [ -n "${PR_NUMBER:-}" ]; then
+            echo "Git diff returned no changed files; loading PR file list from GitHub API."
+            mapfile -t changed_files < <(node scripts/ci-list-pr-files.mjs "$PR_NUMBER")
           fi
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
