@@ -167,13 +167,13 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<Set<string>> {
-  const entries = new Set<string>();
+async function listArchiveEntries(archivePath: string): Promise<string[]> {
+  const entries: string[] = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.add(entry.path);
+      entries.push(entry.path);
     },
   });
   return entries;
@@ -220,9 +220,7 @@ function isRootManifestEntry(entryPath: string): boolean {
 function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
-  const normalizedEntries = [...entries].map((entry) =>
-    normalizeArchivePath(entry, "Archive entry"),
-  );
+  const normalizedEntries = [...entries];
   const normalizedEntrySet = new Set(normalizedEntries);
 
   if (!normalizedEntrySet.has(manifestEntryPath)) {
@@ -267,17 +265,18 @@ export async function backupVerifyCommand(
   opts: BackupVerifyOptions,
 ): Promise<BackupVerifyResult> {
   const archivePath = resolveUserPath(opts.archive);
-  const entries = await listArchiveEntries(archivePath);
-  if (entries.size === 0) {
+  const rawEntries = await listArchiveEntries(archivePath);
+  if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
 
-  const manifestMatches = [...entries]
-    .map((entry) => ({
-      raw: entry,
-      normalized: normalizeArchivePath(entry, "Archive entry"),
-    }))
-    .filter((entry) => isRootManifestEntry(entry.normalized));
+  const entries = rawEntries.map((entry) => ({
+    raw: entry,
+    normalized: normalizeArchivePath(entry, "Archive entry"),
+  }));
+  const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
+
+  const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
   }
@@ -288,7 +287,7 @@ export async function backupVerifyCommand(
 
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
-  verifyManifestAgainstEntries(manifest, entries);
+  verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
   const result: BackupVerifyResult = {
     ok: true,
@@ -297,7 +296,7 @@ export async function backupVerifyCommand(
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
-    entryCount: entries.size,
+    entryCount: rawEntries.length,
   };
 
   runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));

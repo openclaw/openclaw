@@ -214,4 +214,61 @@ describe("backupVerifyCommand", () => {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
+
+  it("fails when the archive contains duplicate root manifest entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-duplicate-manifest-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const manifestPath = path.join(tempDir, "manifest.json");
+    const payloadPath = path.join(tempDir, "payload.txt");
+    try {
+      const rootName = "openclaw-backup-2026-03-09T00-00-00.000Z";
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw/payload.txt`,
+          },
+        ],
+      };
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await fs.writeFile(payloadPath, "payload\n", "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${rootName}/manifest.json`;
+              return;
+            }
+            if (entry.path === payloadPath) {
+              entry.path = `${rootName}/payload/posix/tmp/.openclaw/payload.txt`;
+            }
+          },
+        },
+        [manifestPath, manifestPath, payloadPath],
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /expected exactly one backup manifest entry, found 2/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

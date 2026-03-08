@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -124,6 +125,10 @@ function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
 }
 
+function isLinkUnsupportedError(code: string | undefined): boolean {
+  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
+}
+
 async function publishTempArchive(params: {
   tempArchivePath: string;
   outputPath: string;
@@ -137,7 +142,25 @@ async function publishTempArchive(params: {
         cause: err,
       });
     }
-    throw err;
+    if (!isLinkUnsupportedError(code)) {
+      throw err;
+    }
+
+    try {
+      // Some backup targets support ordinary files but not hard links.
+      await fs.copyFile(params.tempArchivePath, params.outputPath, fsConstants.COPYFILE_EXCL);
+    } catch (copyErr) {
+      const copyCode = (copyErr as NodeJS.ErrnoException | undefined)?.code;
+      if (copyCode !== "EEXIST") {
+        await fs.rm(params.outputPath, { force: true }).catch(() => undefined);
+      }
+      if (copyCode === "EEXIST") {
+        throw new Error(`Refusing to overwrite existing backup archive: ${params.outputPath}`, {
+          cause: copyErr,
+        });
+      }
+      throw copyErr;
+    }
   }
   await fs.rm(params.tempArchivePath, { force: true });
 }

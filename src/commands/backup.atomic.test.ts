@@ -96,4 +96,38 @@ describe("backupCreateCommand atomic archive write", () => {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
+
+  it("falls back to exclusive copy when hard-link publication is unsupported", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-copy-fallback-"));
+    const linkSpy = vi.spyOn(fs, "link");
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      tarCreateMock.mockImplementationOnce(async ({ file }: { file: string }) => {
+        await fs.writeFile(file, "archive-bytes", "utf8");
+      });
+      linkSpy.mockRejectedValueOnce(
+        Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const outputPath = path.join(archiveDir, "backup.tar.gz");
+
+      const result = await backupCreateCommand(runtime, {
+        output: outputPath,
+      });
+
+      expect(result.archivePath).toBe(outputPath);
+      expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
+    } finally {
+      linkSpy.mockRestore();
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
 });
