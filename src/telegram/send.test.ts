@@ -887,14 +887,14 @@ describe("sendMessageTelegram", () => {
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
       {
-        name: "asVoice accepts mp3",
+        name: "asVoice falls back for mp3 to keep bubble behavior strict",
         chatId: "123",
         text: "caption",
         mediaUrl: "https://example.com/clip.mp3",
         contentType: "audio/mpeg",
         fileName: "clip.mp3",
         asVoice: true,
-        expectedMethod: "sendVoice" as const,
+        expectedMethod: "sendAudio" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
       {
