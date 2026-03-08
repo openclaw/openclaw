@@ -115,6 +115,25 @@ describe("parseCliJsonl sandbox detection", () => {
     expect(result!.sessionId).toBe("abc123");
   });
 
+  it("detects sandboxDenied even when JSONL has no message-typed items (text-less denial)", () => {
+    const jsonl = [
+      JSON.stringify({ thread_id: "def456" }),
+      JSON.stringify({
+        item: {
+          type: "tool_call_output",
+          text: "sandbox policy: write to /workspace/TEST_RO.md denied",
+        },
+      }),
+      JSON.stringify({ usage: { input_tokens: 80, output_tokens: 20 } }),
+    ].join("\n");
+
+    const result = parseCliJsonl(jsonl, CODEX_BACKEND);
+    expect(result).not.toBeNull();
+    expect(result!.sandboxDenied).toBe(true);
+    expect(result!.text).toBe("");
+    expect(result!.sessionId).toBe("def456");
+  });
+
   it("does not set sandboxDenied for normal output", () => {
     const jsonl = [
       JSON.stringify({ thread_id: "abc123" }),

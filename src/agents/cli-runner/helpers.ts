@@ -302,11 +302,16 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
       }
     }
   }
+  const sandboxDenied = detectSandboxDenied(records);
   const text = texts.join("\n").trim();
   if (!text) {
+    // Even without extractable message text, surface sandbox denial so the
+    // caller can throw instead of treating the run as a silent success.
+    if (sandboxDenied) {
+      return { text: "", sessionId, usage, sandboxDenied };
+    }
     return null;
   }
-  const sandboxDenied = detectSandboxDenied(records);
   return { text, sessionId, usage, ...(sandboxDenied ? { sandboxDenied } : {}) };
 }
 
