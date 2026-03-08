@@ -64,15 +64,14 @@ enum OverlayPanelFactory {
     @MainActor
     static func present(
         window: NSWindow?,
-        isVisible: inout Bool,
+        isFirstPresent: Bool,
         target: NSRect,
         startOffsetY: CGFloat = -6,
         onFirstPresent: (() -> Void)? = nil,
         onAlreadyVisible: (NSWindow) -> Void)
     {
         guard let window else { return }
-        if !isVisible {
-            isVisible = true
+        if isFirstPresent {
             onFirstPresent?()
             let start = target.offsetBy(dx: 0, dy: startOffsetY)
             self.animatePresent(window: window, from: start, to: target)
