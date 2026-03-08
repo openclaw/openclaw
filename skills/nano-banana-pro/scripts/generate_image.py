@@ -194,6 +194,9 @@ def main():
             image_cfg_kwargs["aspect_ratio"] = args.aspect_ratio
 
         model_id = MODEL_MAP[args.model]
+        # Flash (Nano Banana 2) supports all Pro resolutions (1K/2K/4K) plus
+        # 0.5K, and all Pro aspect ratios plus 1:4, 4:1, 1:8, 8:1 — full
+        # feature parity confirmed per Google docs.
         print(f"Using model: {model_id}")
 
         response = client.models.generate_content(
