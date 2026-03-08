@@ -122,6 +122,50 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("passes identity to sendMessageSlack on initial send", async () => {
+    const send = vi.fn<DraftSendFn>(async () => ({
+      channelId: "C123",
+      messageId: "111.222",
+    }));
+    const identity = { username: "Stitch", iconEmoji: ":stitch-1:" };
+    const stream = createSlackDraftStream({
+      target: "channel:C123",
+      token: "xoxb-test",
+      throttleMs: 250,
+      identity,
+      send,
+      edit: vi.fn<DraftEditFn>(async () => {}),
+      remove: vi.fn<DraftRemoveFn>(async () => {}),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][2]).toMatchObject({ identity });
+  });
+
+  it("omits identity from sendMessageSlack when not provided", async () => {
+    const send = vi.fn<DraftSendFn>(async () => ({
+      channelId: "C123",
+      messageId: "111.222",
+    }));
+    const stream = createSlackDraftStream({
+      target: "channel:C123",
+      token: "xoxb-test",
+      throttleMs: 250,
+      send,
+      edit: vi.fn<DraftEditFn>(async () => {}),
+      remove: vi.fn<DraftRemoveFn>(async () => {}),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][2]).not.toHaveProperty("identity");
+  });
+
   it("clear warns when cleanup fails", async () => {
     const remove = vi.fn<DraftRemoveFn>(async () => {
       throw new Error("cleanup failed");
