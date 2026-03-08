@@ -39,6 +39,11 @@ export interface ConsolidationResult {
  * Uses a greedy approach: for each memory, find all others within
  * the similarity threshold and form a cluster.
  *
+ * NOTE: This uses cosine similarity (range -1 to 1), which is different from
+ * the L2-based similarity used in MemoryDB.search() (sim = 1/(1+d)).
+ * A threshold of 0.85 here is NOT equivalent to 0.85 in search.
+ * Cosine similarity is the standard for clustering in ML.
+ *
  * Time complexity: O(n²) — fine for <1000 memories.
  */
 export function clusterBySimilarity(
@@ -53,9 +58,7 @@ export function clusterBySimilarity(
   for (let i = 0; i < items.length; i++) {
     if (used.has(items[i].id)) continue;
 
-    const cluster: Array<{ id: string; text: string }> = [
-      { id: items[i].id, text: items[i].text },
-    ];
+    const cluster: Array<{ id: string; text: string }> = [{ id: items[i].id, text: items[i].text }];
     used.add(items[i].id);
 
     for (let j = i + 1; j < items.length; j++) {
@@ -110,14 +113,11 @@ function cosineSimilarity(a: number[], b: number[]): number {
  *   Input: ["User likes coffee", "User drinks coffee every morning", "User prefers black coffee"]
  *   Output: "User drinks black coffee every morning (strong preference)"
  */
-export async function mergeFacts(
-  facts: string[],
-  chatModel: ChatModel,
-): Promise<string | null> {
+export async function mergeFacts(facts: string[], chatModel: ChatModel): Promise<string | null> {
   if (facts.length < 2) return null;
 
   const numberedFacts = facts
-    .map((f, i) => `${i + 1}. "${f}"`)
+    .map((f, i) => `${i + 1}. "${JSON.stringify(f).slice(1, -1)}"`)
     .join("\n");
 
   const prompt = `These facts are about the same topic. Merge them into ONE concise, complete statement.

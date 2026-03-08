@@ -10,12 +10,13 @@
  */
 
 import OpenAI from "openai";
+import { withRetry } from "./utils.js";
 
 export type ChatProvider = "openai" | "google";
 
 // Default chat models per provider (used for graph/capture, NOT for embedding)
 export const DEFAULT_CHAT_MODELS: Record<string, string> = {
-  google: "gemini-2.0-flash",
+  google: "gemma-3-27b-it",
   openai: "gpt-4o-mini",
 };
 
@@ -69,18 +70,24 @@ export class ChatModel {
   ): Promise<string> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
 
-    // Convert chat messages to Gemini format
-    const contents = messages.map((m) => ({
+    // Separate system messages (Bug #21: use systemInstruction instead of converting to user)
+    const systemMessages = messages.filter((m) => m.role === "system");
+    const chatMessages = messages.filter((m) => m.role !== "system");
+
+    const contents = chatMessages.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
     }));
 
-    // Try with JSON mode first, fall back to plain text if model doesn't support it
-    // (e.g. gemma-3-27b-it doesn't support responseMimeType: "application/json")
-    const useJsonMime = jsonMode;
-
     const doRequest = async (withJsonMime: boolean): Promise<string> => {
       const body: Record<string, unknown> = { contents };
+
+      // Add system instruction if present (proper Gemini API approach)
+      if (systemMessages.length > 0) {
+        body.systemInstruction = {
+          parts: systemMessages.map((m) => ({ text: m.content })),
+        };
+      }
 
       if (withJsonMime) {
         body.generationConfig = {
@@ -108,7 +115,9 @@ export class ChatModel {
           return doRequest(false);
         }
 
-        throw new Error(`Google Chat API error (${response.status}): ${errorBody}`);
+        // Bug #7: sanitize API key from error messages
+        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+        throw new Error(`Google Chat API error (${response.status}): ${sanitizedError}`);
       }
 
       const data = (await response.json()) as {
@@ -118,7 +127,7 @@ export class ChatModel {
       return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
     };
 
-    return doRequest(useJsonMime);
+    return doRequest(jsonMode);
   }
 
   /**
@@ -133,10 +142,13 @@ export class ChatModel {
     reason: string;
     action: "update" | "keep_both" | "ignore_new";
   }> {
+    // Use JSON.stringify for robust escaping (handles newlines, quotes, etc.)
+    const safeOld = JSON.stringify(oldMemory).slice(1, -1);
+    const safeNew = JSON.stringify(newMemory).slice(1, -1);
     const prompt = `Analyze these two facts for contradictions.
 
-OLD Fact: "${oldMemory.replace(/"/g, '\\"')}"
-NEW Fact: "${newMemory.replace(/"/g, '\\"')}"
+OLD Fact: "${safeOld}"
+NEW Fact: "${safeNew}"
 
 Determine the relationship:
 1. CONTRADICTION: New fact makes old fact false (e.g., moved to new city, changed preference). Action: "update".
@@ -174,34 +186,9 @@ Return JSON:
   }
 
   /**
-   * Retry with exponential backoff.
-   * Handles 429 (rate limit) and 503 (overloaded) errors.
+   * Retry with exponential backoff (delegates to shared utility).
    */
   private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 1000): Promise<T> {
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-
-        const isRetryable =
-          lastError.message.includes("429") ||
-          lastError.message.includes("503") ||
-          lastError.message.includes("rate") ||
-          lastError.message.includes("overloaded");
-
-        if (!isRetryable || attempt === maxRetries) {
-          throw lastError;
-        }
-
-        // Exponential backoff: 1s, 2s, 4s
-        const delay = baseDelay * Math.pow(2, attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-
-    throw lastError!;
+    return withRetry(fn, maxRetries, baseDelay);
   }
 }

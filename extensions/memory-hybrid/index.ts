@@ -11,10 +11,10 @@
  * - GDPR-compliant forget
  */
 
-import type * as LanceDB from "@lancedb/lancedb";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
+import type * as LanceDB from "@lancedb/lancedb";
+import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { WorkingMemoryBuffer } from "./buffer.js";
 import {
   shouldCapture,
@@ -57,6 +57,13 @@ type MemorySearchResult = {
 };
 
 const TABLE_NAME = "memories";
+
+/** Validate that an ID is a proper UUID to prevent SQL injection */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function validateId(id: string): string {
+  if (!UUID_REGEX.test(id)) throw new Error(`Invalid memory ID format: ${id}`);
+  return id;
+}
 
 class MemoryDB {
   private db: LanceDB.Connection | null = null;
@@ -129,13 +136,49 @@ class MemoryDB {
     return fullEntry;
   }
 
+  /**
+   * Multi-Retrieval Search
+   * 1. Fetches top N by vector similarity (semantic search)
+   * 2. Fetches top M most recent memories (temporal search)
+   * Combines and deduplicates them before returning.
+   * This fixes the "Vector Blindspot" where recent events are ignored if completely distinct semantically.
+   */
   async search(vector: number[], limit = 5, minScore = 0.5): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
-    const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
+    // 1. Vector Search
+    const vectorResults = await this.table!.vectorSearch(vector)
+      .limit(Math.max(limit * 2, 50))
+      .toArray();
+
+    // 2. Temporal Search (Recent memories unconditionally)
+    // LanceDB node API doesn't have a great sort() yet without a vector space,
+    // so we get all metadata, sort by createdAt, and take top 20
+    const allRows = await this.table!.query().toArray();
+    const recentRows = allRows
+      .sort((a, b) => (b.createdAt as number) - (a.createdAt as number))
+      .slice(0, 20);
+
+    // 3. Combine and Deduplicate
+    const combinedMap = new Map<string, Record<string, unknown>>();
+
+    for (const row of vectorResults) {
+      combinedMap.set(row.id as string, row);
+    }
+
+    // Add recent rows (giving them a baseline distance if they weren't in vector results)
+    for (const row of recentRows) {
+      if (!combinedMap.has(row.id as string)) {
+        // Approximate a mediocre distance so they don't get filtered out by minScore
+        // They will shine during hybridScoring due to their recency
+        const rowCopy = { ...row };
+        rowCopy._distance = 1.0;
+        combinedMap.set(row.id as string, rowCopy);
+      }
+    }
 
     // LanceDB uses L2 distance; convert to similarity: sim = 1 / (1 + d)
-    const mapped = results.map((row) => {
+    const mapped = Array.from(combinedMap.values()).map((row) => {
       const distance = (row._distance as number) ?? 0;
       const score = 1 / (1 + distance);
       const id = row.id as string;
@@ -148,6 +191,10 @@ class MemoryDB {
           category: row.category as MemoryCategory,
           createdAt: row.createdAt as number,
           recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
+          happenedAt: (row.happenedAt as string) ?? null,
+          validUntil: (row.validUntil as string) ?? null,
+          emotionalTone: (row.emotionalTone as string) ?? null,
+          emotionScore: (row.emotionScore as number) ?? null,
         },
         score,
       };
@@ -158,6 +205,7 @@ class MemoryDB {
 
   async getById(id: string): Promise<MemoryEntry | null> {
     await this.ensureInitialized();
+    validateId(id);
     const rows = await this.table!.query().where(`id = '${id}'`).limit(1).toArray();
     if (rows.length === 0) return null;
     return {
@@ -168,17 +216,17 @@ class MemoryDB {
       category: rows[0].category as string,
       createdAt: rows[0].createdAt as number,
       recallCount: this.mergeRecallDelta(id, (rows[0].recallCount as number) ?? 0),
+      happenedAt: (rows[0].happenedAt as string) ?? null,
+      validUntil: (rows[0].validUntil as string) ?? null,
+      emotionalTone: (rows[0].emotionalTone as string) ?? null,
+      emotionScore: (rows[0].emotionScore as number) ?? null,
     };
   }
 
   async delete(id: string): Promise<boolean> {
     await this.ensureInitialized();
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(id)) {
-      throw new Error(`Invalid memory ID format: ${id}`);
-    }
+    validateId(id);
     await this.table!.delete(`id = '${id}'`);
-    // Clean up delta for deleted memory
     this.recallCountDeltas.delete(id);
     return true;
   }
@@ -202,6 +250,44 @@ class MemoryDB {
         category: row.category as string,
         createdAt: row.createdAt as number,
         recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
+        happenedAt: (row.happenedAt as string) ?? null,
+        validUntil: (row.validUntil as string) ?? null,
+        emotionalTone: (row.emotionalTone as string) ?? null,
+        emotionScore: (row.emotionScore as number) ?? null,
+      };
+    });
+  }
+
+  /** List all memories WITHOUT vectors (lighter on memory — for reflection/timeline). */
+  async listMetadata(): Promise<Omit<MemoryEntry, "vector">[]> {
+    await this.ensureInitialized();
+    const rows = await this.table!.query()
+      .select([
+        "id",
+        "text",
+        "importance",
+        "category",
+        "createdAt",
+        "recallCount",
+        "happenedAt",
+        "validUntil",
+        "emotionalTone",
+        "emotionScore",
+      ])
+      .toArray();
+    return rows.map((row) => {
+      const id = row.id as string;
+      return {
+        id,
+        text: row.text as string,
+        importance: row.importance as number,
+        category: row.category as string,
+        createdAt: row.createdAt as number,
+        recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
+        happenedAt: (row.happenedAt as string) ?? null,
+        validUntil: (row.validUntil as string) ?? null,
+        emotionalTone: (row.emotionalTone as string) ?? null,
+        emotionScore: (row.emotionScore as number) ?? null,
       };
     });
   }
@@ -235,20 +321,30 @@ class MemoryDB {
         continue;
       }
       try {
+        validateId(id);
         const rows = await this.table!.query().where(`id = '${id}'`).toArray();
         if (rows.length === 0) {
           this.recallCountDeltas.delete(id);
           continue;
         }
         const row = rows[0];
+        const updatedRow = {
+          ...row,
+          recallCount: ((row.recallCount as number) ?? 0) + delta,
+        };
 
         await this.table!.delete(`id = '${id}'`);
-        await this.table!.add([
-          {
-            ...row,
-            recallCount: ((row.recallCount as number) ?? 0) + delta,
-          },
-        ]);
+        try {
+          await this.table!.add([updatedRow]);
+        } catch (addErr) {
+          // Rollback: restore original row to prevent data loss
+          try {
+            await this.table!.add([row as Record<string, unknown>]);
+          } catch {
+            console.warn(`[memory-hybrid] CRITICAL: rollback failed for ${id}, data may be lost`);
+          }
+          throw addErr;
+        }
 
         this.recallCountDeltas.delete(id);
         flushed++;
@@ -315,9 +411,11 @@ const memoryPlugin = {
       cfg.embedding.model,
       cfg.embedding.provider,
     );
-    const chatModel = new ChatModel(cfg.embedding.apiKey, cfg.chatModel, cfg.embedding.provider);
+    const chatModel = new ChatModel(cfg.chatApiKey, cfg.chatModel, cfg.chatProvider);
     const graphDB = new GraphDB(resolvedDbPath);
     const workingMemory = new WorkingMemoryBuffer(50, 0.7, 3);
+    let lastPruneTime = 0;
+    const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
     // Load graph on startup (async, non-blocking)
     graphDB.load().catch((err) => {
@@ -501,9 +599,10 @@ const memoryPlugin = {
           extractGraphFromText(text, chatModel)
             .then(async (graph) => {
               if (graph.nodes.length > 0 || graph.edges.length > 0) {
-                for (const node of graph.nodes) graphDB.addNode(node);
-                for (const edge of graph.edges) graphDB.addEdge(edge);
-                await graphDB.save();
+                await graphDB.modify(() => {
+                  for (const node of graph.nodes) graphDB.addNode(node);
+                  for (const edge of graph.edges) graphDB.addEdge(edge);
+                });
                 api.logger.info(
                   `memory-hybrid: graph updated (+${graph.nodes.length} nodes, +${graph.edges.length} edges)`,
                 );
@@ -519,7 +618,7 @@ const memoryPlugin = {
                 type: "text",
                 text:
                   actionmsg === "updated"
-                    ? `Updated memory: "${text.slice(0, 100)}..." (replaced old info)`
+                    ? `Updated memory: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}" (replaced old info)`
                     : `Stored: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"`,
               },
             ],
@@ -618,7 +717,7 @@ const memoryPlugin = {
           "Generate a high-level profile and patterns from all stored memories. Use to understand who the user is holistically, not just individual facts. Requires at least 5 stored memories.",
         parameters: Type.Object({}),
         async execute() {
-          const allMemories = await db.listAll();
+          const allMemories = await db.listMetadata();
 
           const result = await generateReflection(
             allMemories.map((m) => ({
@@ -626,6 +725,9 @@ const memoryPlugin = {
               category: m.category,
               importance: m.importance,
               recallCount: m.recallCount,
+              emotionalTone: m.emotionalTone,
+              emotionScore: m.emotionScore,
+              happenedAt: m.happenedAt,
             })),
             chatModel,
           );
@@ -725,7 +827,7 @@ const memoryPlugin = {
           .description("Show memories sorted by event date (temporal view)")
           .option("--limit <n>", "Max results", "20")
           .action(async (opts) => {
-            const allMemories = await db.listAll();
+            const allMemories = await db.listMetadata();
             const withDates = allMemories
               .filter((m) => m.happenedAt && m.happenedAt !== "")
               .sort((a, b) => {
@@ -834,19 +936,63 @@ const memoryPlugin = {
 
               console.log(`   → ✅ Merged into: "${merged}"`);
 
-              // Delete old memories
-              for (const item of cluster) {
-                await db.delete(item.id);
-              }
+              // Preserve best metadata from original cluster
+              const clusterEntries = await Promise.all(cluster.map((c) => db.getById(c.id)));
+              const validEntries = clusterEntries.filter(
+                (e): e is NonNullable<typeof e> => e != null,
+              );
 
-              // Store merged memory with boosted importance
+              // Pick highest importance, most common category, earliest happenedAt
+              const bestImportance = Math.max(0.85, ...validEntries.map((e) => e.importance));
+              const categories = validEntries.map((e) => e.category);
+              const bestCategory =
+                categories.find((c) => c === "decision") ??
+                categories.find((c) => c === "preference") ??
+                categories.find((c) => c === "entity") ??
+                categories.find((c) => c === "fact") ??
+                "fact";
+              const bestHappenedAt =
+                validEntries
+                  .map((e) => e.happenedAt)
+                  .filter((h): h is string => !!h)
+                  .sort()[0] ?? null;
+              const bestValidUntil =
+                validEntries
+                  .map((e) => e.validUntil)
+                  .filter((v): v is string => !!v)
+                  .sort()
+                  .reverse()[0] ?? null;
+              const emotionalEntries = validEntries.filter(
+                (e) => e.emotionalTone && e.emotionalTone !== "neutral",
+              );
+              const bestEmotionalTone =
+                emotionalEntries.length > 0 ? emotionalEntries[0].emotionalTone : "neutral";
+              const bestEmotionScore =
+                emotionalEntries.length > 0
+                  ? emotionalEntries.reduce(
+                      (max, e) =>
+                        Math.abs(e.emotionScore ?? 0) > Math.abs(max) ? (e.emotionScore ?? 0) : max,
+                      0,
+                    )
+                  : 0;
+
+              // Store merged memory FIRST (safety: if embed/store fails, originals are preserved)
               const vector = await embeddings.embed(merged);
               await db.store({
                 text: merged,
                 vector,
-                importance: 0.85, // consolidated memories are important
-                category: "fact",
+                importance: bestImportance,
+                category: bestCategory,
+                happenedAt: bestHappenedAt,
+                validUntil: bestValidUntil,
+                emotionalTone: bestEmotionalTone,
+                emotionScore: bestEmotionScore,
               });
+
+              // Delete old memories only after new one is safely stored
+              for (const item of cluster) {
+                await db.delete(item.id);
+              }
 
               totalMerged += cluster.length;
               totalCreated++;
@@ -864,7 +1010,7 @@ const memoryPlugin = {
           .command("reflect")
           .description("Generate a high-level user profile from all memories")
           .action(async () => {
-            const allMemories = await db.listAll();
+            const allMemories = await db.listMetadata();
             console.log(`\n🪞 Reflecting on ${allMemories.length} memories...\n`);
 
             const result = await generateReflection(
@@ -873,6 +1019,9 @@ const memoryPlugin = {
                 category: m.category,
                 importance: m.importance,
                 recallCount: m.recallCount,
+                emotionalTone: m.emotionalTone,
+                emotionScore: m.emotionScore,
+                happenedAt: m.happenedAt,
               })),
               chatModel,
             );
@@ -986,10 +1135,20 @@ const memoryPlugin = {
           // The LLM already decided what's worth storing — buffering would be redundant.
           if (cfg.smartCapture && userTexts.length > 0) {
             const lastUserMsg = userTexts[userTexts.length - 1];
+
+            // Pre-filter: skip LLM call for trivial messages (saves API quota)
+            const isTrivial =
+              lastUserMsg.length < 15 ||
+              /^(ok|yes|no|y|n|sure|thanks|thx|thank you|lol|haha|hmm|yep|nope|\u{1F44D}|done|got it|cool|nice|great|good|fine|agreed|alright|\u{043E}\u{043A}|\u{0442}\u{0430}\u{043A}|\u{043D}\u{0456}|\u{0434}\u{044F}\u{043A}\u{0443}\u{044E}|\u{044F}\u{0441}\u{043D}\u{043E}|\u{0434}\u{043E}\u{0431}\u{0440}\u{0435})\s*[.!?]?$/iu.test(
+                lastUserMsg.trim(),
+              );
+
             const lastAssistantMsg =
               assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : undefined;
 
-            const result = await smartCapture(lastUserMsg, lastAssistantMsg, chatModel);
+            const result = isTrivial
+              ? { shouldStore: false as const, facts: [] }
+              : await smartCapture(lastUserMsg, lastAssistantMsg, chatModel);
 
             if (result.shouldStore) {
               let stored = 0;
@@ -1017,9 +1176,10 @@ const memoryPlugin = {
                   extractGraphFromText(fact.text, chatModel)
                     .then(async (graph) => {
                       if (graph.nodes.length > 0 || graph.edges.length > 0) {
-                        for (const n of graph.nodes) graphDB.addNode(n);
-                        for (const e of graph.edges) graphDB.addEdge(e);
-                        await graphDB.save();
+                        await graphDB.modify(() => {
+                          for (const n of graph.nodes) graphDB.addNode(n);
+                          for (const e of graph.edges) graphDB.addEdge(e);
+                        });
                       }
                     })
                     .catch(() => {
@@ -1088,9 +1248,9 @@ const memoryPlugin = {
           api.logger.warn(`memory-hybrid: capture failed: ${String(err)}`);
         }
 
-        // Synaptic Pruning (Maintenance): 5% chance to clean up old memories
-        // Like biological sleep cycles removing toxins
-        if (Math.random() < 0.05) {
+        // Synaptic Pruning (Maintenance): run at most once every 24 hours
+        if (Date.now() - lastPruneTime > PRUNE_INTERVAL_MS) {
+          lastPruneTime = Date.now();
           try {
             // Flush recall count deltas before pruning
             const flushed = await db.flushRecallCounts();
@@ -1103,7 +1263,9 @@ const memoryPlugin = {
               api.logger.info(`memory-hybrid: auto-pruned ${deleted} unused memories (>90 days)`);
             }
           } catch (err) {
-            // maintain silence on background tasks
+            api.logger.warn(
+              `memory-hybrid: pruning/flush failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
       });

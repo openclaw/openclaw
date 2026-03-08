@@ -208,14 +208,17 @@ export class WorkingMemoryBuffer {
       }
 
       // 3. Levenshtein Distance (Slowest but smartest)
-      // Only run if lengths are somewhat close
-      if (Math.abs(normalized.length - entryNorm.length) < 10) {
+      // Guard: skip for long texts (>200 chars) — substring match above is sufficient
+      // Also only run if lengths are somewhat close
+      if (
+        normalized.length <= 200 &&
+        entryNorm.length <= 200 &&
+        Math.abs(normalized.length - entryNorm.length) < 10
+      ) {
         const dist = this.levenshteinDistance(normalized, entryNorm);
         const maxLength = Math.max(normalized.length, entryNorm.length);
 
         // Match if < 20% difference (80% similarity)
-        // e.g. "I love AI" vs "I like AI" -> dist 2, len 9 -> 2/9 = 0.22 (no match)
-        // "My name is Vova" vs "My name is Pova" -> dist 1, len 15 -> 1/15 = 0.06 (match)
         if (dist / maxLength < 0.2) {
           return true;
         }

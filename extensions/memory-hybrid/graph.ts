@@ -46,6 +46,8 @@ interface GraphData {
 export class GraphDB {
   public nodes: Map<string, GraphNode> = new Map();
   public edges: GraphEdge[] = [];
+  /** Set of composite keys for O(1) edge dedup: "source|target|relation" */
+  private edgeKeys: Set<string> = new Set();
   private filePath: string;
   private legacyJsonPath: string;
   private loaded = false;
@@ -103,13 +105,11 @@ export class GraphDB {
               if (!this.nodes.has(node.id)) this.nodes.set(node.id, node);
             } else if (record._t === "e") {
               const edge = record.d as GraphEdge;
-              const exists = this.edges.some(
-                (existing) =>
-                  existing.source === edge.source &&
-                  existing.target === edge.target &&
-                  existing.relation === edge.relation,
-              );
-              if (!exists) this.edges.push(edge);
+              const key = `${edge.source}|${edge.target}|${edge.relation}`;
+              if (!this.edgeKeys.has(key)) {
+                this.edgeKeys.add(key);
+                this.edges.push(edge);
+              }
             }
           } catch {
             // Skip malformed lines
@@ -132,13 +132,11 @@ export class GraphDB {
           if (!this.nodes.has(n.id)) this.nodes.set(n.id, n);
         }
         for (const e of data.edges || []) {
-          const exists = this.edges.some(
-            (existing) =>
-              existing.source === e.source &&
-              existing.target === e.target &&
-              existing.relation === e.relation,
-          );
-          if (!exists) this.edges.push(e);
+          const key = `${e.source}|${e.target}|${e.relation}`;
+          if (!this.edgeKeys.has(key)) {
+            this.edgeKeys.add(key);
+            this.edges.push(e);
+          }
         }
 
         // Mark everything as dirty so first save() writes full JSONL
@@ -216,12 +214,16 @@ export class GraphDB {
         lines.push(JSON.stringify({ _t: "e", d: edge }));
       }
       await writeFile(this.filePath, lines.join("\n") + "\n", "utf-8");
+      this.edgeKeys.clear();
+      for (const edge of this.edges) {
+        this.edgeKeys.add(`${edge.source}|${edge.target}|${edge.relation}`);
+      }
       this.dirtyNodes.clear();
       this.savedEdgeCount = this.edges.length;
     });
   }
 
-  /** Add a node if it doesn't already exist */
+  /** Add a node if it doesn't already exist (must be called inside withLock/modify) */
   addNode(node: GraphNode): void {
     if (!this.nodes.has(node.id)) {
       this.nodes.set(node.id, node);
@@ -229,14 +231,25 @@ export class GraphDB {
     }
   }
 
-  /** Add an edge if an identical one doesn't already exist */
+  /** Add an edge if an identical one doesn't already exist (must be called inside withLock/modify) */
   addEdge(edge: GraphEdge): void {
-    const exists = this.edges.some(
-      (e) => e.source === edge.source && e.target === edge.target && e.relation === edge.relation,
-    );
-    if (!exists) {
+    const key = `${edge.source}|${edge.target}|${edge.relation}`;
+    if (!this.edgeKeys.has(key)) {
+      this.edgeKeys.add(key);
       this.edges.push(edge);
     }
+  }
+
+  /**
+   * Execute a batch of graph mutations within a single transaction lock.
+   * This prevents concurrency race conditions when multiple agents try to write to the graph.
+   * After the mutations, it automatically saves the changes to disk.
+   */
+  async modify(fn: () => void | Promise<void>): Promise<void> {
+    return this.withLock(async () => {
+      await fn();
+      await this.doSave();
+    });
   }
 
   /** Get all edges connected to a node */
@@ -260,8 +273,8 @@ export class GraphDB {
     const matching = this.edges.filter((e) =>
       lowerTexts.some(
         (text) =>
-          (e.source.length >= 3 && text.includes(e.source.toLowerCase())) ||
-          (e.target.length >= 3 && text.includes(e.target.toLowerCase())),
+          (e.source.length >= 4 && text.includes(e.source.toLowerCase())) ||
+          (e.target.length >= 4 && text.includes(e.target.toLowerCase())),
       ),
     );
 
@@ -375,11 +388,14 @@ Format:
 }
 
 Rules:
-- Entity IDs should be short, clean names (not full sentences)
-- Relations should be short verb phrases like "knows", "prefers", "uses", "works_at"
+- Entity IDs MUST BE short, clean names (max 2-3 words)
+- Entity IDs MUST BE normalized (use lowercase, e.g. "python", not "Python")
+- Relations MUST BE exactly one of these allowed uppercase strings:
+  [ "HAS", "LIKES", "DISLIKES", "USES", "CREATED", "KNOWS", "WORKS_AT", "IS_A", "RELATED_TO", "EXPERIENCED" ]
+- If a relation doesn't fit the allowed list perfectly, map it to the closest one (e.g. "loves" -> "LIKES", "built" -> "CREATED")
 - If no entities found, return {"nodes": [], "edges": []}
 
-Text: "${text.replace(/"/g, '\\"')}"`;
+Text: "${JSON.stringify(text).slice(1, -1)}"`;
 
   try {
     const response = await chatModel.complete([{ role: "user", content: prompt }], true);
@@ -395,10 +411,24 @@ Text: "${text.replace(/"/g, '\\"')}"`;
       edges?: Array<{ source?: string; target?: string; relation?: string }>;
     };
 
+    const allowedRelations = new Set([
+      "HAS",
+      "LIKES",
+      "DISLIKES",
+      "USES",
+      "CREATED",
+      "KNOWS",
+      "WORKS_AT",
+      "IS_A",
+      "RELATED_TO",
+      "EXPERIENCED",
+    ]);
+
     const nodes: GraphNode[] = (data.nodes || [])
       .filter((n) => n.id && n.type)
       .map((n) => ({
-        id: String(n.id),
+        // Normalize IDs to lowercase + trimmed to prevent duplicate nodes (e.g. "Vova" vs "vova")
+        id: String(n.id).toLowerCase().trim(),
         type: String(n.type),
         description: n.description ? String(n.description) : undefined,
       }));
@@ -406,9 +436,11 @@ Text: "${text.replace(/"/g, '\\"')}"`;
     const edges: GraphEdge[] = (data.edges || [])
       .filter((e) => e.source && e.target && e.relation)
       .map((e) => ({
-        source: String(e.source),
-        target: String(e.target),
-        relation: String(e.relation),
+        source: String(e.source).toLowerCase().trim(),
+        target: String(e.target).toLowerCase().trim(),
+        relation: allowedRelations.has(String(e.relation).toUpperCase())
+          ? String(e.relation).toUpperCase()
+          : "RELATED_TO", // Fallback if LLM hallucinated a relation
         timestamp: Date.now(),
       }));
 

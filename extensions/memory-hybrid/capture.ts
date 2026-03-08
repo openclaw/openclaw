@@ -156,10 +156,15 @@ export async function smartCapture(
   chatModel: ChatModel,
 ): Promise<SmartCaptureResult> {
   const today = new Date().toISOString().split("T")[0];
+  // Use JSON.stringify for robust escaping (handles newlines, quotes, special chars)
+  const safeUser = JSON.stringify(userMessage).slice(1, -1);
+  const safeAssistant = assistantMessage
+    ? JSON.stringify(assistantMessage.slice(0, 300)).slice(1, -1)
+    : undefined;
   const prompt = `Analyze this conversation snippet and extract personal facts worth remembering long-term.
 
-USER message: "${userMessage.replace(/"/g, '\\"')}"
-${assistantMessage ? `ASSISTANT response: "${assistantMessage.replace(/"/g, '\\"').slice(0, 300)}"` : ""}
+USER message: "${safeUser}"
+${safeAssistant ? `ASSISTANT response: "${safeAssistant}"` : ""}
 
 Today's date: ${today}
 

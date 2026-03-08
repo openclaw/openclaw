@@ -65,6 +65,9 @@
       "chatModel": {
         "type": "string"
       },
+      "chatApiKey": {
+        "type": "string"
+      },
       "dbPath": {
         "type": "string"
       },

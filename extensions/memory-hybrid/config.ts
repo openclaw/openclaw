@@ -5,10 +5,9 @@
  * Supports OpenAI and Google embedding providers.
  */
 
-import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CHAT_MODELS } from "./chat.js";
+import { DEFAULT_CHAT_MODELS, type ChatProvider } from "./chat.js";
 import { detectProvider, vectorDimsForModel, type EmbeddingProvider } from "./embeddings.js";
 
 // ============================================================================
@@ -22,6 +21,8 @@ export type MemoryConfig = {
     apiKey: string;
   };
   chatModel: string;
+  chatApiKey: string;
+  chatProvider: ChatProvider;
   dbPath: string;
   autoCapture: boolean;
   autoRecall: boolean;
@@ -39,18 +40,15 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 const DEFAULT_MODEL = "gemini-embedding-001";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 
-function resolveDefaultDbPath(): string {
-  const home = homedir();
-  const preferred = join(home, ".openclaw", "memory", "lancedb");
-  try {
-    if (fs.existsSync(preferred)) return preferred;
-  } catch {
-    // best-effort
-  }
-  return preferred;
-}
+const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
 
-const DEFAULT_DB_PATH = resolveDefaultDbPath();
+/** Detect chat provider from chat model name */
+function detectChatProvider(model: string): ChatProvider {
+  if (model.startsWith("gpt") || model.startsWith("o1-") || model.startsWith("o3-")) {
+    return "openai";
+  }
+  return "google";
+}
 
 // ============================================================================
 // Helpers
@@ -88,6 +86,7 @@ export const memoryConfigSchema = {
       [
         "embedding",
         "chatModel",
+        "chatApiKey",
         "dbPath",
         "autoCapture",
         "autoRecall",
@@ -109,7 +108,12 @@ export const memoryConfigSchema = {
     // Validate model is supported
     vectorDimsForModel(model);
 
-    const provider = detectProvider(model);
+    // Bug #10: respect explicit provider if set, otherwise auto-detect from model
+    const provider: EmbeddingProvider =
+      typeof embedding.provider === "string" &&
+      (embedding.provider === "openai" || embedding.provider === "google")
+        ? (embedding.provider as EmbeddingProvider)
+        : detectProvider(model);
 
     // --- Capture max chars ---
     const captureMaxChars =
@@ -123,15 +127,38 @@ export const memoryConfigSchema = {
 
     // --- Chat model ---
     const chatModel =
-      typeof cfg.chatModel === "string" ? cfg.chatModel : DEFAULT_CHAT_MODELS[provider];
+      typeof cfg.chatModel === "string"
+        ? cfg.chatModel
+        : typeof cfg.chatApiKey === "string"
+          ? // If separate chatApiKey provided, infer default model from that key's provider
+            cfg.chatApiKey.startsWith("sk-") || resolveEnvVars(cfg.chatApiKey).startsWith("sk-")
+            ? DEFAULT_CHAT_MODELS["openai"]
+            : DEFAULT_CHAT_MODELS["google"]
+          : DEFAULT_CHAT_MODELS[provider];
+
+    // --- Chat API key (optional, defaults to embedding key) ---
+    const resolvedEmbeddingApiKey = resolveEnvVars(embedding.apiKey as string);
+    const chatApiKey =
+      typeof cfg.chatApiKey === "string" ? resolveEnvVars(cfg.chatApiKey) : resolvedEmbeddingApiKey;
+
+    // Detect chat provider: if separate chatApiKey looks like OpenAI key, use openai
+    const hasSeparateChatKey = typeof cfg.chatApiKey === "string";
+    const chatProviderHint: ChatProvider | undefined = hasSeparateChatKey
+      ? chatApiKey.startsWith("sk-")
+        ? "openai"
+        : "google"
+      : undefined;
+    const chatProvider = chatProviderHint ?? detectChatProvider(chatModel);
 
     return {
       embedding: {
         provider,
         model,
-        apiKey: resolveEnvVars(embedding.apiKey),
+        apiKey: resolvedEmbeddingApiKey,
       },
       chatModel,
+      chatApiKey,
+      chatProvider,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
@@ -156,6 +183,13 @@ export const memoryConfigSchema = {
       label: "Chat Model",
       placeholder: "auto (gemma-3-27b-it / gpt-4o-mini)",
       help: "LLM for graph extraction and smart capture. Auto-detected from embedding provider if not set.",
+      advanced: true,
+    },
+    chatApiKey: {
+      label: "Chat API Key (optional)",
+      sensitive: true,
+      placeholder: "defaults to embedding API key",
+      help: "Separate API key for chat/LLM operations. If not set, uses embedding API key.",
       advanced: true,
     },
     dbPath: {

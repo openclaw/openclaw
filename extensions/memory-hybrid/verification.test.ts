@@ -1,9 +1,9 @@
 import { unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { describe, it, expect, vi, beforeAll } from "vitest";
-import { WorkingMemoryBuffer } from "./buffer";
-import { Embeddings } from "./embeddings";
-import { GraphDB } from "./graph";
+import { WorkingMemoryBuffer } from "./buffer.js";
+import { Embeddings } from "./embeddings.js";
+import { GraphDB } from "./graph.js";
 
 describe("Verification of Critical Fixes", () => {
   const testDir = __dirname;

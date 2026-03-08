@@ -6,6 +6,7 @@
  */
 
 import OpenAI from "openai";
+import { withRetry } from "./utils.js";
 
 // Dimension map for supported models
 export const EMBEDDING_DIMENSIONS: Record<string, number> = {
@@ -51,7 +52,7 @@ export class Embeddings {
 
   async embed(text: string): Promise<number[]> {
     // Check cache first (LRU: delete+re-insert moves key to end of Map order)
-    const cacheKey = `${this.model}:${this.provider}:${text}`;
+    const cacheKey = `${this.model}:${text}`;
     if (this.cache.has(cacheKey)) {
       const val = this.cache.get(cacheKey)!;
       this.cache.delete(cacheKey);
@@ -103,7 +104,9 @@ export class Embeddings {
 
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(`Google Embedding API error (${response.status}): ${errorBody}`);
+        // Sanitize API key from error messages
+        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+        throw new Error(`Google Embedding API error (${response.status}): ${sanitizedError}`);
       }
 
       const data = (await response.json()) as { embedding?: { values?: number[] } };
@@ -116,22 +119,10 @@ export class Embeddings {
     });
   }
 
+  /**
+   * Retry with exponential backoff (delegates to shared utility).
+   */
   private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        return await fn();
-      } catch (err) {
-        const msg = String(err);
-        const isRateLimit =
-          msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("rate limit");
-
-        if (i === maxRetries - 1 || !isRateLimit) throw err;
-
-        // Exponential backoff: 1s, 2s, 4s
-        const delay = 1000 * Math.pow(2, i);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-    throw new Error("Unreachable");
+    return withRetry(fn, maxRetries);
   }
 }

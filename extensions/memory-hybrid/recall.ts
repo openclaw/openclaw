@@ -161,7 +161,12 @@ function emotionalAlignmentScore(entry: MemoryEntry): number {
 
 /**
  * Apply hybrid scoring to raw vector search results.
- * Re-ranks results based on 5 signals, not just vector similarity.
+ * Re-ranks results based on 7 signals, not just vector similarity.
+ *
+ * NOTE: The vectorScore here is derived from LanceDB's L2 distance via sim = 1/(1+d).
+ * This is NOT cosine similarity. The consolidate module uses cosine similarity
+ * for clustering — the two metrics have different scales, so thresholds are
+ * not directly comparable between search and consolidation.
  */
 export function hybridScore(
   results: Array<{ entry: MemoryEntry; score: number }>,
