@@ -21,6 +21,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import { listTelegramAccountIds } from "../telegram/accounts.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -57,11 +58,16 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
   };
   pairingAllowFrom: {
-    legacyTelegramPath: string;
-    targetTelegramPath: string;
     hasLegacyTelegram: boolean;
+    copyPlans: FileCopyPlan[];
   };
   preview: string[];
+};
+
+type FileCopyPlan = {
+  label: string;
+  sourcePath: string;
+  targetPath: string;
 };
 
 type MigrationLogger = {
@@ -96,6 +102,30 @@ function isLegacyGroupKey(key: string): boolean {
     return true;
   }
   return false;
+}
+
+function buildFileCopyPreview(plan: FileCopyPlan): string {
+  return `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`;
+}
+
+async function runFileCopyPlans(
+  plans: FileCopyPlan[],
+): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const plan of plans) {
+    if (fileExists(plan.targetPath)) {
+      continue;
+    }
+    try {
+      ensureDir(path.dirname(plan.targetPath));
+      fs.copyFileSync(plan.sourcePath, plan.targetPath);
+      changes.push(`Copied ${plan.label} → ${plan.targetPath}`);
+    } catch (err) {
+      warnings.push(`Failed migrating ${plan.label} (${plan.sourcePath}): ${String(err)}`);
+    }
+  }
+  return { changes, warnings };
 }
 
 function canonicalizeSessionKeyForAgent(params: {
@@ -619,13 +649,24 @@ export async function detectLegacyStateMigrations(params: {
     fileExists(path.join(oauthDir, "creds.json")) &&
     !fileExists(path.join(targetWhatsAppAuthDir, "creds.json"));
   const legacyTelegramAllowFromPath = resolveChannelAllowFromPath("telegram", env);
-  const targetTelegramAllowFromPath = resolveChannelAllowFromPath(
-    "telegram",
-    env,
-    DEFAULT_ACCOUNT_ID,
-  );
-  const hasLegacyTelegramAllowFrom =
-    fileExists(legacyTelegramAllowFromPath) && !fileExists(targetTelegramAllowFromPath);
+  const telegramPairingAllowFromPlans = fileExists(legacyTelegramAllowFromPath)
+    ? Array.from(
+        new Set(
+          listTelegramAccountIds(params.cfg).map((accountId) =>
+            resolveChannelAllowFromPath("telegram", env, accountId),
+          ),
+        ),
+      )
+        .filter((targetPath) => !fileExists(targetPath))
+        .map(
+          (targetPath): FileCopyPlan => ({
+            label: "Telegram pairing allowFrom",
+            sourcePath: legacyTelegramAllowFromPath,
+            targetPath,
+          }),
+        )
+    : [];
+  const hasLegacyTelegramAllowFrom = telegramPairingAllowFromPlans.length > 0;
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -641,9 +682,7 @@ export async function detectLegacyStateMigrations(params: {
     preview.push(`- WhatsApp auth: ${oauthDir} → ${targetWhatsAppAuthDir} (keep oauth.json)`);
   }
   if (hasLegacyTelegramAllowFrom) {
-    preview.push(
-      `- Telegram pairing allowFrom: ${legacyTelegramAllowFromPath} → ${targetTelegramAllowFromPath}`,
-    );
+    preview.push(...telegramPairingAllowFromPlans.map(buildFileCopyPreview));
   }
 
   return {
@@ -671,9 +710,8 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasLegacyWhatsAppAuth,
     },
     pairingAllowFrom: {
-      legacyTelegramPath: legacyTelegramAllowFromPath,
-      targetTelegramPath: targetTelegramAllowFromPath,
       hasLegacyTelegram: hasLegacyTelegramAllowFrom,
+      copyPlans: telegramPairingAllowFromPlans,
     },
     preview,
   };
@@ -899,18 +937,7 @@ async function migrateLegacyTelegramPairingAllowFrom(
   if (!detected.pairingAllowFrom.hasLegacyTelegram) {
     return { changes, warnings };
   }
-
-  const legacyPath = detected.pairingAllowFrom.legacyTelegramPath;
-  const targetPath = detected.pairingAllowFrom.targetTelegramPath;
-  try {
-    ensureDir(path.dirname(targetPath));
-    fs.copyFileSync(legacyPath, targetPath);
-    changes.push(`Copied Telegram pairing allowFrom → ${targetPath}`);
-  } catch (err) {
-    warnings.push(`Failed migrating Telegram pairing allowFrom (${legacyPath}): ${String(err)}`);
-  }
-
-  return { changes, warnings };
+  return await runFileCopyPlans(detected.pairingAllowFrom.copyPlans);
 }
 
 export async function runLegacyStateMigrations(params: {
