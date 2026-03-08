@@ -221,6 +221,8 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /** Cold-start jitter (duration string). Staggers initial scheduling to avoid thundering herd. Defaults to 10% of interval. */
+    jitter?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
       /** Start time (24h, HH:MM). Inclusive. */

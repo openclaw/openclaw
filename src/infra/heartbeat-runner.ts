@@ -94,6 +94,7 @@ export type HeartbeatSummary = {
   prompt: string;
   target: string;
   model?: string;
+  jitter?: string;
   ackMaxChars: number;
 };
 
@@ -104,6 +105,8 @@ type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
+  jitterMs: number;
+  scheduledAt: number;
   lastRunMs?: number;
   nextDueMs: number;
 };
@@ -174,6 +177,7 @@ export function resolveHeartbeatSummaryForAgent(
   const target =
     merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
   const model = merged?.model ?? defaults?.model ?? overrides?.model;
+  const jitter = merged?.jitter ?? defaults?.jitter ?? overrides?.jitter;
   const ackMaxChars = Math.max(
     0,
     merged?.ackMaxChars ??
@@ -189,6 +193,7 @@ export function resolveHeartbeatSummaryForAgent(
     prompt,
     target,
     model,
+    jitter,
     ackMaxChars,
   };
 }
@@ -235,6 +240,33 @@ export function resolveHeartbeatIntervalMs(
     return null;
   }
   return ms;
+}
+
+/** Resolve jitter for cold-start staggering. Explicit config or 10% of interval. Clamped to intervalMs. */
+export function resolveHeartbeatJitterMs(
+  heartbeat: HeartbeatConfig | undefined,
+  intervalMs: number,
+): number {
+  let jitterMs: number;
+  const raw = heartbeat?.jitter?.trim();
+  if (raw) {
+    try {
+      const ms = parseDurationMs(raw, { defaultUnit: "m" });
+      jitterMs = ms >= 0 ? ms : Math.floor(intervalMs * 0.1);
+    } catch {
+      jitterMs = Math.floor(intervalMs * 0.1);
+    }
+  } else {
+    jitterMs = Math.floor(intervalMs * 0.1);
+  }
+  // Clamp so jitter never exceeds the interval (max first-run delay is just under 2× interval)
+  if (jitterMs > intervalMs) {
+    log.warn(
+      `heartbeat: jitter (${raw ?? "default"}) exceeds interval; clamped to ${intervalMs}ms`,
+    );
+    return intervalMs;
+  }
+  return jitterMs;
 }
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -1016,14 +1048,29 @@ export function startHeartbeatRunner(opts: {
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    jitterMs: number,
+    prevState?: HeartbeatAgentState,
+  ): { nextDueMs: number; scheduledAt: number } => {
+    // Steady state: advance deterministically from last run
     if (typeof prevState?.lastRunMs === "number") {
-      return prevState.lastRunMs + intervalMs;
+      return { nextDueMs: prevState.lastRunMs + intervalMs, scheduledAt: prevState.scheduledAt };
     }
-    if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
-      return prevState.nextDueMs;
+    // Pending schedule (no run yet) — keep or recompute based on config changes
+    if (prevState) {
+      const configChanged = prevState.intervalMs !== intervalMs || prevState.jitterMs !== jitterMs;
+      if (!configChanged) {
+        // Config unchanged — keep existing schedule (even if overdue, let it fire)
+        return { nextDueMs: prevState.nextDueMs, scheduledAt: prevState.scheduledAt };
+      }
+      // Config changed — recompute from original cold-start base with a fresh jitter sample
+      const recomputed = prevState.scheduledAt + intervalMs + Math.floor(Math.random() * jitterMs);
+      return { nextDueMs: Math.max(now, recomputed), scheduledAt: prevState.scheduledAt };
     }
-    return now + intervalMs;
+    // Fresh cold start: stagger with jitter to avoid thundering herd
+    return { nextDueMs: now + intervalMs + Math.floor(Math.random() * jitterMs), scheduledAt: now };
   };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
@@ -1052,7 +1099,8 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Cap at Node's signed-32-bit setTimeout limit (~24.8 days); scheduleNext re-fires on the next tick.
+    const delay = Math.min(Math.max(0, nextDue - now), 0x7fff_ffff);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
@@ -1076,11 +1124,14 @@ export function startHeartbeatRunner(opts: {
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const jitterMs = resolveHeartbeatJitterMs(agent.heartbeat, intervalMs);
+      const { nextDueMs, scheduledAt } = resolveNextDue(now, intervalMs, jitterMs, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
+        jitterMs,
+        scheduledAt,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
       });

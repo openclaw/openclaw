@@ -19,9 +19,15 @@ describe("startHeartbeatRunner", () => {
     vi.restoreAllMocks();
   });
 
+  // Pin Math.random to 0 for deterministic scheduling in tests that depend on exact timing.
+  function pinRandom(value = 0) {
+    vi.spyOn(Math, "random").mockReturnValue(value);
+  }
+
   it("updates scheduling when config changes without restart", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
@@ -64,6 +70,7 @@ describe("startHeartbeatRunner", () => {
   it("continues scheduling after runOnce throws an unhandled error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     let callCount = 0;
     const runSpy = vi.fn().mockImplementation(async () => {
@@ -91,6 +98,7 @@ describe("startHeartbeatRunner", () => {
   it("cleanup is idempotent and does not clear a newer runner's handler", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     const runSpy1 = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runSpy2 = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -122,6 +130,7 @@ describe("startHeartbeatRunner", () => {
   it("run() returns skipped when runner is stopped", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
@@ -137,6 +146,7 @@ describe("startHeartbeatRunner", () => {
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     let callCount = 0;
     const runSpy = vi.fn().mockImplementation(async () => {
@@ -210,6 +220,7 @@ describe("startHeartbeatRunner", () => {
   it("routes targeted wake requests to the requested agent/session", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
@@ -248,6 +259,7 @@ describe("startHeartbeatRunner", () => {
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
+    pinRandom();
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
@@ -279,6 +291,71 @@ describe("startHeartbeatRunner", () => {
       }),
     );
     expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
+
+    runner.stop();
+  });
+
+  it("staggers cold-start scheduling with jitter", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    // With random=0.5 and default jitter (10% of 30m = 3m), offset = 1.5m = 90_000ms
+    pinRandom(0.5);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    // At exactly 30m (no jitter), the heartbeat should NOT have fired yet
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    // At 30m + 90s (interval + jitter offset), it should fire
+    await vi.advanceTimersByTimeAsync(90_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
+
+  it("respects explicit jitter config", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    // With random=0.5 and explicit jitter "5m" = 300_000ms, offset = 150_000ms = 2.5m
+    pinRandom(0.5);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m", jitter: "5m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // At 30m, heartbeat should NOT have fired (jitter offset = 2.5m)
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    // At 30m + 2.5m + buffer, it should fire
+    await vi.advanceTimersByTimeAsync(150_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
+
+  it("disables jitter when jitter is set to 0s", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    pinRandom(0.5);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m", jitter: "0s" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // With jitter disabled, heartbeat should fire at exactly 30m
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
 
     runner.stop();
   });
