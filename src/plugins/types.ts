@@ -894,8 +894,15 @@ export type PluginHookGatewayStopEvent = {
 
 // before_response_emit hook (modifying — sequential)
 //
-// Error handling: FAIL-CLOSED. If the hook machinery throws, the response
-// is suppressed (assistantTexts cleared). Plugin authors can rely on crash = blocked.
+// Error handling: Two layers.
+// 1. Per-handler errors: caught by the hook runner's catchErrors flag (default: true).
+//    A crashing handler is logged and skipped — other handlers still run. This matches
+//    the existing hook runner contract for all hooks and prevents one buggy plugin
+//    from breaking the entire hook pipeline.
+// 2. Infrastructure errors (import failure, runner itself throws): FAIL-CLOSED.
+//    The response is suppressed (assistantTexts + session messages cleared,
+//    messagesSnapshot refreshed). Plugin authors needing crash = blocked at the
+//    per-handler level should set catchErrors: false on their hook runner.
 //
 // Content is raw assistant text (may include reasoning/tool-call artifacts that
 // are stripped in the final delivery pipeline). For PII scanning this is correct

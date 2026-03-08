@@ -2665,6 +2665,11 @@ export async function runEmbeddedAttempt(
                 }
               }
             }
+            // Refresh messagesSnapshot so lastAssistant (derived from it later)
+            // reflects the scrubbed state. Without this, the compaction-timeout
+            // snapshot or the pre-scrub snapshot leaks unredacted text through
+            // the lastAssistant fallback in payloads.ts.
+            messagesSnapshot = activeSession.messages.slice();
           }
         }
 
