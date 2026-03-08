@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import { buildTalkConfigResponse } from "../../config/talk.js";
 import { validateTalkConfigResult } from "./index.js";
 
 type ExpectedSelection = {
   provider: string;
   normalizedPayload: boolean;
   voiceId?: string;
+  apiKey?: string;
 };
 
 type SelectionContractCase = {
@@ -16,8 +18,16 @@ type SelectionContractCase = {
   talk: Record<string, unknown>;
 };
 
+type TimeoutContractCase = {
+  id: string;
+  fallback: number;
+  expectedTimeoutMs: number;
+  talk: Record<string, unknown>;
+};
+
 type TalkConfigContractFixture = {
   selectionCases: SelectionContractCase[];
+  timeoutCases: TimeoutContractCase[];
 };
 
 const fixturePath = new URL("../../../test-fixtures/talk-config-contract.json", import.meta.url);
@@ -42,9 +52,11 @@ describe("talk.config contract fixtures", () => {
           provider?: string;
           config?: {
             voiceId?: string;
+            apiKey?: string;
           };
         };
         voiceId?: string;
+        apiKey?: string;
       };
       expect(talk.resolved?.provider ?? fixture.defaultProvider).toBe(
         fixture.expectedSelection.provider,
@@ -52,6 +64,14 @@ describe("talk.config contract fixtures", () => {
       expect(talk.resolved?.config?.voiceId ?? talk.voiceId).toBe(
         fixture.expectedSelection.voiceId,
       );
+      expect(talk.resolved?.config?.apiKey ?? talk.apiKey).toBe(fixture.expectedSelection.apiKey);
+    });
+  }
+
+  for (const fixture of fixtures.timeoutCases) {
+    it(`timeout:${fixture.id}`, () => {
+      const payload = buildTalkConfigResponse(fixture.talk);
+      expect(payload?.silenceTimeoutMs ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
     });
   }
 });
