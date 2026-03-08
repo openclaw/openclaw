@@ -280,11 +280,14 @@ export {
 } from "./allow-from.js";
 export {
   evaluateGroupRouteAccessForPolicy,
+  evaluateMatchedGroupAccessForPolicy,
   evaluateSenderGroupAccess,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
   type GroupRouteAccessDecision,
   type GroupRouteAccessReason,
+  type MatchedGroupAccessDecision,
+  type MatchedGroupAccessReason,
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
@@ -377,6 +380,7 @@ export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
+  createScopedAccountConfigAccessors,
   formatTrimmedAllowFromEntries,
   mapAllowFromEntries,
   resolveOptionalConfigString,
@@ -543,6 +547,9 @@ export {
   buildOpenGroupPolicyNoRouteAllowlistWarning,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,

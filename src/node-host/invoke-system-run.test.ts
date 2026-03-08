@@ -858,13 +858,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
-  it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
+  async function expectNestedEnvShellDenied(params: {
+    depth: number;
+    markerName: string;
+    errorLabel: string;
+  }) {
     const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
       runCommand: vi.fn(async () => {
-        throw new Error("runCommand should not be called for nested env depth overflow");
+        throw new Error(params.errorLabel);
       }),
     });
 
@@ -877,11 +878,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       }),
       run: async ({ tempHome }) => {
-        const marker = path.join(tempHome, "pwned.txt");
+        const marker = path.join(tempHome, params.markerName);
         await runSystemInvoke({
           preferMacAppExecHost: false,
           command: buildNestedEnvShellCommand({
-            depth: 5,
+            depth: params.depth,
             payload: `echo PWNED > ${marker}`,
           }),
           security: "allowlist",
@@ -896,5 +897,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     expect(runCommand).not.toHaveBeenCalled();
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+  }
+
+  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await expectNestedEnvShellDenied({
+      depth: 4,
+      markerName: "depth4-pwned.txt",
+      errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
+    });
+  });
+
+  it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await expectNestedEnvShellDenied({
+      depth: 5,
+      markerName: "pwned.txt",
+      errorLabel: "runCommand should not be called for nested env depth overflow",
+    });
   });
 });

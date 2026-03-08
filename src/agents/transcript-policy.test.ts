@@ -60,6 +60,8 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "kimi-k2.5",
       modelApi: "openai-completions",
     });
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
@@ -120,12 +122,25 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.preserveSignatures).toBe(false);
   });
 
+  it("enables turn-ordering and assistant-merge for strict OpenAI-compatible providers (#38962)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "gemma-3-27b",
+      modelApi: "openai-completions",
+    });
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
       modelId: "openai/gpt-4.1",
       modelApi: "openai-completions",
     });
+    expect(policy.applyGoogleTurnOrdering).toBe(false);
+    expect(policy.validateGeminiTurns).toBe(false);
     expect(policy.validateAnthropicTurns).toBe(false);
   });
 });

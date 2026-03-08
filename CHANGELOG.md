@@ -158,6 +158,7 @@ Docs: https://docs.openclaw.ai
 - Discord/thread session lifecycle: reset thread-scoped sessions when a thread is archived so reopening a thread starts fresh without deleting transcript history. Thanks @thewilloftheshadow.
 - Discord/presence defaults: send an online presence update on ready when no custom presence is configured so bots no longer appear offline by default. Thanks @thewilloftheshadow.
 - Discord/typing cleanup: stop typing indicators after silent/NO_REPLY runs by marking the run complete before dispatch idle cleanup. Thanks @thewilloftheshadow.
+- ACP/sandbox spawn parity: block `/acp spawn` from sandboxed requester sessions with the same host-runtime guard already enforced for `sessions_spawn({ runtime: "acp" })`, preserving non-sandbox ACP flows while closing the command-path policy gap. Thanks @patte.
 - Discord/config SecretRef typing: align Discord account token config typing with SecretInput so SecretRef tokens typecheck. (#32490) Thanks @scoootscooob.
 - Discord/voice messages: request upload slots with JSON fetch calls so voice message uploads no longer fail with content-type errors. Thanks @thewilloftheshadow.
 - Discord/voice decoder fallback: drop the native Opus dependency and use opusscript for voice decoding to avoid native-opus installs. Thanks @thewilloftheshadow.
@@ -304,6 +305,12 @@ Docs: https://docs.openclaw.ai
 - Control UI/auth error reporting: map generic browser `Fetch failed` websocket close errors back to actionable gateway auth messages (`gateway token mismatch`, `authentication failed`, `retry later`) so dashboard disconnects stop hiding credential problems. Landed from contributor PR #28608 by @KimGLee. Thanks @KimGLee.
 - Media/mime unknown-kind handling: return `undefined` (not `"unknown"`) for missing/unrecognized MIME kinds and use document-size fallback caps for unknown remote media, preventing phantom `<media:unknown>` Signal events from being treated as real messages. (#39199) Thanks @nicolasgrasset.
 - Nodes/system.run allow-always persistence: honor shell comment semantics during allowlist analysis so `#`-tailed payloads that never execute are not persisted as trusted follow-up commands. Thanks @tdjackey for reporting.
+- Signal/inbound attachment fan-in: forward all successfully fetched inbound attachments through `MediaPaths`/`MediaUrls`/`MediaTypes` (instead of only the first), and improve multi-attachment placeholder summaries in mention-gated pending history. (#39212) Thanks @joeykrug.
+- Nodes/system.run dispatch-wrapper boundary: keep shell-wrapper approval classification active at the depth boundary so `env` wrapper stacks cannot reach `/bin/sh -c` execution without the expected approval gate. Thanks @tdjackey for reporting.
+- Docker/token persistence on reconfigure: reuse the existing `.env` gateway token during `docker-setup.sh` reruns and align compose token env defaults, so Docker installs stop silently rotating tokens and breaking existing dashboard sessions. Landed from contributor PR #33097 by @chengzhichao-xydt. Thanks @chengzhichao-xydt.
+- Agents/strict OpenAI turn ordering: apply assistant-first transcript bootstrap sanitization to strict OpenAI-compatible providers (for example vLLM/Gemma via `openai-completions`) without adding Google-specific session markers, preventing assistant-first history rejections. (#39252) Thanks @scoootscooob.
+- Discord/exec approvals gateway auth: pass resolved shared gateway credentials into the Discord exec-approvals gateway client so token-auth installs stop failing approvals with `gateway token mismatch`. Related to #38179. Thanks @0riginal-claw for the adjacent PR #35147 investigation.
+- Subagents/workspace inheritance: propagate parent workspace directory to spawned subagent runs so child sessions reliably inherit workspace-scoped instructions (`AGENTS.md`, `SOUL.md`, etc.) without exposing workspace override through tool-call arguments. (#39247) Thanks @jasonQin6.
 
 ## 2026.3.2
 

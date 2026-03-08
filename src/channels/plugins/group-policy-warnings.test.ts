@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
@@ -82,6 +85,108 @@ describe("group policy warning builders", () => {
         groupAllowFromPath: "channels.example.groupAllowFrom",
       }),
     ).toHaveLength(1);
+  });
+
+  it("resolves allowlist-provider runtime policy before collecting restrict-senders warnings", () => {
+    expect(
+      collectAllowlistProviderRestrictSendersWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "open" },
+          },
+        },
+        providerConfigPresent: false,
+        configuredGroupPolicy: undefined,
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ).toEqual([]);
+
+    expect(
+      collectAllowlistProviderRestrictSendersWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "open" },
+          },
+        },
+        providerConfigPresent: true,
+        configuredGroupPolicy: "open",
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ).toEqual([
+      buildOpenGroupPolicyRestrictSendersWarning({
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ]);
+  });
+
+  it("passes resolved allowlist-provider policy into the warning collector", () => {
+    expect(
+      collectAllowlistProviderGroupPolicyWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "open" },
+          },
+        },
+        providerConfigPresent: false,
+        configuredGroupPolicy: undefined,
+        collect: (groupPolicy) => [groupPolicy],
+      }),
+    ).toEqual(["allowlist"]);
+
+    expect(
+      collectAllowlistProviderGroupPolicyWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "disabled" },
+          },
+        },
+        providerConfigPresent: true,
+        configuredGroupPolicy: "open",
+        collect: (groupPolicy) => [groupPolicy],
+      }),
+    ).toEqual(["open"]);
+  });
+
+  it("passes resolved open-provider policy into the warning collector", () => {
+    expect(
+      collectOpenProviderGroupPolicyWarnings({
+        cfg: {
+          channels: {
+            defaults: { groupPolicy: "allowlist" },
+          },
+        },
+        providerConfigPresent: false,
+        configuredGroupPolicy: undefined,
+        collect: (groupPolicy) => [groupPolicy],
+      }),
+    ).toEqual(["allowlist"]);
+
+    expect(
+      collectOpenProviderGroupPolicyWarnings({
+        cfg: {},
+        providerConfigPresent: true,
+        configuredGroupPolicy: undefined,
+        collect: (groupPolicy) => [groupPolicy],
+      }),
+    ).toEqual(["open"]);
+
+    expect(
+      collectOpenProviderGroupPolicyWarnings({
+        cfg: {},
+        providerConfigPresent: true,
+        configuredGroupPolicy: "disabled",
+        collect: (groupPolicy) => [groupPolicy],
+      }),
+    ).toEqual(["disabled"]);
   });
 
   it("collects route allowlist warning variants", () => {
