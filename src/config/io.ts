@@ -144,9 +144,17 @@ export type RuntimeConfigSnapshotRefreshParams = {
   sourceConfig: OpenClawConfig;
 };
 
-type RuntimeConfigSnapshotRefreshHook = (
-  params: RuntimeConfigSnapshotRefreshParams,
-) => boolean | Promise<boolean>;
+export type RuntimeConfigSnapshotRefreshHandler = {
+  refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
+  clearOnRefreshFailure?: () => void;
+};
+
+export class ConfigRuntimeRefreshError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ConfigRuntimeRefreshError";
+  }
+}
 
 function hashConfigRaw(raw: string | null): string {
   return crypto
@@ -1314,7 +1322,7 @@ let configCache: {
 } | null = null;
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSnapshotRefreshHook: RuntimeConfigSnapshotRefreshHook | null = null;
+let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
@@ -1365,10 +1373,10 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
 }
 
-export function setRuntimeConfigSnapshotRefreshHook(
-  refreshHook: RuntimeConfigSnapshotRefreshHook | null,
+export function setRuntimeConfigSnapshotRefreshHandler(
+  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
 ): void {
-  runtimeConfigSnapshotRefreshHook = refreshHook;
+  runtimeConfigSnapshotRefreshHandler = refreshHandler;
 }
 
 export function loadConfig(): OpenClawConfig {
@@ -1431,15 +1439,24 @@ export async function writeConfigFile(
   // Keep follow-up loadConfig() in sync with the just-persisted config (fixes race where a
   // second connection's agents.update fails with "agent not found" after agents.create).
   clearRuntimeConfigSnapshot();
-  if (runtimeConfigSnapshotRefreshHook) {
+  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+  if (refreshHandler) {
     try {
-      const refreshed = await runtimeConfigSnapshotRefreshHook({ sourceConfig: nextCfg });
+      const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
       if (refreshed) {
         return;
       }
-    } catch {
-      // Best-effort hook: if a specialized runtime refresh fails after the write landed,
-      // fall back to plain config refresh instead of surfacing a post-persist error.
+    } catch (error) {
+      try {
+        refreshHandler.clearOnRefreshFailure?.();
+      } catch {
+        // Keep the original refresh failure as the surfaced error.
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new ConfigRuntimeRefreshError(
+        `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
+        { cause: error },
+      );
     }
   }
   if (hadBothSnapshots) {

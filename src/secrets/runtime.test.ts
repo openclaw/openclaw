@@ -8,6 +8,7 @@ import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
@@ -601,6 +602,104 @@ describe("secrets runtime snapshot", () => {
         type: "api_key",
         key: "sk-file-runtime",
       });
+    });
+  });
+
+  it("clears active secrets runtime state and throws when refresh fails after a write", async () => {
+    await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const secretFile = path.join(configDir, "secrets.json");
+      const agentDir = path.join(configDir, "agents", "main", "agent");
+      const authStorePath = path.join(agentDir, "auth-profiles.json");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.chmod(configDir, 0o700).catch(() => {
+        // best-effort on tmp dirs that already have secure perms
+      });
+      await fs.writeFile(
+        secretFile,
+        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await fs.writeFile(
+        authStorePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      let loadAuthStoreCalls = 0;
+      const loadAuthStore = () => {
+        loadAuthStoreCalls += 1;
+        if (loadAuthStoreCalls > 1) {
+          throw new Error("simulated secrets runtime refresh failure");
+        }
+        return loadAuthStoreWithProfiles({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+          },
+        });
+      };
+
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
+            providers: {
+              default: { source: "file", path: secretFile, mode: "json" },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                models: [],
+              },
+            },
+          },
+        }),
+        agentDirs: [agentDir],
+        loadAuthStore,
+      });
+
+      activateSecretsRuntimeSnapshot(prepared);
+
+      await expect(
+        writeConfigFile({
+          ...loadConfig(),
+          gateway: { auth: { mode: "token" } },
+        }),
+      ).rejects.toThrow(
+        /runtime snapshot refresh failed: simulated secrets runtime refresh failure/i,
+      );
+
+      expect(getActiveSecretsRuntimeSnapshot()).toBeNull();
+      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
+      expect(loadConfig().models?.providers?.openai?.apiKey).toEqual({
+        source: "file",
+        provider: "default",
+        id: "/providers/openai/apiKey",
+      });
+
+      const persistedStore = ensureAuthProfileStore(agentDir).profiles["openai:default"];
+      expect(persistedStore).toMatchObject({
+        type: "api_key",
+        keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+      });
+      expect("key" in persistedStore ? persistedStore.key : undefined).toBeUndefined();
     });
   });
 

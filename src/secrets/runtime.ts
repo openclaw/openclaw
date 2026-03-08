@@ -8,7 +8,7 @@ import {
 } from "../agents/auth-profiles.js";
 import {
   clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshotRefreshHook,
+  setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
@@ -66,6 +66,14 @@ function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRunt
     agentDirs: [...context.agentDirs],
     loadAuthStore: context.loadAuthStore,
   };
+}
+
+function clearActiveSecretsRuntimeState(): void {
+  activeSnapshot = null;
+  activeRefreshContext = null;
+  setRuntimeConfigSnapshotRefreshHandler(null);
+  clearRuntimeConfigSnapshot();
+  clearRuntimeAuthProfileStoreSnapshots();
 }
 
 function collectCandidateAgentDirs(config: OpenClawConfig): string[] {
@@ -152,18 +160,21 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
-  setRuntimeConfigSnapshotRefreshHook(async ({ sourceConfig }) => {
-    if (!activeSnapshot || !activeRefreshContext) {
-      return false;
-    }
-    const refreshed = await prepareSecretsRuntimeSnapshot({
-      config: sourceConfig,
-      env: activeRefreshContext.env,
-      agentDirs: activeRefreshContext.agentDirs,
-      loadAuthStore: activeRefreshContext.loadAuthStore,
-    });
-    activateSecretsRuntimeSnapshot(refreshed);
-    return true;
+  setRuntimeConfigSnapshotRefreshHandler({
+    refresh: async ({ sourceConfig }) => {
+      if (!activeSnapshot || !activeRefreshContext) {
+        return false;
+      }
+      const refreshed = await prepareSecretsRuntimeSnapshot({
+        config: sourceConfig,
+        env: activeRefreshContext.env,
+        agentDirs: activeRefreshContext.agentDirs,
+        loadAuthStore: activeRefreshContext.loadAuthStore,
+      });
+      activateSecretsRuntimeSnapshot(refreshed);
+      return true;
+    },
+    clearOnRefreshFailure: clearActiveSecretsRuntimeState,
   });
 }
 
@@ -210,9 +221,5 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
 }
 
 export function clearSecretsRuntimeSnapshot(): void {
-  activeSnapshot = null;
-  activeRefreshContext = null;
-  setRuntimeConfigSnapshotRefreshHook(null);
-  clearRuntimeConfigSnapshot();
-  clearRuntimeAuthProfileStoreSnapshots();
+  clearActiveSecretsRuntimeState();
 }
