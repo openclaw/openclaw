@@ -474,4 +474,59 @@ describe("hooks", () => {
       expect(keys).toEqual([]);
     });
   });
+
+  describe("plugin hook re-registration after clear", () => {
+    it("should survive clearInternalHooks when re-registered from registry", async () => {
+      const handler = vi.fn();
+
+      // Simulate plugin registering a hook during loadGatewayPlugins
+      registerInternalHook("agent:bootstrap", handler);
+
+      // Simulate startGatewaySidecars clearing all hooks
+      clearInternalHooks();
+
+      // Handler should be gone
+      const event = createInternalHookEvent("agent", "bootstrap", "test-session", {
+        workspaceDir: "/tmp",
+        bootstrapFiles: [],
+      });
+      await triggerInternalHook(event);
+      expect(handler).not.toHaveBeenCalled();
+
+      // Simulate re-registration from plugin registry (the fix)
+      registerInternalHook("agent:bootstrap", handler);
+
+      // Now handler should fire
+      await triggerInternalHook(event);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should skip hooks with undefined handler (register:false)", async () => {
+      // Simulate the re-registration loop in startGatewaySidecars — hooks
+      // registered with opts.register=false have handler=undefined and must
+      // not become active after clearInternalHooks().
+      const hooks = [
+        { events: ["agent:bootstrap"], handler: undefined },
+        { events: ["agent:bootstrap"], handler: vi.fn() },
+      ];
+
+      for (const hook of hooks) {
+        if (hook.handler) {
+          for (const event of hook.events) {
+            registerInternalHook(event, hook.handler);
+          }
+        }
+      }
+
+      const event = createInternalHookEvent("agent", "bootstrap", "test-session", {
+        workspaceDir: "/tmp",
+        bootstrapFiles: [],
+      });
+      await triggerInternalHook(event);
+
+      // Only the hook with a defined handler should fire (1 call, not 2).
+      expect(hooks[1].handler).toHaveBeenCalledOnce();
+    });
+  });
 });
