@@ -613,7 +613,14 @@ export const dispatchTelegramMessage = async ({
             }
             return;
           }
-          await sendPayload(payload);
+          // Fix for Issue #39324: Strip thinking tags from payload text
+          // to avoid duplicate messages (raw + cleaned) when reasoning is suppressed
+          // and segments array is empty (e.g., unclosed thinking tags).
+          const cleanedPayload =
+            typeof payload.text === "string"
+              ? { ...payload, text: stripReasoningTagsFromText(payload.text, { mode: "strict" }) }
+              : payload;
+          await sendPayload(cleanedPayload);
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
