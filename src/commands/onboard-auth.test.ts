@@ -126,6 +126,8 @@ describe("writeOAuthCredentials", () => {
 
   let tempStateDir: string;
   const authProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
+  const provisionedAuthProfilePathFor = (dir: string) =>
+    path.join(dir, "auth-profiles.provisioned.json");
 
   afterEach(async () => {
     await lifecycle.cleanup();
@@ -155,6 +157,40 @@ describe("writeOAuthCredentials", () => {
     await expect(
       fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("updates the provisioned auth mirror when it already exists", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-provisioned-");
+    lifecycle.setStateDir(env.stateDir);
+    await fs.writeFile(
+      provisionedAuthProfilePathFor(env.agentDir),
+      JSON.stringify({
+        version: 1,
+        profiles: {},
+        lastGood: { stale: "value" },
+      }),
+    );
+
+    const creds = {
+      refresh: "refresh-provisioned",
+      access: "access-provisioned",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, env.agentDir);
+
+    const parsed = JSON.parse(
+      await fs.readFile(provisionedAuthProfilePathFor(env.agentDir), "utf8"),
+    ) as {
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+      lastGood?: Record<string, string>;
+    };
+    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      refresh: "refresh-provisioned",
+      access: "access-provisioned",
+      type: "oauth",
+    });
+    expect(parsed.lastGood).toBeUndefined();
   });
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
