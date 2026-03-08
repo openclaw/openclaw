@@ -244,7 +244,7 @@ export class GatewayBrowserClient {
         role,
         scopes,
         signedAtMs,
-        token: deviceToken ?? null,
+        token: deviceToken ?? authToken ?? null,
         nonce,
       });
       const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
