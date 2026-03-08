@@ -1,5 +1,5 @@
 import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort } from "../config/paths.js";
+import { DEFAULT_GATEWAY_PORT, resolveGatewayPort } from "../config/paths.js";
 import {
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
@@ -208,7 +208,17 @@ export function resolveBrowserConfig(
   const enabled = cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED;
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
-  const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
+  // In gateway.mode=remote, gateway.port often points to a remote ingress port (e.g. 443).
+  // Browser relay/control ports remain local on the current host, so derive defaults from
+  // the local gateway default unless browser ports are explicitly configured.
+  const gatewayMode =
+    typeof rootConfig?.gateway?.mode === "string"
+      ? rootConfig.gateway.mode.trim().toLowerCase()
+      : undefined;
+  const browserPortBase = gatewayMode === "remote" ? DEFAULT_GATEWAY_PORT : gatewayPort;
+  const controlPort = deriveDefaultBrowserControlPort(
+    browserPortBase ?? DEFAULT_BROWSER_CONTROL_PORT,
+  );
   const defaultColor = normalizeHexColor(cfg?.color);
   const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
   const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(

@@ -59,6 +59,19 @@ describe("browser config", () => {
     });
   });
 
+  it("keeps local browser relay defaults when gateway.mode=remote", () => {
+    withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => {
+      const resolved = resolveBrowserConfig(undefined, {
+        gateway: { mode: "remote", port: 443 },
+      });
+      expect(resolved.controlPort).toBe(18791);
+      const chrome = resolveProfile(resolved, "chrome");
+      expect(chrome?.driver).toBe("extension");
+      expect(chrome?.cdpPort).toBe(18792);
+      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:18792");
+    });
+  });
+
   it("supports overriding the local CDP auto-allocation range start", () => {
     const resolved = resolveBrowserConfig({
       cdpPortRangeStart: 19000,
