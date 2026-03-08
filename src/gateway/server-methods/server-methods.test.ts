@@ -745,6 +745,40 @@ describe("gateway healthHandlers.status scope handling", () => {
     vi.mocked(statusModule.getStatusSummary).mockClear();
   });
 
+  const createHealthSummary = (running = false, connected = false) => ({
+    ok: true as const,
+    ts: 1,
+    durationMs: 1,
+    channels: {
+      whatsapp: {
+        accountId: "default",
+        configured: true,
+        linked: true,
+        running,
+        connected,
+        accounts: {
+          default: {
+            accountId: "default",
+            configured: true,
+            linked: true,
+            running,
+            connected,
+          },
+        },
+      },
+    },
+    channelOrder: ["whatsapp"],
+    channelLabels: { whatsapp: "WhatsApp" },
+    heartbeatSeconds: 1800,
+    defaultAgentId: "main",
+    agents: [],
+    sessions: {
+      path: "/tmp/sessions.json",
+      count: 0,
+      recent: [],
+    },
+  });
+
   async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
 
@@ -760,6 +794,44 @@ describe("gateway healthHandlers.status scope handling", () => {
     return respond;
   }
 
+  async function runHealth(params: {
+    cached?: ReturnType<typeof createHealthSummary> | null;
+    refreshed?: ReturnType<typeof createHealthSummary>;
+    runtime?: {
+      channels: Record<string, Record<string, unknown>>;
+      channelAccounts: Record<string, Record<string, Record<string, unknown>>>;
+    };
+    probe?: boolean;
+  }) {
+    const respond = vi.fn();
+    const getHealthCache = vi.fn().mockReturnValue(params.cached ?? null);
+    const refreshHealthSnapshot = vi
+      .fn()
+      .mockResolvedValue(params.refreshed ?? createHealthSummary(false, false));
+    const getRuntimeSnapshot = vi.fn().mockReturnValue(
+      params.runtime ?? {
+        channels: {},
+        channelAccounts: {},
+      },
+    );
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: (params.probe ? { probe: true } : {}) as never,
+      respond: respond as never,
+      context: {
+        getHealthCache,
+        refreshHealthSnapshot,
+        logHealth: { error: vi.fn() },
+        getRuntimeSnapshot,
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    return { respond, getHealthCache, refreshHealthSnapshot, getRuntimeSnapshot };
+  }
+
   it.each([
     { scopes: ["operator.read"], includeSensitive: false },
     { scopes: ["operator.admin"], includeSensitive: true },
@@ -772,6 +844,260 @@ describe("gateway healthHandlers.status scope handling", () => {
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     },
   );
+
+  it("merges runtime channel state into cached health responses", async () => {
+    const cached = createHealthSummary(false, false);
+    cached.ts = Date.now();
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond, refreshHealthSnapshot } = await runHealth({ cached, runtime });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.running).toBe(true);
+    expect(payload.channels.whatsapp.connected).toBe(true);
+    expect(payload.channels.whatsapp.accounts.default.running).toBe(true);
+    expect(payload.channels.whatsapp.accounts.default.connected).toBe(true);
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined, { cached: true });
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+  });
+
+  it("merges runtime channel state into refreshed health responses", async () => {
+    const refreshed = createHealthSummary(false, false);
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond, refreshHealthSnapshot } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.running).toBe(true);
+    expect(payload.channels.whatsapp.connected).toBe(true);
+    expect(payload.channels.whatsapp.accounts.default.running).toBe(true);
+    expect(payload.channels.whatsapp.accounts.default.connected).toBe(true);
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
+  });
+
+  it("reads runtime snapshot after refresh in the probe path", async () => {
+    const refreshed = createHealthSummary(false, false);
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { refreshHealthSnapshot, getRuntimeSnapshot } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
+    expect(getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshHealthSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      getRuntimeSnapshot.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not inject sparse runtime-only accounts into health summaries", async () => {
+    const refreshed = createHealthSummary(false, false);
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+          secondary: {
+            accountId: "secondary",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.accounts.default.running).toBe(true);
+    expect(payload.channels.whatsapp.accounts.secondary).toBeUndefined();
+  });
+
+  it("prefers runtime state for the selected channel account in multi-account setups", async () => {
+    const refreshed = createHealthSummary(false, false);
+    refreshed.channels.whatsapp.accountId = "secondary";
+    refreshed.channels.whatsapp.accounts = {
+      default: {
+        accountId: "default",
+        configured: true,
+        linked: true,
+        running: false,
+        connected: false,
+      },
+      secondary: {
+        accountId: "secondary",
+        configured: true,
+        linked: true,
+        running: false,
+        connected: false,
+      },
+    };
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: false,
+          connected: false,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: false,
+            connected: false,
+          },
+          secondary: {
+            accountId: "secondary",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.accountId).toBe("secondary");
+    expect(payload.channels.whatsapp.running).toBe(true);
+    expect(payload.channels.whatsapp.connected).toBe(true);
+  });
+
+  it("does not apply default runtime channel state when selected account has no runtime entry", async () => {
+    const refreshed = createHealthSummary(false, false);
+    refreshed.channels.whatsapp.accountId = "ghost";
+    refreshed.channels.whatsapp.accounts = {
+      default: {
+        accountId: "default",
+        configured: true,
+        linked: true,
+        running: false,
+        connected: false,
+      },
+      ghost: {
+        accountId: "ghost",
+        configured: false,
+        linked: false,
+        running: false,
+        connected: false,
+      },
+    };
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.accountId).toBe("ghost");
+    expect(payload.channels.whatsapp.running).toBe(false);
+    expect(payload.channels.whatsapp.connected).toBe(false);
+    expect(payload.channels.whatsapp.accounts.default.running).toBe(true);
+    expect(payload.channels.whatsapp.accounts.default.connected).toBe(true);
+    expect(payload.channels.whatsapp.accounts.ghost.running).toBe(false);
+    expect(payload.channels.whatsapp.accounts.ghost.connected).toBe(false);
+  });
 });
 
 describe("logs.tail", () => {
