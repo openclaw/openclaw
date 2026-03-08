@@ -1522,6 +1522,7 @@ export async function runEmbeddedAttempt(
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
+        suppressPreToolText: params.suppressPreToolText,
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,

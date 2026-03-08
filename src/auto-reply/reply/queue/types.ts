@@ -79,6 +79,7 @@ export type FollowupRun = {
     ownerNumbers?: string[];
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
+    suppressPreToolText?: boolean;
   };
 };
 

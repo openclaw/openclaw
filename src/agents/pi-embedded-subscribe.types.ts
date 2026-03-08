@@ -35,6 +35,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /** Discard intermediate assistant texts from tool-use turns (e.g. "Let me check..."). */
+  suppressPreToolText?: boolean;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
