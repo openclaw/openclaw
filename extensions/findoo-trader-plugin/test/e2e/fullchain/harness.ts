@@ -87,6 +87,22 @@ export const DEFAULT_FUND_CONFIG = {
 
 // ── Exported types ──
 
+export type MockDataProvider = {
+  prices: Map<string, number>;
+  getTicker(symbol: string, market: string): Promise<{ close?: number } | null>;
+};
+
+export function createMockDataProvider(): MockDataProvider {
+  const prices = new Map<string, number>();
+  return {
+    prices,
+    async getTicker(symbol: string, _market: string) {
+      const price = prices.get(symbol);
+      return price != null ? { close: price } : null;
+    },
+  };
+}
+
 export type FullChainServices = {
   registry: ExchangeRegistry;
   riskController: RiskController;
@@ -111,6 +127,7 @@ export type FullChainServices = {
   liveReconciler: LiveReconciler;
   alphaFactory: AlphaFactoryOrchestrator;
   failureFeedbackStore: FailureFeedbackStore;
+  dataProvider: MockDataProvider;
 };
 
 export type FullChainContext = {
@@ -198,6 +215,7 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     enqueueSystemEvent: () => {},
     sessionKeyResolver: () => undefined,
     activityLog,
+    dbPath: join(tmpDir, "wake.sqlite"),
   });
 
   const liveHealthMonitor = new LiveHealthMonitor({
@@ -217,6 +235,8 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     wakeBridge,
   });
 
+  const dataProvider = createMockDataProvider();
+
   const lifecycleEngine = new LifecycleEngine(
     {
       strategyRegistry: strategyRegistry as never,
@@ -227,6 +247,8 @@ export async function createFullChainServer(): Promise<FullChainContext> {
       wakeBridge,
       liveHealthMonitor,
       liveReconciler,
+      alertEngine,
+      dataProvider,
     },
     300_000, // 5 min — won't fire during tests
   );
@@ -429,6 +451,7 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     liveReconciler,
     alphaFactory,
     failureFeedbackStore,
+    dataProvider,
   };
 
   return {
