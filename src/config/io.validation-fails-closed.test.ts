@@ -8,7 +8,7 @@ describe("config validation fail-closed behavior", () => {
     vi.restoreAllMocks();
   });
 
-  it("throws INVALID_CONFIG instead of returning an empty config", async () => {
+  it("ignores unknown keys with warnings instead of failing startup", async () => {
     await withTempHomeConfig(
       {
         agents: { list: [{ id: "main" }] },
@@ -21,7 +21,25 @@ describe("config validation fail-closed behavior", () => {
         },
       },
       async () => {
-        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const cfg = loadConfig();
+        expect(cfg.channels?.whatsapp?.dmPolicy).toBe("allowlist");
+        expect(cfg.channels?.whatsapp?.allowFrom).toEqual(["+1234567890"]);
+        expect(warnSpy).toHaveBeenCalled();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).toContain("unknown config key ignored");
+      },
+    );
+  });
+
+  it("still throws INVALID_CONFIG for invalid known fields", async () => {
+    await withTempHomeConfig(
+      {
+        gateway: { port: -1 },
+        agents: { list: [{ id: "main" }] },
+      },
+      async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
         let thrown: unknown;
         try {
           loadConfig();
@@ -31,7 +49,7 @@ describe("config validation fail-closed behavior", () => {
 
         expect(thrown).toBeInstanceOf(Error);
         expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
-        expect(spy).toHaveBeenCalled();
+        expect(errorSpy).toHaveBeenCalled();
       },
     );
   });

@@ -33,11 +33,141 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 
+type UnknownKeyIssue = {
+  path: string;
+  pathSegments: Array<string | number>;
+  keys: string[];
+};
+
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   return value as UnknownIssueRecord;
+}
+
+function toIssuePathSegments(issue: unknown): Array<string | number> {
+  const record = toIssueRecord(issue);
+  if (!Array.isArray(record?.path)) {
+    return [];
+  }
+  return record.path.filter((segment): segment is string | number => {
+    const segmentType = typeof segment;
+    return segmentType === "string" || segmentType === "number";
+  });
+}
+
+function toIssuePathLabel(issue: unknown): string {
+  return toIssuePathSegments(issue).join(".");
+}
+
+function toUnknownKeyIssue(issue: unknown): UnknownKeyIssue | null {
+  const record = toIssueRecord(issue);
+  if (record?.code !== "unrecognized_keys") {
+    return null;
+  }
+  if (!Array.isArray(record.keys)) {
+    return null;
+  }
+  const keys = record.keys
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (keys.length === 0) {
+    return null;
+  }
+  const pathSegments = toIssuePathSegments(issue);
+  return {
+    path: pathSegments.join("."),
+    pathSegments,
+    keys,
+  };
+}
+
+function collectUnknownKeyIssues(issues: ReadonlyArray<unknown>): UnknownKeyIssue[] {
+  const collected: UnknownKeyIssue[] = [];
+  for (const issue of issues) {
+    const unknownKeyIssue = toUnknownKeyIssue(issue);
+    if (!unknownKeyIssue) {
+      continue;
+    }
+    collected.push(unknownKeyIssue);
+  }
+  return collected;
+}
+
+function resolveIssuePathObject(
+  root: unknown,
+  pathSegments: Array<string | number>,
+): Record<string, unknown> | null {
+  let current: unknown = root;
+  for (const segment of pathSegments) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) {
+        return null;
+      }
+      current = current[segment];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return null;
+    }
+    current = current[segment];
+  }
+  return isRecord(current) ? current : null;
+}
+
+function formatUnknownKeysWarning(issue: UnknownKeyIssue): ConfigValidationIssue {
+  const keyList = issue.keys.map((key) => `"${key}"`).join(", ");
+  return {
+    path: issue.path,
+    message:
+      issue.keys.length === 1
+        ? `unknown config key ignored: ${keyList}`
+        : `unknown config keys ignored: ${keyList}`,
+  };
+}
+
+function stripUnknownKeysWithWarnings(raw: unknown): {
+  sanitizedRaw: unknown;
+  warnings: ConfigValidationIssue[];
+} {
+  const parsed = OpenClawSchema.safeParse(raw);
+  if (parsed.success) {
+    return { sanitizedRaw: raw, warnings: [] };
+  }
+
+  const unknownKeyIssues = collectUnknownKeyIssues(parsed.error.issues);
+  if (unknownKeyIssues.length === 0) {
+    return { sanitizedRaw: raw, warnings: [] };
+  }
+
+  const sanitizedRaw = structuredClone(raw);
+  const warnings: ConfigValidationIssue[] = [];
+  for (const issue of unknownKeyIssues) {
+    const target = resolveIssuePathObject(sanitizedRaw, issue.pathSegments);
+    if (!target) {
+      continue;
+    }
+    let removed = false;
+    for (const key of issue.keys) {
+      if (!Object.prototype.hasOwnProperty.call(target, key)) {
+        continue;
+      }
+      delete target[key];
+      removed = true;
+    }
+    if (!removed) {
+      continue;
+    }
+    warnings.push(formatUnknownKeysWarning(issue));
+  }
+
+  if (warnings.length === 0) {
+    return { sanitizedRaw: raw, warnings: [] };
+  }
+
+  return { sanitizedRaw, warnings };
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -116,14 +246,7 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const path = Array.isArray(record?.path)
-    ? record.path
-        .filter((segment): segment is string | number => {
-          const segmentType = typeof segment;
-          return segmentType === "string" || segmentType === "number";
-        })
-        .join(".")
-    : "";
+  const path = toIssuePathLabel(issue);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
@@ -309,16 +432,19 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const { sanitizedRaw, warnings: unknownKeyWarnings } = stripUnknownKeysWithWarnings(raw);
+  const base = opts.applyDefaults
+    ? validateConfigObject(sanitizedRaw)
+    : validateConfigObjectRaw(sanitizedRaw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    return { ok: false, issues: base.issues, warnings: unknownKeyWarnings };
   }
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...unknownKeyWarnings];
   const hasExplicitPluginsConfig =
-    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+    isRecord(sanitizedRaw) && Object.prototype.hasOwnProperty.call(sanitizedRaw, "plugins");
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
