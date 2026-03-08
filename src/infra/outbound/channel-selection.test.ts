@@ -88,4 +88,106 @@ describe("resolveMessageChannelSelection", () => {
       }),
     ).rejects.toThrow("Unknown channel: channel:c123");
   });
+
+  it("normalizes explicit channel (case-insensitive)", async () => {
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      channel: "Telegram",
+    });
+
+    expect(selection).toEqual({
+      channel: "telegram",
+      configured: [],
+      source: "explicit",
+    });
+  });
+
+  it("throws when fallback is disabled and no channel provided", async () => {
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {
+          tools: { message: { fallbackChannel: { enabled: false } } },
+        } as never,
+      }),
+    ).rejects.toThrow(/Unknown channel/);
+  });
+
+  it("throws when fallback is disabled and explicit channel is unknown", async () => {
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {
+          tools: { message: { fallbackChannel: { enabled: false } } },
+        } as never,
+        channel: "channel:C123",
+        fallbackChannel: "slack",
+      }),
+    ).rejects.toThrow("Unknown channel: channel:c123");
+  });
+
+  it("throws when no channel/fallback and zero configured channels", async () => {
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("Channel is required (no configured channels detected).");
+  });
+
+  it("throws when no channel/fallback and multiple channels configured", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "discord",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isConfigured: async () => true,
+        },
+      },
+      {
+        id: "telegram",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isConfigured: async () => true,
+        },
+      },
+    ]);
+
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow(/Channel is required when multiple channels are configured/);
+  });
+
+  it("uses fallback when channel omitted and fallback valid (no configured list needed)", async () => {
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      fallbackChannel: "discord",
+    });
+
+    expect(selection.source).toBe("tool-context-fallback");
+    expect(selection.channel).toBe("discord");
+  });
+
+  it("returns configured list when explicit channel is used", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "slack",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isConfigured: async () => true,
+        },
+      },
+    ]);
+
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      channel: "telegram",
+    });
+
+    expect(selection.source).toBe("explicit");
+    expect(selection.channel).toBe("telegram");
+    expect(selection.configured).toContain("slack");
+  });
 });

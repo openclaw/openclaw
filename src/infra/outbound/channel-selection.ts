@@ -92,16 +92,19 @@ export async function resolveMessageChannelSelection(params: {
   configured: MessageChannelId[];
   source: MessageChannelSelectionSource;
 }> {
+  const fallbackEnabled = params.cfg.tools?.message?.fallbackChannel?.enabled !== false;
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
     if (!isKnownChannel(normalized)) {
-      const fallback = resolveKnownChannel(params.fallbackChannel);
-      if (fallback) {
-        return {
-          channel: fallback,
-          configured: await listConfiguredMessageChannels(params.cfg),
-          source: "tool-context-fallback",
-        };
+      if (fallbackEnabled) {
+        const fallback = resolveKnownChannel(params.fallbackChannel);
+        if (fallback) {
+          return {
+            channel: fallback,
+            configured: await listConfiguredMessageChannels(params.cfg),
+            source: "tool-context-fallback",
+          };
+        }
       }
       throw new Error(`Unknown channel: ${String(normalized)}`);
     }
@@ -110,6 +113,10 @@ export async function resolveMessageChannelSelection(params: {
       configured: await listConfiguredMessageChannels(params.cfg),
       source: "explicit",
     };
+  }
+
+  if (!fallbackEnabled) {
+    throw new Error(`Unknown channel: ${String(normalized)}`);
   }
 
   const fallback = resolveKnownChannel(params.fallbackChannel);
