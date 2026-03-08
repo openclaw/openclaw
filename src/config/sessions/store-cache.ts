@@ -38,6 +38,19 @@ export function dropSessionStoreObjectCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
 }
 
+/**
+ * Return the raw cached store object without TTL or mtime validation.
+ * Used by write-behind to read authoritative in-memory state that hasn't
+ * been flushed to disk yet.
+ */
+export function readSessionStoreCacheRaw(storePath: string): Record<string, SessionEntry> | null {
+  const cached = SESSION_STORE_CACHE.get(storePath);
+  if (!cached) {
+    return null;
+  }
+  return cached.store;
+}
+
 export function readSessionStoreCache(params: {
   storePath: string;
   ttlMs: number;
