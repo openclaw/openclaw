@@ -87,7 +87,7 @@ enum OverlayPanelFactory {
         offsetX: CGFloat = 6,
         offsetY: CGFloat = 6,
         duration: TimeInterval = 0.16,
-        completion: @escaping () -> Void)
+        completion: @escaping @MainActor @Sendable () -> Void)
     {
         let target = window.frame.offsetBy(dx: offsetX, dy: offsetY)
         NSAnimationContext.runAnimationGroup { context in
@@ -96,7 +96,7 @@ enum OverlayPanelFactory {
             window.animator().setFrame(target, display: true)
             window.animator().alphaValue = 0
         } completionHandler: {
-            completion()
+            Task { @MainActor in completion() }
         }
     }
 
@@ -109,10 +109,8 @@ enum OverlayPanelFactory {
         onHidden: @escaping @MainActor () -> Void)
     {
         self.animateDismiss(window: window, offsetX: offsetX, offsetY: offsetY, duration: duration) {
-            Task { @MainActor in
-                window.orderOut(nil)
-                onHidden()
-            }
+            window.orderOut(nil)
+            onHidden()
         }
     }
 
