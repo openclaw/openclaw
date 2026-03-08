@@ -587,6 +587,8 @@ export function renderApp(state: AppViewState) {
                 toolsCatalogError: state.toolsCatalogError,
                 toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
+                agentSessionResetLoading: state.agentSessionResetLoading,
+                agentSessionResetError: state.agentSessionResetError,
                 onRefresh: async () => {
                   await loadAgents(state);
                   const nextSelected =
@@ -846,6 +848,20 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
+                },
+                onSessionReset: async (agentId) => {
+                  state.agentSessionResetLoading = true;
+                  state.agentSessionResetError = null;
+                  try {
+                    await state.client?.request("sessions.reset", {
+                      key: `agent:${agentId}:main`,
+                      reason: "reset",
+                    });
+                  } catch (err) {
+                    state.agentSessionResetError = String(err);
+                  } finally {
+                    state.agentSessionResetLoading = false;
+                  }
                 },
               })
             : nothing
