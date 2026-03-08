@@ -108,4 +108,42 @@ describe("chat.inject with missing transcript file", () => {
     // The transcript file must now exist on disk.
     expect(fs.existsSync(mockState.transcriptPath)).toBe(true);
   });
+
+  it("appends cleanly to the same transcript on a second inject after auto-creation", async () => {
+    // Guards against a regression where createIfMissing: true fixes the first
+    // write but a subsequent append or rotation silently fails or overwrites.
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-inject-append-"));
+    mockState.transcriptPath = path.join(tmpDir, "sess.jsonl");
+
+    const invokeInject = async (message: string) => {
+      const respond = vi.fn();
+      await chatHandlers["chat.inject"]({
+        params: { sessionKey: "main", message },
+        respond,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: createChatContext() as GatewayRequestContext,
+      });
+      const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+      return { ok, payload };
+    };
+
+    // First call — auto-creates the transcript file.
+    const first = await invokeInject("first message");
+    expect(first.ok).toBe(true);
+    expect(first.payload).toMatchObject({ ok: true });
+    expect(fs.existsSync(mockState.transcriptPath)).toBe(true);
+    const sizeAfterFirst = fs.statSync(mockState.transcriptPath).size;
+    expect(sizeAfterFirst).toBeGreaterThan(0);
+
+    // Second call — must append to the existing file, not fail or overwrite.
+    const second = await invokeInject("second message");
+    expect(second.ok).toBe(true);
+    expect(second.payload).toMatchObject({ ok: true });
+
+    // File must have grown — content from both writes is present.
+    const sizeAfterSecond = fs.statSync(mockState.transcriptPath).size;
+    expect(sizeAfterSecond).toBeGreaterThan(sizeAfterFirst);
+  });
 });
