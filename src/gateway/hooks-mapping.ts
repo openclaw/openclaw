@@ -108,7 +108,7 @@ export function resolveHookMappings(
   opts?: { configDir?: string },
 ): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
-  const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
+  const gmail = hooks?.gmail;
   const mappings: HookMappingConfig[] = [];
   if (hooks?.mappings) {
     mappings.push(...hooks.mappings);
@@ -118,14 +118,42 @@ export function resolveHookMappings(
     if (!presetMappings) {
       continue;
     }
-    if (preset === "gmail" && typeof gmailAllowUnsafe === "boolean") {
-      mappings.push(
-        ...presetMappings.map((mapping) => ({
-          ...mapping,
-          allowUnsafeExternalContent: gmailAllowUnsafe,
-        })),
-      );
-      continue;
+    if (preset === "gmail" && gmail) {
+      // Merge user-configurable gmail hook options into the preset mapping
+      const overrides: Partial<HookMappingConfig> = {};
+      if (typeof gmail.allowUnsafeExternalContent === "boolean") {
+        overrides.allowUnsafeExternalContent = gmail.allowUnsafeExternalContent;
+      }
+      if (gmail.channel) {
+        overrides.channel = gmail.channel;
+      }
+      if (gmail.to) {
+        overrides.to = gmail.to;
+      }
+      if (typeof gmail.deliver === "boolean") {
+        overrides.deliver = gmail.deliver;
+      }
+      if (gmail.action) {
+        overrides.action = gmail.action;
+      }
+      if (gmail.messageTemplate) {
+        overrides.messageTemplate = gmail.messageTemplate;
+      }
+      if (gmail.model) {
+        overrides.model = gmail.model;
+      }
+      if (gmail.thinking) {
+        overrides.thinking = gmail.thinking;
+      }
+      if (Object.keys(overrides).length > 0) {
+        mappings.push(
+          ...presetMappings.map((mapping) => ({
+            ...mapping,
+            ...overrides,
+          })),
+        );
+        continue;
+      }
     }
     mappings.push(...presetMappings);
   }

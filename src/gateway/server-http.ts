@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { request as httpRequest } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
@@ -11,6 +12,11 @@ import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
+import {
+  DEFAULT_GMAIL_SERVE_BIND,
+  DEFAULT_GMAIL_SERVE_PORT,
+  DEFAULT_GMAIL_SERVE_PATH,
+} from "../hooks/gmail.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
@@ -83,6 +89,70 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+/**
+ * Proxy a Pub/Sub push notification to the local gog watch serve process.
+ * Pub/Sub sends POST with ?token= to authenticate; gog expects the same format.
+ * Returns true if the request was handled (proxied or errored), false to fall through.
+ */
+async function proxyPubSubToGog(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  log: SubsystemLogger,
+): Promise<boolean> {
+  const cfg = loadConfig();
+  const gmail = cfg.hooks?.gmail;
+  const serveBind = gmail?.serve?.bind ?? DEFAULT_GMAIL_SERVE_BIND;
+  const servePort = gmail?.serve?.port ?? DEFAULT_GMAIL_SERVE_PORT;
+  const servePath = gmail?.serve?.path ?? DEFAULT_GMAIL_SERVE_PATH;
+  const token = url.searchParams.get("token") ?? "";
+
+  const targetUrl = `http://${serveBind}:${servePort}${servePath}?token=${encodeURIComponent(token)}`;
+  log.info(`proxying Pub/Sub push to gog: ${serveBind}:${servePort}${servePath}`);
+
+  return new Promise<boolean>((resolve) => {
+    const proxyReq = httpRequest(
+      targetUrl,
+      {
+        method: "POST",
+        headers: {
+          "content-type": req.headers["content-type"] ?? "application/json",
+        },
+        timeout: 30_000,
+      },
+      (proxyRes) => {
+        res.statusCode = proxyRes.statusCode ?? 502;
+        for (const [key, value] of Object.entries(proxyRes.headers)) {
+          if (value !== undefined) {
+            res.setHeader(key, value);
+          }
+        }
+        proxyRes.pipe(res);
+        proxyRes.on("end", () => resolve(true));
+        proxyRes.on("error", () => {
+          if (!res.headersSent) {
+            res.statusCode = 502;
+            res.end("proxy error");
+          }
+          resolve(true);
+        });
+      },
+    );
+
+    proxyReq.on("error", (err) => {
+      log.warn(`Pub/Sub proxy to gog failed: ${String(err)}`);
+      if (!res.headersSent) {
+        res.statusCode = 502;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Bad Gateway: gog watch serve not reachable");
+      }
+      resolve(true);
+    });
+
+    req.pipe(proxyReq);
+  });
 }
 
 const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
@@ -380,7 +450,16 @@ export function createHooksRequestHandler(
       return false;
     }
 
+    // Pub/Sub push notifications arrive with ?token= in the URL.
+    // Proxy these to the local gog watch serve process instead of rejecting.
     if (url.searchParams.has("token")) {
+      const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
+      if (subPath === "gmail") {
+        const proxied = await proxyPubSubToGog(req, res, url, logHooks);
+        if (proxied) {
+          return true;
+        }
+      }
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end(
