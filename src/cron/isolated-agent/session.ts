@@ -20,7 +20,11 @@ export function resolveCronSession(params: {
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
+  // Skip cache: cron sessions must always read fresh data so that /model overrides
+  // and other session-store writes (e.g. from concurrent agents) are visible
+  // immediately. Stale mtime-based cache hits can mask store updates that happen
+  // within the same millisecond on fast machines.
+  const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[params.sessionKey];
 
   // Check if we can reuse an existing session
