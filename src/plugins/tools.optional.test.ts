@@ -9,10 +9,18 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
+const { getActivePluginRegistryMock } = vi.hoisted(() => ({
+  getActivePluginRegistryMock: vi.fn(() => null as unknown),
+}));
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
 }));
+
+vi.mock("./runtime.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./runtime.js")>();
+  return { ...orig, getActivePluginRegistry: getActivePluginRegistryMock };
+});
 
 function makeTool(name: string) {
   return {
@@ -92,6 +100,7 @@ function resolveOptionalDemoTools(toolAllowlist?: string[]) {
 describe("resolvePluginTools optional tools", () => {
   beforeEach(() => {
     loadOpenClawPluginsMock.mockClear();
+    getActivePluginRegistryMock.mockReturnValue(null);
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -152,5 +161,27 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
     expect(registry.diagnostics).toHaveLength(0);
+  });
+
+  it("uses active registry instead of reloading plugins", () => {
+    const activeRegistry = {
+      tools: [
+        {
+          pluginId: "active-plugin",
+          optional: false,
+          source: "/tmp/active.js",
+          factory: () => makeTool("active_tool"),
+        },
+      ],
+      diagnostics: [],
+    };
+    getActivePluginRegistryMock.mockReturnValue(activeRegistry);
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["active_tool"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
