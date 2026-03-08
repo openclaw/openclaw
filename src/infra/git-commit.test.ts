@@ -43,6 +43,9 @@ describe("git commit resolution", () => {
 
   afterEach(() => {
     process.chdir(originalCwd);
+    vi.restoreAllMocks();
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
     vi.resetModules();
   });
 
