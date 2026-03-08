@@ -52,7 +52,13 @@ export type CronServiceDeps = {
     text: string,
     opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
   ) => void;
-  requestHeartbeatNow: (opts?: { reason?: string; agentId?: string; sessionKey?: string }) => void;
+  requestHeartbeatNow: (opts?: {
+    reason?: string;
+    agentId?: string;
+    sessionKey?: string;
+    /** Optional heartbeat override (e.g. target/channel for cron main delivery). Preserved on fallback from runHeartbeatOnce. */
+    heartbeat?: { target?: string; to?: string; accountId?: string };
+  }) => void;
   runHeartbeatOnce?: (opts?: {
     reason?: string;
     agentId?: string;

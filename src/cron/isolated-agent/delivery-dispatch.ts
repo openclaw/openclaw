@@ -485,8 +485,14 @@ export async function dispatchCronDelivery(
     //
     // When skipHeartbeatDelivery (heartbeat-only response), use announce path
     // so cleanup/keep/delete and suppression are handled there.
+    // When there are active descendants or text suggests follow-up, use
+    // announce path so we wait for subagent completion and suppress interim.
+    const hasPendingDescendantFollowup =
+      countActiveDescendantRuns(params.agentSessionKey) > 0 ||
+      expectsSubagentFollowup(params.synthesizedText ?? "");
     const useDirectDelivery =
       !params.skipHeartbeatDelivery &&
+      !hasPendingDescendantFollowup &&
       (params.deliveryPayloadHasStructuredContent ||
         params.resolvedDelivery.threadId != null ||
         (params.resolvedDelivery.ok && !params.deliveryPayloadHasStructuredContent));

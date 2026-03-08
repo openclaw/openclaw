@@ -1024,6 +1024,7 @@ export async function executeJobCore(
             reason,
             agentId: job.agentId,
             sessionKey: targetMainSessionKey,
+            heartbeat: heartbeatOverride,
           });
           return { status: "ok", summary: text };
         }
@@ -1041,10 +1042,22 @@ export async function executeJobCore(
       if (abortSignal?.aborted) {
         return resolveAbortError();
       }
+      const delivery = job.delivery as
+        | { mode?: string; channel?: string; to?: string; accountId?: string }
+        | undefined;
+      const heartbeatOverride =
+        delivery?.mode === "announce" && delivery?.channel
+          ? {
+              target: delivery.channel,
+              to: delivery.to,
+              accountId: delivery.accountId,
+            }
+          : { target: "last" as const };
       state.deps.requestHeartbeatNow({
         reason: `cron:${job.id}`,
         agentId: job.agentId,
         sessionKey: targetMainSessionKey,
+        heartbeat: heartbeatOverride,
       });
       return { status: "ok", summary: text };
     }

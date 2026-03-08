@@ -207,9 +207,13 @@ function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "d
   if (!failureDestination) {
     return;
   }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    job.delivery?.mode !== "announce"
+  ) {
     throw new Error(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook" or "announce"',
     );
   }
   if (failureDestination.mode === "webhook") {
