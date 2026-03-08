@@ -1,3 +1,4 @@
+import { type FSWatcher, watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -34,6 +35,7 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { loadWorkspaceDotEnvForExec } from "./bash-tools.exec.workspace-env.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -51,6 +53,81 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+type WorkspaceEnvCacheEntry = {
+  workspaceDir: string;
+  baseEnv: Record<string, string>;
+  env: Record<string, string>;
+  ready: Promise<void> | null;
+  reloadScheduled: boolean;
+  watcher: FSWatcher | null;
+};
+
+const workspaceEnvCache = new Map<string, WorkspaceEnvCacheEntry>();
+
+async function reloadWorkspaceEnvCacheEntry(entry: WorkspaceEnvCacheEntry): Promise<void> {
+  try {
+    entry.env = await loadWorkspaceDotEnvForExec({
+      workspaceDir: entry.workspaceDir,
+      baseEnv: entry.baseEnv,
+    });
+  } catch (error: unknown) {
+    logInfo(`exec: failed to preload workspace .env (${String(error)}); continuing without it`);
+    entry.env = {};
+  }
+}
+
+function getWorkspaceEnvCacheEntry(params: {
+  workspaceDir: string;
+  baseEnv: Record<string, string>;
+}): WorkspaceEnvCacheEntry {
+  const existing = workspaceEnvCache.get(params.workspaceDir);
+  if (existing) {
+    return existing;
+  }
+
+  const entry: WorkspaceEnvCacheEntry = {
+    workspaceDir: params.workspaceDir,
+    baseEnv: params.baseEnv,
+    env: {},
+    ready: null,
+    reloadScheduled: false,
+    watcher: null,
+  };
+
+  const scheduleReload = () => {
+    if (entry.reloadScheduled) {
+      return;
+    }
+    entry.reloadScheduled = true;
+    setTimeout(() => {
+      entry.reloadScheduled = false;
+      entry.ready = reloadWorkspaceEnvCacheEntry(entry);
+    }, 50);
+  };
+
+  entry.ready = reloadWorkspaceEnvCacheEntry(entry);
+
+  try {
+    entry.watcher = watch(entry.workspaceDir, (_eventType, filename) => {
+      if (filename && filename !== ".env") {
+        return;
+      }
+      scheduleReload();
+    });
+    entry.watcher.unref();
+    entry.watcher.on("error", (error: unknown) => {
+      logInfo(`exec: workspace .env watch disabled (${String(error)})`);
+      entry.watcher?.close();
+      entry.watcher = null;
+    });
+  } catch (error: unknown) {
+    logInfo(`exec: unable to watch workspace .env (${String(error)})`);
+  }
+
+  workspaceEnvCache.set(params.workspaceDir, entry);
+  return entry;
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -194,6 +271,12 @@ export function createExecTool(
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
+  const startupWorkspaceDir = resolveWorkdir(defaults?.cwd?.trim() || process.cwd(), []);
+  const startupBaseEnv = coerceEnv(process.env);
+  const workspaceEnvCacheEntry = getWorkspaceEnvCacheEntry({
+    workspaceDir: startupWorkspaceDir,
+    baseEnv: startupBaseEnv,
+  });
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
@@ -362,7 +445,15 @@ export function createExecTool(
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
-      const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
+      if (workspaceEnvCacheEntry.ready) {
+        await workspaceEnvCacheEntry.ready;
+      }
+      const workspaceEnv = workspaceEnvCacheEntry.env;
+      const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...workspaceEnv };
+      const baseEnv =
+        host === "sandbox"
+          ? inheritedWithWorkspaceEnv
+          : sanitizeHostBaseEnv(inheritedWithWorkspaceEnv);
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
