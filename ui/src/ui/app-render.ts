@@ -720,8 +720,14 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state),
-                onConfigSave: () => saveConfig(state),
+                onConfigReload: async () => {
+                  await loadConfig(state);
+                  await loadAgents(state);
+                },
+                onConfigSave: async () => {
+                  await saveConfig(state);
+                  await loadAgents(state);
+                },
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),
