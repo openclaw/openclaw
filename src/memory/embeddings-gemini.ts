@@ -5,6 +5,7 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { retryAsync } from "../infra/retry.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
@@ -80,26 +81,41 @@ export async function createGeminiEmbeddingProvider(
       ...authHeaders.headers,
       ...client.headers,
     };
-    const payload = await withRemoteHttpResponse({
-      url: endpoint,
-      ssrfPolicy: client.ssrfPolicy,
-      init: {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
+    return await retryAsync(
+      async () => {
+        return await withRemoteHttpResponse({
+          url: endpoint,
+          ssrfPolicy: client.ssrfPolicy,
+          init: {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          },
+          onResponse: async (res) => {
+            if (!res.ok) {
+              const text = await res.text();
+              const err = new Error(`gemini embeddings failed: ${res.status} ${text}`);
+              (err as Error & { status: number }).status = res.status;
+              throw err;
+            }
+            return (await res.json()) as {
+              embedding?: { values?: number[] };
+              embeddings?: Array<{ values?: number[] }>;
+            };
+          },
+        });
       },
-      onResponse: async (res) => {
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
-        }
-        return (await res.json()) as {
-          embedding?: { values?: number[] };
-          embeddings?: Array<{ values?: number[] }>;
-        };
+      {
+        attempts: 3,
+        minDelayMs: 300,
+        maxDelayMs: 2000,
+        jitter: 0.2,
+        shouldRetry: (err) => {
+          const status = (err as { status?: number }).status;
+          return status === 429 || (typeof status === "number" && status >= 500);
+        },
       },
-    });
-    return payload;
+    );
   };
 
   const embedQuery = async (text: string): Promise<number[]> => {
