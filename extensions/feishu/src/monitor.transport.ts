@@ -16,6 +16,7 @@ import {
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
+import type { FeishuStatusSink } from "./monitor.account.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorTransportParams = {
@@ -24,12 +25,7 @@ export type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
-  statusSink?: (patch: {
-    connected?: boolean;
-    lastEventAt?: number | null;
-    mode?: string;
-    lastError?: string | null;
-  }) => void;
+  statusSink?: FeishuStatusSink;
 };
 
 export async function monitorWebSocket({

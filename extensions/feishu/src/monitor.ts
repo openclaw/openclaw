@@ -4,6 +4,7 @@ import {
   monitorSingleAccount,
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,
+  type FeishuStatusSink,
 } from "./monitor.account.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
@@ -18,12 +19,7 @@ export type MonitorFeishuOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
-  statusSink?: (patch: {
-    connected?: boolean;
-    lastEventAt?: number | null;
-    mode?: string;
-    lastError?: string | null;
-  }) => void;
+  statusSink?: FeishuStatusSink;
 };
 
 export {

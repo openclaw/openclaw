@@ -126,7 +126,7 @@ export async function resolveReactionSyntheticEvent(
   };
 }
 
-type FeishuStatusSink = (patch: {
+export type FeishuStatusSink = (patch: {
   connected?: boolean;
   lastEventAt?: number | null;
   mode?: string;
