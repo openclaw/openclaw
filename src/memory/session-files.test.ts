@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry } from "./session-files.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
 
 describe("buildSessionEntry", () => {
   let tmpDir: string;
@@ -83,5 +83,54 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
     expect(entry!.lineMap).toEqual([3, 5]);
+  });
+});
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionTranscriptsDirForAgent: (_agentId: string) => {
+    // Overridden per test via __mockDir
+    return (globalThis as Record<string, unknown>).__mockSessionDir as string;
+  },
+}));
+
+describe("listSessionFilesForAgent", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-list-test-"));
+    (globalThis as Record<string, unknown>).__mockSessionDir = tmpDir;
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    delete (globalThis as Record<string, unknown>).__mockSessionDir;
+  });
+
+  it("includes primary, reset, and deleted session files but excludes lock files", async () => {
+    const files = [
+      "abc.jsonl",
+      "abc.jsonl.reset.2026-02-16T22-26-33.000Z",
+      "abc.jsonl.deleted.2026-02-16T22-26-33.000Z",
+      "abc.jsonl.bak.2026-02-16T22-26-33.000Z",
+      "abc.jsonl.lock",
+      "sessions.json",
+      "sessions.json.bak.123456",
+      "notes.txt",
+    ];
+    for (const f of files) {
+      await fs.writeFile(path.join(tmpDir, f), "");
+    }
+
+    const result = await listSessionFilesForAgent("test-agent");
+    const names = result.map((p) => path.basename(p));
+
+    expect(names).toContain("abc.jsonl");
+    expect(names).toContain("abc.jsonl.reset.2026-02-16T22-26-33.000Z");
+    expect(names).toContain("abc.jsonl.deleted.2026-02-16T22-26-33.000Z");
+    expect(names).toContain("abc.jsonl.bak.2026-02-16T22-26-33.000Z");
+    expect(names).not.toContain("abc.jsonl.lock");
+    expect(names).not.toContain("sessions.json");
+    expect(names).not.toContain("sessions.json.bak.123456");
+    expect(names).not.toContain("notes.txt");
   });
 });
