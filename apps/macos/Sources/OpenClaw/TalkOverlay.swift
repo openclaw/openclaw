@@ -30,14 +30,20 @@ final class TalkOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
+        // Copy to a local to avoid an exclusive write borrow on self.model
+        // while AppKit synchronously evaluates the SwiftUI body during
+        // window ordering (recalculateKeyViewLoop → TalkOverlayView.body
+        // reads self.model.isPaused).
+        var visible = self.model.isVisible
         OverlayPanelFactory.present(
             window: self.window,
-            isVisible: &self.model.isVisible,
+            isVisible: &visible,
             target: target)
         { window in
             window.setFrame(target, display: true)
             window.orderFrontRegardless()
         }
+        self.model.isVisible = visible
     }
 
     func dismiss() {

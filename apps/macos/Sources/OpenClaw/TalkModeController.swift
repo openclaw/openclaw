@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 @MainActor
@@ -14,6 +15,9 @@ final class TalkModeController {
         self.logger.info("talk enabled=\(enabled)")
         if enabled {
             TalkOverlayController.shared.present()
+            // Persist only after presentation succeeds so a startup crash
+            // cannot leave the persisted flag stuck on true.
+            UserDefaults.standard.set(true, forKey: talkEnabledKey)
         } else {
             TalkOverlayController.shared.dismiss()
         }

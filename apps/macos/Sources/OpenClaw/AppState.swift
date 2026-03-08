@@ -138,7 +138,12 @@ final class AppState {
     var talkEnabled: Bool {
         didSet {
             self.ifNotPreview {
-                UserDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
+                // Persist false immediately; persist true only after Talk
+                // starts successfully (in TalkModeController) to prevent a
+                // crash-loop if startup fails.
+                if !self.talkEnabled {
+                    UserDefaults.standard.set(false, forKey: talkEnabledKey)
+                }
                 Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
             }
         }
