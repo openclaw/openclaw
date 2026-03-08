@@ -273,10 +273,10 @@ export async function monitorWebChannel(
         try {
           await listener.pingPresence();
           status.lastEventAt = Date.now();
-          emitStatus();
         } catch {
           // Socket didn't respond — let health monitor detect stale-socket.
         }
+        emitStatus();
 
         const authAgeMs = getWebAuthAgeMs(account.authDir);
         const minutesSinceLastMessage = lastMessageAt
