@@ -149,6 +149,15 @@ export async function applyBeforeResponseEmitHook(
 
   // Check for full multi-turn modification (allContent takes precedence)
   if (emitResult?.allContent !== undefined) {
+    // No-op optimization: if the plugin returned allContent unchanged, skip
+    // session rewrites to avoid unnecessary work and observer confusion.
+    const allContentChanged =
+      emitResult.allContent.length !== assistantTexts.length ||
+      emitResult.allContent.some((t, i) => t !== assistantTexts[i]);
+    if (!allContentChanged) {
+      log.debug("allContent unchanged, skipping rewrite");
+      return undefined;
+    }
     log.debug(
       `applying allContent modification (${emitResult.allContent.length} entries, original ${assistantTexts.length})`,
     );
@@ -240,14 +249,25 @@ export function getRunScopedMessagesForBlock(
   }
   // Extend backward from textBoundaryIdx to include tool-call-only assistant
   // messages and tool results that precede the first text-bearing message.
-  // Stop at the first non-assistant, non-tool message (user prompt = run start).
+  // Stop at:
+  // 1. A user message (run boundary), OR
+  // 2. A text-bearing assistant message (prior turn), OR
+  // 3. The start of the array
+  // This prevents overshooting into prior-history in sessions without a user
+  // message at the start (sub-agent auto-runs, greeting-first sessions).
   let startIdx = textBoundaryIdx;
   for (let i = textBoundaryIdx - 1; i >= 0; i--) {
-    const role = messages[i].role;
-    if (role === "assistant" || role === "toolResult") {
+    const msg = messages[i];
+    if (msg.role === "user") {
+      break; // Run boundary
+    }
+    if (msg.role === "assistant" && extractAssistantText(msg).length > 0) {
+      break; // Prior turn's text-bearing assistant message
+    }
+    if (msg.role === "assistant" || msg.role === "toolResult") {
       startIdx = i;
     } else {
-      break;
+      break; // Unknown role, stop
     }
   }
   return messages.slice(startIdx);
