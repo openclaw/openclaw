@@ -4,7 +4,7 @@ import {
   collectAllowlistProviderGroupPolicyWarnings,
   createScopedAccountConfigAccessors,
   formatNormalizedAllowFromEntries,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
