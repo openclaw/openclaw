@@ -415,15 +415,14 @@ export function detectFileType(
 }
 
 /**
- * Resolve effective localRoots for loadWebMedia: channel config (localRoots) overrides
- * context mediaLocalRoots. Supports channels.feishu.localRoots = "any" or string[].
+ * Resolve effective localRoots for loadWebMedia from merged account config (so
+ * channels.feishu.accounts.<id>.localRoots overrides top-level). Supports "any" or string[].
  */
 function resolveFeishuMediaLocalRoots(params: {
-  cfg: ClawdbotConfig;
+  feishuConfig: FeishuConfig | undefined;
   mediaLocalRoots?: readonly string[];
 }): readonly string[] | "any" | undefined {
-  const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
-  const channelRoots = feishuCfg?.localRoots;
+  const channelRoots = params.feishuConfig?.localRoots;
   if (channelRoots === "any") {
     return "any";
   }
@@ -435,8 +434,8 @@ function resolveFeishuMediaLocalRoots(params: {
 
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
- * When mediaUrl is a local path, allowed roots come from channels.feishu.localRoots
- * (or "any") or from core outbound mediaLocalRoots.
+ * When mediaUrl is a local path, allowed roots come from merged Feishu config
+ * (channels.feishu.localRoots or channels.feishu.accounts.<id>.localRoots) or core mediaLocalRoots.
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -474,7 +473,10 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const localRoots = resolveFeishuMediaLocalRoots({ cfg, mediaLocalRoots });
+    const localRoots = resolveFeishuMediaLocalRoots({
+      feishuConfig: account.config,
+      mediaLocalRoots,
+    });
     const loadOptions: {
       maxBytes: number;
       optimizeImages: boolean;

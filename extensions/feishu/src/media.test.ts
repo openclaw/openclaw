@@ -295,15 +295,20 @@ describe("sendMediaFeishu msg_type routing", () => {
       kind: "image",
       contentType: "image/png",
     });
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      configured: true,
+      accountId: "main",
+      config: { localRoots: "any" },
+    });
 
     await sendMediaFeishu({
       cfg: { channels: { feishu: { localRoots: "any" } } } as any,
       to: "user:ou_target",
-      mediaUrl: "/Users/zhengxing/openclaw/workspace/ask_official.png",
+      mediaUrl: "/local/feishu/workspace/ask_official.png",
     });
 
     expect(loadWebMediaMock).toHaveBeenCalledWith(
-      "/Users/zhengxing/openclaw/workspace/ask_official.png",
+      "/local/feishu/workspace/ask_official.png",
       expect.objectContaining({
         localRoots: "any",
         readFile: expect.any(Function),
@@ -320,6 +325,11 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const channelRoots = ["/custom/feishu/root"];
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      configured: true,
+      accountId: "main",
+      config: { localRoots: channelRoots },
+    });
     await sendMediaFeishu({
       cfg: { channels: { feishu: { localRoots: channelRoots } } } as any,
       to: "user:ou_target",
