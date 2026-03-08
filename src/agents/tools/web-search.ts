@@ -1528,6 +1528,72 @@ function mapBraveLlmContextResults(
   }));
 }
 
+function buildBraveWebSearchUrl(params: {
+  query: string;
+  count: number;
+  country?: string;
+  language?: string;
+  search_lang?: string;
+  ui_lang?: string;
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+  goggles?: string;
+}): URL {
+  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("count", String(params.count));
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  if (params.search_lang || params.language) {
+    url.searchParams.set("search_lang", (params.search_lang || params.language)!);
+  }
+  if (params.ui_lang) {
+    url.searchParams.set("ui_lang", params.ui_lang);
+  }
+  if (params.freshness) {
+    url.searchParams.set("freshness", params.freshness);
+  } else if (params.dateAfter && params.dateBefore) {
+    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
+  } else if (params.dateAfter) {
+    url.searchParams.set(
+      "freshness",
+      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
+    );
+  } else if (params.dateBefore) {
+    url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
+  }
+  if (params.goggles) {
+    url.searchParams.set("goggles", params.goggles);
+  }
+  return url;
+}
+
+function buildBraveLlmContextUrl(params: {
+  query: string;
+  country?: string;
+  search_lang?: string;
+  freshness?: string;
+  goggles?: string;
+}): URL {
+  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  if (params.search_lang) {
+    url.searchParams.set("search_lang", params.search_lang);
+  }
+  if (params.freshness) {
+    url.searchParams.set("freshness", params.freshness);
+  }
+  if (params.goggles) {
+    url.searchParams.set("goggles", params.goggles);
+  }
+  return url;
+}
+
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1545,20 +1611,7 @@ async function runBraveLlmContextSearch(params: {
   }>;
   sources?: BraveLlmContextResponse["sources"];
 }> {
-  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
-  url.searchParams.set("q", params.query);
-  if (params.country) {
-    url.searchParams.set("country", params.country);
-  }
-  if (params.search_lang) {
-    url.searchParams.set("search_lang", params.search_lang);
-  }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
-  }
-  if (params.goggles) {
-    url.searchParams.set("goggles", params.goggles);
-  }
+  const url = buildBraveLlmContextUrl(params);
 
   return withTrustedWebSearchEndpoint(
     {
@@ -1821,33 +1874,7 @@ async function runWebSearch(params: {
     return payload;
   }
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
-  url.searchParams.set("q", params.query);
-  url.searchParams.set("count", String(params.count));
-  if (params.country) {
-    url.searchParams.set("country", params.country);
-  }
-  if (params.search_lang || params.language) {
-    url.searchParams.set("search_lang", (params.search_lang || params.language)!);
-  }
-  if (params.ui_lang) {
-    url.searchParams.set("ui_lang", params.ui_lang);
-  }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
-  } else if (params.dateAfter && params.dateBefore) {
-    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
-  } else if (params.dateAfter) {
-    url.searchParams.set(
-      "freshness",
-      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
-    );
-  } else if (params.dateBefore) {
-    url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
-  }
-  if (params.goggles) {
-    url.searchParams.set("goggles", params.goggles);
-  }
+  const url = buildBraveWebSearchUrl(params);
 
   const mapped = await withTrustedWebSearchEndpoint(
     {
@@ -2247,4 +2274,6 @@ export const __testing = {
   resolveBraveMode,
   mapBraveLlmContextResults,
   createWebSearchSchema,
+  buildBraveWebSearchUrl,
+  buildBraveLlmContextUrl,
 } as const;
