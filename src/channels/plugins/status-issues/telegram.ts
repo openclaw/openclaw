@@ -11,6 +11,7 @@ type TelegramAccountStatus = {
   enabled?: unknown;
   configured?: unknown;
   allowUnmentionedGroups?: unknown;
+  suppressPrivacyModeWarning?: unknown;
   audit?: unknown;
 };
 
@@ -36,6 +37,7 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     enabled: value.enabled,
     configured: value.configured,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
+    suppressPrivacyModeWarning: value.suppressPrivacyModeWarning,
     audit: value.audit,
   };
 }
@@ -91,14 +93,14 @@ export function collectTelegramStatusIssues(
       continue;
     }
 
-    if (account.allowUnmentionedGroups === true) {
+    if (account.allowUnmentionedGroups === true && account.suppressPrivacyModeWarning !== true) {
       issues.push({
         channel: "telegram",
         accountId,
         kind: "config",
         message:
           "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
-        fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+        fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway). If you have already disabled privacy mode, set suppressPrivacyModeWarning: true in your Telegram channel config to suppress this warning.",
       });
     }
 
