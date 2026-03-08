@@ -171,6 +171,71 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("suppresses NO_REPLY text before any Telegram API call", async () => {
+    botApi.sendMessage.mockClear();
+
+    const result = await sendMessageTelegram("123", "  NO_REPLY  ", {
+      token: "tok",
+    });
+
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ messageId: "suppressed", chatId: "123" });
+  });
+
+  it("does not suppress NO_REPLY when sending media", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 73,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const result = await sendMessageTelegram(chatId, " NO_REPLY ", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "NO_REPLY",
+      parse_mode: "HTML",
+    });
+    expect(result).toEqual({ messageId: "73", chatId });
+  });
+
+  it("does not suppress NO_REPLY when inline buttons are present", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 74,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram(chatId, " NO_REPLY ", {
+      token: "tok",
+      api,
+      buttons: [[{ text: "Open", callback_data: "cmd:open" }]],
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "NO_REPLY", {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "Open", callback_data: "cmd:open" }]],
+      },
+    });
+    expect(result).toEqual({ messageId: "74", chatId });
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
