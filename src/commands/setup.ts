@@ -8,9 +8,15 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
+function isParseError(err: unknown): boolean {
+  return err instanceof SyntaxError || (err as Error | null)?.name === "SyntaxError";
+}
+
 async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
   parsed: OpenClawConfig;
+  parseError?: boolean;
+  readError?: unknown;
 }> {
   try {
     const raw = await fs.readFile(configPath, "utf-8");
@@ -19,8 +25,15 @@ async function readConfigFileRaw(configPath: string): Promise<{
       return { exists: true, parsed: parsed as OpenClawConfig };
     }
     return { exists: true, parsed: {} };
-  } catch {
-    return { exists: false, parsed: {} };
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return { exists: false, parsed: {} };
+    }
+    if (isParseError(err)) {
+      return { exists: true, parsed: {}, parseError: true };
+    }
+    return { exists: true, parsed: {}, readError: err };
   }
 }
 
@@ -36,6 +49,24 @@ export async function setupCommand(
   const io = createConfigIO();
   const configPath = io.configPath;
   const existingRaw = await readConfigFileRaw(configPath);
+
+  if (existingRaw.parseError) {
+    throw new Error(
+      `Config file exists but is not valid JSON: ${formatConfigPath(configPath)}. Fix the file before running setup.`,
+    );
+  }
+  if (existingRaw.readError) {
+    const message =
+      existingRaw.readError instanceof Error
+        ? existingRaw.readError.message
+        : typeof existingRaw.readError === "string"
+          ? existingRaw.readError
+          : "Unknown error";
+    throw new Error(`Config file could not be read: ${formatConfigPath(configPath)} — ${message}`, {
+      cause: existingRaw.readError,
+    });
+  }
+
   const cfg = existingRaw.parsed;
   const defaults = cfg.agents?.defaults ?? {};
 
