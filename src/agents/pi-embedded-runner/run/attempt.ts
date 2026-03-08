@@ -870,6 +870,8 @@ export async function runEmbeddedAttempt(
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
+          trigger: params.trigger,
+          memoryFlushWritePath: params.memoryFlushWritePath,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
           modelId: params.modelId,
