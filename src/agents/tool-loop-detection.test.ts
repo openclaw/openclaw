@@ -236,7 +236,7 @@ describe("tool-loop-detection", () => {
       expect(timestamp).toBeLessThanOrEqual(after);
     });
 
-    it("clears stale history when last entry is older than 60 seconds", () => {
+    it("does not clear stale history on its own (ownership is in detectToolCallLoop)", () => {
       const state = createState();
 
       // Record some calls with timestamps in the past (>60s ago)
@@ -250,10 +250,10 @@ describe("tool-loop-detection", () => {
         call.timestamp = Date.now() - 120_000;
       }
 
-      // Next recordToolCall should detect stale history and clear it
+      // recordToolCall no longer clears stale history — that responsibility
+      // belongs to detectToolCallLoop which always runs first in production.
       recordToolCall(state, "read", { path: "/file.txt" }, "new-1");
-      expect(state.toolCallHistory).toHaveLength(1);
-      expect(state.toolCallHistory?.[0]?.toolCallId).toBe("new-1");
+      expect(state.toolCallHistory).toHaveLength(4);
     });
 
     it("does not clear history when last entry is recent", () => {
@@ -317,6 +317,31 @@ describe("tool-loop-detection", () => {
       );
       expect(result.stuck).toBe(false);
       expect(state.toolCallHistory).toHaveLength(0);
+    });
+
+    it("respects configurable staleThresholdMs", () => {
+      const state = createState();
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `old-${i}`);
+      }
+
+      // Backdate entries to 90 seconds ago — stale under default 60s but
+      // fresh under a custom 120s threshold.
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 90_000;
+      }
+
+      // With a 120s threshold the history is still "fresh", so the loop
+      // detector should see all the repeated calls and fire a warning.
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        { enabled: true, staleThresholdMs: 120_000 },
+      );
+      expect(result.stuck).toBe(true);
+      expect(state.toolCallHistory).toHaveLength(WARNING_THRESHOLD);
     });
 
     it("does not flag unique tool calls", () => {

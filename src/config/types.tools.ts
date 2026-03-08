@@ -161,6 +161,8 @@ export type ToolLoopDetectionConfig = {
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
   globalCircuitBreakerThreshold?: number;
+  /** Milliseconds after which idle tool call history is considered stale and cleared (default: 60 000). Align with the heartbeat interval to avoid false positives across cycles. */
+  staleThresholdMs?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
 };

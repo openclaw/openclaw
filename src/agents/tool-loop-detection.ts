@@ -28,12 +28,15 @@ export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+const STALE_THRESHOLD_MS_DEFAULT = 60_000;
+
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  staleThresholdMs: STALE_THRESHOLD_MS_DEFAULT,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
@@ -47,6 +50,7 @@ type ResolvedLoopDetectionConfig = {
   warningThreshold: number;
   criticalThreshold: number;
   globalCircuitBreakerThreshold: number;
+  staleThresholdMs: number;
   detectors: {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
@@ -88,6 +92,10 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     warningThreshold,
     criticalThreshold,
     globalCircuitBreakerThreshold,
+    staleThresholdMs: asPositiveInt(
+      config?.staleThresholdMs,
+      DEFAULT_LOOP_DETECTION_CONFIG.staleThresholdMs,
+    ),
     detectors: {
       genericRepeat:
         config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
@@ -365,19 +373,20 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
-const STALE_HISTORY_THRESHOLD_MS = 60_000;
-
 /**
  * Clear stale tool call history to prevent false positives across heartbeat
- * cycles.  If the most recent entry is older than 60 seconds, the previous
- * burst of tool calls belongs to a different heartbeat cycle.
+ * cycles.  If the most recent entry is older than {@link staleThresholdMs},
+ * the previous burst of tool calls belongs to a different heartbeat cycle.
+ *
+ * Ownership: called only from {@link detectToolCallLoop}, which runs before
+ * {@link recordToolCall} in production (see pi-tools.before-tool-call.ts).
  */
-function clearStaleHistory(state: SessionState): void {
+function clearStaleHistory(state: SessionState, staleThresholdMs: number): void {
   if (!state.toolCallHistory || state.toolCallHistory.length === 0) {
     return;
   }
   const lastCall = state.toolCallHistory.at(-1);
-  if (lastCall && Date.now() - lastCall.timestamp > STALE_HISTORY_THRESHOLD_MS) {
+  if (lastCall && Date.now() - lastCall.timestamp > staleThresholdMs) {
     state.toolCallHistory = [];
   }
 }
@@ -396,10 +405,10 @@ export function detectToolCallLoop(
   if (!resolvedConfig.enabled) {
     return { stuck: false };
   }
-  // Clear stale history before checking — in production, detectToolCallLoop
-  // is called before recordToolCall, so stale entries from a previous
-  // heartbeat cycle must be discarded here to avoid false positives.
-  clearStaleHistory(state);
+  // Clear stale history before checking — detectToolCallLoop is called before
+  // recordToolCall in production, so this is the single point of ownership
+  // for discarding entries from a previous heartbeat cycle.
+  clearStaleHistory(state, resolvedConfig.staleThresholdMs);
   const history = state.toolCallHistory ?? [];
   const currentHash = hashToolCall(toolName, params);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
@@ -531,7 +540,8 @@ export function recordToolCall(
     state.toolCallHistory = [];
   }
 
-  clearStaleHistory(state);
+  // Stale history is cleared in detectToolCallLoop, which always runs before
+  // recordToolCall in production (see pi-tools.before-tool-call.ts).
 
   state.toolCallHistory.push({
     toolName,
