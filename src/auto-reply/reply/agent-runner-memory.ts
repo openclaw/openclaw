@@ -37,6 +37,7 @@ import {
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
+  computeContextHash,
 } from "./memory-flush.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -447,6 +448,34 @@ export async function runMemoryFlushIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  // --- Content hash dedup (state-based) ---
+  // Read the tail of the session transcript and compute a lightweight hash.
+  // If the hash matches the last flush, the context hasn't materially changed
+  // and flushing again would produce duplicate memory entries (#30115).
+  const sessionFilePath = await resolveSessionFilePathForFlush(
+    params.followupRun.run.sessionId,
+    entry ?? params.sessionEntry,
+    params.storePath,
+    params.agentId,
+  );
+  let contextHashBeforeFlush: string | undefined;
+  if (sessionFilePath) {
+    try {
+      const tailMessages = await readTranscriptTailMessages(sessionFilePath, 10);
+      contextHashBeforeFlush = computeContextHash(tailMessages);
+      const previousHash = entry?.memoryFlushContextHash;
+      if (previousHash && contextHashBeforeFlush === previousHash) {
+        logVerbose(
+          `memoryFlush skipped (context hash unchanged): sessionKey=${params.sessionKey} hash=${contextHashBeforeFlush}`,
+        );
+        return entry ?? params.sessionEntry;
+      }
+    } catch (err) {
+      // If we can't read the transcript, fall through and allow the flush.
+      logVerbose(`memoryFlush hash check failed, proceeding with flush: ${String(err)}`);
+    }
+  }
+
   logVerbose(
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
@@ -505,7 +534,7 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              if (phase === "end" && !evt.data?.willRetry) {
                 memoryCompactionCompleted = true;
               }
             }
@@ -540,6 +569,12 @@ export async function runMemoryFlushIfNeeded(params: {
           update: async () => ({
             memoryFlushAt: Date.now(),
             memoryFlushCompactionCount,
+            // Use the hash computed *before* the flush run. Reading after flush
+            // would include the flush turn's own messages, making the hash differ
+            // from what the next pre-flush check computes — dedup would never match.
+            ...(contextHashBeforeFlush != null
+              ? { memoryFlushContextHash: contextHashBeforeFlush }
+              : {}),
           }),
         });
         if (updatedEntry) {
@@ -554,4 +589,95 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 
   return activeSessionEntry;
+}
+
+/**
+ * Resolve the session transcript file path for flush hash computation.
+ */
+async function resolveSessionFilePathForFlush(
+  sessionId: string | undefined,
+  entry: SessionEntry | undefined,
+  storePath: string | undefined,
+  agentId?: string,
+): Promise<string | undefined> {
+  if (!sessionId) {
+    return undefined;
+  }
+  // Always normalize through resolveSessionFilePath to handle stale absolute
+  // paths and relative entries consistently (mirrors resolveSessionLogPath).
+  const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
+  const transcriptPath = (
+    entry as (SessionEntry & { transcriptPath?: string }) | undefined
+  )?.transcriptPath?.trim();
+  const sessionFile = entry?.sessionFile?.trim() || transcriptPath;
+  try {
+    const resolved = resolveSessionFilePath(
+      sessionId,
+      sessionFile ? { sessionFile } : entry,
+      pathOpts,
+    );
+    try {
+      await fs.promises.access(resolved);
+      return resolved;
+    } catch {
+      // fall through — resolved path doesn't exist
+    }
+  } catch {
+    // resolveSessionFilePath threw — try raw sessionFile as last resort
+  }
+  // Fallback: try the raw sessionFile if normalization didn't produce a valid path
+  if (sessionFile) {
+    try {
+      await fs.promises.access(sessionFile);
+      return sessionFile;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Read the last N messages (with role + content) from a session transcript JSONL file.
+ * Only returns entries that have a `message` field with a `role`.
+ */
+async function readTranscriptTailMessages(
+  filePath: string,
+  maxMessages: number,
+): Promise<Array<{ role?: string; content?: unknown }>> {
+  // Only read the tail of the file to avoid loading multi-MB transcripts (#15145).
+  const TAIL_BYTES = 64 * 1024; // 64KB — same budget as readSessionLogSnapshot
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    const start = Math.max(0, stat.size - TAIL_BYTES);
+    const readLen = Math.min(stat.size, TAIL_BYTES);
+    const buf = Buffer.alloc(readLen);
+    await handle.read(buf, 0, readLen, start);
+    const tail = buf.toString("utf-8");
+    // If we started mid-file, drop the first (likely partial) line.
+    // Guard against indexOf returning -1 (no newline found = entire chunk is one partial line).
+    const nlIdx = tail.indexOf("\n");
+    const trimmed = start > 0 ? (nlIdx >= 0 ? tail.slice(nlIdx + 1) : "") : tail;
+    const lines = trimmed.split(/\r?\n/);
+    const messages: Array<{ role?: string; content?: unknown }> = [];
+    // Read from the end for efficiency — we only need the tail.
+    for (let i = lines.length - 1; i >= 0 && messages.length < maxMessages; i--) {
+      const line = lines[i].trim();
+      if (!line) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.message?.role) {
+          messages.unshift({ role: parsed.message.role, content: parsed.message.content });
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return messages;
+  } finally {
+    await handle.close();
+  }
 }

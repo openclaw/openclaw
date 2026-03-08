@@ -145,6 +145,8 @@ export type SessionEntry = {
   contextTokens?: number;
   compactionCount?: number;
   memoryFlushAt?: number;
+  /** SHA-256 prefix of session context at last memory flush (state-based dedup). */
+  memoryFlushContextHash?: string;
   memoryFlushCompactionCount?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
