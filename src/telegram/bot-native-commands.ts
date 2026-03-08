@@ -1,6 +1,7 @@
 import type { Bot, Context } from "grammy";
 import { ensureConfiguredAcpRouteReady } from "../acp/persistent-bindings.route.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
+import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import {
   buildCommandTextFromArgs,
@@ -209,6 +210,28 @@ async function resolveTelegramCommandAuth(params: {
   const dmAllowFrom = groupAllowOverride ?? allowFrom;
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
+  const commandsAllowFrom = cfg.commands?.allowFrom;
+  const commandsAllowFromConfigured =
+    commandsAllowFrom != null &&
+    typeof commandsAllowFrom === "object" &&
+    (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]));
+  const commandsAllowFromAccess = commandsAllowFromConfigured
+    ? resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          AccountId: accountId,
+          ChatType: isGroup ? "group" : "direct",
+          From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
+          SenderId: senderId || undefined,
+          SenderUsername: senderUsername || undefined,
+        },
+        cfg,
+        // commands.allowFrom is the only auth source when configured.
+        commandAuthorized: false,
+      })
+    : null;
 
   const sendAuthMessage = async (text: string) => {
     const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
@@ -256,7 +279,7 @@ async function resolveTelegramCommandAuth(params: {
     resolveGroupPolicy,
     enforcePolicy: useAccessGroups,
     useTopicAndGroupOverrides: false,
-    enforceAllowlistAuthorization: requireAuth,
+    enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
     checkChatAllowlist: useAccessGroups,
@@ -289,16 +312,18 @@ async function resolveTelegramCommandAuth(params: {
   const groupSenderAllowed = isGroup
     ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
     : false;
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers: [
-      { configured: dmAllow.hasEntries, allowed: senderAllowed },
-      ...(isGroup
-        ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
-        : []),
-    ],
-    modeWhenAccessGroupsOff: "configured",
-  });
+  const commandAuthorized = commandsAllowFromConfigured
+    ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
+    : resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [
+          { configured: dmAllow.hasEntries, allowed: senderAllowed },
+          ...(isGroup
+            ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
+            : []),
+        ],
+        modeWhenAccessGroupsOff: "configured",
+      });
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
