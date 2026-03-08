@@ -26,6 +26,9 @@ const tabBySession = new Map()
 /** @type {Map<string, number>} */
 const childSessionToTab = new Map()
 
+/** @type {number|null} */
+let openclawGroupId = null
+
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map()
 
@@ -107,6 +110,22 @@ async function rehydrateState() {
       })
       tabBySession.set(entry.sessionId, entry.tabId)
       setBadge(entry.tabId, 'on')
+    }
+    // Batch-group all rehydrated tabs into the OpenClaw group.
+    if (entries.length > 0) {
+      const tabIds = entries.map(e => e.tabId)
+      try {
+        const existing = await chrome.tabGroups.query({ title: 'OpenClaw' })
+        if (existing.length > 0) {
+          openclawGroupId = existing[0].id
+          await chrome.tabs.group({ tabIds, groupId: openclawGroupId })
+        } else {
+          openclawGroupId = await chrome.tabs.group({ tabIds })
+          await chrome.tabGroups.update(openclawGroupId, { title: 'OpenClaw', color: 'red' })
+        }
+      } catch {
+        // Grouping is cosmetic.
+      }
     }
     // Phase 2: validate asynchronously, remove dead tabs.
     for (const entry of entries) {
@@ -474,6 +493,43 @@ function getTabByTargetId(targetId) {
   return null
 }
 
+async function ensureTabInGroup(tabId) {
+  try {
+    if (openclawGroupId != null) {
+      try {
+        await chrome.tabs.group({ tabIds: [tabId], groupId: openclawGroupId })
+      } catch {
+        openclawGroupId = null
+      }
+    }
+    if (openclawGroupId == null) {
+      const existing = await chrome.tabGroups.query({ title: 'OpenClaw' })
+      if (existing.length > 0) {
+        openclawGroupId = existing[0].id
+        await chrome.tabs.group({ tabIds: [tabId], groupId: openclawGroupId })
+      }
+    }
+    if (openclawGroupId == null) {
+      openclawGroupId = await chrome.tabs.group({ tabIds: [tabId] })
+    }
+    // Chrome bug: update() writes data correctly but tab strip may not repaint
+    // until user interaction. No reliable workaround — keep the call so it works
+    // once Chrome fixes the rendering.
+    await chrome.tabGroups.update(openclawGroupId, { title: 'OpenClaw', color: 'red' })
+  } catch (e) {
+    // Grouping is cosmetic — never block attach.
+    console.warn('ensureTabInGroup failed:', e?.message || e)
+  }
+}
+
+async function removeTabFromGroup(tabId) {
+  try {
+    await chrome.tabs.ungroup(tabId)
+  } catch {
+    // Tab may already be closed or ungrouped.
+  }
+}
+
 async function attachTab(tabId, opts = {}) {
   const debuggee = { tabId }
   await chrome.debugger.attach(debuggee, '1.3')
@@ -512,6 +568,7 @@ async function attachTab(tabId, opts = {}) {
   }
 
   setBadge(tabId, 'on')
+  await ensureTabInGroup(tabId)
   await persistState()
 
   return { sessionId, targetId }
@@ -555,6 +612,7 @@ async function detachTab(tabId, reason) {
 
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
   tabs.delete(tabId)
+  await removeTabFromGroup(tabId)
 
   try {
     await chrome.debugger.detach({ tabId })
@@ -876,6 +934,7 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
     }
   }
   setBadge(addedTabId, 'on')
+  void ensureTabInGroup(addedTabId)
   void persistState()
 }))
 
