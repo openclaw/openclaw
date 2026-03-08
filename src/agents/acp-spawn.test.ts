@@ -310,7 +310,7 @@ describe("spawnAcpDirect", () => {
     );
   });
 
-  it("keeps explicit delivery routing for fresh oneshot ACP runs", async () => {
+  it("keeps non-threaded ACP run completions isolated by default", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -331,13 +331,13 @@ describe("spawnAcpDirect", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
-    expect(agentCall?.params?.deliver).toBe(true);
-    expect(agentCall?.params?.channel).toBe("telegram");
-    expect(agentCall?.params?.to).toBe("telegram:6098642967");
-    expect(agentCall?.params?.threadId).toBe("1");
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.channel).toBeUndefined();
+    expect(agentCall?.params?.to).toBeUndefined();
+    expect(agentCall?.params?.threadId).toBeUndefined();
   });
 
-  it("can disable non-threaded ACP completion delivery back to the source chat", async () => {
+  it("keeps non-threaded ACP run completions isolated when opt-in is explicitly false", async () => {
     hoisted.state.cfg = {
       ...hoisted.state.cfg,
       acp: {
@@ -373,6 +373,85 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
     expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it("enables inline delivery for non-threaded ACP runs only when explicitly opted in", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        dispatch: {
+          ...hoisted.state.cfg.acp?.dispatch,
+          nonThreadedCompletionToParent: true,
+        },
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:6098642967",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+        agentThreadId: "1",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("telegram:6098642967");
+    expect(agentCall?.params?.threadId).toBe("1");
+  });
+
+  it("does not use inline delivery for opted-in non-threaded ACP runs from internal or non-deliverable channels", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        dispatch: {
+          ...hoisted.state.cfg.acp?.dispatch,
+          nonThreadedCompletionToParent: true,
+        },
+      },
+    };
+
+    for (const [index, channel] of ["webchat", "tui"].entries()) {
+      const result = await spawnAcpDirect(
+        {
+          task: `Investigate flaky tests (${channel})`,
+          agentId: "codex",
+          mode: "run",
+        },
+        {
+          agentSessionKey: `agent:main:${channel}:turn-${index + 1}`,
+          agentChannel: channel,
+          agentAccountId: "default",
+          agentTo: `${channel}:turn-${index + 1}`,
+          agentThreadId: String(index + 1),
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(result.mode).toBe("run");
+      const agentCall = hoisted.callGatewayMock.mock.calls
+        .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+        .filter((request) => request.method === "agent")
+        .at(index);
+      expect(agentCall?.params?.deliver).toBe(false);
+      expect(agentCall?.params?.channel).toBeUndefined();
+      expect(agentCall?.params?.to).toBeUndefined();
+      expect(agentCall?.params?.threadId).toBeUndefined();
+    }
   });
 
   it("includes cwd in ACP thread intro banner when provided at spawn time", async () => {

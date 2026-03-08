@@ -263,6 +263,21 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("rejects internal delivery channels instead of attempting outbound inline delivery", async () => {
+    await expect(
+      runDelivery({
+        opts: {
+          message: "hello",
+          deliver: true,
+          channel: "webchat",
+          to: "webchat:turn-1",
+        },
+      }),
+    ).rejects.toThrow("delivery channel is required");
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("uses caller-provided outbound session context when opts.sessionKey is absent", async () => {
     await runDelivery({
       opts: {
