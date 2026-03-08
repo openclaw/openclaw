@@ -1052,6 +1052,7 @@
                 "pages": [
                   "automation/hooks",
                   "automation/cron-jobs",
+                  "automation/pr-friction-dashboard",
                   "automation/cron-vs-heartbeat",
                   "automation/troubleshooting",
                   "automation/webhook",
