@@ -1,4 +1,5 @@
 import { resolveIrcAccount } from "./accounts.js";
+import { getLiveIrcClient } from "./client-registry.js";
 import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
@@ -8,7 +9,6 @@ import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
-  cfg?: CoreConfig;
   accountId?: string;
   replyTo?: string;
   target?: string;
@@ -38,7 +38,7 @@ export async function sendMessageIrc(
   opts: SendIrcOptions = {},
 ): Promise<SendIrcResult> {
   const runtime = getIrcRuntime();
-  const cfg = (opts.cfg ?? runtime.config.loadConfig()) as CoreConfig;
+  const cfg = runtime.config.loadConfig() as CoreConfig;
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
@@ -63,7 +63,10 @@ export async function sendMessageIrc(
     throw new Error("Message must be non-empty for IRC sends");
   }
 
-  const client = opts.client;
+  // Prefer a caller-supplied client, then the monitor's live registered
+  // client, and only fall back to a transient connection if neither exists.
+  // This avoids opening duplicate connections with the same nick (IRC 433).
+  const client = opts.client ?? getLiveIrcClient(account.accountId);
   if (client?.isReady()) {
     client.sendPrivmsg(target, payload);
   } else {
