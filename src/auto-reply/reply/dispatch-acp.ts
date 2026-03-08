@@ -8,12 +8,14 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
@@ -25,6 +27,8 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+
+const MIN_ACP_TURN_TIMEOUT_MS = 30_000;
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -247,14 +251,27 @@ export async function tryDispatchAcpReply(params: {
       );
     }
 
-    await acpManager.runTurn({
+    // Guard against stalled upstream streams: abort the turn after the configured
+    // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
+    // a silently hung SSE connection blocks the session queue forever. refs #17258
+    const turnTimeoutMs = resolveAgentTimeoutMs({
       cfg: params.cfg,
-      sessionKey,
-      text: promptText,
-      mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      onEvent: async (event) => await projector.onEvent(event),
+      minMs: MIN_ACP_TURN_TIMEOUT_MS,
     });
+    await withTimeout(
+      (signal) =>
+        acpManager.runTurn({
+          cfg: params.cfg,
+          sessionKey,
+          text: promptText,
+          mode: "prompt",
+          requestId: resolveAcpRequestId(params.ctx),
+          onEvent: (event) => projector.onEvent(event),
+          signal,
+        }),
+      turnTimeoutMs,
+      "ACP turn",
+    );
 
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
