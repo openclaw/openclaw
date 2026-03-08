@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
+import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import {
   buildMkdirpPlan,
   buildRemovePlan,
@@ -7,8 +8,7 @@ import {
   buildStatPlan,
   buildWriteCommitPlan,
   type SandboxFsCommandPlan,
-} from "./fs-bridge-command-plans.js";
-import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
+} from "./fs-bridge-shell-command-plans.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
@@ -99,12 +99,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    const opened = await this.pathGuard.openReadableFile(target);
-    try {
-      return fs.readFileSync(opened.fd);
-    } finally {
-      fs.closeSync(opened.fd);
-    }
+    return this.readPinnedFile(target);
   }
 
   async writeFile(params: {
@@ -237,6 +232,15 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       allowFailure: options.allowFailure,
       signal: options.signal,
     });
+  }
+
+  private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {
+    const opened = await this.pathGuard.openReadableFile(target);
+    try {
+      return fs.readFileSync(opened.fd);
+    } finally {
+      fs.closeSync(opened.fd);
+    }
   }
 
   private async runCheckedCommand(
