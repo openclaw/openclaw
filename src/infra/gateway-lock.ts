@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -131,12 +132,55 @@ async function checkPortFree(port: number, host = "127.0.0.1"): Promise<boolean>
   });
 }
 
+/**
+ * Get list of running gateway process PIDs.
+ * Uses stricter pattern to avoid false positives (e.g., matching "vim gateway-lock.ts").
+ */
+async function getRunningGatewayPids(): Promise<number[]> {
+  if (process.platform !== "linux") {
+    return [];
+  }
+
+  try {
+    // Use stricter pattern: openclaw followed by anything, then gateway
+    // This avoids matching processes like "vim gateway-lock.ts"
+    const output = execSync("pgrep -f 'openclaw.*gateway' 2>/dev/null", {
+      encoding: "utf8",
+      timeout: 2000,
+    });
+    const pids = output
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((p) => {
+        const pid = parseInt(p.trim(), 10);
+        return Number.isFinite(pid) ? pid : null;
+      })
+      .filter((pid): pid is number => pid !== null);
+    return pids;
+  } catch {
+    // pgrep returns non-zero if no matches, which is fine
+    return [];
+  }
+}
+
 async function resolveGatewayOwnerStatus(
   pid: number,
   payload: LockPayload | null,
   platform: NodeJS.Platform,
   port: number | undefined,
 ): Promise<LockOwnerStatus> {
+  // Check if the lock owner PID is among running gateway processes.
+  // This catches cases where gateways start on different ports with the same config.
+  if (platform === "linux") {
+    const gatewayPids = await getRunningGatewayPids();
+    if (gatewayPids.includes(pid)) {
+      return "alive";
+    }
+    // If lock owner not in running gateways but other gateways exist,
+    // continue to port check (allows different profiles to run)
+  }
+
   if (port != null) {
     const portFree = await checkPortFree(port);
     if (portFree) {
