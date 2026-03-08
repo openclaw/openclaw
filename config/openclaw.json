@@ -17,11 +17,14 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "google/gemini-2.5-pro"
+        "primary": "google/gemini-2.5-flash"
       },
       "userTimezone": "America/Santiago",
       "compaction": {
         "mode": "safeguard"
+      },
+      "heartbeat": {
+        "every": "1h"
       },
       "maxConcurrent": 4,
       "subagents": {
