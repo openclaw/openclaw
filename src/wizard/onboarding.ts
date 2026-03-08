@@ -70,6 +70,11 @@ async function requireRiskAcknowledgement(params: {
   }
 }
 
+function isWorkspacePermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null | undefined)?.code;
+  return code === "EACCES" || code === "EPERM";
+}
+
 export async function runOnboardingWizard(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -406,6 +411,26 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
+  const skipBootstrap = Boolean(baseConfig.agents?.defaults?.skipBootstrap);
+  try {
+    await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      skipBootstrap,
+    });
+  } catch (err) {
+    if (!isWorkspacePermissionError(err)) {
+      throw err;
+    }
+    runtime.error(
+      [
+        `Workspace directory is not writable: ${workspaceDir}`,
+        "Fix directory permissions (or choose another workspace path), then re-run onboarding.",
+      ].join("\n"),
+    );
+    await prompter.outro("Onboarding stopped before setup because workspace access failed.");
+    runtime.exit(1);
+    return;
+  }
+
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
@@ -508,9 +533,6 @@ export async function runOnboardingWizard(
   await writeConfigFile(nextConfig);
   const { logConfigUpdated } = await import("../config/logging.js");
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-  });
 
   if (opts.skipSearch) {
     await prompter.note("Skipping search setup.", "Search");

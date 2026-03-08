@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -228,6 +228,10 @@ describe("runOnboardingWizard", () => {
     suiteCase = 0;
   });
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   async function makeCaseDir(prefix: string): Promise<string> {
     const dir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
     await fs.mkdir(dir, { recursive: true });
@@ -305,6 +309,63 @@ describe("runOnboardingWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("fails fast on workspace permission errors before setup prompts", async () => {
+    const workspaceDir = await makeCaseDir("workspace-eacces-");
+    const err = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    ensureWorkspaceAndSessions.mockRejectedValueOnce(err);
+
+    const runtime = createRuntime({ throwsOnExit: true });
+    const prompter = buildWizardPrompter();
+
+    await expect(
+      runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          workspace: workspaceDir,
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:1");
+
+    expect(promptAuthChoiceGrouped).not.toHaveBeenCalled();
+    expect(configureGatewayForOnboarding).not.toHaveBeenCalled();
+    expect(setupChannels).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("not writable"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
+  });
+
+  it("re-throws non-permission workspace errors", async () => {
+    const workspaceDir = await makeCaseDir("workspace-enoent-");
+    const err = Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+    ensureWorkspaceAndSessions.mockRejectedValueOnce(err);
+
+    const runtime = createRuntime();
+    const prompter = buildWizardPrompter();
+
+    await expect(
+      runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          workspace: workspaceDir,
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("ENOENT");
+
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   async function runTuiHatchTest(params: {
