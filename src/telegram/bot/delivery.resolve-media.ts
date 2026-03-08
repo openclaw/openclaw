@@ -257,13 +257,21 @@ export async function resolveMedia(
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }
-  const saved = await downloadAndSaveTelegramFile({
-    filePath: file.file_path,
-    token,
-    fetchImpl: resolveRequiredFetchImpl(proxyFetch),
-    maxBytes,
-    telegramFileName: resolveTelegramFileName(msg),
-  });
+  let saved: Awaited<ReturnType<typeof downloadAndSaveTelegramFile>>;
+  try {
+    saved = await downloadAndSaveTelegramFile({
+      filePath: file.file_path,
+      token,
+      fetchImpl: resolveRequiredFetchImpl(proxyFetch),
+      maxBytes,
+      telegramFileName: resolveTelegramFileName(msg),
+    });
+  } catch (err) {
+    // Handle timeout and network errors gracefully (e.g., AbortError from timeout)
+    // to prevent media group failures on transient issues
+    logVerbose(`telegram: media download failed: ${String(err)}`);
+    return null;
+  }
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }

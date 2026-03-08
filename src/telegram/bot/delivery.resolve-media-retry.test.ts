@@ -191,14 +191,15 @@ describe("resolveMedia getFile retry", () => {
     },
   );
 
-  it("does not catch errors from fetchRemoteMedia (only getFile is retried)", async () => {
+  it("gracefully handles errors from fetchRemoteMedia (returns null instead of throwing)", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
     fetchRemoteMedia.mockRejectedValueOnce(new Error("download failed"));
 
-    await expect(
-      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
-    ).rejects.toThrow("download failed");
+    const result = await resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
 
+    // Should return null (graceful degradation) instead of throwing
+    // This prevents media group failures on transient download issues
+    expect(result).toBeNull();
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 
