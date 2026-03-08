@@ -47,10 +47,12 @@ const registryCache = new Map<string, PluginRegistry>();
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
+type PluginSdkAliasCandidateKind = "dist" | "src";
+
 function resolvePluginSdkAliasCandidateOrder(params: {
   modulePath: string;
   isProduction: boolean;
-}) {
+}): PluginSdkAliasCandidateKind[] {
   const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
   const isDistRuntime = normalizedModulePath.includes("/dist/");
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
