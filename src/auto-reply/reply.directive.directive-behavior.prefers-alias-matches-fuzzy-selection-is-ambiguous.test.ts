@@ -123,7 +123,7 @@ describe("directive behavior", () => {
                 workspace: path.join(home, "openclaw"),
                 models: {
                   "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "minimax/MiniMax-M2.5-highspeed": {},
                   "lmstudio/minimax-m2.5-gs32": {},
                 },
               },
@@ -157,7 +157,7 @@ describe("directive behavior", () => {
                 workspace: path.join(home, "openclaw"),
                 models: {
                   "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "minimax/MiniMax-M2.5-highspeed": {},
                 },
               },
             },
@@ -170,7 +170,7 @@ describe("directive behavior", () => {
                   api: "anthropic-messages",
                   models: [
                     makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
-                    makeModelDefinition("MiniMax-M2.5-Lightning", "MiniMax M2.5 Lightning"),
+                    makeModelDefinition("MiniMax-M2.5-highspeed", "MiniMax M2.5 Highspeed"),
                   ],
                 },
               },

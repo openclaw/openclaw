@@ -2186,7 +2186,7 @@ Fix checklist:
 2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
    exists in env/auth profiles so the provider can be injected.
 3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
-   `minimax/MiniMax-M2.5-highspeed` (legacy: `minimax/MiniMax-M2.5-Lightning`).
+   `minimax/MiniMax-M2.5-highspeed`.
 4. Run:
 
    ```bash
