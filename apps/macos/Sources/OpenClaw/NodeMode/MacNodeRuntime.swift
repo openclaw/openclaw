@@ -65,6 +65,8 @@ actor MacNodeRuntime {
                 return try await self.handleLocationInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawSystemCommand.prepare.rawValue:
+                return try await self.handleSystemRunPrepare(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
             case OpenClawSystemCommand.which.rawValue:
@@ -551,6 +553,64 @@ actor MacNodeRuntime {
             sessionKey: sessionKey,
             runId: runId,
             displayCommand: evaluation.displayCommand)
+    }
+
+    private func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawSystemRunPrepareParams.self, from: req.paramsJSON)
+
+        // Resolve command: prefer command array, fallback to rawCommand
+        let command: [String]
+        if let cmd = params.command, !cmd.isEmpty {
+            command = cmd
+        } else if let raw = params.rawCommand, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            command = ["/bin/sh", "-c", raw]
+        } else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
+        }
+
+        // Resolve cwd
+        let cwd = params.cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedCwd = (cwd?.isEmpty == false) ? cwd : nil
+
+        // Resolve agentId and sessionKey
+        let agentId = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedAgentId = (agentId?.isEmpty == false) ? agentId : nil
+        let sessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSessionKey = (sessionKey?.isEmpty == false) ? sessionKey : nil
+
+        // Resolve executable path and build argv with pinned executable
+        let resolution = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: params.rawCommand,
+            cwd: resolvedCwd,
+            env: [:]).first
+
+        // Build argv: pin the executable to its resolved path if available
+        let argv: [String]
+        if let resolvedPath = resolution?.resolvedPath, resolvedPath != command.first {
+            argv = [resolvedPath] + command.dropFirst()
+        } else {
+            argv = command
+        }
+
+        // Build rawCommand string for plan (use display formatter for proper quoting)
+        let rawCommandString = ExecCommandFormatter.displayString(for: argv)
+
+        let plan = OpenClawSystemRunApprovalPlan(
+            argv: argv,
+            cwd: resolvedCwd,
+            rawCommand: rawCommandString,
+            agentId: resolvedAgentId,
+            sessionKey: resolvedSessionKey)
+
+        struct PreparePayload: Encodable {
+            var cmdText: String
+            var plan: OpenClawSystemRunApprovalPlan
+        }
+
+        let cmdText = ExecCommandFormatter.displayString(for: command)
+        let payload = try Self.encodePayload(PreparePayload(cmdText: cmdText, plan: plan))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
