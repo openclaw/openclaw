@@ -710,16 +710,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Check if any hooks are registered for a given hook name.
+   * Also supports colon notation aliases (message:sent -> message_sent)
    */
   function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+    // Support colon notation aliases: message:sent -> message_sent
+    const normalizedName = hookName.replace(":", "_");
+    return registry.typedHooks.some(
+      (h) => h.hookName === hookName || h.hookName === normalizedName,
+    );
   }
 
   /**
    * Get count of registered hooks for a given hook name.
+   * Also supports colon notation aliases (message:received -> message_received)
    */
   function getHookCount(hookName: PluginHookName): number {
-    return registry.typedHooks.filter((h) => h.hookName === hookName).length;
+    // Support colon notation aliases
+    const normalizedName = hookName.replace(":", "_");
+    return registry.typedHooks.filter(
+      (h) => h.hookName === hookName || h.hookName === normalizedName,
+    ).length;
   }
 
   return {

@@ -649,7 +649,15 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
+
+  // Check if session was recently active (within 60 seconds) to avoid conflicting
+  // with user message delivery context (#28639)
   const { entry, sessionKey, storePath } = preflight.session;
+  const SESSION_ACTIVE_THRESHOLD_MS = 60000; // 60 seconds
+  if (entry?.updatedAt && startedAt - entry.updatedAt < SESSION_ACTIVE_THRESHOLD_MS) {
+    return { status: "skipped", reason: "session-recently-active" };
+  }
+
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
