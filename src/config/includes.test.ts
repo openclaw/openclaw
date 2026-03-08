@@ -592,6 +592,36 @@ describe("security: path traversal protection (CWE-22)", () => {
         expect(result).toEqual(testCase.expected);
       }
     });
+
+    it("drops blocked prototype keys while resolving include trees", () => {
+      const input = {
+        safe: 1,
+        nested: JSON.parse('{"ok":true,"__proto__":{"polluted":"nested"}}'),
+        rootPollution: JSON.parse('{"__proto__":{"polluted":"root"}}'),
+      };
+
+      const resolvedUnknown = resolveConfigIncludes(input, DEFAULT_BASE_PATH);
+      expect(resolvedUnknown).toBeTypeOf("object");
+      expect(resolvedUnknown).not.toBeNull();
+      const resolved = resolvedUnknown as Record<string, unknown>;
+
+      expect(Object.prototype.hasOwnProperty.call(resolved, "__proto__")).toBe(false);
+      expect(Object.keys(resolved)).toEqual(["safe", "nested", "rootPollution"]);
+      expect(resolved.polluted).toBeUndefined();
+      expect((resolved.nested as Record<string, unknown>).polluted).toBeUndefined();
+      expect((resolved.rootPollution as Record<string, unknown>).polluted).toBeUndefined();
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("ignores blocked sibling keys for include merges", () => {
+      const files = { [configPath("array.json")]: ["a", "b"] };
+      const input = JSON.parse('{"$include":"./array.json","__proto__":{"polluted":true}}');
+
+      const resolved = resolve(input, files);
+
+      expect(resolved).toEqual(["a", "b"]);
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    });
   });
 
   describe("edge cases", () => {

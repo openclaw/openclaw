@@ -123,6 +123,9 @@ class IncludeProcessor {
   private processObject(obj: Record<string, unknown>): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
+      if (isBlockedObjectKey(key)) {
+        continue;
+      }
       result[key] = this.process(value);
     }
     return result;
@@ -130,7 +133,7 @@ class IncludeProcessor {
 
   private processInclude(obj: Record<string, unknown>): unknown {
     const includeValue = obj[INCLUDE_KEY];
-    const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
+    const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY && !isBlockedObjectKey(k));
     const included = this.resolveInclude(includeValue);
 
     if (otherKeys.length === 0) {
