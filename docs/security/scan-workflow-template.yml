@@ -1,0 +1,98 @@
+# Security Scan Workflow Template
+#
+# This workflow runs security scans on your OpenClaw workspace:
+# - Trivy: Vulnerability scanning for dependencies and filesystem
+# - KICS: Infrastructure as Code security scanning
+# - TruffleHog: Secret detection in git history
+#
+# Based on Catena-X TRG 8 security guidelines (eclipse-tractusx)
+#
+# Usage: Copy this file to your repo's .github/workflows/ directory
+#
+# Action refs are pinned to commit SHAs (supply-chain hardening).
+# To update, run: gh api repos/<owner>/<action>/git/ref/tags/<tag>
+# and replace the SHA below.
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "0 3 * * 0" # Weekly Sunday 3 AM UTC
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  trivy-scan:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Run Trivy vulnerability scanner
+        # aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          severity: "CRITICAL,HIGH"
+          format: "table"
+          exit-code: "1" # Fail the build on findings (set to '0' to report-only)
+          ignore-unfixed: true
+
+  kics-scan:
+    name: KICS IaC Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Run KICS scan
+        # Checkmarx/kics-github-action@v2.1.0
+        uses: Checkmarx/kics-github-action@aacf8e81cd48e227259c937c215b352e02ad447a
+        with:
+          path: "."
+          fail_on: "critical" # Only fail on critical issues
+          output_path: "kics-results"
+          output_formats: "json"
+          exclude_paths: "node_modules,dist,.git,tmp"
+
+      - name: Upload KICS results
+        # Upload findings artifact so they survive after the job ends
+        if: always() # Run even if the KICS step fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: kics-results
+          path: kics-results/
+          retention-days: 30
+
+  secret-scan:
+    name: TruffleHog Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0 # Full history for secret scanning
+
+      - name: Run TruffleHog
+        # trufflesecurity/trufflehog@v3.88.0
+        # NOTE: --only-verified is intentionally omitted.
+        # With --only-verified, TruffleHog only reports secrets it can confirm
+        # via outbound API calls. This silently skips entire secret classes:
+        # SSH private keys, database passwords, internal service tokens,
+        # and any credential whose service has no TruffleHog verifier.
+        # The hook also becomes a no-op in air-gapped / offline environments.
+        # Without the flag, all detected secrets are reported (verified or not),
+        # giving teams full visibility. Tune your baseline as needed.
+        uses: trufflesecurity/trufflehog@ddc015e5ed99942b2253d8ea16a0586a01ef2ab1
