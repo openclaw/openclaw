@@ -388,24 +388,7 @@ export function applyNovitaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
  */
 export function applyNovitaConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyNovitaProviderConfig(cfg);
-  const existingModel = next.agents?.defaults?.model;
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-              }
-            : undefined),
-          primary: NOVITA_DEFAULT_MODEL_REF,
-        },
-      },
-    },
-  };
+  return applyAgentDefaultModelPrimary(next, NOVITA_DEFAULT_MODEL_REF);
 }
 
 /**
