@@ -40,19 +40,46 @@ function createTestPrompter(params: { text: string[]; select?: string[] }): {
   };
 }
 
-function stubFetchSequence(
-  responses: Array<{ ok: boolean; status?: number }>,
-): ReturnType<typeof vi.fn> {
-  const fetchMock = vi.fn();
-  for (const response of responses) {
-    fetchMock.mockResolvedValueOnce({
-      ok: response.ok,
-      status: response.status,
+/**
+ * URL-aware fetch mock for custom API config tests.
+ * Requests ending with `/models` are treated as model discovery;
+ * everything else consumes from the verificationResponses queue.
+ */
+function stubFetchForCustomApi(params: {
+  discoveryModels?: Array<{ id: string; owned_by?: string }>;
+  verificationResponses: Array<{ ok: boolean; status?: number }>;
+}): ReturnType<typeof vi.fn> {
+  const discoveryModels = params.discoveryModels ?? [];
+  const verificationQueue = [...params.verificationResponses];
+
+  const fetchMock = vi.fn().mockImplementation((url: string) => {
+    if (typeof url === "string" && url.endsWith("/models")) {
+      if (discoveryModels.length === 0) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: discoveryModels }),
+      });
+    }
+    const response = verificationQueue.shift();
+    return Promise.resolve({
+      ok: response?.ok ?? false,
+      status: response?.status ?? 500,
       json: async () => ({}),
     });
-  }
+  });
+
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** Filter fetch mock calls to only verification/probe requests (excludes /models discovery). */
+function filterVerificationCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(
+    ([url]: unknown[]) => typeof url !== "string" || !url.endsWith("/models"),
+  );
 }
 
 async function runPromptCustomApi(
@@ -126,7 +153,7 @@ describe("promptCustomApiConfig", () => {
       text: ["http://localhost:11434/v1", "", "llama3", "custom", "local"],
       select: ["plaintext", "openai"],
     });
-    stubFetchSequence([{ ok: true }]);
+    stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
     const result = await runPromptCustomApi(prompter);
 
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
@@ -138,7 +165,9 @@ describe("promptCustomApiConfig", () => {
       text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],
       select: ["plaintext", "openai", "model"],
     });
-    stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
+    stubFetchForCustomApi({
+      verificationResponses: [{ ok: false, status: 400 }, { ok: true }],
+    });
     await runPromptCustomApi(prompter);
 
     expect(prompter.text).toHaveBeenCalledTimes(6);
@@ -150,7 +179,7 @@ describe("promptCustomApiConfig", () => {
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "unknown"],
     });
-    stubFetchSequence([{ ok: true }]);
+    stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
     const result = await runPromptCustomApi(prompter);
 
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
@@ -161,11 +190,12 @@ describe("promptCustomApiConfig", () => {
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "openai"],
     });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
+    const fetchMock = stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
 
     await runPromptCustomApi(prompter);
 
-    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
+    const verifyCalls = filterVerificationCalls(fetchMock);
+    const firstCall = verifyCalls[0]?.[1] as { body?: string } | undefined;
     expect(firstCall?.body).toBeDefined();
     expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
@@ -181,11 +211,12 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["plaintext", "openai"],
     });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
+    const fetchMock = stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
 
     await runPromptCustomApi(prompter);
 
-    const firstCall = fetchMock.mock.calls[0];
+    const verifyCalls = filterVerificationCalls(fetchMock);
+    const firstCall = verifyCalls[0];
     const firstUrl = firstCall?.[0];
     const firstInit = firstCall?.[1] as
       | { body?: string; headers?: Record<string, string> }
@@ -214,12 +245,15 @@ describe("promptCustomApiConfig", () => {
       text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "unknown"],
     });
-    const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+    const fetchMock = stubFetchForCustomApi({
+      verificationResponses: [{ ok: false, status: 404 }, { ok: true }],
+    });
 
     await runPromptCustomApi(prompter);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
+    const verifyCalls = filterVerificationCalls(fetchMock);
+    expect(verifyCalls).toHaveLength(2);
+    const secondCall = verifyCalls[1]?.[1] as { body?: string } | undefined;
     expect(secondCall?.body).toBeDefined();
     expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
@@ -237,7 +271,9 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
-    stubFetchSequence([{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }]);
+    stubFetchForCustomApi({
+      verificationResponses: [{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }],
+    });
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
@@ -251,7 +287,7 @@ describe("promptCustomApiConfig", () => {
       text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
       select: ["plaintext", "openai"],
     });
-    stubFetchSequence([{ ok: true }]);
+    stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
     const result = await runPromptCustomApi(prompter, {
       models: {
         providers: {
@@ -286,14 +322,19 @@ describe("promptCustomApiConfig", () => {
       select: ["plaintext", "openai", "model"],
     });
 
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce((_url: string, init?: { signal?: AbortSignal }) => {
+    let verificationCallCount = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: { signal?: AbortSignal }) => {
+      if (typeof url === "string" && url.endsWith("/models")) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      }
+      verificationCallCount++;
+      if (verificationCallCount === 1) {
         return new Promise((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
         });
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const promise = runPromptCustomApi(prompter);
@@ -310,7 +351,7 @@ describe("promptCustomApiConfig", () => {
       text: ["https://example.com/v1", "CUSTOM_PROVIDER_API_KEY", "detected-model", "custom", ""],
       select: ["ref", "env", "openai"],
     });
-    const fetchMock = stubFetchSequence([{ ok: true }]);
+    const fetchMock = stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
 
     const result = await runPromptCustomApi(prompter);
 
@@ -319,10 +360,11 @@ describe("promptCustomApiConfig", () => {
       provider: "default",
       id: "CUSTOM_PROVIDER_API_KEY",
     });
-    const firstCall = fetchMock.mock.calls[0]?.[1] as
+    const verifyCalls = filterVerificationCalls(fetchMock);
+    const firstVerification = verifyCalls[0]?.[1] as
       | { headers?: Record<string, string> }
       | undefined;
-    expect(firstCall?.headers?.Authorization).toBe("Bearer test-env-key");
+    expect(firstVerification?.headers?.Authorization).toBe("Bearer test-env-key");
   });
 
   it("re-prompts source after provider ref preflight fails and succeeds with env ref", async () => {
@@ -338,7 +380,7 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["ref", "provider", "filemain", "env", "openai"],
     });
-    stubFetchSequence([{ ok: true }]);
+    stubFetchForCustomApi({ verificationResponses: [{ ok: true }] });
 
     const result = await runPromptCustomApi(prompter, {
       secrets: {
@@ -361,6 +403,43 @@ describe("promptCustomApiConfig", () => {
       provider: "default",
       id: "CUSTOM_PROVIDER_API_KEY",
     });
+  });
+
+  it("discovers models and lets user select from list", async () => {
+    const prompter = createTestPrompter({
+      // modelId is selected via prompter.select, not text
+      text: ["https://custom-llm.example.com/v1", "test-key", "custom", ""],
+      select: ["plaintext", "openai", "gpt-4o"],
+    });
+    stubFetchForCustomApi({
+      discoveryModels: [
+        { id: "gpt-4o", owned_by: "openai" },
+        { id: "gpt-4o-mini", owned_by: "openai" },
+      ],
+      verificationResponses: [{ ok: true }],
+    });
+    const result = await runPromptCustomApi(prompter);
+
+    expect(prompter.text).toHaveBeenCalledTimes(4);
+    expect(prompter.select).toHaveBeenCalledTimes(3);
+    expect(result.modelId).toBe("gpt-4o");
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-completions");
+  });
+
+  it("falls back to manual input when user selects manual option from discovered list", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://custom-llm.example.com/v1", "test-key", "my-custom-model", "custom", ""],
+      select: ["plaintext", "openai", "__manual_input__"],
+    });
+    stubFetchForCustomApi({
+      discoveryModels: [{ id: "gpt-4o" }],
+      verificationResponses: [{ ok: true }],
+    });
+    const result = await runPromptCustomApi(prompter);
+
+    expect(prompter.text).toHaveBeenCalledTimes(5);
+    expect(prompter.select).toHaveBeenCalledTimes(3);
+    expect(result.modelId).toBe("my-custom-model");
   });
 });
 
