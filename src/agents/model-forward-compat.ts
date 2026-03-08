@@ -12,8 +12,11 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = OPENAI_GPT_54_CONTEXT_TOKENS;
-const OPENAI_CODEX_GPT_54_MAX_TOKENS = OPENAI_GPT_54_MAX_TOKENS;
+// Default to the codex template ceiling (272k) rather than the native 1,050,000. Cost doubles
+// above 272k on the Codex path and there is real performance degradation at higher context.
+// Users can opt into the full native window via contextTokens in their agent config.
+const OPENAI_CODEX_DEFAULT_CONTEXT_TOKENS = 272_000;
+const OPENAI_CODEX_DEFAULT_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -125,15 +128,9 @@ function resolveOpenAICodexForwardCompatModel(
 
   let templateIds: readonly string[];
   let eligibleProviders: Set<string>;
-  let patch: Partial<Model<Api>> | undefined;
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
-    // GPT-5.4 supports a larger native context window than its template models.
-    patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-    };
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
     templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
@@ -145,13 +142,14 @@ function resolveOpenAICodexForwardCompatModel(
     return undefined;
   }
 
+  // Default to template context (272k for codex models). Users can opt into
+  // the full native 1,050,000 window via contextTokens in their agent config.
   return (
     cloneFirstTemplateModel({
       normalizedProvider,
       trimmedModelId,
       templateIds: [...templateIds],
       modelRegistry,
-      patch,
     }) ??
     normalizeModelCompat({
       id: trimmedModelId,
@@ -164,11 +162,11 @@ function resolveOpenAICodexForwardCompatModel(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow:
         lower === OPENAI_CODEX_GPT_54_MODEL_ID
-          ? OPENAI_CODEX_GPT_54_CONTEXT_TOKENS
+          ? OPENAI_CODEX_DEFAULT_CONTEXT_TOKENS
           : DEFAULT_CONTEXT_TOKENS,
       maxTokens:
         lower === OPENAI_CODEX_GPT_54_MODEL_ID
-          ? OPENAI_CODEX_GPT_54_MAX_TOKENS
+          ? OPENAI_CODEX_DEFAULT_MAX_TOKENS
           : DEFAULT_CONTEXT_TOKENS,
     } as Model<Api>)
   );
