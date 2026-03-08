@@ -10,14 +10,6 @@ export type SandboxFsCommandPlan = {
   allowFailure?: boolean;
 };
 
-export function buildReadFilePlan(target: SandboxResolvedFsPath): SandboxFsCommandPlan {
-  return {
-    checks: [{ target, options: { action: "read files" } }],
-    script: 'set -eu; cat -- "$1"',
-    args: [target.containerPath],
-  };
-}
-
 export function buildWriteCommitPlan(
   target: SandboxResolvedFsPath,
   tempPath: string,
