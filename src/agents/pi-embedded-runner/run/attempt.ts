@@ -1538,6 +1538,7 @@ export async function runEmbeddedAttempt(
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
+        isCompactionInFlight,
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
@@ -1814,6 +1815,7 @@ export async function runEmbeddedAttempt(
             waitForCompactionRetry,
             abortable,
             aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+            isCompactionStillInFlight: isCompactionInFlight,
           });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;

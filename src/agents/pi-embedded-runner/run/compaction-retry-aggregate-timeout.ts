@@ -7,30 +7,43 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   aggregateTimeoutMs: number;
   onTimeout?: () => void;
+  isCompactionStillInFlight?: () => boolean;
 }): Promise<{ timedOut: boolean }> {
   const timeoutMsRaw = params.aggregateTimeoutMs;
   const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  const waitPromise = params.waitForCompactionRetry().then(() => "done" as const);
 
-  try {
-    const result = await params.abortable(
-      Promise.race([
-        params.waitForCompactionRetry().then(() => "done" as const),
-        new Promise<"timeout">((resolve) => {
-          timer = setTimeout(() => resolve("timeout"), timeoutMs);
-        }),
-      ]),
-    );
+  while (true) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await params.abortable(
+        Promise.race([
+          waitPromise,
+          new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), timeoutMs);
+          }),
+        ]),
+      );
 
-    if (result === "timeout") {
+      if (result === "done") {
+        break;
+      }
+
+      // Keep extending the timeout window while compaction is actively running.
+      // We only trigger the fallback timeout once compaction appears idle.
+      if (params.isCompactionStillInFlight?.()) {
+        continue;
+      }
+
       timedOut = true;
       params.onTimeout?.();
-    }
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer);
+      break;
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 
