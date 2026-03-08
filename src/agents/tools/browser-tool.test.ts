@@ -389,7 +389,7 @@ describe("browser tool act compatibility", () => {
     );
   });
 
-  it("prefers request payload when both request and flattened fields are present", async () => {
+  it("preserves nested request fields while backfilling missing shared act fields", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", {
       action: "act",
@@ -404,13 +404,92 @@ describe("browser tool act compatibility", () => {
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
       undefined,
-      {
+      expect.objectContaining({
         kind: "press",
         key: "Enter",
         targetId: "tab-2",
-      },
+        ref: "legacy-ref",
+      }),
       expect.objectContaining({ profile: undefined }),
     );
+  });
+
+  it("merges top-level ref into nested act request", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      ref: "e146",
+      request: { kind: "click" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ kind: "click", ref: "e146" }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("keeps nested request ref when both nested and top-level ref are provided", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      ref: "outer-ref",
+      request: { kind: "click", ref: "inner-ref" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ kind: "click", ref: "inner-ref" }),
+      expect.objectContaining({ profile: undefined }),
+    );
+    const [, request] = browserActionsMocks.browserAct.mock.calls.at(-1) ?? [];
+    expect(request).not.toMatchObject({ ref: "outer-ref" });
+  });
+
+  it("merges top-level targetId and timeoutMs into nested act request", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      targetId: "target-1",
+      timeoutMs: 1234,
+      request: { kind: "click", ref: "e146" },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "click",
+        ref: "e146",
+        targetId: "target-1",
+        timeoutMs: 1234,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("keeps nested request timeoutMs when both nested and top-level timeoutMs are provided", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      timeoutMs: 1234,
+      request: { kind: "click", ref: "e146", timeoutMs: 5678 },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "click",
+        ref: "e146",
+        timeoutMs: 5678,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+    const [, request] = browserActionsMocks.browserAct.mock.calls.at(-1) ?? [];
+    expect(request).not.toMatchObject({ timeoutMs: 1234 });
   });
 });
 
