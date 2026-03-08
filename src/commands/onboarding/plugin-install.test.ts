@@ -1,15 +1,25 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:fs", () => ({
-  default: {
-    existsSync: vi.fn(),
-  },
-}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      existsSync: vi.fn(),
+    },
+  };
+});
 
 const installPluginFromNpmSpec = vi.fn();
 vi.mock("../../plugins/install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpec(...args),
+}));
+
+const findBundledPluginSource = vi.fn();
+vi.mock("../../plugins/bundled-sources.js", () => ({
+  findBundledPluginSource: (...args: unknown[]) => findBundledPluginSource(...args),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -41,6 +51,7 @@ const baseEntry: ChannelPluginCatalogEntry = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  findBundledPluginSource.mockReturnValue(undefined);
 });
 
 function mockRepoLocalPathExists() {
@@ -134,6 +145,38 @@ describe("ensureOnboardingPluginInstalled", () => {
 
   it("defaults to npm on beta channel even when local path exists", async () => {
     expect(await runInitialValueForChannel("beta")).toBe("npm");
+  });
+
+  it("defaults to bundled local path on beta channel when available", async () => {
+    const runtime = makeRuntime();
+    const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
+    const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+    const cfg: OpenClawConfig = { update: { channel: "beta" } };
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    findBundledPluginSource.mockReturnValue({
+      pluginId: "zalo",
+      localPath: "/opt/openclaw/extensions/zalo",
+      npmSpec: "@openclaw/zalo",
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg,
+      entry: baseEntry,
+      prompter,
+      runtime,
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: "local",
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "local",
+            hint: "/opt/openclaw/extensions/zalo",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("falls back to local path after npm install failure", async () => {
