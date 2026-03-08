@@ -306,19 +306,19 @@ jobs:
             exit 0
           fi
 
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
           changed_files=()
-          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            echo "Base commit $BASE not present in shallow checkout; fetching it for targeted secrets scan."
-            git fetch --no-tags --depth=1 origin "$BASE" || true
+          BASE_COMMIT=""
+          if git fetch --no-tags --depth=1 origin "$BASE_REF"; then
+            BASE_COMMIT="$(git merge-base HEAD FETCH_HEAD || true)"
           fi
 
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+          if [ -n "$BASE_COMMIT" ] && git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
               [ -f "$path" ] || continue
               changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+            done < <(git diff --name-only --diff-filter=ACMR "$BASE_COMMIT" HEAD)
           fi
 
           if [ "${#changed_files[@]}" -gt 0 ]; then
