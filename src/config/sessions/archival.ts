@@ -34,8 +34,11 @@ export async function archiveSessionTranscript(params: ArchivalParams): Promise<
   let raw: string;
   try {
     raw = await fs.readFile(sessionFile, "utf-8");
-  } catch {
-    return noArchival;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return noArchival;
+    }
+    throw err;
   }
 
   const lines = raw.split("\n").filter((line) => line.trim().length > 0);

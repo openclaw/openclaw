@@ -69,7 +69,7 @@ describe("archiveSessionTranscript", () => {
 
   it("handles missing file gracefully", async () => {
     const result = await archiveSessionTranscript({
-      sessionFile: "/tmp/nonexistent-session.jsonl",
+      sessionFile: path.join(os.tmpdir(), `nonexistent-session-${Date.now()}.jsonl`),
       keepLastTurns: 5,
     });
     expect(result.archived).toBe(false);
