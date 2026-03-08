@@ -698,6 +698,19 @@ export function shouldWrapMcpToolsForRun(params: {
   );
 }
 
+export function resolveRunCustomTools<T>(params: {
+  customTools: T[];
+  clientToolDefs: T[];
+  shouldWrapMcp: boolean;
+  wrapMcpTools?: (defs: T[]) => T[];
+}): T[] {
+  const wrappedCustomTools =
+    params.shouldWrapMcp && params.wrapMcpTools
+      ? params.wrapMcpTools(params.customTools)
+      : params.customTools;
+  return [...wrappedCustomTools, ...params.clientToolDefs];
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -1197,21 +1210,26 @@ export async function runEmbeddedAttempt(
           )
         : [];
 
-      const mergedCustomTools = [...customTools, ...clientToolDefs];
       const mcpSanitizationCfg = resolveSessionSanitizationMcpConfig(params.config);
-      const allCustomTools = shouldWrapMcpToolsForRun({
-        mcpSanitizationEnabled: mcpSanitizationCfg.enabled,
-        config: params.config,
-        sessionId: params.sessionId,
-        trigger: params.trigger,
-      })
-        ? wrapMcpToolDefinitions(mergedCustomTools, {
+      const allCustomTools = resolveRunCustomTools({
+        customTools,
+        clientToolDefs,
+        shouldWrapMcp: shouldWrapMcpToolsForRun({
+          mcpSanitizationEnabled: mcpSanitizationCfg.enabled,
+          config: params.config,
+          sessionId: params.sessionId,
+          trigger: params.trigger,
+        }),
+        // Client-hosted tools (OpenResponses) are not MCP server outputs and
+        // must bypass MCP result sanitization wrapping.
+        wrapMcpTools: (defs) =>
+          wrapMcpToolDefinitions(defs, {
             cfg: params.config!,
             agentId: sessionAgentId,
             sessionId: params.sessionId,
             lane: "background:session-memory-mcp",
-          })
-        : mergedCustomTools;
+          }),
+      });
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,

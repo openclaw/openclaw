@@ -6,6 +6,7 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  resolveRunCustomTools,
   resolveAttemptFsWorkspaceOnly,
   shouldWrapMcpToolsForRun,
   resolveOllamaCompatNumCtxEnabled,
@@ -205,6 +206,35 @@ describe("shouldWrapMcpToolsForRun", () => {
         trigger: "user",
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveRunCustomTools", () => {
+  it("wraps only base custom tools and appends hosted client tools untouched", () => {
+    const wrapMcpTools = vi.fn((defs: string[]) => defs.map((d) => `wrapped:${d}`));
+    const result = resolveRunCustomTools({
+      customTools: ["read"],
+      clientToolDefs: ["web_search"],
+      shouldWrapMcp: true,
+      wrapMcpTools,
+    });
+
+    expect(wrapMcpTools).toHaveBeenCalledTimes(1);
+    expect(wrapMcpTools).toHaveBeenCalledWith(["read"]);
+    expect(result).toEqual(["wrapped:read", "web_search"]);
+  });
+
+  it("skips wrapping when shouldWrapMcp is false", () => {
+    const wrapMcpTools = vi.fn((defs: string[]) => defs.map((d) => `wrapped:${d}`));
+    const result = resolveRunCustomTools({
+      customTools: ["read"],
+      clientToolDefs: ["web_search"],
+      shouldWrapMcp: false,
+      wrapMcpTools,
+    });
+
+    expect(wrapMcpTools).not.toHaveBeenCalled();
+    expect(result).toEqual(["read", "web_search"]);
   });
 });
 
