@@ -4,6 +4,7 @@ import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
+import type { RecentDeliveredEntry } from "./pi-embedded-helpers/messaging-dedupe.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import type {
   BlockReplyChunking,
@@ -68,6 +69,7 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
 
+  recentDeliveredTexts: RecentDeliveredEntry[];
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
