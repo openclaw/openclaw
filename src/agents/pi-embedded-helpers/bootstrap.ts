@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { WorkspaceBootstrapFile } from "../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
 
 type ContentBlockWithSignature = {
@@ -218,6 +218,12 @@ export function buildBootstrapContextFiles(
       continue;
     }
     if (file.missing) {
+      // BOOTSTRAP.md is intentionally deleted after initial setup ("Follow it, figure
+      // out who you are, then delete it"). Skip the [MISSING] marker so users who have
+      // completed onboarding don't see noisy context injections every session.
+      if (file.name === DEFAULT_BOOTSTRAP_FILENAME) {
+        continue;
+      }
       const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
