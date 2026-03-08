@@ -22,11 +22,16 @@ class I18nManager {
   }
 
   private resolveInitialLocale(): Locale {
-    const saved = localStorage.getItem("openclaw.i18n.locale");
-    if (isSupportedLocale(saved)) {
-      return saved;
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem("openclaw.i18n.locale");
+      if (isSupportedLocale(saved)) {
+        return saved;
+      }
     }
-    return resolveNavigatorLocale(navigator.language);
+    if (typeof navigator !== "undefined") {
+      return resolveNavigatorLocale(navigator.language);
+    }
+    return DEFAULT_LOCALE;
   }
 
   private loadLocale() {
@@ -64,7 +69,9 @@ class I18nManager {
     }
 
     this.locale = locale;
-    localStorage.setItem("openclaw.i18n.locale", locale);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("openclaw.i18n.locale", locale);
+    }
     this.notify();
   }
 
