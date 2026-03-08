@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -11,6 +12,13 @@ import {
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
+  beforeEach(() => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("includes user bin directories when HOME is set on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
@@ -173,6 +181,13 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 describe("buildMinimalServicePath", () => {
   const splitPath = (value: string, platform: NodeJS.Platform) =>
     value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
+
+  beforeEach(() => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("includes Homebrew + system dirs on macOS", () => {
     const result = buildMinimalServicePath({
