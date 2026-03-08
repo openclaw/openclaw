@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 enum ConfigStore {
@@ -8,6 +9,7 @@ enum ConfigStore {
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
         var saveRemote: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        var saveToGateway: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
     }
 
     private actor OverrideStore {
@@ -56,17 +58,64 @@ enum ConfigStore {
             } else {
                 try await self.saveToGateway(root)
             }
-        } else {
+            return
+        }
+
+        do {
+            try await self.saveToGateway(root)
+        } catch {
+            guard self.shouldFallbackToLocalSave(error) else {
+                throw error
+            }
             if let override = overrides.saveLocal {
                 override(root)
             } else {
-                do {
-                    try await self.saveToGateway(root)
-                } catch {
-                    OpenClawConfigFile.saveDict(root)
-                }
+                OpenClawConfigFile.saveDict(root)
             }
         }
+    }
+
+    @MainActor
+    private static func shouldFallbackToLocalSave(_ error: Error) -> Bool {
+        if let gatewayError = error as? GatewayResponseError,
+           self.isConfigBaseHashConflict(gatewayError)
+        {
+            return false
+        }
+        if self.isGatewayBusinessError(error) {
+            return false
+        }
+        return self.isTransportFailure(error)
+    }
+
+    @MainActor
+    private static func isGatewayBusinessError(_ error: Error) -> Bool {
+        if error is GatewayResponseError {
+            return true
+        }
+        if error is GatewayDecodingError {
+            return true
+        }
+        return false
+    }
+
+    @MainActor
+    private static func isConfigBaseHashConflict(_ error: GatewayResponseError) -> Bool {
+        let code = error.code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let message = error.message.lowercased()
+        if code == "INVALID_REQUEST" && message.contains("changed since last load") {
+            return true
+        }
+        return message.contains("base hash") && message.contains("reload")
+    }
+
+    @MainActor
+    private static func isTransportFailure(_ error: Error) -> Bool {
+        if error is URLError {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain
     }
 
     @MainActor
@@ -85,6 +134,11 @@ enum ConfigStore {
 
     @MainActor
     private static func saveToGateway(_ root: [String: Any]) async throws {
+        let overrides = await self.overrideStore.overrides
+        if let override = overrides.saveToGateway {
+            try await override(root)
+            return
+        }
         if self.lastHash == nil {
             _ = await self.loadFromGateway()
         }
