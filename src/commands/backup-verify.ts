@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
@@ -185,22 +183,38 @@ async function extractManifest(params: {
   archivePath: string;
   manifestEntryPath: string;
 }): Promise<string> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-"));
-  try {
-    await tar.x(
-      {
-        file: params.archivePath,
-        gzip: true,
-        cwd: tempDir,
-        preservePaths: false,
-      },
-      [params.manifestEntryPath],
-    );
-    const manifestPath = path.join(tempDir, params.manifestEntryPath);
-    return await fs.readFile(manifestPath, "utf8");
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  let manifestContentPromise: Promise<string> | undefined;
+  await tar.t({
+    file: params.archivePath,
+    gzip: true,
+    onentry: (entry) => {
+      if (entry.path !== params.manifestEntryPath) {
+        entry.resume();
+        return;
+      }
+
+      manifestContentPromise = new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        entry.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        entry.on("error", reject);
+        entry.on("end", () => {
+          resolve(Buffer.concat(chunks).toString("utf8"));
+        });
+      });
+    },
+  });
+
+  if (!manifestContentPromise) {
+    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
   }
+  return await manifestContentPromise;
+}
+
+function isRootManifestEntry(entryPath: string): boolean {
+  const parts = entryPath.split("/");
+  return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
 }
 
 function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
@@ -263,7 +277,7 @@ export async function backupVerifyCommand(
       raw: entry,
       normalized: normalizeArchivePath(entry, "Archive entry"),
     }))
-    .filter((entry) => entry.normalized.endsWith("/manifest.json"));
+    .filter((entry) => isRootManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
   }

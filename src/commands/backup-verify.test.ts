@@ -166,4 +166,52 @@ describe("backupVerifyCommand", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("ignores payload manifest.json files when locating the backup manifest", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-out-"));
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: externalWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "hello\n", "utf8");
+      await fs.writeFile(
+        path.join(externalWorkspace, "manifest.json"),
+        JSON.stringify({ name: "workspace-payload" }),
+        "utf8",
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: true,
+        nowMs: Date.UTC(2026, 2, 9, 2, 0, 0),
+      });
+      const verified = await backupVerifyCommand(runtime, { archive: created.archivePath });
+
+      expect(verified.ok).toBe(true);
+      expect(verified.assetCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
 });

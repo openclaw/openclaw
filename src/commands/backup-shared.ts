@@ -40,6 +40,8 @@ export type BackupPlan = {
 type BackupAssetCandidate = {
   kind: BackupAssetKind;
   sourcePath: string;
+  canonicalPath: string;
+  exists: boolean;
 };
 
 function backupAssetPriority(kind: BackupAssetKind): number {
@@ -82,7 +84,7 @@ export function buildBackupArchivePath(archiveRoot: string, sourcePath: string):
 }
 
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
-  const depthDelta = left.sourcePath.length - right.sourcePath.length;
+  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
   if (depthDelta !== 0) {
     return depthDelta;
   }
@@ -90,7 +92,7 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
   if (priorityDelta !== 0) {
     return priorityDelta;
   }
-  return left.sourcePath.localeCompare(right.sourcePath);
+  return left.canonicalPath.localeCompare(right.canonicalPath);
 }
 
 async function canonicalizeExistingPath(targetPath: string): Promise<string> {
@@ -125,7 +127,7 @@ export async function resolveBackupPlanFromDisk(
   });
   const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
 
-  const candidates: BackupAssetCandidate[] = [
+  const rawCandidates = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
     ...(cleanupPlan.configInsideState
       ? []
@@ -141,16 +143,35 @@ export async function resolveBackupPlanFromDisk(
       : []),
   ];
 
-  const uniqueCandidates = [
-    ...new Map(candidates.map((candidate) => [candidate.sourcePath, candidate])).values(),
-  ].toSorted(compareCandidates);
+  const candidates: BackupAssetCandidate[] = await Promise.all(
+    rawCandidates.map(async (candidate) => {
+      const exists = await pathExists(candidate.sourcePath);
+      return {
+        ...candidate,
+        exists,
+        canonicalPath: exists
+          ? await canonicalizeExistingPath(candidate.sourcePath)
+          : path.resolve(candidate.sourcePath),
+      };
+    }),
+  );
+
+  const uniqueCandidates: BackupAssetCandidate[] = [];
+  const seenCanonicalPaths = new Set<string>();
+  for (const candidate of [...candidates].toSorted(compareCandidates)) {
+    if (seenCanonicalPaths.has(candidate.canonicalPath)) {
+      continue;
+    }
+    seenCanonicalPaths.add(candidate.canonicalPath);
+    uniqueCandidates.push(candidate);
+  }
   const archiveRoot = buildBackupArchiveRoot(params.nowMs);
 
   const included: BackupAsset[] = [];
   const skipped: SkippedBackupAsset[] = [];
 
   for (const candidate of uniqueCandidates) {
-    if (!(await pathExists(candidate.sourcePath))) {
+    if (!candidate.exists) {
       skipped.push({
         kind: candidate.kind,
         sourcePath: candidate.sourcePath,
@@ -160,13 +181,14 @@ export async function resolveBackupPlanFromDisk(
       continue;
     }
 
-    const canonicalPath = await canonicalizeExistingPath(candidate.sourcePath);
-    const coveredBy = included.find((asset) => isPathWithin(canonicalPath, asset.sourcePath));
+    const coveredBy = included.find((asset) =>
+      isPathWithin(candidate.canonicalPath, asset.sourcePath),
+    );
     if (coveredBy) {
       skipped.push({
         kind: candidate.kind,
-        sourcePath: canonicalPath,
-        displayPath: shortenHomePath(canonicalPath),
+        sourcePath: candidate.canonicalPath,
+        displayPath: shortenHomePath(candidate.canonicalPath),
         reason: "covered",
         coveredBy: coveredBy.displayPath,
       });
@@ -175,9 +197,9 @@ export async function resolveBackupPlanFromDisk(
 
     included.push({
       kind: candidate.kind,
-      sourcePath: canonicalPath,
-      displayPath: shortenHomePath(canonicalPath),
-      archivePath: buildBackupArchivePath(archiveRoot, canonicalPath),
+      sourcePath: candidate.canonicalPath,
+      displayPath: shortenHomePath(candidate.canonicalPath),
+      archivePath: buildBackupArchivePath(archiveRoot, candidate.canonicalPath),
     });
   }
 

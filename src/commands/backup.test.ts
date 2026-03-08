@@ -58,6 +58,43 @@ describe("backup commands", () => {
     );
   });
 
+  it("orders coverage checks by canonical path so symlinked workspaces do not duplicate state", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-link-"));
+    const workspaceLink = path.join(symlinkDir, "ws-link");
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+      await fs.symlink(workspaceDir, workspaceLink);
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: workspaceLink,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
+
+      expect(plan.included).toHaveLength(1);
+      expect(plan.included[0]?.kind).toBe("state");
+      expect(plan.skipped).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
+      );
+    } finally {
+      await fs.rm(symlinkDir, { recursive: true, force: true });
+    }
+  });
+
   it("creates an archive with a manifest and external workspace payload", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
@@ -188,6 +225,34 @@ describe("backup commands", () => {
         output: path.join(stateDir, "backups"),
       }),
     ).rejects.toThrow(/must not be written inside a source path/i);
+  });
+
+  it("rejects symlinked output paths even when intermediate directories do not exist yet", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-link-"));
+    const symlinkPath = path.join(symlinkDir, "linked-state");
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.symlink(stateDir, symlinkPath);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: path.join(symlinkPath, "new", "subdir", "backup.tar.gz"),
+        }),
+      ).rejects.toThrow(/must not be written inside a source path/i);
+    } finally {
+      await fs.rm(symlinkDir, { recursive: true, force: true });
+    }
   });
 
   it("falls back to the home directory when cwd is inside a backed-up source tree", async () => {

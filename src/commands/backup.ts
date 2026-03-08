@@ -124,20 +124,41 @@ function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
 }
 
+async function publishTempArchive(params: {
+  tempArchivePath: string;
+  outputPath: string;
+}): Promise<void> {
+  try {
+    await fs.link(params.tempArchivePath, params.outputPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EEXIST") {
+      throw new Error(`Refusing to overwrite existing backup archive: ${params.outputPath}`, {
+        cause: err,
+      });
+    }
+    throw err;
+  }
+  await fs.rm(params.tempArchivePath, { force: true });
+}
+
 async function canonicalizePathForContainment(targetPath: string): Promise<string> {
   const resolved = path.resolve(targetPath);
-  try {
-    return await fs.realpath(resolved);
-  } catch {
-    // Fall through to canonicalizing the nearest existing parent directory.
-  }
+  const suffix: string[] = [];
+  let probe = resolved;
 
-  const parent = path.dirname(resolved);
-  try {
-    const realParent = await fs.realpath(parent);
-    return path.join(realParent, path.basename(resolved));
-  } catch {
-    return resolved;
+  while (true) {
+    try {
+      const realProbe = await fs.realpath(probe);
+      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
   }
 }
 
@@ -301,7 +322,7 @@ export async function backupCreateCommand(
         },
         [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
       );
-      await fs.rename(tempArchivePath, outputPath);
+      await publishTempArchive({ tempArchivePath, outputPath });
     } finally {
       await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
