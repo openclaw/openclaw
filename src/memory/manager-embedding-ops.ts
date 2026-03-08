@@ -38,6 +38,43 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
 
+/**
+ * Sanitize text by replacing lone surrogates with U+FFFD (replacement character).
+ * Lone surrogates are invalid in UTF-8 and will cause embeddings API to reject the request.
+ * This is a defensive measure to prevent embedding sync loops when session content
+ * contains invalid Unicode (e.g., from emoji in tool output).
+ *
+ * Valid surrogate pairs (properly formed emoji) are preserved.
+ */
+function sanitizeLoneSurrogates(text: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    // High surrogate (U+D800-U+DBFF)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const nextCode = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
+      // Check if followed by low surrogate (U+DC00-U+DFFF)
+      if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+        // Valid surrogate pair, keep both
+        result += text[i] + text[i + 1];
+        i++; // Skip the low surrogate
+      } else {
+        // Lone high surrogate, replace with U+FFFD
+        result += "\uFFFD";
+      }
+    }
+    // Low surrogate (U+DC00-U+DFFF) without preceding high surrogate
+    else if (code >= 0xdc00 && code <= 0xdfff) {
+      // Lone low surrogate, replace with U+FFFD
+      result += "\uFFFD";
+    } else {
+      // Normal character
+      result += text[i];
+    }
+  }
+  return result;
+}
+
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
@@ -499,6 +536,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!this.provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
+    // Sanitize texts to remove lone surrogates before sending to embeddings API
+    const sanitizedTexts = texts.map(sanitizeLoneSurrogates);
     let attempt = 0;
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
     while (true) {
@@ -506,11 +545,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: batch start", {
           provider: this.provider.id,
-          items: texts.length,
+          items: sanitizedTexts.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          this.provider.embedBatch(texts),
+          this.provider.embedBatch(sanitizedTexts),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
@@ -549,10 +588,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
+    // Sanitize text to remove lone surrogates before sending to embeddings API
+    const sanitizedText = sanitizeLoneSurrogates(text);
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
-      this.provider.embedQuery(text),
+      this.provider.embedQuery(sanitizedText),
       timeoutMs,
       `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
