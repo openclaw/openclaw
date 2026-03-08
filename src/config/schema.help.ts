@@ -414,6 +414,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
+  "gateway.mdns":
+    "mDNS/Bonjour advertising configuration for the gateway process. Disable on platforms without multicast support (Android/Termux) to prevent watchdog spam and crash loops.",
+  "gateway.mdns.enabled":
+    "Enables Bonjour/mDNS advertising so LAN clients can auto-discover this gateway (default: true). Set to false on platforms that lack multicast support (Android, Termux) to avoid watchdog retries and crash loops. The env var OPENCLAW_DISABLE_BONJOUR=1 still overrides this when set.",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
   "nodeHost.browserProxy":

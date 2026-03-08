@@ -352,6 +352,15 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayMdnsConfig = {
+  /**
+   * Enable Bonjour/mDNS advertising for the gateway (default: true).
+   * Set to false to disable mDNS entirely on platforms that do not
+   * support multicast (e.g. Android/Termux).
+   */
+  enabled?: boolean;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -393,6 +402,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** mDNS/Bonjour advertising configuration. */
+  mdns?: GatewayMdnsConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
