@@ -755,12 +755,18 @@ async function agentCommandInternal(
       });
       const finalTranscriptText = normalizedFinalPayload?.text?.trim() ?? "";
       if (finalTranscriptText) {
-        await appendAssistantMessageToSessionTranscript({
-          agentId: sessionAgentId,
-          sessionKey: acpSessionKey,
-          text: finalTranscriptText,
-          storePath,
-        });
+        try {
+          await appendAssistantMessageToSessionTranscript({
+            agentId: sessionAgentId,
+            sessionKey: acpSessionKey,
+            text: finalTranscriptText,
+            storePath,
+          });
+        } catch (err) {
+          log.warn(
+            `best-effort ACP transcript mirror failed session=${acpSessionKey}: ${String(err)}`,
+          );
+        }
       }
 
       emitAgentEvent({
