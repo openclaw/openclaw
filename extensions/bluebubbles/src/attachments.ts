@@ -1,4 +1,7 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
@@ -29,6 +32,7 @@ export type BlueBubblesAttachmentOpts = {
 const DEFAULT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const AUDIO_MIME_MP3 = new Set(["audio/mpeg", "audio/mp3"]);
 const AUDIO_MIME_CAF = new Set(["audio/x-caf", "audio/caf"]);
+const AUDIO_MIME_OPUS = new Set(["audio/opus", "audio/ogg", "audio/ogg; codecs=opus"]);
 
 function sanitizeFilename(input: string | undefined, fallback: string): string {
   const trimmed = input?.trim() ?? "";
@@ -54,8 +58,43 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
     extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isCaf =
     extension === ".caf" || (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
-  const isAudio = isMp3 || isCaf || Boolean(normalizedType?.startsWith("audio/"));
-  return { isAudio, isMp3, isCaf };
+  const isOpus =
+    extension === ".opus" ||
+    extension === ".ogg" ||
+    (normalizedType ? AUDIO_MIME_OPUS.has(normalizedType) : false);
+  const isAudio = isMp3 || isCaf || isOpus || Boolean(normalizedType?.startsWith("audio/"));
+  return { isAudio, isMp3, isCaf, isOpus };
+}
+
+/**
+ * Convert audio to iMessage-native CAF (Opus) format using ffmpeg.
+ * Required because BlueBubbles' isAudioMessage flag only produces correct
+ * voice bubbles when the input is already in CAF/Opus format — MP3/raw Opus
+ * input results in 0-second broken voice bubbles (BB server issue #773).
+ */
+async function convertToCafOpus(inputBuffer: Uint8Array, inputExt: string): Promise<Uint8Array> {
+  const tmpDir = os.tmpdir();
+  const id = crypto.randomUUID().slice(0, 8);
+  const inputPath = path.join(tmpDir, `openclaw-voice-${id}${inputExt}`);
+  const outputPath = path.join(tmpDir, `openclaw-voice-${id}.caf`);
+  try {
+    await fs.writeFile(inputPath, inputBuffer);
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "ffmpeg",
+        ["-y", "-i", inputPath, "-c:a", "libopus", "-b:a", "24k", "-f", "caf", outputPath],
+        { timeout: 15_000 },
+        (err) => {
+          if (err) reject(new Error(`ffmpeg CAF conversion failed: ${err.message}`));
+          else resolve();
+        },
+      );
+    });
+    return new Uint8Array(await fs.readFile(outputPath));
+  } finally {
+    await fs.unlink(inputPath).catch(() => {});
+    await fs.unlink(outputPath).catch(() => {});
+  }
 }
 
 function resolveAccount(params: BlueBubblesAttachmentOpts) {
@@ -136,7 +175,8 @@ export type SendBlueBubblesAttachmentResult = {
 /**
  * Send an attachment via BlueBubbles API.
  * Supports sending media files (images, videos, audio, documents) to a chat.
- * When asVoice is true, expects MP3/CAF audio and marks it as an iMessage voice memo.
+ * When asVoice is true, it tries to convert audio to CAF for an iMessage voice memo
+ * and falls back to a normal attachment if conversion is unavailable.
  */
 export async function sendBlueBubblesAttachment(params: {
   to: string;
@@ -159,23 +199,36 @@ export async function sendBlueBubblesAttachment(params: {
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
-  // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
-  const isAudioMessage = wantsVoice;
+  // Convert audio to iMessage-native CAF (Opus) for voice bubbles.
+  // BB's isAudioMessage creates broken 0-sec bubbles with MP3/raw Opus (issue #773).
+  // Pre-converting to CAF+Opus bypasses BB's broken internal conversion.
+  let isAudioMessage = wantsVoice;
   if (isAudioMessage) {
     const voiceInfo = resolveVoiceInfo(filename, contentType);
     if (!voiceInfo.isAudio) {
-      throw new Error("BlueBubbles voice messages require audio media (mp3 or caf).");
+      throw new Error("BlueBubbles voice messages require audio media.");
     }
-    if (voiceInfo.isMp3) {
-      filename = ensureExtension(filename, ".mp3", fallbackName);
-      contentType = contentType ?? "audio/mpeg";
-    } else if (voiceInfo.isCaf) {
+    if (voiceInfo.isCaf) {
+      // Already CAF, no conversion needed
       filename = ensureExtension(filename, ".caf", fallbackName);
-      contentType = contentType ?? "audio/x-caf";
+      contentType = "audio/x-caf";
     } else {
-      throw new Error(
-        "BlueBubbles voice messages require mp3 or caf audio (convert before sending).",
-      );
+      // Convert MP3/Opus/other → CAF (Opus @ 24kHz) via ffmpeg.
+      // If ffmpeg is unavailable, fall back to sending as a normal attachment
+      // rather than dropping the reply entirely.
+      const inputExt =
+        path.extname(filename).toLowerCase() ||
+        (voiceInfo.isMp3 ? ".mp3" : voiceInfo.isOpus ? ".opus" : ".audio");
+      try {
+        buffer = await convertToCafOpus(buffer, inputExt);
+        filename = ensureExtension(filename, ".caf", fallbackName);
+        contentType = "audio/x-caf";
+      } catch {
+        warnBlueBubbles(
+          "ffmpeg CAF conversion failed; sending as normal attachment instead of voice bubble.",
+        );
+        isAudioMessage = false;
+      }
     }
   }
 

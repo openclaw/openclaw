@@ -85,6 +85,61 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function summarizeKeys(record: Record<string, unknown>, limit = 12): string {
+  const keys = Object.keys(record);
+  if (keys.length === 0) {
+    return "none";
+  }
+  const shown = keys.slice(0, limit);
+  return keys.length > limit ? `${shown.join(",")}…(+${keys.length - limit})` : shown.join(",");
+}
+
+function summarizePayloadDebugShape(payload: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const eventType = typeof payload.type === "string" ? payload.type.trim() : "";
+  parts.push(`type=${eventType || "unknown"}`);
+  parts.push(`keys=${summarizeKeys(payload)}`);
+
+  const data = payload.data;
+  if (Array.isArray(data)) {
+    parts.push(`data=array(${data.length})`);
+    const first = asRecord(data[0]);
+    if (first) {
+      parts.push(`dataKeys=${summarizeKeys(first)}`);
+      parts.push(`hasHandle=${String("handle" in first)}`);
+      parts.push(`hasChatGuid=${String("chatGuid" in first)}`);
+      parts.push(`hasGuid=${String("guid" in first)}`);
+      parts.push(`hasText=${String("text" in first || "body" in first)}`);
+      if (typeof first.isGroup === "boolean") {
+        parts.push(`isGroup=${String(first.isGroup)}`);
+      }
+      if (typeof first.isFromMe === "boolean") {
+        parts.push(`isFromMe=${String(first.isFromMe)}`);
+      }
+    }
+  } else {
+    const dataRecord = asRecord(data);
+    if (dataRecord) {
+      parts.push("data=object");
+      parts.push(`dataKeys=${summarizeKeys(dataRecord)}`);
+      parts.push(`hasHandle=${String("handle" in dataRecord)}`);
+      parts.push(`hasChatGuid=${String("chatGuid" in dataRecord)}`);
+      parts.push(`hasGuid=${String("guid" in dataRecord)}`);
+      parts.push(`hasText=${String("text" in dataRecord || "body" in dataRecord)}`);
+      if (typeof dataRecord.isGroup === "boolean") {
+        parts.push(`isGroup=${String(dataRecord.isGroup)}`);
+      }
+      if (typeof dataRecord.isFromMe === "boolean") {
+        parts.push(`isFromMe=${String(dataRecord.isFromMe)}`);
+      }
+    } else {
+      parts.push(`dataType=${data == null ? "null" : typeof data}`);
+    }
+  }
+
+  return parts.join(" ");
+}
+
 function maskSecret(value: string): string {
   if (value.length <= 6) {
     return "***";
@@ -216,7 +271,9 @@ export async function handleBlueBubblesWebhookRequest(
       if (!message && !reaction) {
         res.statusCode = 400;
         res.end("invalid payload");
-        console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
+        console.warn(
+          `[bluebubbles] webhook rejected: unable to parse message payload (${summarizePayloadDebugShape(payload)})`,
+        );
         return true;
       }
 

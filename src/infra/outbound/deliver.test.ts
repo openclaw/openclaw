@@ -928,6 +928,60 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
   });
 
+  it("scopes audioAsVoice to audio media items for plugin sendMedia", async () => {
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "bluebubbles", messageId: "bb-1" })
+      .mockResolvedValueOnce({ channel: "bluebubbles", messageId: "bb-2" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bluebubbles",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bluebubbles",
+            outbound: { deliveryMode: "direct", sendText: vi.fn(), sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "bluebubbles",
+      to: "chat_guid:iMessage;-;+15551234567",
+      payloads: [
+        {
+          text: "caption",
+          mediaUrls: ["https://example.com/voice.m4a", "https://example.com/photo.png"],
+          audioAsVoice: true,
+        },
+      ],
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(sendMedia).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/voice.m4a",
+        audioAsVoice: true,
+        text: "caption",
+      }),
+    );
+    expect(sendMedia).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+        audioAsVoice: undefined,
+        text: "",
+      }),
+    );
+    expect(results).toEqual([
+      { channel: "bluebubbles", messageId: "bb-1" },
+      { channel: "bluebubbles", messageId: "bb-2" },
+    ]);
+  });
+
   it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
     setActivePluginRegistry(

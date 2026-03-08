@@ -53,6 +53,25 @@ describe("normalizeWebhookMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.senderId).toBe("+15551234567");
   });
+
+  it("accepts from-me group payloads even when sender handle is missing", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-group-self-1",
+        text: "",
+        isGroup: true,
+        isFromMe: true,
+        handle: null,
+        chatGuid: "iMessage;+;chat123456",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("me");
+    expect(result?.fromMe).toBe(true);
+    expect(result?.chatGuid).toBe("iMessage;+;chat123456");
+  });
 });
 
 describe("normalizeWebhookReaction", () => {
@@ -74,5 +93,24 @@ describe("normalizeWebhookReaction", () => {
     expect(result?.senderId).toBe("+15551234567");
     expect(result?.messageId).toBe("p:0/msg-1");
     expect(result?.action).toBe("added");
+  });
+
+  it("accepts from-me group reactions even when sender handle is missing", () => {
+    const result = normalizeWebhookReaction({
+      type: "message-reaction",
+      data: {
+        associatedMessageGuid: "msg-1",
+        associatedMessageType: 2000,
+        isGroup: true,
+        isFromMe: true,
+        handle: null,
+        chatGuid: "iMessage;+;chat123456",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("me");
+    expect(result?.fromMe).toBe(true);
+    expect(result?.messageId).toBe("msg-1");
   });
 });
