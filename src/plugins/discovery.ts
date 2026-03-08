@@ -312,11 +312,14 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
+  const normalizedUnscoped = unscoped.startsWith("openclaw-")
+    ? unscoped.slice("openclaw-".length)
+    : unscoped;
 
   if (!params.hasMultipleExtensions) {
-    return unscoped;
+    return normalizedUnscoped;
   }
-  return `${unscoped}/${base}`;
+  return `${normalizedUnscoped}/${base}`;
 }
 
 function addCandidate(params: {
