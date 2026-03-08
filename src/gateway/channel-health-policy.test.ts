@@ -234,4 +234,17 @@ describe("resolveChannelRestartReason", () => {
     );
     expect(reason).toBe("gave-up");
   });
+
+  it("maps disconnected to disconnected instead of stuck", () => {
+    const reason = resolveChannelRestartReason(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+      },
+      { healthy: false, reason: "disconnected" },
+    );
+    expect(reason).toBe("disconnected");
+  });
 });
