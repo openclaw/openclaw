@@ -1,3 +1,4 @@
+// @ts-nocheck - Testing vendored helpers with any types
 import type { Context, Tool } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
