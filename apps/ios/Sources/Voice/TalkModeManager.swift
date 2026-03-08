@@ -1970,17 +1970,6 @@ extension TalkModeManager {
         return trimmed
     }
 
-    static func selectTalkProviderConfig(_ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection? {
-        TalkConfigParsing.selectProviderConfig(
-            talk,
-            defaultProvider: Self.defaultTalkProvider,
-            allowLegacyFallback: false)
-    }
-
-    static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
-        TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: Self.defaultSilenceTimeoutMs)
-    }
-
     func reloadConfig() async {
         guard let gateway else { return }
         self.pcmFormatUnavailable = false
@@ -1992,41 +1981,27 @@ extension TalkModeManager {
             )
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
-            let talk = TalkConfigParsing.bridgeFoundationDictionary(config["talk"] as? [String: Any])
-            let selection = Self.selectTalkProviderConfig(talk)
-            if talk != nil, selection == nil {
+            let parsed = TalkModeGatewayConfigParser.parse(
+                config: config,
+                defaultProvider: Self.defaultTalkProvider,
+                defaultModelIdFallback: Self.defaultModelIdFallback,
+                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs)
+            if parsed.missingResolvedPayload {
                 GatewayDiagnostics.log(
                     "talk config ignored: normalized payload missing talk.resolved")
             }
-            let activeProvider = selection?.provider ?? Self.defaultTalkProvider
-            let activeConfig = selection?.config
-            let silenceTimeoutMs = Self.resolvedSilenceTimeoutMs(talk)
-            self.defaultVoiceId = activeConfig?["voiceId"]?.stringValue?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let aliases = activeConfig?["voiceAliases"]?.dictionaryValue {
-                var resolved: [String: String] = [:]
-                for (key, value) in aliases {
-                    guard let id = value.stringValue else { continue }
-                    let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let trimmedId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !normalizedKey.isEmpty, !trimmedId.isEmpty else { continue }
-                    resolved[normalizedKey] = trimmedId
-                }
-                self.voiceAliases = resolved
-            } else {
-                self.voiceAliases = [:]
-            }
+            let activeProvider = parsed.activeProvider
+            self.defaultVoiceId = parsed.defaultVoiceId
+            self.voiceAliases = parsed.voiceAliases
             if !self.voiceOverrideActive {
                 self.currentVoiceId = self.defaultVoiceId
             }
-            let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.defaultModelId = (model?.isEmpty == false) ? model : Self.defaultModelIdFallback
+            self.defaultModelId = parsed.defaultModelId
             if !self.modelOverrideActive {
                 self.currentModelId = self.defaultModelId
             }
-            self.defaultOutputFormat = activeConfig?["outputFormat"]?.stringValue?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.defaultOutputFormat = parsed.defaultOutputFormat
+            let rawConfigApiKey = parsed.rawConfigApiKey
             let configApiKey = Self.normalizedTalkApiKey(rawConfigApiKey)
             let localApiKey = Self.normalizedTalkApiKey(
                 GatewaySettingsStore.loadTalkProviderApiKey(provider: activeProvider))
@@ -2045,12 +2020,13 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = self.defaultModelId
             self.gatewayTalkApiKeyConfigured = (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
-            if let interrupt = talk?["interruptOnSpeech"]?.boolValue {
+            if let interrupt = parsed.interruptOnSpeech {
                 self.interruptOnSpeech = interrupt
             }
-            self.silenceWindow = TimeInterval(silenceTimeoutMs) / 1000
-            if selection != nil {
-                GatewayDiagnostics.log("talk config provider=\(activeProvider) silenceTimeoutMs=\(silenceTimeoutMs)")
+            self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
+            if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
+                GatewayDiagnostics.log(
+                    "talk config provider=\(activeProvider) silenceTimeoutMs=\(parsed.silenceTimeoutMs)")
             }
         } catch {
             self.defaultModelId = Self.defaultModelIdFallback
