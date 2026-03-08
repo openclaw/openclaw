@@ -263,6 +263,10 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // pnpm stores package files as hardlinks (nlink > 1) in its
+    // content-addressable store.  Rejecting hardlinks breaks the
+    // Control UI for all pnpm global installs.
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
