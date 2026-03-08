@@ -71,8 +71,10 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 
 /**
  * Resolves a command for Windows compatibility.
- * On Windows, non-.exe commands (like pnpm, yarn) are resolved to .cmd; npm/npx
- * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
+ * On Windows, non-.exe commands (like pnpm, yarn, npm, npx) are resolved to .cmd.
+ * npm/npx prefer resolveNpmArgvForWindows (node + cli script) to avoid spawn EINVAL,
+ * but fall back to .cmd resolution when the cli script is not found (e.g. nvm-windows,
+ * volta, fnm installs where npm-cli.js is not at the standard nodeDir path).
  */
 function resolveCommand(command: string): string {
   if (process.platform !== "win32") {
@@ -83,7 +85,7 @@ function resolveCommand(command: string): string {
   if (ext) {
     return command;
   }
-  const cmdCommands = ["pnpm", "yarn"];
+  const cmdCommands = ["pnpm", "yarn", "npm", "npx"];
   if (cmdCommands.includes(basename)) {
     return `${command}.cmd`;
   }
@@ -122,11 +124,13 @@ export async function runExec(
     const argv = [command, ...args];
     let execCommand: string;
     let execArgs: string[];
+    let wasNpmResolved = false;
     if (process.platform === "win32") {
       const resolved = resolveNpmArgvForWindows(argv);
       if (resolved) {
         execCommand = resolved[0] ?? "";
         execArgs = resolved.slice(1);
+        wasNpmResolved = true;
       } else {
         execCommand = resolveCommand(command);
         execArgs = args;
@@ -135,7 +139,9 @@ export async function runExec(
       execCommand = resolveCommand(command);
       execArgs = args;
     }
-    const useCmdWrapper = isWindowsBatchCommand(execCommand);
+    const useCmdWrapper =
+      isWindowsBatchCommand(execCommand) ||
+      (wasNpmResolved && [execCommand, ...execArgs].some((a) => a.includes(" ")));
     const { stdout, stderr } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
@@ -229,8 +235,13 @@ export async function runCommandWithTimeout(
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
-  const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
-  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const wasNpmResolved = process.platform === "win32" && finalArgv !== argv;
+  const resolvedCommand = wasNpmResolved ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
+  // Use cmd.exe wrapper when the command is a .bat/.cmd file, or when npm/npx was resolved
+  // to node.exe + cli-script paths that contain spaces (e.g. C:\Program Files\nodejs\).
+  const useCmdWrapper =
+    isWindowsBatchCommand(resolvedCommand) ||
+    (wasNpmResolved && finalArgv.some((a) => a.includes(" ")));
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
