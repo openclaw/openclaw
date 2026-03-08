@@ -73,7 +73,7 @@ describe("getShellConfig", () => {
     process.env.PATH = "";
     const { shell, args } = getShellConfig();
     expect(shell).toBe("/usr/bin/fish");
-    expect(args).toEqual(["-c"]);
+    expect(args).toEqual(["--no-config", "-c"]);
   });
 
   it("uses zsh no-rc mode to avoid startup-file env overrides", () => {
