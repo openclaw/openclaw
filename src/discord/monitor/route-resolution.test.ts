@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import {
+  resolveDiscordBoundConversationRoute,
   buildDiscordRoutePeer,
   resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
@@ -102,6 +103,41 @@ describe("discord route resolution helpers", () => {
       agentId: "worker",
       sessionKey: "agent:worker:discord:channel:c1",
       matchedBy: "binding.peer",
+    });
+  });
+
+  it("composes route building with effective-route overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "worker" }],
+      },
+      bindings: [
+        {
+          agentId: "worker",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "user-1" },
+          },
+        },
+      ],
+    };
+
+    expect(
+      resolveDiscordBoundConversationRoute({
+        cfg,
+        accountId: "default",
+        isDirectMessage: true,
+        isGroupDm: false,
+        directUserId: "user-1",
+        conversationId: "dm-1",
+        boundSessionKey: "agent:worker:discord:direct:user-1",
+        matchedBy: "binding.channel",
+      }),
+    ).toMatchObject({
+      agentId: "worker",
+      sessionKey: "agent:worker:discord:direct:user-1",
+      matchedBy: "binding.channel",
     });
   });
 });
