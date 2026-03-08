@@ -139,41 +139,44 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function emitToolResultOutput(params: {
+async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
   meta?: string;
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
-}) {
+}): Promise<boolean> {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
   if (!ctx.params.onToolResult) {
-    return;
+    return false;
   }
+
+  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
 
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
-    return;
+    return mediaPaths.length > 0 && Boolean(outputText);
   }
 
   if (isToolError) {
-    return;
+    return false;
   }
 
   // emitToolOutput() already handles MEDIA: directives when enabled; this path
   // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
   if (mediaPaths.length === 0) {
-    return;
+    return false;
   }
   try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    await ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    return true;
   } catch {
     // ignore delivery failures
+    return false;
   }
 }
 
@@ -372,13 +375,6 @@ export async function handleToolExecutionEnd(
   }
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (
-    !isToolError &&
-    toolName === "tts" &&
-    filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result)).length > 0
-  ) {
-    ctx.state.didSendViaTtsTool = true;
-  }
   const startArgs =
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
@@ -434,7 +430,17 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  const didDispatchToolResultMedia = await emitToolResultOutput({
+    ctx,
+    toolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+  });
+  if (!isToolError && toolName === "tts" && didDispatchToolResultMedia) {
+    ctx.state.didSendViaTtsTool = true;
+  }
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();

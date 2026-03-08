@@ -8,13 +8,13 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
-  onToolResult?: ReturnType<typeof vi.fn>;
+  onToolResult?: ReturnType<typeof vi.fn> | undefined;
 }): EmbeddedPiSubscribeContext {
-  const onToolResult = overrides?.onToolResult ?? vi.fn();
+  const onToolResult = overrides && "onToolResult" in overrides ? overrides.onToolResult : vi.fn();
   return {
     params: {
       runId: "test-run",
-      onToolResult,
+      ...(onToolResult ? { onToolResult } : {}),
       onAgentEvent: vi.fn(),
     },
     state: {
@@ -222,6 +222,41 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(ctx.state.didSendViaTtsTool).toBe(true);
+  });
+
+  it("does not mark tts media sends when tool-result delivery is unavailable", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: undefined });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/voice.opus" }],
+      },
+    });
+
+    expect(ctx.state.didSendViaTtsTool).not.toBe(true);
+  });
+
+  it("does not mark tts media sends when tool-result delivery fails", async () => {
+    const onToolResult = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/voice.opus" }],
+      },
+    });
+
+    expect(ctx.state.didSendViaTtsTool).not.toBe(true);
   });
 
   it("does NOT emit media for malformed MEDIA:-prefixed prose", async () => {
