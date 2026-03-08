@@ -18,10 +18,17 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
+const configModule = vi.hoisted(() => ({
+  loadConfig: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+}));
+
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
+vi.mock("../../config/config.js", () => configModule);
 
-const { registerSubCliByName, registerSubCliCommands } = await import("./register.subclis.js");
+const { loadValidatedConfigForPluginRegistration, registerSubCliByName, registerSubCliCommands } =
+  await import("./register.subclis.js");
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -47,6 +54,8 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    configModule.loadConfig.mockReset();
+    configModule.readConfigFileSnapshot.mockReset();
   });
 
   afterEach(() => {
@@ -77,6 +86,28 @@ describe("registerSubCliCommands", () => {
     expect(names).toContain("gateway");
     expect(names).toContain("clawbot");
     expect(registerAcpCli).not.toHaveBeenCalled();
+  });
+
+  it("returns null for plugin registration when the config snapshot is invalid", async () => {
+    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: false,
+      config: { plugins: { load: { paths: ["/tmp/evil"] } } },
+    });
+
+    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBeNull();
+    expect(configModule.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("loads validated config for plugin registration when the snapshot is valid", async () => {
+    const loadedConfig = { plugins: { enabled: true } };
+    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: true,
+      config: loadedConfig,
+    });
+    configModule.loadConfig.mockReturnValueOnce(loadedConfig);
+
+    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(loadedConfig);
+    expect(configModule.loadConfig).toHaveBeenCalledTimes(1);
   });
 
   it("re-parses argv for lazy subcommands", async () => {
