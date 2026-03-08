@@ -173,6 +173,14 @@ actor MacNodeRuntime {
     }
 
     private func handleBrowserProxyInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard OpenClawConfigFile.browserControlEnabled() else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "BROWSER_DISABLED: enable Browser in Settings"))
+        }
         let payloadJSON = try await self.browserProxyRequest(req.paramsJSON)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payloadJSON)
     }

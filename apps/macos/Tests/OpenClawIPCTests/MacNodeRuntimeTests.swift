@@ -113,4 +113,25 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == true)
         #expect(response.payloadJSON == #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#)
     }
+
+    @Test func handleInvokeBrowserProxyRejectsDisabledBrowserControl() async throws {
+        let override = TestIsolation.tempConfigPath()
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            try JSONSerialization.data(withJSONObject: ["browser": ["enabled": false]])
+                .write(to: URL(fileURLWithPath: override))
+
+            let runtime = MacNodeRuntime(browserProxyRequest: { _ in
+                Issue.record("browserProxyRequest should not run when browser control is disabled")
+                return "{}"
+            })
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-browser-disabled",
+                    command: OpenClawBrowserCommand.proxy.rawValue,
+                    paramsJSON: #"{"method":"GET","path":"/tabs"}"#))
+
+            #expect(response.ok == false)
+            #expect(response.error?.message.contains("BROWSER_DISABLED") == true)
+        }
+    }
 }

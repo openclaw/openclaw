@@ -36,8 +36,11 @@ struct ChatComposerPasteSupportTests {
         pasteboard.clearContents()
         #expect(pasteboard.writeObjects([fileURL as NSURL]))
 
-        let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard)
+        let references = ChatComposerPasteSupport.imageFileReferences(from: pasteboard)
+        let attachments = ChatComposerPasteSupport.loadImageAttachments(from: references)
 
+        #expect(references.count == 1)
+        #expect(references[0].url == fileURL)
         #expect(attachments.count == 1)
         #expect(attachments[0].data == pngData)
         #expect(attachments[0].fileName == fileURL.lastPathComponent)

@@ -519,41 +519,65 @@ private final class ChatComposerNSTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        let attachments = ChatComposerPasteSupport.imageAttachments(from: pboard, matching: type)
-        if attachments.isEmpty {
+        if !self.handleImagePaste(from: pboard, matching: type) {
             return super.readSelection(from: pboard, type: type)
-        }
-
-        for attachment in attachments {
-            self.onPasteImageAttachment?(
-                attachment.data,
-                attachment.fileName,
-                attachment.mimeType)
         }
         return true
     }
 
     override func paste(_ sender: Any?) {
-        let attachments = ChatComposerPasteSupport.imageAttachments(from: NSPasteboard.general)
-        if attachments.isEmpty {
+        if !self.handleImagePaste(from: NSPasteboard.general, matching: nil) {
             super.paste(sender)
-            return
-        }
-        for attachment in attachments {
-            self.onPasteImageAttachment?(
-                attachment.data,
-                attachment.fileName,
-                attachment.mimeType)
         }
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         self.paste(sender)
     }
+
+    private func handleImagePaste(
+        from pasteboard: NSPasteboard,
+        matching preferredType: NSPasteboard.PasteboardType?) -> Bool
+    {
+        let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard, matching: preferredType)
+        if !attachments.isEmpty {
+            self.deliver(attachments)
+            return true
+        }
+
+        let fileReferences = ChatComposerPasteSupport.imageFileReferences(from: pasteboard, matching: preferredType)
+        if !fileReferences.isEmpty {
+            self.loadAndDeliver(fileReferences)
+            return true
+        }
+
+        return false
+    }
+
+    private func deliver(_ attachments: [ChatComposerPasteSupport.ImageAttachment]) {
+        for attachment in attachments {
+            self.onPasteImageAttachment?(
+                attachment.data,
+                attachment.fileName,
+                attachment.mimeType)
+        }
+    }
+
+    private func loadAndDeliver(_ fileReferences: [ChatComposerPasteSupport.FileImageReference]) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, fileReferences] in
+            let attachments = ChatComposerPasteSupport.loadImageAttachments(from: fileReferences)
+            guard !attachments.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.deliver(attachments)
+            }
+        }
+    }
 }
 
 enum ChatComposerPasteSupport {
     typealias ImageAttachment = (data: Data, fileName: String, mimeType: String)
+    typealias FileImageReference = (url: URL, fileName: String, mimeType: String)
 
     static var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         [.fileURL] + self.preferredImagePasteboardTypes.map(\.type)
@@ -563,13 +587,6 @@ enum ChatComposerPasteSupport {
         from pasteboard: NSPasteboard,
         matching preferredType: NSPasteboard.PasteboardType? = nil) -> [ImageAttachment]
     {
-        if self.matchesFileURL(preferredType),
-           let attachments = self.imageAttachmentsFromFileURLs(in: pasteboard),
-           !attachments.isEmpty
-        {
-            return attachments
-        }
-
         let dataAttachments = self.imageAttachmentsFromRawData(in: pasteboard, matching: preferredType)
         if !dataAttachments.isEmpty {
             return dataAttachments
@@ -577,10 +594,6 @@ enum ChatComposerPasteSupport {
 
         if let preferredType, !self.matchesImageType(preferredType) {
             return []
-        }
-
-        if let attachments = self.imageAttachmentsFromFileURLs(in: pasteboard), !attachments.isEmpty {
-            return attachments
         }
 
         guard let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage], !images.isEmpty else {
@@ -591,27 +604,45 @@ enum ChatComposerPasteSupport {
         }
     }
 
-    private static func imageAttachmentsFromFileURLs(in pasteboard: NSPasteboard) -> [ImageAttachment]? {
+    static func imageFileReferences(
+        from pasteboard: NSPasteboard,
+        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [FileImageReference]
+    {
+        guard self.matchesFileURL(preferredType) else { return [] }
+        return self.imageFileReferencesFromFileURLs(in: pasteboard)
+    }
+
+    static func loadImageAttachments(from fileReferences: [FileImageReference]) -> [ImageAttachment] {
+        fileReferences.compactMap { reference in
+            guard let data = try? Data(contentsOf: reference.url), !data.isEmpty else {
+                return nil
+            }
+            return (
+                data: data,
+                fileName: reference.fileName,
+                mimeType: reference.mimeType)
+        }
+    }
+
+    private static func imageFileReferencesFromFileURLs(in pasteboard: NSPasteboard) -> [FileImageReference] {
         guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty else {
-            return nil
+            return []
         }
 
-        let attachments = urls.compactMap { url -> ImageAttachment? in
+        return urls.enumerated().compactMap { index, url -> FileImageReference? in
             guard url.isFileURL,
                   let type = UTType(filenameExtension: url.pathExtension),
-                  type.conforms(to: .image),
-                  let data = try? Data(contentsOf: url),
-                  !data.isEmpty
+                  type.conforms(to: .image)
             else {
                 return nil
             }
 
             let mimeType = type.preferredMIMEType ?? "image/\(type.preferredFilenameExtension ?? "png")"
-            let fileName = url.lastPathComponent.isEmpty ? self.defaultFileName(index: 0, ext: type.preferredFilenameExtension ?? "png") : url.lastPathComponent
-            return (data: data, fileName: fileName, mimeType: mimeType)
+            let fileName = url.lastPathComponent.isEmpty
+                ? self.defaultFileName(index: index, ext: type.preferredFilenameExtension ?? "png")
+                : url.lastPathComponent
+            return (url: url, fileName: fileName, mimeType: mimeType)
         }
-
-        return attachments.isEmpty ? nil : attachments
     }
 
     private static func imageAttachmentsFromRawData(
