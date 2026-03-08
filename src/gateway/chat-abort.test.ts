@@ -55,6 +55,9 @@ describe("isChatStopCommandText", () => {
     expect(isChatStopCommandText("halt")).toBe(true);
     expect(isChatStopCommandText("stopp")).toBe(true);
     expect(isChatStopCommandText("pare")).toBe(true);
+    expect(isChatStopCommandText("멈춰")).toBe(true);
+    expect(isChatStopCommandText("중지")).toBe(true);
+    expect(isChatStopCommandText("그만해")).toBe(true);
     expect(isChatStopCommandText("/status")).toBe(false);
     expect(isChatStopCommandText("please do not do that")).toBe(false);
     expect(isChatStopCommandText("keep going")).toBe(false);

@@ -234,6 +234,16 @@ describe("abort detection", () => {
       "hoer auf",
       "stopp",
       "pare",
+      "멈춰",
+      "중지",
+      "그만",
+      "중단",
+      "취소",
+      "정지",
+      "그만해",
+      "멈춰줘",
+      "중지해",
+      "그만 해",
     ];
     for (const candidate of positives) {
       expect(isAbortTrigger(candidate)).toBe(true);
@@ -261,6 +271,10 @@ describe("abort detection", () => {
     expect(isAbortRequestText("stopp")).toBe(true);
     expect(isAbortRequestText("pare")).toBe(true);
     expect(isAbortRequestText(" توقف ")).toBe(true);
+    expect(isAbortRequestText("멈춰")).toBe(true);
+    expect(isAbortRequestText("중지")).toBe(true);
+    expect(isAbortRequestText("그만해")).toBe(true);
+    expect(isAbortRequestText("그만 해")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
 
