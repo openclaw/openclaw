@@ -13,6 +13,16 @@ describe("resolveTranscriptPolicy e2e smoke", () => {
     expect(policy.toolCallIdMode).toBeUndefined();
   });
 
+  it("sanitizes tool-call IDs for openai-codex-responses API (#35528)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai-codex",
+      modelId: "codex-mini-latest",
+      modelApi: "openai-codex-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
   it("uses strict9 tool-call sanitization for Mistral-family models", () => {
     const policy = resolveTranscriptPolicy({
       provider: "mistral",
