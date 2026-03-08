@@ -17,11 +17,13 @@ vi.mock("./session.js", () => {
   const getStatusCode = vi.fn(
     (err: unknown) =>
       (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-      (err as { status?: number })?.status,
+      (err as { status?: number })?.status ??
+      (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
   );
   const webAuthExists = vi.fn(async () => false);
   const readWebSelfId = vi.fn(() => ({ e164: null, jid: null }));
   const logoutWeb = vi.fn(async () => true);
+  const waitForCredsSaveQueue = vi.fn(async () => {});
   return {
     createWaSocket,
     waitForWaConnection,
@@ -30,6 +32,7 @@ vi.mock("./session.js", () => {
     webAuthExists,
     readWebSelfId,
     logoutWeb,
+    waitForCredsSaveQueue,
   };
 });
 
