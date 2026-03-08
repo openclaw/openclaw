@@ -128,6 +128,9 @@ export function toWhatsappJid(number: string): string {
   }
   const e164 = normalizeE164(withoutPrefix);
   const digits = e164.replace(/\D/g, "");
+  if (!digits) {
+    throw new Error(`Invalid WhatsApp number: input "${number}" contains no digits`);
+  }
   return `${digits}@s.whatsapp.net`;
 }
 

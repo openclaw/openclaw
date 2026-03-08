@@ -90,6 +90,13 @@ describe("normalizeE164 & toWhatsappJid", () => {
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
   });
+
+  it("throws on empty or non-numeric input instead of producing invalid JID", () => {
+    expect(() => toWhatsappJid("")).toThrow("contains no digits");
+    expect(() => toWhatsappJid("   ")).toThrow("contains no digits");
+    expect(() => toWhatsappJid("whatsapp:")).toThrow("contains no digits");
+    expect(() => toWhatsappJid("abc")).toThrow("contains no digits");
+  });
 });
 
 describe("jidToE164", () => {
