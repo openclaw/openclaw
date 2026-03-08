@@ -7,6 +7,7 @@ const {
   normalizeFreshness,
   normalizeToIsoDate,
   isoToPerplexityDate,
+  resolveTavilyApiKey,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
@@ -19,6 +20,7 @@ const {
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+const tavilyApiKeyEnv = ["TAVILY_API", "KEY"].join("_");
 
 describe("web_search brave language param normalization", () => {
   it("normalizes and auto-corrects swapped Brave language params", () => {
@@ -132,6 +134,26 @@ describe("web_search grok config resolution", () => {
   it("respects inlineCitations config", () => {
     expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
     expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+  });
+});
+
+describe("web_search tavily config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveTavilyApiKey({ apiKey: "tavily-test-key" })).toBe("tavily-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to TAVILY_API_KEY", () => {
+    const tavilyEnvValue = "tavily-env"; // pragma: allowlist secret
+    withEnv({ [tavilyApiKeyEnv]: tavilyEnvValue }, () => {
+      expect(resolveTavilyApiKey({})).toBe(tavilyEnvValue);
+    });
+  });
+
+  it("returns undefined when no Tavily key is configured", () => {
+    withEnv({ TAVILY_API_KEY: undefined }, () => {
+      expect(resolveTavilyApiKey({})).toBeUndefined();
+      expect(resolveTavilyApiKey(undefined)).toBeUndefined();
+    });
   });
 });
 

@@ -48,6 +48,21 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts tavily provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "tavily",
+        providerConfig: {
+          apiKey: "test-key", // pragma: allowlist secret
+          searchDepth: "advanced",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -59,6 +74,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.TAVILY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
@@ -92,6 +108,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("perplexity");
+  });
+
+  it("auto-detects tavily when only TAVILY_API_KEY is set", () => {
+    process.env.TAVILY_API_KEY = "test-tavily-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("tavily");
   });
 
   it("auto-detects grok when only XAI_API_KEY is set", () => {

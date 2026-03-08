@@ -266,6 +266,7 @@ export const ToolsWebSearchSchema = z
       .union([
         z.literal("brave"),
         z.literal("perplexity"),
+        z.literal("tavily"),
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
@@ -282,6 +283,13 @@ export const ToolsWebSearchSchema = z
         // so existing configs don't fail validation. Ignored at runtime.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        searchDepth: z.union([z.literal("basic"), z.literal("advanced")]).optional(),
       })
       .strict()
       .optional(),
