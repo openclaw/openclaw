@@ -140,10 +140,16 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
-    if (shouldRethrowAbort(err)) {
+    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
+    // so they become FailoverErrors and continue the fallback loop instead of aborting.
+    const normalizedFailover = coerceToFailoverError(err, {
+      provider: params.provider,
+      model: params.model,
+    });
+    if (shouldRethrowAbort(err) && !normalizedFailover) {
       throw err;
     }
-    return { ok: false, error: err };
+    return { ok: false, error: normalizedFailover ?? err };
   }
 }
 
