@@ -166,6 +166,40 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+
+  const findAgentConfigIndex = (agentId: string): number | null => {
+    const current =
+      state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {};
+    const agents =
+      current && typeof current === "object" && !Array.isArray(current)
+        ? ((current as { agents?: unknown }).agents as { list?: unknown[] } | undefined)
+        : undefined;
+    const list = Array.isArray(agents?.list) ? agents.list : [];
+    const existingIndex = list.findIndex(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        "id" in entry &&
+        (entry as { id?: string }).id === agentId,
+    );
+    return existingIndex >= 0 ? existingIndex : null;
+  };
+
+  const ensureAgentConfigIndex = (agentId: string): number => {
+    const existingIndex = findAgentConfigIndex(agentId);
+    if (existingIndex != null) {
+      return existingIndex;
+    }
+    const current =
+      state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {};
+    const agents =
+      current && typeof current === "object" && !Array.isArray(current)
+        ? ((current as { agents?: unknown }).agents as { list?: unknown[] } | undefined)
+        : undefined;
+    const list = Array.isArray(agents?.list) ? agents.list : [];
+    updateConfigFormValue(state, ["agents", "list"], [...list, { id: agentId }]);
+    return list.length;
+  };
   const cronAgentSuggestions = sortLocaleStrings(
     new Set(
       [
@@ -663,23 +697,14 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  if (!configValue) {
+                  if (!profile && !clearAllow) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const existingIndex = findAgentConfigIndex(agentId);
+                  if (!profile && existingIndex == null) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
+                  const index = existingIndex ?? ensureAgentConfigIndex(agentId);
                   const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
                     updateConfigFormValue(state, [...basePath, "profile"], profile);
@@ -691,21 +716,8 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
+                  const index = ensureAgentConfigIndex(agentId);
+                  if (index == null) {
                     return;
                   }
                   const basePath = ["agents", "list", index, "tools"];
@@ -731,24 +743,19 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onAgentSkillToggle: (agentId, skillName, enabled) => {
-                  if (!configValue) {
+                  const index = ensureAgentConfigIndex(agentId);
+                  if (index == null) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const entry = list[index] as { skills?: unknown };
+                  const currentConfig =
+                    state.configForm ??
+                    (state.configSnapshot?.config as Record<string, unknown> | null) ??
+                    {};
+                  const list = (currentConfig as { agents?: { list?: unknown[] } }).agents?.list;
+                  const entry =
+                    Array.isArray(list) && list[index] && typeof list[index] === "object"
+                      ? (list[index] as { skills?: unknown })
+                      : {};
                   const normalizedSkill = skillName.trim();
                   if (!normalizedSkill) {
                     return;
@@ -769,69 +776,39 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], [...next]);
                 },
                 onAgentSkillsClear: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
+                  const index = ensureAgentConfigIndex(agentId);
+                  if (index == null) {
                     return;
                   }
                   removeConfigFormValue(state, ["agents", "list", index, "skills"]);
                 },
                 onAgentSkillsDisableAll: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
+                  const index = ensureAgentConfigIndex(agentId);
+                  if (index == null) {
                     return;
                   }
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
                 onModelChange: (agentId, modelId) => {
-                  if (!configValue) {
+                  const existingIndex = findAgentConfigIndex(agentId);
+                  if (!modelId && existingIndex == null) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
+                  const index = existingIndex ?? ensureAgentConfigIndex(agentId);
                   const basePath = ["agents", "list", index, "model"];
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const entry = list[index] as { model?: unknown };
+                  const currentConfig =
+                    state.configForm ??
+                    (state.configSnapshot?.config as Record<string, unknown> | null) ??
+                    {};
+                  const list = (currentConfig as { agents?: { list?: unknown[] } }).agents?.list;
+                  const entry =
+                    Array.isArray(list) && list[index] && typeof list[index] === "object"
+                      ? (list[index] as { model?: unknown })
+                      : {};
                   const existing = entry?.model;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
@@ -845,26 +822,22 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const existingIndex = findAgentConfigIndex(agentId);
+                  if (normalized.length === 0 && existingIndex == null) {
+                    return;
+                  }
+                  const index = existingIndex ?? ensureAgentConfigIndex(agentId);
+                  const currentConfig =
+                    state.configForm ??
+                    (state.configSnapshot?.config as Record<string, unknown> | null) ??
+                    {};
+                  const list = (currentConfig as { agents?: { list?: unknown[] } }).agents?.list;
+                  const entry =
+                    Array.isArray(list) && list[index] && typeof list[index] === "object"
+                      ? (list[index] as { model?: unknown })
+                      : {};
+                  const basePath = ["agents", "list", index, "model"];
                   const existing = entry.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
