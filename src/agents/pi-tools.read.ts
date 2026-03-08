@@ -11,6 +11,7 @@ import {
 } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { checkPathGuardStrict } from "../security/path-guard.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
@@ -24,8 +25,8 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
-import { checkPathGuardStrict, type ToolFsPolicy } from "../security/path-guard.js";
 
 export {
   CLAUDE_PARAM_GROUPS,
@@ -657,7 +658,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
           rootDir: root,
           relativePath: relative,
         });
-        await opened.handle.close().catch(() => { });
+        await opened.handle.close().catch(() => {});
       } catch (error) {
         if (error instanceof SafeOpenError && error.code === "not-found") {
           throw createFsAccessError("ENOENT", absolutePath);
