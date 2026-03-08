@@ -1374,6 +1374,7 @@ describe("loadOpenClawPlugins", () => {
         console.error(record?.error ?? "legacy-root-import missing");
         process.exit(1);
       }
+      process.exit(0);
     `;
 
     execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
