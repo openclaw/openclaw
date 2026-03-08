@@ -125,11 +125,22 @@ export function createGatewayTool(opts?: {
         // falling back to the stale session store. See #18612.
         const ownKey = opts?.agentSessionKey?.trim() || undefined;
         const agentId = resolveAgentIdFromSessionKey(ownKey);
-        const canonicalize = (k: string) =>
+        // Canonicalize each key using its OWN agentId — not the current session's.
+        // If a non-default agent passes sessionKey="main", resolveAgentIdFromSessionKey
+        // returns DEFAULT_AGENT_ID ("main") so "main" → "agent:main:main". Using the
+        // current session's agentId instead would map "main" to the current agent's main
+        // session, falsely treating a cross-agent request as same-session. See #18612.
+        const canonicalizeOwn = (k: string) =>
           canonicalizeMainSessionAlias({ cfg: opts?.config, agentId, sessionKey: k });
+        const canonicalizeTarget = (k: string) =>
+          canonicalizeMainSessionAlias({
+            cfg: opts?.config,
+            agentId: resolveAgentIdFromSessionKey(k),
+            sessionKey: k,
+          });
         const isTargetingOtherSession =
           explicitSessionKey != null &&
-          canonicalize(explicitSessionKey) !== (ownKey ? canonicalize(ownKey) : undefined);
+          canonicalizeTarget(explicitSessionKey) !== (ownKey ? canonicalizeOwn(ownKey) : undefined);
         // Only forward live context when both channel and to are present.
         // Forwarding a partial context (channel without to) causes the server
         // to write a sentinel without `to`, and scheduleRestartSentinelWake
@@ -245,12 +256,20 @@ export function createGatewayTool(opts?: {
         // deliveryContext so the server falls back to extractDeliveryInfo(sessionKey).
         const rpcOwnKey = opts?.agentSessionKey?.trim() || undefined;
         const rpcAgentId = resolveAgentIdFromSessionKey(rpcOwnKey);
-        const rpcCanonicalize = (k: string) =>
+        // Same cross-agent alias fix as the restart path: derive agentId from each key
+        // independently so that "main" resolves to the default agent, not the current one.
+        const rpcCanonicalizeOwn = (k: string) =>
           canonicalizeMainSessionAlias({ cfg: opts?.config, agentId: rpcAgentId, sessionKey: k });
+        const rpcCanonicalizeTarget = (k: string) =>
+          canonicalizeMainSessionAlias({
+            cfg: opts?.config,
+            agentId: resolveAgentIdFromSessionKey(k),
+            sessionKey: k,
+          });
         const isTargetingOtherSession =
           explicitSessionKey != null &&
-          rpcCanonicalize(explicitSessionKey) !==
-            (rpcOwnKey ? rpcCanonicalize(rpcOwnKey) : undefined);
+          rpcCanonicalizeTarget(explicitSessionKey) !==
+            (rpcOwnKey ? rpcCanonicalizeOwn(rpcOwnKey) : undefined);
         const deliveryContext = isTargetingOtherSession ? undefined : liveDeliveryContextForRpc;
         return { sessionKey, note, restartDelayMs, deliveryContext };
       };

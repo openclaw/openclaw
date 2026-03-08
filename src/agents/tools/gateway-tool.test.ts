@@ -167,4 +167,53 @@ describe("createGatewayTool – live delivery context guard", () => {
     expect(sentinelPayload?.deliveryContext?.channel).toBe("discord");
     expect(sentinelPayload?.deliveryContext?.to).toBe("123456789");
   });
+
+  it("does not forward live RPC delivery context when a non-default agent passes sessionKey='main'", async () => {
+    // "main" resolves to "agent:main:main" (default agent), which differs from the
+    // current session "agent:shopping-claw:main". Live context must NOT be forwarded.
+    mocks.callGatewayTool.mockClear();
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:shopping-claw:main",
+      agentChannel: "discord",
+      agentTo: "123456789",
+    });
+
+    await execTool(tool, {
+      action: "config.patch",
+      raw: '{"key":"value"}',
+      baseHash: "abc123",
+      sessionKey: "main", // targets default agent — different from current shopping-claw session
+      note: "cross-agent patch",
+    });
+
+    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(forwardedParams?.deliveryContext).toBeUndefined();
+  });
+
+  it("does not forward live restart context when a non-default agent passes sessionKey='main'", async () => {
+    // "main" resolves to "agent:main:main" (default agent), which differs from the
+    // current session "agent:shopping-claw:main". Sentinel must not carry this session's thread.
+    mocks.writeRestartSentinel.mockClear();
+    mocks.extractDeliveryInfo.mockReturnValueOnce({
+      deliveryContext: { channel: "telegram", to: "+19995550001", accountId: undefined },
+      threadId: undefined,
+    });
+
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:shopping-claw:main",
+      agentChannel: "discord",
+      agentTo: "123456789",
+    });
+
+    await execTool(tool, { action: "restart", sessionKey: "main" });
+
+    const sentinelPayload = getCallArg<{ deliveryContext?: { channel?: string; to?: string } }>(
+      mocks.writeRestartSentinel,
+      0,
+      0,
+    );
+    // Should fall back to extractDeliveryInfo() for the targeted session, not current session's live context
+    expect(sentinelPayload?.deliveryContext?.channel).toBe("telegram");
+    expect(sentinelPayload?.deliveryContext?.to).toBe("+19995550001");
+  });
 });
