@@ -111,11 +111,12 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
       "",
-      "Manifest (JSON):",
-      manifest,
+      "Manifest JSON is printed below for easy copying.",
     ].join("\n"),
     "Slack socket mode tokens",
   );
+  console.log("\nManifest JSON (copy this):");
+  console.log(manifest);
 }
 
 function setSlackChannelAllowlist(
