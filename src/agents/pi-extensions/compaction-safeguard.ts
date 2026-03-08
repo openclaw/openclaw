@@ -783,6 +783,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             maxContextTokens: contextWindowTokens,
             maxHistoryShare,
             parts: 2,
+            allowSyntheticToolResults: runtime?.allowSyntheticToolResults,
           });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
@@ -836,6 +837,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       } = splitPreservedRecentTurns({
         messages: messagesToSummarize,
         recentTurnsPreserve,
+        allowSyntheticToolResults: runtime?.allowSyntheticToolResults,
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
