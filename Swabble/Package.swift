@@ -14,7 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.1"),
-        .package(url: "https://github.com/apple/swift-testing", from: "0.99.0"),
+        .package(url: "https://github.com/apple/swift-testing", from: "6.2.3"),
     ],
     targets: [
         .target(
