@@ -79,7 +79,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await expect(
       downloadBlueBubblesAttachment(attachment, {
         serverUrl: "http://localhost:1234",
-        password: "test",
+        password: "test", // pragma: allowlist secret
         ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
       }),
     ).rejects.toThrow("too large");
@@ -90,7 +90,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await expect(
       downloadBlueBubblesAttachment(attachment, {
         serverUrl: "http://localhost:1234",
-        password: "test-password",
+        password: "test-password", // pragma: allowlist secret
       }),
     ).rejects.toThrow("guid is required");
   });
@@ -154,7 +154,7 @@ describe("downloadBlueBubblesAttachment", () => {
     const attachment: BlueBubblesAttachment = { guid: "att-456" };
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://localhost:1234",
-      password: "my-secret-password",
+      password: "my-secret-password", // pragma: allowlist secret
     });
 
     const calledUrl = mockFetch.mock.calls[0][0] as string;
@@ -260,7 +260,7 @@ describe("downloadBlueBubblesAttachment", () => {
         channels: {
           bluebubbles: {
             serverUrl: "http://config-server:5678",
-            password: "config-password",
+            password: "config-password", // pragma: allowlist secret
           },
         },
       },

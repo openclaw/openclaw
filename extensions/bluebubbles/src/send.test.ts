@@ -76,7 +76,7 @@ describe("send", () => {
       };
       return await resolveChatGuidForTarget({
         baseUrl: "http://localhost:1234",
-        password: "test",
+        password: "test", // pragma: allowlist secret
         target,
       });
     };
@@ -780,7 +780,7 @@ describe("send", () => {
           channels: {
             bluebubbles: {
               serverUrl: "http://config-server:5678",
-              password: "config-pass",
+              password: "config-pass", // pragma: allowlist secret
             },
           },
         },
