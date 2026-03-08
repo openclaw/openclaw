@@ -68,6 +68,11 @@ async function readSymlinkedWorkspaceFile(filePath: string): Promise<WorkspaceGu
     if (stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
       return { ok: false, reason: "validation" };
     }
+    // Reject hardlinked targets so that the symlink fallback cannot bypass
+    // the hardlink rejection enforced by the primary boundary reader.
+    if (stat.nlink > 1) {
+      return { ok: false, reason: "validation" };
+    }
 
     const identity = workspaceFileIdentity(stat, realPath);
     const cached = workspaceFileCache.get(filePath);

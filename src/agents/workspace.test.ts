@@ -244,6 +244,39 @@ describe("loadWorkspaceBootstrapFiles", () => {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects symlinks whose target is hardlinked", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-sym-hard-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      const outsideFile = path.join(outsideDir, "original.md");
+      const hardlinkFile = path.join(outsideDir, DEFAULT_AGENTS_FILENAME);
+      await fs.writeFile(outsideFile, "hardlinked-symlink content", "utf-8");
+      try {
+        await fs.link(outsideFile, hardlinkFile);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+      // Symlink in workspace → hardlinked file outside workspace
+      await fs.symlink(hardlinkFile, path.join(workspaceDir, DEFAULT_AGENTS_FILENAME));
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("filterBootstrapFilesForSession", () => {
