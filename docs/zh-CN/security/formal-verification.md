@@ -30,7 +30,9 @@ x-i18n:
 
 ## 模型存放位置
 
-模型维护在一个单独的仓库中：[vignesh07/openclaw-formal-models](https://github.com/vignesh07/openclaw-formal-models)。
+形式化验证模型目前与 OpenClaw 主仓库分开维护。模型仓库尚未公开。
+
+有关形式化验证的问题或请求访问模型，请联系负责形式化建模的维护者（参见 [Contributing Guide](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md)）。
 
 ## 重要注意事项
 
@@ -40,22 +42,19 @@ x-i18n:
 
 ## 复现结果
 
-目前，结果通过在本地克隆模型仓库并运行 TLC 来复现（见下文）。未来的迭代可能提供：
+形式化验证模型使用 TLA+ 和 TLC 模型检查器。未来的迭代可能提供：
 
+- 带有克隆/运行指令的公开模型仓库
 - 带有公开产物（反例追踪、运行日志）的 CI 运行模型
 - 用于小型、有界检查的托管"运行此模型"工作流
 
-开始使用：
+**要求**（当模型可用时）：
 
-```bash
-git clone https://github.com/vignesh07/openclaw-formal-models
-cd openclaw-formal-models
+- Java 11+（TLC 在 JVM 上运行）
+- TLA+ 工具（`tla2tools.jar`）
+- Make（用于运行模型目标）
 
-# 需要 Java 11+（TLC 在 JVM 上运行）。
-# 仓库内置了固定版本的 `tla2tools.jar`（TLA+ 工具）并提供 `bin/tlc` + Make 目标。
-
-make <target>
-```
+以下模型描述了预期的检查，可以作为理解 OpenClaw 安全属性的参考。
 
 ### Gateway 网关暴露和开放 Gateway 网关配置错误
 
