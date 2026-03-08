@@ -13,21 +13,26 @@ extension VoiceWakeOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = VoiceWakeOverlayView(controller: self)
         let target = self.targetFrame()
+        // Use a local variable to avoid holding exclusive write access on
+        // self.model while the window triggers a SwiftUI layout pass that
+        // reads other model fields (text, phase, etc.).
+        var visible = self.model.isVisible
         OverlayPanelFactory.present(
             window: self.window,
-            isVisible: &self.model.isVisible,
+            isVisible: &visible,
             target: target,
             onFirstPresent: {
                 self.logger.log(
                     level: .info,
                     "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
-                // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
+                // Keep the status item in "listening" mode until we explicitly dismiss the overlay.
                 AppStateStore.shared.triggerVoiceEars(ttl: nil)
             },
             onAlreadyVisible: { window in
                 self.updateWindowFrame(animate: true)
                 window.orderFrontRegardless()
             })
+        self.model.isVisible = visible
     }
 
     private func ensureWindow() {

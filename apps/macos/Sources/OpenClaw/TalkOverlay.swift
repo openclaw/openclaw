@@ -30,14 +30,19 @@ final class TalkOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
+        // Use a local variable to avoid holding exclusive write access on
+        // self.model while the window triggers a SwiftUI layout pass that
+        // reads other model fields (phase, level, etc.).
+        var visible = self.model.isVisible
         OverlayPanelFactory.present(
             window: self.window,
-            isVisible: &self.model.isVisible,
+            isVisible: &visible,
             target: target)
         { window in
             window.setFrame(target, display: true)
             window.orderFrontRegardless()
         }
+        self.model.isVisible = visible
     }
 
     func dismiss() {
