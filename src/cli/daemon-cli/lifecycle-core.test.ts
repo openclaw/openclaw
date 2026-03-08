@@ -72,6 +72,26 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings?.[0]).toContain("gateway install --force");
   });
 
+  it("does not warn when the service relies on config auth instead of an embedded token", async () => {
+    service.readCommand.mockResolvedValue({
+      environment: {},
+    });
+
+    const { runServiceRestart } = await import("./lifecycle-core.js");
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      checkTokenDrift: true,
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
+    expect(payload.warnings).toBeUndefined();
+  });
+
   it("skips drift warning when disabled", async () => {
     const { runServiceRestart } = await import("./lifecycle-core.js");
 

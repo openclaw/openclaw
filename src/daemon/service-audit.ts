@@ -212,7 +212,7 @@ function auditGatewayToken(
     return;
   }
   const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (serviceToken === expectedToken) {
+  if (!serviceToken || serviceToken === expectedToken) {
     return;
   }
   issues.push({
@@ -376,8 +376,9 @@ export function checkTokenDrift(params: {
     return null;
   }
 
-  // Drift: config has token, service has different or no token
-  if (configToken && serviceToken !== configToken) {
+  // Drift: config has token and service still embeds a different token.
+  // A missing service token is acceptable because the daemon can read auth from config.
+  if (configToken && serviceToken && serviceToken !== configToken) {
     return {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:

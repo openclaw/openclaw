@@ -23,6 +23,55 @@ import {
 import { parsePort } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+async function persistGatewayTokenToConfig(params: {
+  token: string;
+  json: boolean;
+  warnings: string[];
+}): Promise<{ tokenPersisted: boolean; config: ReturnType<typeof loadConfig> }> {
+  const { token, json, warnings } = params;
+
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    if (snapshot.exists && !snapshot.valid) {
+      const msg = "Warning: config file exists but is invalid; skipping token persistence.";
+      if (json) {
+        warnings.push(msg);
+      } else {
+        defaultRuntime.log(msg);
+      }
+      return { tokenPersisted: false, config: loadConfig() };
+    }
+
+    const baseConfig = snapshot.exists ? snapshot.config : {};
+    const existingToken = baseConfig.gateway?.auth?.token?.trim();
+    if (existingToken) {
+      return { tokenPersisted: true, config: baseConfig };
+    }
+
+    const updatedConfig = {
+      ...baseConfig,
+      gateway: {
+        ...baseConfig.gateway,
+        auth: {
+          ...baseConfig.gateway?.auth,
+          mode: baseConfig.gateway?.auth?.mode ?? "token",
+          token,
+        },
+      },
+    };
+    await writeConfigFile(updatedConfig);
+    return { tokenPersisted: true, config: updatedConfig };
+  } catch (err) {
+    const msg = `Warning: could not persist token to config: ${String(err)}`;
+    if (json) {
+      warnings.push(msg);
+    } else {
+      defaultRuntime.log(msg);
+    }
+    return { tokenPersisted: false, config: loadConfig() };
+  }
+}
+
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
   const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
@@ -32,7 +81,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
-  const cfg = loadConfig();
+  let cfg = loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -81,8 +130,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     authConfig: cfg.gateway?.auth,
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
   });
-  const needsToken =
-    resolvedAuth.mode === "token" && !resolvedAuth.token && !resolvedAuth.allowTailscale;
+  const requiresPersistentTokenAuth = resolvedAuth.mode === "token" && !resolvedAuth.allowTailscale;
 
   let token: string | undefined =
     opts.token ||
@@ -90,7 +138,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     process.env.OPENCLAW_GATEWAY_TOKEN ||
     process.env.CLAWDBOT_GATEWAY_TOKEN;
 
-  if (!token && needsToken) {
+  if (!token && requiresPersistentTokenAuth) {
     token = randomToken();
     const warnMsg = "No gateway token found. Auto-generated one and saving to config.";
     if (json) {
@@ -98,55 +146,22 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     } else {
       defaultRuntime.log(warnMsg);
     }
+  }
 
-    // Persist to config file so the gateway reads it at runtime
-    // (launchd does not inherit shell env vars, and CLI tools also
-    // read gateway.auth.token from config for gateway calls).
-    try {
-      const snapshot = await readConfigFileSnapshot();
-      if (snapshot.exists && !snapshot.valid) {
-        // Config file exists but is corrupt/unparseable — don't risk overwriting.
-        // Token is still embedded in the plist EnvironmentVariables.
-        const msg = "Warning: config file exists but is invalid; skipping token persistence.";
-        if (json) {
-          warnings.push(msg);
-        } else {
-          defaultRuntime.log(msg);
-        }
-      } else {
-        const baseConfig = snapshot.exists ? snapshot.config : {};
-        if (!baseConfig.gateway?.auth?.token) {
-          await writeConfigFile({
-            ...baseConfig,
-            gateway: {
-              ...baseConfig.gateway,
-              auth: {
-                ...baseConfig.gateway?.auth,
-                mode: baseConfig.gateway?.auth?.mode ?? "token",
-                token,
-              },
-            },
-          });
-        } else {
-          // Another process wrote a token between loadConfig() and now.
-          token = baseConfig.gateway.auth.token;
-        }
-      }
-    } catch (err) {
-      // Non-fatal: token is still embedded in the plist EnvironmentVariables.
-      const msg = `Warning: could not persist token to config: ${String(err)}`;
-      if (json) {
-        warnings.push(msg);
-      } else {
-        defaultRuntime.log(msg);
-      }
+  let tokenPersistedToConfig = Boolean(cfg.gateway?.auth?.token?.trim());
+  if (requiresPersistentTokenAuth && token && !tokenPersistedToConfig) {
+    const persisted = await persistGatewayTokenToConfig({ token, json, warnings });
+    tokenPersistedToConfig = persisted.tokenPersisted;
+    cfg = persisted.config;
+    if (cfg.gateway?.auth?.token?.trim()) {
+      token = cfg.gateway.auth.token;
     }
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token,
+    token: tokenPersistedToConfig ? undefined : token,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {
