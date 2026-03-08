@@ -9,6 +9,10 @@ export type BrowserProfileConfig = {
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Override global headless setting for this profile. Useful for profiles that need a visible window (e.g. login setup). */
+  headless?: boolean;
+  /** Override the browser executable path for this profile. Takes precedence over the global executablePath. */
+  executablePath?: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */

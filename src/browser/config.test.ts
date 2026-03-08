@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import {
+  effectiveHeadless,
+  resolveBrowserConfig,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "./config.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -300,5 +305,79 @@ describe("browser config", () => {
       });
       expect(resolved.defaultProfile).toBe("custom");
     });
+  });
+
+  it("resolveProfile passes headless:undefined when profile has no headless setting", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { work: { cdpPort: 19200, color: "#FF4500" } },
+    });
+    const profile = resolveProfile(resolved, "work");
+    expect(profile?.headless).toBeUndefined();
+  });
+
+  it("resolveProfile passes headless:true from profile config", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { "headless-profile": { cdpPort: 19201, color: "#FF4500", headless: true } },
+    });
+    const profile = resolveProfile(resolved, "headless-profile");
+    expect(profile?.headless).toBe(true);
+  });
+
+  it("resolveProfile passes headless:false from profile config, enabling headed override", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: { "headed-profile": { cdpPort: 19202, color: "#FF4500", headless: false } },
+    });
+    const profile = resolveProfile(resolved, "headed-profile");
+    expect(profile?.headless).toBe(false);
+  });
+
+  describe("effectiveHeadless", () => {
+    const makeProfile = (headless: boolean | undefined) =>
+      ({ headless }) as Parameters<typeof effectiveHeadless>[0];
+    const makeResolved = (headless: boolean) =>
+      ({ headless }) as Parameters<typeof effectiveHeadless>[1];
+
+    it("returns profile.headless:true when global is false", () => {
+      expect(effectiveHeadless(makeProfile(true), makeResolved(false))).toBe(true);
+    });
+
+    it("returns profile.headless:false when global is true", () => {
+      expect(effectiveHeadless(makeProfile(false), makeResolved(true))).toBe(false);
+    });
+
+    it("returns global headless:true when profile.headless is undefined", () => {
+      expect(effectiveHeadless(makeProfile(undefined), makeResolved(true))).toBe(true);
+    });
+
+    it("returns global headless:false when profile.headless is undefined", () => {
+      expect(effectiveHeadless(makeProfile(undefined), makeResolved(false))).toBe(false);
+    });
+  });
+
+  it("resolveProfile passes executablePath:undefined when profile has no executablePath", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { work: { cdpPort: 19200, color: "#FF4500" } },
+    });
+    const profile = resolveProfile(resolved, "work");
+    expect(profile?.executablePath).toBeUndefined();
+  });
+
+  it("resolveProfile passes executablePath from profile config", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        custom: { cdpPort: 19201, color: "#FF4500", executablePath: "/opt/chromium/chromium" },
+      },
+    });
+    const profile = resolveProfile(resolved, "custom");
+    expect(profile?.executablePath).toBe("/opt/chromium/chromium");
+  });
+
+  it("resolveProfile trims and normalizes empty executablePath to undefined", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { work: { cdpPort: 19202, color: "#FF4500", executablePath: "  " } },
+    });
+    const profile = resolveProfile(resolved, "work");
+    expect(profile?.executablePath).toBeUndefined();
   });
 });
