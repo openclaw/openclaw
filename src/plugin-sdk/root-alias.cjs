@@ -3,8 +3,12 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
-let monolithicSdk = null;
-let jitiLoader = null;
+const MONOLITHIC_SDK_UNCHECKED = Symbol("monolithic-sdk-unchecked");
+const MONOLITHIC_SDK_UNAVAILABLE = Symbol("monolithic-sdk-unavailable");
+
+let monolithicSdk = MONOLITHIC_SDK_UNCHECKED;
+let legacyJiti = null;
+const legacyModuleCache = new Map();
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -61,38 +65,36 @@ function resolveControlCommandGate(params) {
   return { commandAuthorized, shouldBlock };
 }
 
-function getJiti() {
-  if (jitiLoader) {
-    return jitiLoader;
+function createJitiLoader() {
+  if (legacyJiti) {
+    return legacyJiti;
   }
-
   const { createJiti } = require("jiti");
-  jitiLoader = createJiti(__filename, {
+  legacyJiti = createJiti(__filename, {
     interopDefault: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  return jitiLoader;
+  return legacyJiti;
 }
 
 function loadMonolithicSdk() {
-  if (monolithicSdk) {
-    return monolithicSdk;
+  if (monolithicSdk !== MONOLITHIC_SDK_UNCHECKED) {
+    return monolithicSdk === MONOLITHIC_SDK_UNAVAILABLE ? null : monolithicSdk;
   }
 
-  const jiti = getJiti();
+  monolithicSdk = MONOLITHIC_SDK_UNAVAILABLE;
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
-  if (fs.existsSync(distCandidate)) {
-    try {
-      monolithicSdk = jiti(distCandidate);
-      return monolithicSdk;
-    } catch {
-      // Fall through to source alias if dist is unavailable or stale.
-    }
+  if (!fs.existsSync(distCandidate)) {
+    return null;
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
-  return monolithicSdk;
+  try {
+    monolithicSdk = createJitiLoader()(distCandidate);
+    return monolithicSdk;
+  } catch {
+    return null;
+  }
 }
 
 function tryLoadMonolithicSdk() {
@@ -108,6 +110,51 @@ const fastExports = {
   resolveControlCommandGate,
 };
 
+const legacyExportMap = {
+  isDangerousNameMatchingEnabled: "../config/dangerous-name-matching.js",
+  createAccountListHelpers: "../channels/plugins/account-helpers.js",
+  buildAgentMediaPayload: "./agent-media-payload.js",
+  createReplyPrefixOptions: "../channels/reply-prefix.js",
+  createTypingCallbacks: "../channels/typing.js",
+  logInboundDrop: "../channels/logging.js",
+  logTypingFailure: "../channels/logging.js",
+  buildPendingHistoryContextFromMap: "../auto-reply/reply/history.js",
+  clearHistoryEntriesIfEnabled: "../auto-reply/reply/history.js",
+  recordPendingHistoryEntryIfEnabled: "../auto-reply/reply/history.js",
+  resolveControlCommandGate: "../channels/command-gating.js",
+  resolveDmGroupAccessWithLists: "../security/dm-policy-shared.js",
+  resolveAllowlistProviderRuntimeGroupPolicy: "../config/runtime-group-policy.js",
+  resolveDefaultGroupPolicy: "../config/runtime-group-policy.js",
+  resolveChannelMediaMaxBytes: "../channels/plugins/media-limits.js",
+  warnMissingProviderGroupPolicyFallbackOnce: "../config/runtime-group-policy.js",
+  normalizePluginHttpPath: "../plugins/http-path.js",
+  registerPluginHttpRoute: "../plugins/http-registry.js",
+  DEFAULT_ACCOUNT_ID: "../routing/session-key.js",
+  DEFAULT_GROUP_HISTORY_LIMIT: "../auto-reply/reply/history.js",
+};
+const legacyExportNames = new Set(Object.keys(legacyExportMap));
+
+function loadLegacyModule(specifier) {
+  if (legacyModuleCache.has(specifier)) {
+    return legacyModuleCache.get(specifier);
+  }
+  const loaded = createJitiLoader()(path.resolve(__dirname, specifier));
+  legacyModuleCache.set(specifier, loaded);
+  return loaded;
+}
+
+function loadLegacyExport(prop) {
+  const monolithic = loadMonolithicSdk();
+  if (monolithic) {
+    return monolithic[prop];
+  }
+  const specifier = legacyExportMap[prop];
+  if (!specifier) {
+    return undefined;
+  }
+  return loadLegacyModule(specifier)[prop];
+}
+
 const rootProxy = new Proxy(fastExports, {
   get(target, prop, receiver) {
     if (prop === "__esModule") {
@@ -119,7 +166,11 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return Reflect.get(target, prop, receiver);
     }
-    return loadMonolithicSdk()[prop];
+    if (legacyExportNames.has(prop)) {
+      return loadLegacyExport(prop);
+    }
+    const monolithic = loadMonolithicSdk();
+    return monolithic ? monolithic[prop] : undefined;
   },
   has(target, prop) {
     if (prop === "__esModule" || prop === "default") {
@@ -128,15 +179,22 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return true;
     }
+    if (legacyExportNames.has(prop)) {
+      return true;
+    }
     const monolithic = tryLoadMonolithicSdk();
     return monolithic ? prop in monolithic : false;
   },
   ownKeys(target) {
-    const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
-    // Keep Object.keys/property reflection fast and deterministic.
-    // Only expose monolithic keys if it was already loaded by direct access.
-    if (monolithicSdk) {
-      for (const key of Reflect.ownKeys(monolithicSdk)) {
+    const keys = new Set([
+      ...Reflect.ownKeys(target),
+      ...legacyExportNames,
+      "default",
+      "__esModule",
+    ]);
+    const monolithic = tryLoadMonolithicSdk();
+    if (monolithic) {
+      for (const key of Reflect.ownKeys(monolithic)) {
         keys.add(key);
       }
     }
@@ -162,6 +220,15 @@ const rootProxy = new Proxy(fastExports, {
     const own = Object.getOwnPropertyDescriptor(target, prop);
     if (own) {
       return own;
+    }
+    if (legacyExportNames.has(prop)) {
+      return {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return loadLegacyExport(prop);
+        },
+      };
     }
     const monolithic = tryLoadMonolithicSdk();
     if (!monolithic) {
