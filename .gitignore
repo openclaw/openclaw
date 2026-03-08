@@ -2,6 +2,7 @@ node_modules
 **/node_modules/
 .env
 docker-compose.extra.yml
+docker-compose.override.yml
 dist
 pnpm-lock.yaml
 bun.lock
