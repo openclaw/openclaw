@@ -1,0 +1,91 @@
+{
+  "id": "swiftapi",
+  "name": "SwiftAPI Attestation",
+  "description": "Cryptographic pre-execution attestation for agent tool calls via SwiftAPI trust authority (swiftapi.ai)",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "key": {
+        "type": "string",
+        "description": "SwiftAPI authority key (swiftapi_live_...)"
+      },
+      "baseUrl": {
+        "type": "string",
+        "default": "https://swiftapi.ai",
+        "description": "SwiftAPI authority endpoint"
+      },
+      "failClosed": {
+        "type": "boolean",
+        "default": true,
+        "description": "Block execution if attestation service is unreachable"
+      },
+      "attestTools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Tool names requiring attestation. Empty array or omit to attest all tools."
+      },
+      "bypassTools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Tool names that skip attestation. Default is empty; only bypass explicitly safe tools."
+      },
+      "defaultHumanApproved": {
+        "type": "boolean",
+        "default": false,
+        "description": "Default human approval flag attached to attested actions when not explicitly provided."
+      },
+      "humanApprovedActionTypes": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Action type families that should be tagged as human approved (e.g. message_broadcast, exec_runtime)."
+      },
+      "strictActionTypeMapping": {
+        "type": "boolean",
+        "default": true,
+        "description": "Block tool calls if the plugin cannot safely map them to a canonical SwiftAPI action type."
+      },
+      "attestMessageSending": {
+        "type": "boolean",
+        "default": true,
+        "description": "Also attest outbound message delivery via the message_sending hook."
+      }
+    },
+    "required": ["key"]
+  },
+  "uiHints": {
+    "key": {
+      "label": "Authority Key",
+      "help": "Your SwiftAPI authority key. Get one at getswiftapi.com/request",
+      "sensitive": true
+    },
+    "failClosed": {
+      "label": "Fail Closed",
+      "help": "If enabled, blocks all tool calls when attestation service is unreachable"
+    },
+    "attestTools": {
+      "label": "Attested Tools",
+      "help": "Only these tools require attestation. Leave empty to attest all tools."
+    },
+    "bypassTools": {
+      "label": "Bypassed Tools",
+      "help": "These tools skip attestation. Recommended: keep empty and rely on policy controls."
+    },
+    "defaultHumanApproved": {
+      "label": "Default Human Approval",
+      "help": "Adds human_approved=true/false to attestation payloads when not supplied by tool params."
+    },
+    "humanApprovedActionTypes": {
+      "label": "Human Approved Families",
+      "help": "Canonical action families that should be marked human approved."
+    },
+    "strictActionTypeMapping": {
+      "label": "Strict Mapping",
+      "help": "If enabled, unmapped tool/action combinations are blocked before execution."
+    },
+    "attestMessageSending": {
+      "label": "Attest Message Sending",
+      "help": "If enabled, outbound messages are attested at send time in addition to tool-call attestation."
+    }
+  }
+}
