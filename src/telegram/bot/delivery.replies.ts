@@ -18,6 +18,7 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { trackTelegramRelayMessageOwner } from "../group-bot-relay.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -512,12 +513,24 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-}): Promise<{ delivered: boolean }> {
+}): Promise<{
+  delivered: boolean;
+  deliveredMessages: Array<{
+    messageId: number;
+    text: string;
+    replyToMessageId?: number;
+  }>;
+}> {
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
     deliveredCount: 0,
   };
+  const deliveredMessages: Array<{
+    messageId: number;
+    text: string;
+    replyToMessageId?: number;
+  }> = [];
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
@@ -621,6 +634,20 @@ export async function deliverReplies(params: {
         runtime: params.runtime,
         firstDeliveredMessageId,
       });
+      if (typeof firstDeliveredMessageId === "number") {
+        if (params.accountId) {
+          trackTelegramRelayMessageOwner({
+            chatId: params.chatId,
+            messageId: firstDeliveredMessageId,
+            accountId: params.accountId,
+          });
+        }
+        deliveredMessages.push({
+          messageId: firstDeliveredMessageId,
+          text: contentForSentHook,
+          replyToMessageId: replyToId,
+        });
+      }
 
       if (hasMessageSentHooks) {
         const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
@@ -657,5 +684,5 @@ export async function deliverReplies(params: {
     }
   }
 
-  return { delivered: progress.hasDelivered };
+  return { delivered: progress.hasDelivered, deliveredMessages };
 }

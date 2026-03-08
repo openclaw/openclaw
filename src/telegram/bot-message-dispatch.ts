@@ -31,6 +31,7 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { publishTelegramGroupRelay, readTelegramRelayMeta } from "./group-bot-relay.js";
 import {
   type ArchivedPreview,
   createLaneDeliveryStateTracker,
@@ -161,6 +162,13 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController,
   } = context;
+  const inboundRelayMeta = readTelegramRelayMeta(msg);
+  const relayChainId =
+    inboundRelayMeta?.chainId ??
+    `telegram:${route.accountId}:${chatId}:${msg.message_id ?? msg.date ?? Date.now()}`;
+  const relayChainTurn = inboundRelayMeta?.turn ?? 0;
+  const relayHumanInitiated = inboundRelayMeta?.humanInitiated ?? msg.from?.is_bot !== true;
+  const relayThreadId = threadSpec?.scope === "forum" ? threadSpec.id : undefined;
 
   const draftMaxChars = Math.min(textLimit, 4096);
   const tableMode = resolveMarkdownTableMode({
@@ -457,6 +465,29 @@ export const dispatchTelegramMessage = async ({
     });
     if (result.delivered) {
       deliveryState.markDelivered();
+    }
+    const deliveredMessages = result.deliveredMessages ?? [];
+    if (isGroup && deliveredMessages.length > 0) {
+      for (const deliveredMessage of deliveredMessages) {
+        try {
+          await publishTelegramGroupRelay({
+            sourceAccountId: route.accountId,
+            chatId,
+            messageId: deliveredMessage.messageId,
+            text: deliveredMessage.text,
+            replyToMessageId: deliveredMessage.replyToMessageId,
+            messageThreadId: relayThreadId,
+            isGroup,
+            chain: {
+              chainId: relayChainId,
+              turn: relayChainTurn,
+              humanInitiated: relayHumanInitiated,
+            },
+          });
+        } catch (err) {
+          logVerbose(`telegram relay publish failed: ${String(err)}`);
+        }
+      }
     }
     return result.delivered;
   };
