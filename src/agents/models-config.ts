@@ -144,11 +144,34 @@ async function resolveProvidersForModelsJson(params: {
 }): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir } = params;
   const explicitProviders = cfg.models?.providers ?? {};
+  const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
+
+  // NOTE: resolveImplicitProviders is called even with explicit providers
+  // because it provides built-in catalog enrichment (model capabilities,
+  // context windows, reasoning flags) that mergeProviderModels applies to
+  // explicitly configured providers. Skipping it entirely would break
+  // catalog refresh. A future optimization could split catalog lookup from
+  // network discovery (e.g. Ollama probe) to avoid unnecessary probes.
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
   });
+
+  if (hasExplicitProviders) {
+    // User has explicitly configured providers — strip any implicit-only
+    // providers that were not in the explicit list to avoid unexpected cost
+    // routing and confusing startup errors (e.g. Bedrock discovery from
+    // ambient AWS_PROFILE). Catalog enrichment for explicitly-configured
+    // providers is preserved via the merge above. See #33327.
+    const explicitKeys = new Set(Object.keys(explicitProviders));
+    for (const key of Object.keys(providers)) {
+      if (!explicitKeys.has(key)) {
+        delete providers[key];
+      }
+    }
+    return providers;
+  }
 
   const implicitBedrock = await resolveImplicitBedrockProvider({ agentDir, config: cfg });
   if (implicitBedrock) {
