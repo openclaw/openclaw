@@ -262,11 +262,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         if (!shouldRetry) {
           return undefined;
         }
-        return undefined;
+        // Retry bot creation after backoff
+        return createPollingBot();
       }
     };
 
-    const ensureWebhookCleanup = async (bot: TelegramBot): Promise<"ready" | "retry" | "exit"> => {
+    const ensureWebhookCleanup = async (
+      bot: TelegramBot,
+      signal?: Parameters<(typeof bot)["init"]>[0],
+    ): Promise<"ready" | "retry" | "exit"> => {
       if (webhookCleared) {
         return "ready";
       }
@@ -274,7 +278,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         await withTelegramApiErrorLogging({
           operation: "deleteWebhook",
           runtime: opts.runtime,
-          fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+          fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }, signal),
         });
         webhookCleared = true;
         return "ready";
@@ -402,12 +406,41 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         continue;
       }
 
-      const cleanupState = await ensureWebhookCleanup(bot);
+      // Cast the native AbortSignal to the grammY-compatible type.
+      // grammY re-exports AbortSignal from the `abort-controller` polyfill,
+      // which is structurally identical but nominally incompatible with the
+      // built-in AbortSignal. This mirrors the pattern used in webhook.ts.
+      const grammySignal = opts.abortSignal as Parameters<(typeof bot)["init"]>[0];
+
+      const cleanupState = await ensureWebhookCleanup(bot, grammySignal);
       if (cleanupState === "retry") {
         continue;
       }
       if (cleanupState === "exit") {
         return;
+      }
+
+      // Pre-initialize the bot with abort signal support before handing it
+      // to the grammY runner. The runner calls bot.init() internally but
+      // does not forward the abort signal, so a hanging getMe() would
+      // block indefinitely. Initializing here ensures the runner skips
+      // its own init() call (bot is already initialized) and allows the
+      // abort signal to cancel a stuck getMe() request.
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "getMe",
+          runtime: opts.runtime,
+          fn: () => bot.init(grammySignal),
+        });
+      } catch (err) {
+        const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
+          err,
+          "Telegram bot init failed",
+        );
+        if (!shouldRetry) {
+          return;
+        }
+        continue;
       }
 
       const state = await runPollingCycle(bot);
