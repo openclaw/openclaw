@@ -50,6 +50,9 @@ function resolvePosixShellArgs(shellPath: string): string[] {
   if (shellName === "bash") {
     return ["--noprofile", "--norc", "-c"];
   }
+  if (shellName === "fish") {
+    return ["--no-config", "-c"];
+  }
   return ["-c"];
 }
 
