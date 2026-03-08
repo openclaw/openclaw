@@ -104,8 +104,8 @@ describe("novita model discovery", () => {
       });
       vi.stubGlobal("fetch", successFetch);
 
-      await discoverNovitaModels({ apiKey: "test-key" });
-      await discoverNovitaModels({ apiKey: "test-key" });
+      await discoverNovitaModels({ apiKey: "test-key" }); // pragma: allowlist secret
+      await discoverNovitaModels({ apiKey: "test-key" }); // pragma: allowlist secret
       expect(successFetch).toHaveBeenCalledTimes(1);
 
       const failedFetch = vi.fn().mockResolvedValue({
