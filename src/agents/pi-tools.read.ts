@@ -406,11 +406,15 @@ function mapContainerPathToWorkspaceRoot(params: {
   return path.resolve(params.root, ...relative.split("/").filter(Boolean));
 }
 
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import { checkPathGuardStrict, PathGuardError } from "../security/path-guard.js";
+
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,
   options?: {
     containerWorkdir?: string;
+    policy?: ToolFsPolicy;
   },
 ): AnyAgentTool {
   return {
@@ -427,7 +431,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+
+        if (options?.policy) {
+          await checkPathGuardStrict(sandboxPath, options.policy, root);
+        } else {
+          await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        }
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
@@ -650,7 +659,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
           rootDir: root,
           relativePath: relative,
         });
-        await opened.handle.close().catch(() => {});
+        await opened.handle.close().catch(() => { });
       } catch (error) {
         if (error instanceof SafeOpenError && error.code === "not-found") {
           throw createFsAccessError("ENOENT", absolutePath);
