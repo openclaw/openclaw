@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -21,6 +22,7 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
+import { handleLearnCommand, runLearnForSession } from "./commands-learn.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import {
@@ -194,6 +196,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleModelsCommand,
       handleStopCommand,
       handleCompactCommand,
+      handleLearnCommand,
       handleAbortTrigger,
     ];
   }
@@ -218,6 +221,54 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
         ? boundAcpSessionKey.trim()
         : undefined;
+
+    // Determine which session to learn from (after ACP resolution)
+    // For non-ACP resets, use previousSessionEntry because initSessionState already rotated to fresh session
+    const targetSessionKey = boundAcpKey ?? params.sessionKey;
+    let targetSessionEntry: typeof params.sessionEntry;
+    if (boundAcpKey) {
+      targetSessionEntry = resolveSessionEntryForHookSessionKey(params.sessionStore, boundAcpKey);
+    } else if (params.previousSessionEntry?.sessionId) {
+      targetSessionEntry = params.previousSessionEntry;
+    } else {
+      targetSessionEntry = params.sessionEntry;
+    }
+
+    // Trigger learning before reset/new commands (after ACP target resolution)
+    // Run in background with dedicated lane to avoid blocking user interactions
+    if (targetSessionEntry?.sessionId && targetSessionEntry.sessionFile) {
+      const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
+      runLearnForSession({
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: targetSessionKey,
+        messageChannel: params.command.channel,
+        groupId: targetSessionEntry.groupId,
+        groupChannel: targetSessionEntry.groupChannel,
+        groupSpace: targetSessionEntry.space,
+        spawnedBy: targetSessionEntry.spawnedBy,
+        sessionFile: targetSessionEntry.sessionFile,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: params.cfg,
+        skillsSnapshot: targetSessionEntry.skillsSnapshot,
+        provider: params.provider,
+        model: params.model,
+        thinkLevel,
+        customFocus:
+          "What insights and lessons should be remembered before starting a new session?",
+        senderIsOwner: params.command.senderIsOwner,
+        ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+        lane: "learn",
+      }).then((learnResult) => {
+        if (learnResult.ok) {
+          logVerbose(`Background pre-reset learning completed for session ${targetSessionKey}`);
+        } else {
+          logVerbose(
+            `Background pre-reset learning failed for session ${targetSessionKey}: ${learnResult.message ?? "unknown error"}`,
+          );
+        }
+      });
+    }
     if (boundAcpKey) {
       const resetResult = await resetAcpSessionInPlace({
         cfg: params.cfg,
