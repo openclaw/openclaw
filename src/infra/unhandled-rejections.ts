@@ -51,6 +51,18 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
   "TimeoutError",
 ]);
 
+// SQLite error codes that indicate transient failures (shouldn't crash the gateway)
+// These errors are common during database locks, file permission issues, or temporary I/O problems
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+  "SQLITE_PROTOCOL",
+  "SQLITE_FULL",
+  "SQLITE_ABORT",
+]);
+
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
 
@@ -163,6 +175,11 @@ export function isTransientNetworkError(err: unknown): boolean {
   })) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
+      return true;
+    }
+
+    // Check for transient SQLite errors
+    if (code && TRANSIENT_SQLITE_CODES.has(code)) {
       return true;
     }
 
