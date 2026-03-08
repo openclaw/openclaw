@@ -1,4 +1,5 @@
 import { refreshChat } from "./app-chat.ts";
+import { trackEvent, setTag } from "./analytics.ts";
 import {
   startLogsPolling,
   stopLogsPolling,
@@ -149,6 +150,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 }
 
 export function setTab(host: SettingsHost, next: Tab) {
+  trackEvent("tab_changed", next);
   applyTabSelection(host, next, { refreshPolicy: "always", syncUrl: true });
 }
 

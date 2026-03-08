@@ -1,4 +1,5 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
+import { trackEvent } from "./analytics.ts";
 import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -64,6 +65,7 @@ export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) {
     return;
   }
+  trackEvent("message_aborted");
   host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
 }
@@ -113,6 +115,7 @@ async function sendChatMessageNow(
     host.chatAttachments = opts.previousAttachments;
   }
   if (ok) {
+    trackEvent("message_sent");
     setLastActiveSessionKey(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       host.sessionKey,
