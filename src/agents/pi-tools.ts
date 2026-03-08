@@ -455,8 +455,6 @@ export function createOpenClawCodingTools(options?: {
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
-                    agentWorkspaceMount:
-                      sandbox.workspaceAccess === "ro" ? SANDBOX_AGENT_WORKSPACE_MOUNT : undefined,
                   },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
@@ -466,8 +464,6 @@ export function createOpenClawCodingTools(options?: {
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
-                    agentWorkspaceMount:
-                      sandbox.workspaceAccess === "ro" ? SANDBOX_AGENT_WORKSPACE_MOUNT : undefined,
                   },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
