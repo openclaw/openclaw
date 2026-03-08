@@ -1276,6 +1276,15 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
       Boolean,
     );
     if (recovered.length === 0) {
+      // No pairing store entries — fall back to dmPolicy="pairing" so DMs aren't silently blocked.
+      if (params.account.dmPolicy === "allowlist") {
+        params.account.dmPolicy = "pairing";
+      } else if (dm?.policy === "allowlist") {
+        dm.policy = "pairing";
+      }
+      changes.push(
+        `- ${params.prefix}: dmPolicy="allowlist" with empty allowFrom and no pairing store entries; falling back to dmPolicy="pairing".`,
+      );
       return;
     }
 

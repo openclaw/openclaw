@@ -587,6 +587,32 @@ describe("doctor config flow", () => {
     expect(cfg.channels.telegram.allowFrom).toEqual(["12345"]);
   });
 
+  it('falls back dmPolicy="allowlist" to "pairing" when no pairing store exists on repair', async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            botToken: "fake-token",
+            dmPolicy: "allowlist",
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        telegram: {
+          dmPolicy: string;
+          allowFrom?: string[];
+        };
+      };
+    };
+    expect(cfg.channels.telegram.dmPolicy).toBe("pairing");
+    expect(cfg.channels.telegram.allowFrom).toBeUndefined();
+  });
+
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
