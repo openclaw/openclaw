@@ -361,8 +361,14 @@ function removeMessageThreadIdParam(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
+
 function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramEmptyTextError(err: unknown): boolean {
+  return EMPTY_TEXT_ERR_RE.test(formatErrorMessage(err));
 }
 
 function buildTelegramThreadReplyParams(params: {
@@ -406,12 +412,13 @@ async function withTelegramHtmlParseFallback<T>(params: {
   try {
     return await params.requestHtml(params.label);
   } catch (err) {
-    if (!isTelegramHtmlParseError(err)) {
+    if (!isTelegramHtmlParseError(err) && !isTelegramEmptyTextError(err)) {
       throw err;
     }
     if (params.verbose) {
+      const errorKind = isTelegramEmptyTextError(err) ? "empty text" : "HTML parse";
       sendLogger.warn(
-        `telegram ${params.label} failed with HTML parse error, retrying as plain text: ${formatErrorMessage(
+        `telegram ${params.label} failed with ${errorKind} error, retrying as plain text: ${formatErrorMessage(
           err,
         )}`,
       );
