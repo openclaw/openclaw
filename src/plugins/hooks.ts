@@ -36,6 +36,7 @@ import type {
   PluginHookRegistration,
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
+  PluginHookSessionBeforeEndEvent,
   PluginHookSessionStartEvent,
   PluginHookSubagentContext,
   PluginHookSubagentDeliveryTargetEvent,
@@ -84,6 +85,7 @@ export type {
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
+  PluginHookSessionBeforeEndEvent,
   PluginHookSubagentContext,
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
@@ -678,6 +680,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("subagent_ended", event, ctx);
   }
 
+  /**
+   * Run session_before_end hook.
+   * Runs sequentially to allow async work before session is cleared.
+   */
+  async function runSessionBeforeEnd(
+    event: PluginHookSessionBeforeEndEvent,
+    ctx: PluginHookSessionContext,
+  ): Promise<void> {
+    return runVoidHook("session_before_end", event, ctx);
+  }
+
   // =========================================================================
   // Gateway Hooks
   // =========================================================================
@@ -746,6 +759,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Session hooks
     runSessionStart,
     runSessionEnd,
+    runSessionBeforeEnd,
     runSubagentSpawning,
     runSubagentDeliveryTarget,
     runSubagentSpawned,

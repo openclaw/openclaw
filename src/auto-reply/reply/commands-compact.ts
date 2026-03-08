@@ -12,6 +12,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -68,6 +69,23 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     abortEmbeddedPiRun(sessionId);
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+
+  // Trigger session_before_end hook for manual compaction
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("session_before_end")) {
+    await hookRunner.runSessionBeforeEnd(
+      {
+        sessionId,
+        reason: "compact",
+        messageCount: params.sessionEntry.messageCount ?? 0,
+      },
+      {
+        sessionId,
+        agentId: params.agentId,
+      },
+    );
+  }
+
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
