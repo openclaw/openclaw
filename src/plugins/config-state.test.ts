@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isTestDefaultMemorySlotDisabled,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
@@ -192,5 +193,43 @@ describe("resolveEnableState", () => {
       enabled: false,
       reason: "workspace plugin (disabled by default)",
     });
+  });
+});
+
+describe("isTestDefaultMemorySlotDisabled", () => {
+  it("is false when not in test mode", () => {
+    expect(
+      isTestDefaultMemorySlotDisabled(
+        {},
+        {
+          NODE_ENV: "production",
+          VITEST: undefined,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for explicit VITEST values that are not test booleans", () => {
+    expect(
+      isTestDefaultMemorySlotDisabled(
+        {},
+        {
+          NODE_ENV: "production",
+          VITEST: "enabled",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for recognized test mode via VITEST", () => {
+    expect(
+      isTestDefaultMemorySlotDisabled(
+        {},
+        {
+          NODE_ENV: "production",
+          VITEST: "1",
+        },
+      ),
+    ).toBe(true);
   });
 });
