@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **OpenClaw Instagram** — Instagram channel plugin for OpenClaw, powered by `instagram-cli-4llm` for DMs and group threads.
+  npm: `@rylena/openclaw-instagram`
+  repo: `https://github.com/rylena/openclaw-instagram`
+  install: `openclaw plugins install @rylena/openclaw-instagram`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`

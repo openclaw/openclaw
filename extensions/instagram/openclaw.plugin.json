@@ -1,0 +1,9 @@
+{
+  "id": "instagram",
+  "channels": ["instagram"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
