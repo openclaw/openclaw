@@ -6,6 +6,7 @@ export type MatrixResolvedConfig = {
   deviceName?: string;
   initialSyncLimit?: number;
   encryption?: boolean;
+  recoveryKey?: string;
 };
 
 /**
@@ -22,6 +23,7 @@ export type MatrixAuth = {
   deviceName?: string;
   initialSyncLimit?: number;
   encryption?: boolean;
+  recoveryKey?: string;
 };
 
 export type MatrixStoragePaths = {

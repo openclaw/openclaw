@@ -102,6 +102,7 @@ E2EE config (end to end encryption enabled):
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
       encryption: true,
+      recoveryKey: { source: "env", provider: "default", id: "MATRIX_RECOVERY_KEY" },
       dm: { policy: "pairing" },
     },
   },
@@ -116,8 +117,6 @@ Enable with `channels.matrix.encryption: true`:
 
 - If the crypto module loads, encrypted rooms are decrypted automatically.
 - Outbound media is encrypted when sending to encrypted rooms.
-- On first connection, OpenClaw requests device verification from your other sessions.
-- Verify the device in another Matrix client (Element, etc.) to enable key sharing.
 - If the crypto module cannot be loaded, E2EE is disabled and encrypted rooms will not decrypt;
   OpenClaw logs a warning.
 - If you see missing crypto module errors (for example, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -131,10 +130,49 @@ Crypto state is stored per account + access token in
 If the access token (device) changes, a new store is created and the bot must be
 re-verified for encrypted rooms.
 
-**Device verification:**
-When E2EE is enabled, the bot will request verification from your other sessions on startup.
-Open Element (or another client) and approve the verification request to establish trust.
-Once verified, the bot can decrypt messages in encrypted rooms.
+**Automatic device verification via recovery key:**
+Set `channels.matrix.recoveryKey` to your Matrix recovery key and OpenClaw will automatically
+cross-sign its own device at startup — no interactive verification needed. The device will
+appear as **Verified** in other Matrix clients.
+
+To get your recovery key: log into Element (or any Matrix client that supports cross-signing)
+as the bot account and complete any cross-signing or secure backup setup it prompts you with.
+Save the recovery key phrase it generates — that is the value to use here.
+
+Store the key in an environment variable to avoid putting it in plain config:
+
+```bash
+MATRIX_RECOVERY_KEY="EsTc LdvM MrJj zsCE DLbK Pjgs DcVT sj8p nRV2 EW5r"
+```
+
+Then reference it from config:
+
+```json5
+{
+  channels: {
+    matrix: {
+      encryption: true,
+      recoveryKey: "${MATRIX_RECOVERY_KEY}",
+    },
+  },
+}
+```
+
+Or directly in config (not recommended — treat the recovery key like a password):
+
+```json5
+{
+  channels: {
+    matrix: {
+      encryption: true,
+      recoveryKey: "EsTc LdvM MrJj zsCE DLbK Pjgs DcVT sj8p nRV2 EW5r",
+    },
+  },
+}
+```
+
+If `recoveryKey` is not configured, the device will show as unverified in other clients until
+manually verified.
 
 ## Multi-account
 
@@ -284,6 +322,7 @@ Provider options:
 - `channels.matrix.password`: password for login (token stored).
 - `channels.matrix.deviceName`: device display name.
 - `channels.matrix.encryption`: enable E2EE (default: false).
+- `channels.matrix.recoveryKey`: Matrix recovery key phrase for automatic cross-signing at startup. Supports SecretRef (env var recommended).
 - `channels.matrix.initialSyncLimit`: initial sync limit.
 - `channels.matrix.threadReplies`: `off | inbound | always` (default: inbound).
 - `channels.matrix.textChunkLimit`: outbound text chunk size (chars).

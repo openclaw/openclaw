@@ -19,6 +19,7 @@ import {
   resolveSharedMatrixClient,
   stopSharedClientForAccount,
 } from "../client.js";
+import { bootstrapCrossSigningFromRecoveryKey } from "../client/cross-signing.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
@@ -378,21 +379,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // @vector-im/matrix-bot-sdk client is already started via resolveSharedMatrixClient
   logger.info(`matrix: logged in as ${auth.userId}`);
 
-  // If E2EE is enabled, trigger device verification
-  if (auth.encryption && client.crypto) {
-    try {
-      // Request verification from other sessions
-      const verificationRequest = await (
-        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
-      ).requestOwnUserVerification?.();
-      if (verificationRequest) {
-        logger.info("matrix: device verification requested - please verify in another client");
-      }
-    } catch (err) {
-      logger.debug?.("Device verification request failed (may already be verified)", {
-        error: String(err),
-      });
-    }
+  // If E2EE is enabled and a recovery key is configured, bootstrap cross-signing so
+  // the bot's device shows as verified without any interactive emoji/QR flow.
+  if (auth.encryption && auth.recoveryKey) {
+    await bootstrapCrossSigningFromRecoveryKey({
+      homeserver: auth.homeserver,
+      userId: auth.userId,
+      accessToken: auth.accessToken,
+      recoveryKey: auth.recoveryKey,
+      logger,
+    });
   }
 
   await new Promise<void>((resolve) => {
