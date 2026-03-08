@@ -55,7 +55,9 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
 
     expect(resolved.config.allowFrom).toBeUndefined();
   });
+});
 
+describe("resolveDiscordMaxLinesPerMessage", () => {
   it("falls back to merged root discord maxLinesPerMessage when runtime config omits it", () => {
     const resolved = resolveDiscordMaxLinesPerMessage({
       cfg: {
