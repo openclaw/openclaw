@@ -45,7 +45,7 @@ export async function dispatchInboundMessage(params: {
   // Auto-prefetch: run memory_search and inject results before the LLM sees the message.
   // Hooked here (shared dispatch) so it works for all channels, not just webchat.
   const message = finalized.BodyStripped ?? finalized.Body ?? "";
-  const sessionKey = typeof finalized.sessionKey === "string" ? finalized.sessionKey : "main";
+  const sessionKey = typeof finalized.SessionKey === "string" ? finalized.SessionKey : "main";
   const prefetch = await runMemoryPrefetch({ message, sessionKey, cfg: params.cfg });
   const mergedReplyOptions = prefetch.context
     ? {
