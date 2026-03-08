@@ -3,7 +3,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -83,7 +83,7 @@ function inferProviderFromSessionKey(params: {
   if (candidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  return normalizeAnyChannelId(candidate) ?? undefined;
+  return normalizeChatChannelId(candidate) ?? normalizeAnyChannelId(candidate) ?? undefined;
 }
 
 function resolveActiveChannel(params: {
