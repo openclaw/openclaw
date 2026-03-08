@@ -214,7 +214,7 @@ export async function registerApnsToken(params: {
     throw new Error("topic required");
   }
   if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
+    throw new Error("Invalid APNs token");
   }
 
   return await withLock(async () => {
@@ -394,7 +394,7 @@ function resolveApnsSendContext(params: { auth: ApnsAuthConfig; registration: Ap
 } {
   const token = normalizeApnsToken(params.registration.token);
   if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
+    throw new Error("Invalid APNs token");
   }
   const topic = normalizeTopic(params.registration.topic);
   if (!topic) {
