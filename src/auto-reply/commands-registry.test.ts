@@ -248,6 +248,57 @@ describe("commands registry", () => {
     ).toBe(true);
   });
 
+  it("textForce disables text commands on non-native surfaces", () => {
+    const cfg = { commands: { text: false, textForce: true } };
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "whatsapp",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "webchat",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+  });
+
+  it("textForce still allows native command source", () => {
+    const cfg = { commands: { text: false, textForce: true } };
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "whatsapp",
+        commandSource: "native",
+      }),
+    ).toBe(true);
+  });
+
+  it("textForce without text:false has no effect", () => {
+    const cfg = { commands: { textForce: true } };
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "whatsapp",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+  });
+
+  it("text:false without textForce preserves backward compat on non-native surfaces", () => {
+    const cfg = { commands: { text: false } };
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "whatsapp",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+  });
+
   it("normalizes telegram-style command mentions for the current bot", () => {
     expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
     expect(

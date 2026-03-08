@@ -33,6 +33,7 @@ They run immediately, are stripped before the model sees the message, and the re
     native: "auto",
     nativeSkills: "auto",
     text: true,
+    textForce: false,
     bash: false,
     bashForegroundMs: 2000,
     config: false,
@@ -48,7 +49,8 @@ They run immediately, are stripped before the model sees the message, and the re
 ```
 
 - `commands.text` (default `true`) enables parsing `/...` in chat messages.
-  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/MS Teams), text commands still work even if you set this to `false`.
+  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/MS Teams), text commands still work even if you set this to `false` — unless `commands.textForce` is also enabled.
+- `commands.textForce` (default `false`) enforces `commands.text: false` on **all** surfaces, including those without native command support. Use this in multi-tenant or white-label deployments where end users should not have access to `/model`, `/bash`, `/config`, or `/debug`. Native command sources (e.g., Discord slash commands) are always handled regardless of this setting.
 - `commands.native` (default `"auto"`) registers native commands.
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
   - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).

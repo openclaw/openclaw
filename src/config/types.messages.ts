@@ -141,6 +141,8 @@ export type CommandsConfig = {
   nativeSkills?: NativeCommandsSetting;
   /** Enable text command parsing (default: true). */
   text?: boolean;
+  /** When true, `commands.text: false` is enforced on ALL surfaces including those without native command support (default: false). */
+  textForce?: boolean;
   /** Allow bash chat command (`!`; `/bash` alias) (default: false). */
   bash?: boolean;
   /** How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately). */

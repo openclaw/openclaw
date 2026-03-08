@@ -478,6 +478,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
   "commands.text": "Text Commands",
+  "commands.textForce": "Enforce Text Command Disabling",
   "commands.bash": "Allow Bash Chat Command",
   "commands.bashForegroundMs": "Bash Foreground Window (ms)",
   "commands.config": "Allow /config",
