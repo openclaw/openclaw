@@ -46,7 +46,7 @@ describe("web_search perplexity compatibility routing", () => {
       { PERPLEXITY_API_KEY: undefined, OPENROUTER_API_KEY: "sk-or-v1-test" }, // pragma: allowlist secret
       () => {
         expect(resolvePerplexityApiKey(undefined)).toEqual({
-          apiKey: "sk-or-v1-test",
+          apiKey: "sk-or-v1-test", // pragma: allowlist secret
           source: "openrouter_env",
         });
         expect(resolvePerplexityTransport(undefined)).toMatchObject({
@@ -77,7 +77,7 @@ describe("web_search perplexity compatibility routing", () => {
     );
     expect(
       resolvePerplexityTransport({
-        apiKey: "pplx-test",
+        apiKey: "pplx-test", // pragma: allowlist secret
         model: "perplexity/sonar-reasoning-pro",
       }),
     ).toMatchObject({
