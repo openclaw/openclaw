@@ -103,9 +103,20 @@ export type ZaloSendPhotoParams = {
   caption?: string;
 };
 
+export type ZaloSendChatActionParams = {
+  chat_id: string;
+  action: "typing" | "upload_photo";
+};
+
 export type ZaloSetWebhookParams = {
   url: string;
   secret_token: string;
+};
+
+export type ZaloWebhookInfo = {
+  url?: string;
+  updated_at?: number;
+  has_custom_certificate?: boolean;
 };
 
 export type ZaloGetUpdatesParams = {
@@ -291,6 +302,21 @@ export async function sendPhoto(
 }
 
 /**
+ * Send a temporary chat action such as typing.
+ */
+export async function sendChatAction(
+  token: string,
+  params: ZaloSendChatActionParams,
+  fetcher?: ZaloFetch,
+  timeoutMs?: number,
+): Promise<ZaloApiResponse<boolean>> {
+  return callZaloApi<boolean>("sendChatAction", token, params, {
+    timeoutMs,
+    fetch: fetcher,
+  });
+}
+
+/**
  * Get updates using long polling (dev/testing only)
  * Note: Zalo returns a single update per call, not an array like Telegram
  */
@@ -317,8 +343,8 @@ export async function setWebhook(
   token: string,
   params: ZaloSetWebhookParams,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<boolean>> {
-  return callZaloApi<boolean>("setWebhook", token, params, { fetch: fetcher });
+): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
+  return callZaloApi<ZaloWebhookInfo>("setWebhook", token, params, { fetch: fetcher });
 }
 
 /**
@@ -327,8 +353,12 @@ export async function setWebhook(
 export async function deleteWebhook(
   token: string,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<boolean>> {
-  return callZaloApi<boolean>("deleteWebhook", token, undefined, { fetch: fetcher });
+  timeoutMs?: number,
+): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
+  return callZaloApi<ZaloWebhookInfo>("deleteWebhook", token, undefined, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -337,6 +367,6 @@ export async function deleteWebhook(
 export async function getWebhookInfo(
   token: string,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<{ url?: string; has_custom_certificate?: boolean }>> {
-  return callZaloApi("getWebhookInfo", token, undefined, { fetch: fetcher });
+): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
+  return callZaloApi<ZaloWebhookInfo>("getWebhookInfo", token, undefined, { fetch: fetcher });
 }
