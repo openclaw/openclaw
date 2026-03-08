@@ -113,8 +113,11 @@ export async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ token?: string; password?: string }> {
+  const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
+  const configForResolution =
+    mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
   return await resolveGatewayConnectionAuth({
-    config: params.config,
+    config: configForResolution,
     env: params.env,
     includeLegacyEnv: false,
     localTokenPrecedence: "env-first",
@@ -122,6 +125,20 @@ export async function resolveNodeHostGatewayCredentials(params: {
     remoteTokenPrecedence: "env-first",
     remotePasswordPrecedence: "env-first",
   });
+}
+
+function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
+  if (!config.gateway?.remote?.token && !config.gateway?.remote?.password) {
+    return config;
+  }
+  const nextConfig = structuredClone(config);
+  if (nextConfig.gateway?.remote) {
+    // Local node-host must not inherit gateway.remote.* auth material, which can
+    // suppress GatewayClient device-token fallback and cause local token mismatches.
+    nextConfig.gateway.remote.token = undefined;
+    nextConfig.gateway.remote.password = undefined;
+  }
+  return nextConfig;
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
