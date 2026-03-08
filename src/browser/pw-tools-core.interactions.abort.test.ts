@@ -72,4 +72,45 @@ describe("clickViaPlaywright (abort)", () => {
       }),
     );
   });
+
+  it("rejects immediately on abort even if disconnect cleanup is still pending", async () => {
+    const ctrl = new AbortController();
+    let resolveStarted!: () => void;
+    let resolveClick!: () => void;
+    let resolveDisconnect!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const pendingClick = new Promise<void>((resolve) => {
+      resolveClick = resolve;
+    });
+    forceDisconnectPlaywrightForTarget.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveDisconnect = resolve;
+        }),
+    );
+
+    page = {};
+    locator = {
+      click: vi.fn(() => {
+        resolveStarted();
+        return pendingClick;
+      }),
+    };
+
+    const promise = clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "page-1",
+      ref: "e1",
+      signal: ctrl.signal,
+    });
+
+    await started;
+    ctrl.abort(new Error("abort should win"));
+    resolveClick();
+
+    await expect(promise).rejects.toThrow("abort should win");
+    resolveDisconnect();
+  });
 });

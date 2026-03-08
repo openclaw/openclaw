@@ -32,8 +32,8 @@ async function runAbortablePlaywrightAction<T>(
   }
 
   const abortReason = () => signal.reason ?? new Error("aborted");
-  const disconnect = async () => {
-    await forceDisconnectPlaywrightForTarget({
+  const disconnect = () => {
+    void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
       reason: "abort browser action",
@@ -41,7 +41,7 @@ async function runAbortablePlaywrightAction<T>(
   };
 
   if (signal.aborted) {
-    await disconnect();
+    disconnect();
     throw abortReason();
   }
 
@@ -54,7 +54,8 @@ async function runAbortablePlaywrightAction<T>(
         return;
       }
       abortTriggered = true;
-      void disconnect().finally(() => reject(abortReason()));
+      disconnect();
+      reject(abortReason());
     };
     signal.addEventListener("abort", abortListener, { once: true });
   });

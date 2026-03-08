@@ -62,4 +62,43 @@ describe("snapshotAiViaPlaywright (abort)", () => {
       }),
     );
   });
+
+  it("rejects immediately on abort even if snapshot disconnect cleanup is still pending", async () => {
+    const ctrl = new AbortController();
+    let resolveStarted!: () => void;
+    let resolveSnapshot!: () => void;
+    let resolveDisconnect!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const pendingSnapshot = new Promise((resolve) => {
+      resolveSnapshot = () => resolve(undefined);
+    });
+    forceDisconnectPlaywrightForTarget.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveDisconnect = resolve;
+        }),
+    );
+
+    page = {
+      _snapshotForAI: vi.fn(() => {
+        resolveStarted();
+        return pendingSnapshot;
+      }),
+    };
+
+    const promise = snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "page-1",
+      signal: ctrl.signal,
+    });
+
+    await started;
+    ctrl.abort(new Error("snapshot abort should win"));
+    resolveSnapshot();
+
+    await expect(promise).rejects.toThrow("snapshot abort should win");
+    resolveDisconnect();
+  });
 });

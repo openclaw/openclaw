@@ -36,8 +36,8 @@ async function runAbortableSnapshotWork<T>(
   }
 
   const abortReason = () => signal.reason ?? new Error("aborted");
-  const disconnect = async () => {
-    await forceDisconnectPlaywrightForTarget({
+  const disconnect = () => {
+    void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
       reason: "abort browser snapshot",
@@ -45,7 +45,7 @@ async function runAbortableSnapshotWork<T>(
   };
 
   if (signal.aborted) {
-    await disconnect();
+    disconnect();
     throw abortReason();
   }
 
@@ -58,7 +58,8 @@ async function runAbortableSnapshotWork<T>(
         return;
       }
       abortTriggered = true;
-      void disconnect().finally(() => reject(abortReason()));
+      disconnect();
+      reject(abortReason());
     };
     signal.addEventListener("abort", abortListener, { once: true });
   });
