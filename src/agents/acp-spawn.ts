@@ -177,7 +177,7 @@ function formatAcpBackendAvailabilityError(params: {
     return null;
   }
 
-  const configuredBackend = params.cfg.acp?.backend?.trim() || "acpx";
+  const configuredBackend = params.cfg.acp?.backend?.trim().toLowerCase() || "acpx";
   const backendPluginEnabled = params.cfg.plugins?.entries?.[configuredBackend]?.enabled === true;
   const backendHint = backendPluginEnabled
     ? `backend "${configuredBackend}" is enabled in config, so this likely indicates runtime startup/health failure.`

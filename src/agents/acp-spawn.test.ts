@@ -461,6 +461,44 @@ describe("spawnAcpDirect", () => {
     expect(result.error).toContain("runtime startup/health failure");
   });
 
+  it("normalizes backend id for diagnostics when backend is unavailable", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        backend: "  CuStOm-Backend  ",
+      },
+      plugins: {
+        entries: {
+          "custom-backend": {
+            enabled: true,
+          },
+        },
+      },
+    };
+    hoisted.initializeSessionMock.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNAVAILABLE",
+        "ACP runtime backend is currently unavailable.",
+      ),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("configured backend=custom-backend");
+    expect(result.error).toContain("runtime startup/health failure");
+    expect(result.error).not.toContain("plugins.entries.  CuStOm-Backend  .enabled");
+  });
+
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
     hoisted.state.cfg = {
       ...hoisted.state.cfg,
