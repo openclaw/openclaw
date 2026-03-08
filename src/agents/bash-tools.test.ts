@@ -575,6 +575,57 @@ describe("exec notifyOnExit", () => {
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
 });
 
+describe("exec backgroundMode", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it('defaults to poll mode with "Use process" follow-up text', async () => {
+    const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+    const result = await executeExecCommand(tool, longDelayCmd, { background: true });
+    const text = readTextContent(result.content) ?? "";
+    expect(text).toContain("Use process");
+    expect(text).not.toContain("automatically notified");
+  });
+
+  it('uses poll mode follow-up text when backgroundMode is "poll"', async () => {
+    const tool = createTestExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      backgroundMode: "poll",
+    });
+    const result = await executeExecCommand(tool, longDelayCmd, { background: true });
+    const text = readTextContent(result.content) ?? "";
+    expect(text).toContain("Use process");
+    expect(text).not.toContain("automatically notified");
+  });
+
+  it('uses notify mode follow-up text when backgroundMode is "notify" and notifyOnExit is true', async () => {
+    const tool = createTestExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      backgroundMode: "notify",
+      notifyOnExit: true,
+    });
+    const result = await executeExecCommand(tool, longDelayCmd, { background: true });
+    const text = readTextContent(result.content) ?? "";
+    expect(text).toContain("automatically notified");
+    expect(text).toContain("Do not poll");
+    expect(text).not.toContain("Use process");
+  });
+
+  it('falls back to poll mode when backgroundMode is "notify" but notifyOnExit is false', async () => {
+    const tool = createTestExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      backgroundMode: "notify",
+      notifyOnExit: false,
+    });
+    const result = await executeExecCommand(tool, longDelayCmd, { background: true });
+    const text = readTextContent(result.content) ?? "";
+    expect(text).toContain("Use process");
+    expect(text).not.toContain("automatically notified");
+  });
+});
+
 describe("exec PATH handling", () => {
   useCapturedEnv([...PATH_SHELL_ENV_KEYS], applyDefaultShellEnv);
 
