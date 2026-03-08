@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "./runtime.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -64,13 +64,16 @@ export function resolvePluginTools(params: {
   // like bound ports, causing EADDRINUSE on stateful plugins.
   // Note: the active registry uses the gateway's startup workspaceDir;
   // per-session workspaceDir differences are not expected in gateway mode.
+  // Version > 0 means registry was explicitly activated (gateway startup or
+  // prior loadOpenClawPlugins call); version 0 = default empty placeholder.
   const registry =
-    getActivePluginRegistry() ??
-    loadOpenClawPlugins({
-      config: effectiveConfig,
-      workspaceDir: params.context.workspaceDir,
-      logger: createPluginLoaderLogger(log),
-    });
+    getActivePluginRegistryVersion() > 0
+      ? getActivePluginRegistry()!
+      : loadOpenClawPlugins({
+          config: effectiveConfig,
+          workspaceDir: params.context.workspaceDir,
+          logger: createPluginLoaderLogger(log),
+        });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();

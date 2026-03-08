@@ -9,8 +9,9 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
-const { getActivePluginRegistryMock } = vi.hoisted(() => ({
+const { getActivePluginRegistryMock, getActivePluginRegistryVersionMock } = vi.hoisted(() => ({
   getActivePluginRegistryMock: vi.fn(() => null as unknown),
+  getActivePluginRegistryVersionMock: vi.fn(() => 0),
 }));
 
 vi.mock("./loader.js", () => ({
@@ -19,7 +20,11 @@ vi.mock("./loader.js", () => ({
 
 vi.mock("./runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("./runtime.js")>();
-  return { ...orig, getActivePluginRegistry: getActivePluginRegistryMock };
+  return {
+    ...orig,
+    getActivePluginRegistry: getActivePluginRegistryMock,
+    getActivePluginRegistryVersion: getActivePluginRegistryVersionMock,
+  };
 });
 
 function makeTool(name: string) {
@@ -101,6 +106,7 @@ describe("resolvePluginTools optional tools", () => {
   beforeEach(() => {
     loadOpenClawPluginsMock.mockClear();
     getActivePluginRegistryMock.mockReturnValue(null);
+    getActivePluginRegistryVersionMock.mockReturnValue(0);
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -175,6 +181,7 @@ describe("resolvePluginTools optional tools", () => {
       ],
       diagnostics: [],
     };
+    getActivePluginRegistryVersionMock.mockReturnValue(1);
     getActivePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools({
