@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
+  resolveGatewayStateDir: vi.fn(),
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -20,6 +21,10 @@ vi.mock("../daemon/program-args.js", () => ({
 
 vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
+}));
+
+vi.mock("../daemon/paths.js", () => ({
+  resolveGatewayStateDir: mocks.resolveGatewayStateDir,
 }));
 
 import {
@@ -52,12 +57,12 @@ function mockNodeGatewayPlanFixture(
   } = {},
 ) {
   const {
-    workingDirectory = "/Users/me",
     version = "22.0.0",
     supported = true,
     warning,
     serviceEnvironment = { OPENCLAW_PORT: "3000" },
   } = params;
+  const workingDirectory = "workingDirectory" in params ? params.workingDirectory : "/Users/me";
   mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
   mocks.resolveGatewayProgramArguments.mockResolvedValue({
     programArguments: ["node", "gateway"],
@@ -70,6 +75,7 @@ function mockNodeGatewayPlanFixture(
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
+  mocks.resolveGatewayStateDir.mockReturnValue("/Users/me/.openclaw");
 }
 
 describe("buildGatewayInstallPlan", () => {
@@ -100,7 +106,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: "/Users/me" },
       port: 3000,
       runtime: "node",
       warn,
@@ -108,6 +114,31 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(warn).toHaveBeenCalledWith("Node too old", "Gateway runtime");
     expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
+  });
+
+  it("defaults workingDirectory to the state dir when not provided by program args", async () => {
+    mockNodeGatewayPlanFixture({ workingDirectory: undefined });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: "/Users/me" },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.workingDirectory).toBe("/Users/me/.openclaw");
+    expect(mocks.resolveGatewayStateDir).toHaveBeenCalledWith({ HOME: "/Users/me" });
+  });
+
+  it("preserves explicit workingDirectory from program args", async () => {
+    mockNodeGatewayPlanFixture({ workingDirectory: "/custom/dir" });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: "/Users/me" },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.workingDirectory).toBe("/custom/dir");
   });
 
   it("merges config env vars into the environment", async () => {
