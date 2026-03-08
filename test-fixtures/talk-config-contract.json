@@ -1,0 +1,88 @@
+{
+  "selectionCases": [
+    {
+      "id": "canonical_resolved_wins",
+      "defaultProvider": "elevenlabs",
+      "payloadValid": true,
+      "expectedSelection": {
+        "provider": "elevenlabs",
+        "normalizedPayload": true,
+        "voiceId": "voice-resolved"
+      },
+      "talk": {
+        "resolved": {
+          "provider": "elevenlabs",
+          "config": {
+            "voiceId": "voice-resolved"
+          }
+        },
+        "provider": "elevenlabs",
+        "providers": {
+          "elevenlabs": {
+            "voiceId": "voice-normalized"
+          }
+        },
+        "voiceId": "voice-legacy"
+      }
+    },
+    {
+      "id": "normalized_missing_resolved",
+      "defaultProvider": "elevenlabs",
+      "payloadValid": false,
+      "expectedSelection": null,
+      "talk": {
+        "provider": "elevenlabs",
+        "providers": {
+          "elevenlabs": {
+            "voiceId": "voice-normalized"
+          }
+        },
+        "voiceId": "voice-legacy"
+      }
+    },
+    {
+      "id": "provider_mismatch_missing_resolved",
+      "defaultProvider": "elevenlabs",
+      "payloadValid": false,
+      "expectedSelection": null,
+      "talk": {
+        "provider": "acme",
+        "providers": {
+          "elevenlabs": {
+            "voiceId": "voice-normalized"
+          }
+        }
+      }
+    },
+    {
+      "id": "ambiguous_providers_missing_resolved",
+      "defaultProvider": "elevenlabs",
+      "payloadValid": false,
+      "expectedSelection": null,
+      "talk": {
+        "providers": {
+          "acme": {
+            "voiceId": "voice-acme"
+          },
+          "elevenlabs": {
+            "voiceId": "voice-normalized"
+          }
+        }
+      }
+    },
+    {
+      "id": "legacy_payload_fallback",
+      "defaultProvider": "elevenlabs",
+      "payloadValid": true,
+      "expectedSelection": {
+        "provider": "elevenlabs",
+        "normalizedPayload": false,
+        "voiceId": "voice-legacy"
+      },
+      "talk": {
+        "voiceId": "voice-legacy",
+        "apiKey": "legacy-key"
+      }
+    }
+  ]
+}
