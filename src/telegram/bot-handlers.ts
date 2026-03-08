@@ -515,7 +515,7 @@ export const registerTelegramHandlers = ({
       topicConfig,
       msg,
       botUsername,
-      ctx,
+      _ctx,
       bot,
     } = params;
 
@@ -531,7 +531,7 @@ export const registerTelegramHandlers = ({
             },
           );
         } catch (err) {
-          logVerbose(`Failed to send auth hint: ${err}`);
+          logVerbose(`Failed to send auth hint: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     };
