@@ -75,6 +75,7 @@ export async function runReplyAgent(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  defaultProvider: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
@@ -106,6 +107,7 @@ export async function runReplyAgent(params: {
     sessionStore,
     sessionKey,
     storePath,
+    defaultProvider,
     defaultModel,
     agentCfgContextTokens,
     resolvedVerboseLevel,
@@ -231,6 +233,7 @@ export async function runReplyAgent(params: {
     sessionCtx,
     opts,
     defaultModel,
+    defaultProvider,
     agentCfgContextTokens,
     resolvedVerboseLevel,
     sessionEntry: activeSessionEntry,
@@ -457,7 +460,7 @@ export async function runReplyAgent(params: {
       : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
-      lookupContextTokens(modelUsed) ??
+      lookupContextTokens(modelUsed, providerUsed) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 

@@ -8,23 +8,27 @@ import {
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the smallest context window when duplicate model ids are discovered", () => {
+  it("keeps the largest context window when duplicate model ids are discovered across providers", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
       models: [
-        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        { id: "gemini-3-flash", provider: "google", contextWindow: 1_000_000 },
+        { id: "github-copilot/gemini-3-flash", provider: "github-copilot", contextWindow: 128_000 },
       ],
     });
 
-    expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
+    // Normalized bare key should take the largest value (V4.2)
+    expect(cache.get("gemini-3-flash")).toBe(1_000_000);
+    // Scoped keys should still preserve individual limits
+    expect(cache.get("google::gemini-3-flash")).toBe(1_000_000);
+    expect(cache.get("github-copilot::gemini-3-flash")).toBe(128_000);
   });
 });
 
 describe("applyConfiguredContextWindows", () => {
   it("overrides discovered cache values with explicit models.providers contextWindow", () => {
-    const cache = new Map<string, number>([["anthropic/claude-opus-4-6", 1_000_000]]);
+    const cache = new Map<string, number>([["claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
       modelsConfig: {
@@ -36,7 +40,8 @@ describe("applyConfiguredContextWindows", () => {
       },
     });
 
-    expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
+    expect(cache.get("claude-opus-4-6")).toBe(200_000);
+    expect(cache.get("openrouter::claude-opus-4-6")).toBe(200_000);
   });
 
   it("adds config-only model context windows and ignores invalid entries", () => {
@@ -47,7 +52,7 @@ describe("applyConfiguredContextWindows", () => {
         providers: {
           openrouter: {
             models: [
-              { id: "custom/model", contextWindow: 150_000 },
+              { id: "custom/model-name", contextWindow: 150_000 },
               { id: "bad/model", contextWindow: 0 },
               { id: "", contextWindow: 300_000 },
             ],
@@ -56,7 +61,8 @@ describe("applyConfiguredContextWindows", () => {
       },
     });
 
-    expect(cache.get("custom/model")).toBe(150_000);
+    expect(cache.get("model-name")).toBe(150_000);
+    expect(cache.get("openrouter::model-name")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
   });
 });
