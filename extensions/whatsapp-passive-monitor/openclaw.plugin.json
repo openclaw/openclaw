@@ -8,19 +8,24 @@
     "additionalProperties": false,
     "properties": {
       "ollamaUrl": {
-        "type": "string"
+        "type": "string",
+        "default": "http://localhost:11434"
       },
       "debounceMs": {
-        "type": "number"
+        "type": "number",
+        "default": 5000
       },
       "dbPath": {
-        "type": "string"
+        "type": "string",
+        "default": "passive/messages.db"
       },
       "outputDir": {
-        "type": "string"
+        "type": "string",
+        "default": "passive"
       },
       "detectMeetings": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       }
     }
   },
