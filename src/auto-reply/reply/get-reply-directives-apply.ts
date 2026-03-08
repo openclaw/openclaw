@@ -156,6 +156,8 @@ export async function applyInlineDirectiveOverrides(params: {
     } = await resolveCurrentDirectiveLevels({
       sessionEntry,
       agentCfg,
+      surface: ctx.Surface,
+      provider: ctx.Provider,
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;

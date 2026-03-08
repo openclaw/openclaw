@@ -970,6 +970,14 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.reasoningDefault":
+    'Global reasoning visibility default: "off", "on", or "stream". When unset, OpenClaw keeps legacy runtime reasoning fallback behavior based on model capability and thinking state.',
+  "agents.defaults.surfaceDefaults":
+    "Optional per-surface UX defaults keyed by normalized surface/provider names (for example tui, discord, webchat). Use this to set different visibility defaults across interfaces without changing model behavior.",
+  "agents.defaults.surfaceDefaults.*.verboseDefault":
+    'Per-surface verbose visibility default: "off", "on", or "full". This applies only when no inline /verbose directive or stored session override is set.',
+  "agents.defaults.surfaceDefaults.*.reasoningDefault":
+    'Per-surface reasoning visibility default: "off", "on", or "stream". Use this to keep reasoning visible on rich surfaces (for example TUI) while keeping chat channels cleaner by default.',
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",

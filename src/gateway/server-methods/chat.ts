@@ -6,6 +6,7 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveSurfaceDirectiveDefaults } from "../../auto-reply/reply/surface-defaults.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -202,6 +203,23 @@ function resolveChatSendOriginatingRoute(params: {
     messageThreadId: routeThreadIdCandidate,
     explicitDeliverRoute: true,
   };
+}
+
+function resolveInternalChatSurface(
+  client?: {
+    mode?: string | null;
+    id?: string | null;
+    displayName?: string | null;
+  } | null,
+): string {
+  const id = client?.id?.trim().toLowerCase();
+  const displayName = client?.displayName?.trim().toLowerCase();
+
+  if (id === "openclaw-tui" || displayName === "openclaw-tui") {
+    return "tui";
+  }
+
+  return INTERNAL_MESSAGE_CHANNEL;
 }
 
 function stripDisallowedChatControlChars(message: string): string {
@@ -702,7 +720,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -756,7 +774,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         catalog,
       });
     }
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const historySurface = resolveInternalChatSurface(client?.connect?.client);
+    const historySurfaceDefaults = resolveSurfaceDirectiveDefaults({
+      agentCfg: cfg.agents?.defaults,
+      surface: historySurface,
+      provider: INTERNAL_MESSAGE_CHANNEL,
+    });
+    const verboseLevel =
+      entry?.verboseLevel ??
+      historySurfaceDefaults.verboseDefault ??
+      cfg.agents?.defaults?.verboseDefault;
     respond(true, {
       sessionKey,
       sessionId,
@@ -973,6 +1000,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const resolvedSurface = resolveInternalChatSurface(clientInfo);
       const {
         originatingChannel,
         originatingTo,
@@ -1000,7 +1028,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         CommandBody: commandBody,
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
+        Surface: resolvedSurface,
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
         ExplicitDeliverRoute: explicitDeliverRoute,

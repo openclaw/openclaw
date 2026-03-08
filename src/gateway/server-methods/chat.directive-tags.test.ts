@@ -648,6 +648,37 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send marks TUI client sends with surface=tui", async () => {
+    createTranscriptFixture("openclaw-chat-send-surface-tui-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-surface-tui",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: "gateway-client",
+            displayName: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        Provider: "webchat",
+        Surface: "tui",
+        OriginatingChannel: "webchat",
+      }),
+    );
+  });
+
   it("chat.send inherits external delivery context for CLI clients on configured main sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-cli-routes-");
     mockState.mainSessionKey = "work";
