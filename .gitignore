@@ -88,6 +88,7 @@ USER.md
 
 # local tooling
 .serena/
+scripts/committer.ps1
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
