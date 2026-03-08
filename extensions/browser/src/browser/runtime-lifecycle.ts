@@ -4,6 +4,7 @@ import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
+import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
@@ -25,6 +26,7 @@ export async function createBrowserRuntimeState(params: {
     resolved: params.resolved,
     onWarn: params.onWarn,
   });
+  state.stopUnhandledRejectionHandler = registerBrowserUnhandledRejectionHandler();
 
   return state;
 }
@@ -39,6 +41,8 @@ export async function stopBrowserRuntime(params: {
   if (!params.current) {
     return;
   }
+  params.current.stopUnhandledRejectionHandler?.();
+  params.current.stopUnhandledRejectionHandler = undefined;
   params.current.stopTrackedTabCleanup?.();
 
   await stopKnownBrowserProfiles({
