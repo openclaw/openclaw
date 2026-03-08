@@ -190,6 +190,36 @@ describe("inspectGatewayRestart", () => {
     );
   });
 
+  it("uses provided env auth credentials for gateway probe", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ commandLine: "" }],
+      hints: [],
+    });
+    classifyPortListener.mockReturnValue("unknown");
+    probeGateway.mockResolvedValue({ ok: true, close: null });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    await inspectGatewayRestart({
+      service,
+      port: 18789,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: " tok ",
+        OPENCLAW_GATEWAY_PASSWORD: " pw ",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: { token: "tok", password: "pw" },
+      }),
+    );
+  });
   it("treats auth-closed probe as healthy gateway reachability", async () => {
     const snapshot = await inspectAmbiguousOwnershipWithProbe({
       ok: false,
