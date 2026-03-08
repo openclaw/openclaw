@@ -30,7 +30,7 @@ describe("talk.config contract fixtures", () => {
       if (fixture.payloadValid) {
         expect(validateTalkConfigResult(payload)).toBe(true);
       } else {
-        expect((payload.config.talk as { resolved?: unknown }).resolved).toBeUndefined();
+        expect(validateTalkConfigResult(payload)).toBe(false);
       }
 
       if (!fixture.expectedSelection) {
