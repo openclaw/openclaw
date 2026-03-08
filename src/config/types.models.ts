@@ -57,6 +57,7 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  [key: string]: unknown;
 };
 
 export type BedrockDiscoveryConfig = {
