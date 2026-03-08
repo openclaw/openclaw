@@ -76,7 +76,7 @@ describe("parseMessageWithAttachments", () => {
     expect(logs).toHaveLength(0);
   });
 
-  it("drops non-image payloads and logs", async () => {
+  it("accepts non-image payloads as file attachments", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       {
@@ -86,9 +86,13 @@ describe("parseMessageWithAttachments", () => {
         content: pdf,
       },
     ]);
+    // PDF sniffs as non-image, so it goes to files not images
     expect(parsed.images).toHaveLength(0);
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0]?.mimeType).toMatch(/pdf|application/);
+    expect(parsed.files[0]?.fileName).toBe("not-image.pdf");
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/non-image/i);
+    expect(logs[0]).toMatch(/non-image file/i);
   });
 
   it("prefers sniffed mime type and logs mismatch", async () => {
@@ -106,17 +110,20 @@ describe("parseMessageWithAttachments", () => {
     expect(logs[0]).toMatch(/mime mismatch/i);
   });
 
-  it("drops unknown mime when sniff fails and logs", async () => {
+  it("accepts unknown mime as file attachment when sniff fails", async () => {
     const unknown = Buffer.from("not an image").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       { type: "file", fileName: "unknown.bin", content: unknown },
     ]);
+    // Unknown file type is accepted as a file attachment, not dropped
     expect(parsed.images).toHaveLength(0);
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0]?.fileName).toBe("unknown.bin");
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unable to detect image mime type/i);
+    expect(logs[0]).toMatch(/non-image file/i);
   });
 
-  it("keeps valid images and drops invalid ones", async () => {
+  it("separates images and non-image files", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       {
@@ -132,10 +139,14 @@ describe("parseMessageWithAttachments", () => {
         content: pdf,
       },
     ]);
+    // PNG image goes to images array
     expect(parsed.images).toHaveLength(1);
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
-    expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+    // PDF goes to files array (sniffed as non-image)
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0]?.fileName).toBe("not-image.pdf");
+    expect(logs.some((l) => /non-image file/i.test(l))).toBe(true);
   });
 });
 

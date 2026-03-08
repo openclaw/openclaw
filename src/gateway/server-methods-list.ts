@@ -111,6 +111,10 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // Chunked file upload methods
+  "file.chunk",
+  "file.complete",
+  "file.cancel",
 ];
 
 export function listGatewayMethods(): string[] {
@@ -140,5 +144,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "file.uploaded",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

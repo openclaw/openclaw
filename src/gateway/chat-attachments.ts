@@ -14,9 +14,19 @@ export type ChatImageContent = {
   mimeType: string;
 };
 
+/** A non-image file attachment passed inline as base64. */
+export type ChatFileContent = {
+  type: "file";
+  data: string;
+  mimeType: string;
+  fileName: string;
+};
+
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  /** Non-image file attachments (PDFs, documents, etc.) sent inline. */
+  files: ChatFileContent[];
 };
 
 type AttachmentLog = {
@@ -90,9 +100,13 @@ function validateAttachmentBase64OrThrow(
 }
 
 /**
- * Parse attachments and extract images as structured content blocks.
- * Returns the message text and an array of image content blocks
- * compatible with Claude API's image format.
+ * Parse attachments and extract content blocks for all supported file types.
+ * Returns the message text, an array of image content blocks (for vision),
+ * and an array of non-image file content blocks (PDFs, documents, etc.).
+ *
+ * All MIME types are accepted. Images are returned as image content blocks
+ * compatible with the Claude API's image format. Non-image files are returned
+ * as file content blocks with their base64 data and metadata.
  */
 export async function parseMessageWithAttachments(
   message: string,
@@ -102,10 +116,11 @@ export async function parseMessageWithAttachments(
   const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
   const log = opts?.log;
   if (!attachments || attachments.length === 0) {
-    return { message, images: [] };
+    return { message, images: [], files: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const files: ChatFileContent[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -120,28 +135,35 @@ export async function parseMessageWithAttachments(
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
-    if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
-      continue;
-    }
-    if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
-      continue;
-    }
-    if (sniffedMime && providedMime && sniffedMime !== providedMime) {
-      log?.warn(
-        `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
-      );
-    }
+    const resolvedMime = sniffedMime ?? providedMime ?? mime;
 
-    images.push({
-      type: "image",
-      data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
-    });
+    if (isImageMime(sniffedMime) || (!sniffedMime && isImageMime(providedMime))) {
+      // Image attachment — add as image content block for vision APIs.
+      if (sniffedMime && providedMime && sniffedMime !== providedMime) {
+        log?.warn(
+          `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
+        );
+      }
+      images.push({
+        type: "image",
+        data: b64,
+        mimeType: resolvedMime,
+      });
+    } else {
+      // Non-image attachment — accept all file types (PDFs, documents, videos, etc.).
+      log?.warn(
+        `attachment ${label}: non-image file (${resolvedMime}), accepted as file attachment`,
+      );
+      files.push({
+        type: "file",
+        data: b64,
+        mimeType: resolvedMime,
+        fileName: label,
+      });
+    }
   }
 
-  return { message, images };
+  return { message, images, files };
 }
 
 /**

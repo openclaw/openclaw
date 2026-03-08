@@ -36,6 +36,7 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
+import { saveInlineFileAttachment } from "../file-upload-save.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -282,11 +283,31 @@ export const agentHandlers: GatewayRequestHandlers = {
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: 10_000_000,
           log: context.logGateway,
         });
         message = parsed.message.trim();
         images = parsed.images;
+        // Save non-image file attachments to disk and prepend file info
+        if (parsed.files.length > 0) {
+          const fileNotifications: string[] = [];
+          for (const file of parsed.files) {
+            try {
+              const saved = await saveInlineFileAttachment(file);
+              fileNotifications.push(
+                `📎 File attached: \`${saved.filePath}\` (type: ${saved.mimeType}, size: ${saved.sizeFormatted})`,
+              );
+            } catch (err) {
+              context.logGateway.warn(
+                `failed to save file attachment ${file.fileName}: ${String(err)}`,
+              );
+            }
+          }
+          if (fileNotifications.length > 0) {
+            const prefix = fileNotifications.join("\n");
+            message = message ? `${prefix}\n\n${message}` : prefix;
+          }
+        }
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;

@@ -35,9 +35,14 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatFileContent,
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { saveInlineFileAttachment } from "../file-upload-save.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -1290,17 +1295,40 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
+    let parsedFiles: ChatFileContent[] = [];
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: 10_000_000, // 10 MB for inline attachments (all types)
           log: context.logGateway,
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
+        parsedFiles = parsed.files;
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
+      }
+    }
+    // Save non-image file attachments to disk and prepend file info to the message.
+    // This gives the agent access to the file path for processing.
+    if (parsedFiles.length > 0) {
+      const fileNotifications: string[] = [];
+      for (const file of parsedFiles) {
+        try {
+          const saved = await saveInlineFileAttachment(file);
+          fileNotifications.push(
+            `📎 File attached: \`${saved.filePath}\` (type: ${saved.mimeType}, size: ${saved.sizeFormatted})`,
+          );
+        } catch (err) {
+          context.logGateway.warn(
+            `failed to save file attachment ${file.fileName}: ${String(err)}`,
+          );
+        }
+      }
+      if (fileNotifications.length > 0) {
+        const prefix = fileNotifications.join("\n");
+        parsedMessage = parsedMessage.trim() ? `${prefix}\n\n${parsedMessage}` : prefix;
       }
     }
     const rawSessionKey = p.sessionKey;

@@ -14,6 +14,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
+import { saveInlineFileAttachment } from "./file-upload-save.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
@@ -357,11 +358,29 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (normalizedAttachments.length > 0) {
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-            maxBytes: 5_000_000,
+            maxBytes: 10_000_000,
             log: ctx.logGateway,
           });
           message = parsed.message.trim();
           images = parsed.images;
+          // Save non-image file attachments to disk and prepend file info
+          if (parsed.files.length > 0) {
+            const fileNotifications: string[] = [];
+            for (const file of parsed.files) {
+              try {
+                const saved = await saveInlineFileAttachment(file);
+                fileNotifications.push(
+                  `📎 File attached: \`${saved.filePath}\` (type: ${saved.mimeType}, size: ${saved.sizeFormatted})`,
+                );
+              } catch {
+                // Skip failed saves silently for node events
+              }
+            }
+            if (fileNotifications.length > 0) {
+              const prefix = fileNotifications.join("\n");
+              message = message ? `${prefix}\n\n${message}` : prefix;
+            }
+          }
         } catch {
           return;
         }

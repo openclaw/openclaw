@@ -10,6 +10,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
+import { cleanupFileUploadManager } from "../server-methods/file-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
@@ -251,6 +252,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           context.nodeUnsubscribeAll(nodeId);
         }
       }
+      // Clean up any in-progress file uploads for this connection.
+      cleanupFileUploadManager(connId);
       logWs("out", "close", {
         connId,
         code,

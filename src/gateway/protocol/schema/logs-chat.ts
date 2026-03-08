@@ -81,3 +81,51 @@ export const ChatEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Chunked file upload protocol
+export const FileChunkParamsSchema = Type.Object(
+  {
+    uploadId: NonEmptyString,
+    chunkIndex: Type.Integer({ minimum: 0 }),
+    totalChunks: Type.Integer({ minimum: 1 }),
+    data: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export type FileChunkParams = {
+  uploadId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  data: string;
+};
+
+export const FileCompleteParamsSchema = Type.Object(
+  {
+    uploadId: NonEmptyString,
+    filename: NonEmptyString,
+    mimeType: NonEmptyString,
+    totalSize: Type.Integer({ minimum: 1 }),
+    sessionKey: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export type FileCompleteParams = {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  totalSize: number;
+  sessionKey?: string;
+};
+
+export const FileCancelParamsSchema = Type.Object(
+  {
+    uploadId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export type FileCancelParams = {
+  uploadId: string;
+};
