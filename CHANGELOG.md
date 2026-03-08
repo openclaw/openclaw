@@ -231,6 +231,8 @@ Docs: https://docs.openclaw.ai
 - Daemon/systemd fresh-install probe: check for OpenClaw's managed user unit before running `systemctl --user is-enabled`, so first-time Linux installs no longer fail on generic missing-unit probe errors. (#38819) Thanks @adaHubble.
 - Gateway/Windows restart supervision: relaunch task-managed gateways through Scheduled Task with quoted helper-script command paths, distinguish restart-capable supervisors per platform, and stop orphaned Windows gateway children during self-restart. (#38825) Thanks @obviyus.
 - Telegram/native topic command routing: resolve forum-topic native commands through the same conversation route as inbound messages so topic `agentId` overrides and bound topic sessions target the active session instead of the default topic-parent session. (#38871) Thanks @obviyus.
+- Gateway/Telegram webhook certificate: add `webhookCertPath` configuration option to allow uploading self-signed certificates during webhook registration, preventing SSL verification failures after health-monitor restarts. Fixes #39303.
+- Gateway/Health monitor webhook mode: skip `stale-socket` detection for any channel operating in webhook mode, as there is no persistent outgoing socket to go stale. Fixes #39303.
 
 ## 2026.3.2
 
