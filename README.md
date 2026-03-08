@@ -69,6 +69,9 @@ Full beginner guide (auth, pairing, channels): [Getting started](https://docs.op
 ```bash
 openclaw onboard --install-daemon
 
+# Check daemon state first
+openclaw gateway status
+
 openclaw gateway --port 18789 --verbose
 
 # Send a message
