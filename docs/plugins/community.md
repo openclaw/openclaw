@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Kumiho Cognitive Memory** — Persistent, graph-native long-term memory for OpenClaw agents. Automatically recalls relevant context before each turn, captures facts after each response, and consolidates sessions into a versioned Neo4j graph via Dream State. Privacy-first: raw conversations stay local; only structured summaries reach the cloud. Supports local (Python MCP) and cloud modes, PII redaction, cross-channel memory, and 9 explicit agent memory tools.
+  npm: `@kumiho/openclaw-kumiho`
+  repo: `https://github.com/kumihoclouds/kumiho-openclaw`
+  install: `openclaw plugins install @kumiho/openclaw-kumiho`
