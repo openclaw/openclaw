@@ -407,6 +407,34 @@ export async function runReplyAgent(params: {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
     }
+
+    // Send the compaction completion notice *after* the pipeline has flushed and
+    // stopped, so the enqueue does not set didStream() = true and cause
+    // buildReplyPayloads to discard the real assistant reply.  We still apply a
+    // timeout so the notice cannot stall the run indefinitely.
+    if (autoCompactionCompleted && blockStreamingEnabled && opts?.onBlockReply) {
+      const verboseEnabled = resolvedVerboseLevel !== "off";
+      const completionText = verboseEnabled
+        ? `🧹 Auto-compaction complete.`
+        : `✅ Context compacted.`;
+      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+      const noticePayload = applyReplyToMode({
+        text: completionText,
+        replyToId: currentMessageId,
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      });
+      // Fire-and-forget with timeout — best-effort delivery; failure must not
+      // propagate to the caller.
+      void Promise.race([
+        opts.onBlockReply(noticePayload),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error("compaction notice timeout")), blockReplyTimeoutMs),
+        ),
+      ]).catch(() => {
+        // Intentionally swallowed — the notice is informational only.
+      });
+    }
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
@@ -684,9 +712,23 @@ export async function runReplyAgent(params: {
           });
       }
 
-      if (verboseEnabled) {
-        const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+      // Always notify the user when compaction completes — not just in verbose
+      // mode. The "🧹 Compacting context..." notice was already sent at start,
+      // so the completion message closes the loop for every user regardless of
+      // their verbose setting.
+      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      const completionText = verboseEnabled
+        ? `🧹 Auto-compaction complete${suffix}.`
+        : `✅ Context compacted${suffix}.`;
+
+      // In block-streaming mode the completion notice is sent above (after the
+      // pipeline has flushed) via a fire-and-forget call to opts.onBlockReply,
+      // so that it does not set didStream()=true and cause buildReplyPayloads to
+      // discard the real assistant reply.
+      // In non-streaming mode, push into verboseNotices so it is included in
+      // the final payload batch.
+      if (!blockReplyPipeline) {
+        verboseNotices.push({ text: completionText });
       }
     }
     if (verboseNotices.length > 0) {

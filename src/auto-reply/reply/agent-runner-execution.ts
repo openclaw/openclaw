@@ -196,6 +196,24 @@ export async function runAgentTurnWithFallback(params: {
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
+      // Build the delivery handler once so both onAgentEvent (compaction start
+      // notice) and the onBlockReply field share the same instance.  This
+      // ensures replyToId threading (replyToMode=all|first) is applied to
+      // compaction notices just like every other block reply.
+      const blockReplyHandler = params.opts?.onBlockReply
+        ? createBlockReplyDeliveryHandler({
+            onBlockReply: params.opts.onBlockReply,
+            currentMessageId:
+              params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            normalizeStreamingText,
+            applyReplyToMode: params.applyReplyToMode,
+            normalizeMediaPaths: normalizeReplyMediaPaths,
+            typingSignals: params.typingSignals,
+            blockStreamingEnabled: params.blockStreamingEnabled,
+            blockReplyPipeline,
+            directlySentBlockKeys,
+          })
+        : undefined;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
@@ -390,10 +408,43 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts?.onToolStart?.({ name, phase });
                   }
                 }
-                // Track auto-compaction completion
+                // Track auto-compaction and notify user
                 if (evt.stream === "compaction") {
                   const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "end") {
+                  if (phase === "start") {
+                    // Notify the user that compaction is beginning so the
+                    // silence during the compaction pause isn't alarming.
+                    // Send directly via opts.onBlockReply (bypassing the pipeline)
+                    // so the notice does not set didStream() = true on the
+                    // blockReplyPipeline.  If didStream() were set here,
+                    // buildReplyPayloads would discard all final payloads, dropping
+                    // the real assistant reply on non-streaming model paths where
+                    // assistantTexts is populated from the final message rather
+                    // than from block-reply chunks.  applyReplyToMode is still
+                    // applied so replyToId threading (replyToMode=all|first) is
+                    // honoured consistently with other compaction notices.
+                    if (params.opts?.onBlockReply) {
+                      const currentMessageId =
+                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+                      const noticePayload = params.applyReplyToMode({
+                        text: "🧹 Compacting context...",
+                        replyToId: currentMessageId,
+                        replyToCurrent: true,
+                        isCompactionNotice: true,
+                      });
+                      try {
+                        await params.opts.onBlockReply(noticePayload);
+                      } catch (err) {
+                        // Non-critical notice — swallow delivery failures so a downstream
+                        // send/TTS error does not create an unhandled rejection inside the
+                        // fire-and-forget onAgentEvent callback.
+                        params.logger?.warn(
+                          { err },
+                          "compaction start notice delivery failed (non-fatal)",
+                        );
+                      }
+                    }
+                  } else if (phase === "end") {
                     autoCompactionCompleted = true;
                   }
                 }
@@ -401,20 +452,7 @@ export async function runAgentTurnWithFallback(params: {
               // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
               // even when regular block streaming is disabled. The handler sends directly
               // via opts.onBlockReply when the pipeline isn't available.
-              onBlockReply: params.opts?.onBlockReply
-                ? createBlockReplyDeliveryHandler({
-                    onBlockReply: params.opts.onBlockReply,
-                    currentMessageId:
-                      params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
-                    normalizeStreamingText,
-                    applyReplyToMode: params.applyReplyToMode,
-                    normalizeMediaPaths: normalizeReplyMediaPaths,
-                    typingSignals: params.typingSignals,
-                    blockStreamingEnabled: params.blockStreamingEnabled,
-                    blockReplyPipeline,
-                    directlySentBlockKeys,
-                  })
-                : undefined,
+              onBlockReply: blockReplyHandler,
               onBlockReplyFlush:
                 params.blockStreamingEnabled && blockReplyPipeline
                   ? async () => {
