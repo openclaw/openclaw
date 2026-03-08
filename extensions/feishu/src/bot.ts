@@ -457,14 +457,26 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
   const rawContent = event.message.content ?? "";
   if (rawContent.includes("@_all")) return true;
   const mentions = event.message.mentions ?? [];
-  if (mentions.length > 0) {
-    // Rely on Feishu mention IDs; display names can vary by alias/context.
-    return mentions.some((m) => m.id.open_id === botOpenId);
-  }
+  // Check structured mentions array for bot open_id
+  if (mentions.some((m) => m.id.open_id === botOpenId)) return true;
   // Post (rich text) messages may have empty message.mentions when they contain docs/paste
   if (event.message.message_type === "post") {
     const { mentionedOpenIds } = parsePostContent(event.message.content);
-    return mentionedOpenIds.some((id) => id === botOpenId);
+    if (mentionedOpenIds.some((id) => id === botOpenId)) return true;
+  }
+  // Reply messages: Feishu may omit the bot from the mentions array while
+  // keeping the @_user_N / @_bot_N placeholder in the text content.  Detect
+  // orphaned mention keys as a signal that a mention was dropped.
+  if (event.message.parent_id && event.message.message_type === "text") {
+    try {
+      const parsed = JSON.parse(rawContent);
+      const text = typeof parsed.text === "string" ? parsed.text : "";
+      const knownKeys = new Set(mentions.map((m) => m.key));
+      const keysInText = text.match(/@_[a-z]+_\d+/g) ?? [];
+      if (keysInText.some((key) => !knownKeys.has(key))) return true;
+    } catch {
+      // malformed content — ignore
+    }
   }
   return false;
 }
@@ -796,7 +808,11 @@ export function parseFeishuMessageEvent(
     chatType: event.message.chat_type,
     mentionedBot,
     hasAnyMention,
-    rootId: event.message.root_id || undefined,
+    // When the bot is explicitly @-mentioned in a reply message, reply in the
+    // main chat instead of entering the topic thread.  The user's intent is to
+    // address the bot, not to continue the thread they replied to.
+    rootId:
+      mentionedBot && event.message.parent_id ? undefined : event.message.root_id || undefined,
     parentId: event.message.parent_id || undefined,
     threadId: event.message.thread_id || undefined,
     content,
