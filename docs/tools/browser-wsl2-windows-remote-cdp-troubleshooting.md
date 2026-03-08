@@ -22,7 +22,7 @@ Working reference setup:
 - Windows exposes a Windows-reachable endpoint for CDP (for example via portproxy + firewall rules)
 - OpenClaw browser profile in WSL2 points to that reachable CDP endpoint
 - Control UI is opened from Windows using localhost:
-  - `http://127.0.0.1:18789/openclaw/`
+  - `http://127.0.0.1:18789/`
 
 ## Why this setup is confusing
 
@@ -42,7 +42,7 @@ Open the Control UI from Windows localhost, not from the LAN IP.
 
 Use:
 
-`http://127.0.0.1:18789/openclaw/`
+`http://127.0.0.1:18789/`
 
 Do not use the LAN IP for the Control UI unless the deployment is explicitly configured for a secure context (HTTPS with valid origin handling).
 
