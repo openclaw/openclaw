@@ -1,3 +1,5 @@
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+
 export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
 
 /**
@@ -111,11 +113,7 @@ export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaul
 }
 
 export function normalizeSecretInputString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalSecretInput(value);
 }
 
 function formatSecretRefLabel(ref: SecretRef): string {
