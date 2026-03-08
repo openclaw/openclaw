@@ -67,7 +67,12 @@ export function openExternalUrlSafe(
 
   const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
   if (opened) {
-    opened.opener = null;
+    try {
+      opened.opener = null;
+    } catch {
+      // Some browser/proxy-like WindowProxy implementations may reject opener writes.
+      // noop: noopener,noreferrer already requested in feature string.
+    }
   }
   return opened;
 }
