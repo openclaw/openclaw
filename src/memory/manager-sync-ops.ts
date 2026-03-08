@@ -683,6 +683,13 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
+      // Audit: record the hash change before indexing
+      this.db
+        .prepare(
+          `INSERT INTO file_changes (path, old_hash, new_hash, changed_at, source)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(entry.path, record?.hash ?? null, entry.hash, Date.now(), "agent");
       await this.indexFile(entry, { source: "memory" });
       if (params.progress) {
         params.progress.completed += 1;
