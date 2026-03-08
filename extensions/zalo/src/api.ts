@@ -219,9 +219,12 @@ export async function callZaloApi<T = unknown>(
       const contentType = response.headers.get("content-type")?.trim();
       const contentTypePart = contentType ? `, content-type ${contentType}` : "";
       const snippet = formatBodySnippet(rawBody);
+      // Keep HTTP status in the message for diagnostics, but do not mark non-JSON
+      // HTTP 408 as a polling timeout code (reserved for API-level JSON errors).
+      const mappedErrorCode = response.status === 408 ? undefined : response.status;
       throw new ZaloApiError(
         `Zalo API returned non-JSON response for ${method} (status ${response.status}${contentTypePart}); body: ${snippet}`,
-        response.status,
+        mappedErrorCode,
       );
     }
 
