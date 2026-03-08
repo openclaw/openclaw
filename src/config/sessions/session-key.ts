@@ -1,11 +1,11 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { normalizeExplicitDiscordSessionKey } from "../../discord/session-key-normalization.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
+import { normalizeExplicitSessionKey } from "./explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "./group.js";
 import type { SessionScope } from "./types.js";
 
@@ -29,7 +29,7 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
 export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) {
-    return normalizeExplicitDiscordSessionKey(explicit, ctx);
+    return normalizeExplicitSessionKey(explicit, ctx);
   }
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") {
