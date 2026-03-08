@@ -920,9 +920,15 @@ export type PluginHookBeforeResponseEmitEvent = {
 };
 
 export type PluginHookBeforeResponseEmitResult = {
-  /** Replace the final response text (first-writer-wins, mutually exclusive with allContent). */
+  /** Replace the final response text (first-writer-wins across handlers).
+   *  Mutually exclusive with allContent in the merge layer: if any handler
+   *  (regardless of priority) sets allContent, content is dropped from the
+   *  merged result. In applyBeforeResponseEmitHook, allContent also takes
+   *  precedence over content when both are present. */
   content?: string;
-  /** Replace all assistant texts from the current run (first-writer-wins, takes precedence over content). */
+  /** Replace all assistant texts from the current run (first-writer-wins across handlers).
+   *  Takes precedence over content both in the merge layer (content is dropped when
+   *  any handler sets allContent) and in the application layer. */
   allContent?: string[];
   /** Block the response entirely (one-way latch). Clears all current-run assistant content from session history. */
   block?: boolean;
