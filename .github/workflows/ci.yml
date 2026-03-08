@@ -266,6 +266,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          fetch-depth: 0
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
