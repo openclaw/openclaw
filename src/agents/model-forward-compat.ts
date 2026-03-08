@@ -1,5 +1,11 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildCopilotModelMetadata,
+  COPILOT_GPT_54_MODEL_ID,
+  DEFAULT_COPILOT_API_BASE_URL,
+} from "../providers/github-copilot-constants.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -33,6 +39,8 @@ const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+
+const log = createSubsystemLogger("model-forward-compat");
 
 function resolveOpenAIGpt54ForwardCompatModel(
   provider: string,
@@ -89,7 +97,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
   trimmedModelId: string;
-  templateIds: string[];
+  templateIds: readonly string[];
   modelRegistry: ModelRegistry;
   patch?: Partial<Model<Api>>;
 }): Model<Api> | undefined {
@@ -111,6 +119,75 @@ function cloneFirstTemplateModel(params: {
 
 const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
 const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const GITHUB_COPILOT_GPT54_TEMPLATE_MODEL_IDS = ["gpt-5", "gpt-5.1"] as const;
+
+function resolveCopilotBaseUrlFromRegistry(modelRegistry: ModelRegistry): string {
+  try {
+    // Best effort: preserve any token-derived / provider-specific Copilot proxy URL
+    // already present in the registry so GPT-5.4 resolves like existing Copilot models.
+    const existing = modelRegistry
+      .getAll()
+      .find(
+        (model) =>
+          normalizeProviderId(model.provider) === "github-copilot" &&
+          typeof model.baseUrl === "string" &&
+          model.baseUrl.trim().length > 0,
+      );
+    return existing?.baseUrl?.trim() ?? DEFAULT_COPILOT_API_BASE_URL;
+  } catch (err) {
+    log.debug(`resolveCopilotBaseUrlFromRegistry failed: ${String(err)}`);
+    return DEFAULT_COPILOT_API_BASE_URL;
+  }
+}
+
+function resolveGitHubCopilotGpt54ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "github-copilot") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+  if (lower !== COPILOT_GPT_54_MODEL_ID) {
+    return undefined;
+  }
+
+  const metadata = buildCopilotModelMetadata(trimmedModelId);
+
+  const templateModel = cloneFirstTemplateModel({
+    normalizedProvider: "github-copilot",
+    trimmedModelId,
+    templateIds: GITHUB_COPILOT_GPT54_TEMPLATE_MODEL_IDS,
+    modelRegistry,
+    patch: {
+      api: "openai-responses",
+      provider: "github-copilot",
+      ...metadata,
+    },
+  });
+  if (templateModel) {
+    // Reuse the template directly when it already carries a concrete Copilot baseUrl.
+    if (typeof templateModel.baseUrl === "string" && templateModel.baseUrl.trim().length > 0) {
+      return templateModel;
+    }
+    return {
+      ...templateModel,
+      baseUrl: resolveCopilotBaseUrlFromRegistry(modelRegistry),
+    } as Model<Api>;
+  }
+
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: trimmedModelId,
+    api: "openai-responses",
+    provider: "github-copilot",
+    baseUrl: resolveCopilotBaseUrlFromRegistry(modelRegistry),
+    ...metadata,
+  } as Model<Api>);
+}
 
 function resolveOpenAICodexForwardCompatModel(
   provider: string,
@@ -324,6 +401,7 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveGitHubCopilotGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
