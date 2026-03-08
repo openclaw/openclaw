@@ -119,7 +119,14 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
         },
       });
 
+      const connectTimer = setTimeout(() => {
+        if (!this.connected) {
+          reject(new Error("Realtime STT connection timeout"));
+        }
+      }, 10000);
+
       this.ws.on("open", () => {
+        clearTimeout(connectTimer);
         console.log("[RealtimeSTT] WebSocket connected");
         this.connected = true;
         this.reconnectAttempts = 0;
@@ -154,6 +161,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
       });
 
       this.ws.on("error", (error) => {
+        clearTimeout(connectTimer);
         console.error("[RealtimeSTT] WebSocket error:", error);
         if (!this.connected) {
           reject(error);
@@ -171,12 +179,6 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
           void this.attemptReconnect();
         }
       });
-
-      setTimeout(() => {
-        if (!this.connected) {
-          reject(new Error("Realtime STT connection timeout"));
-        }
-      }, 10000);
     });
   }
 
