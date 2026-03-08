@@ -500,6 +500,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.resourceAttributes":
+    "Additional OpenTelemetry resource attributes (key-value pairs) merged into the telemetry resource. Use this to set attributes like service.namespace or deployment.environment required by backends such as Grafana Cloud.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

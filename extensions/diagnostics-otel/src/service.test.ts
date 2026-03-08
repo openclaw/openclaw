@@ -341,6 +341,85 @@ describe("diagnostics-otel service", () => {
     }
   });
 
+  test("merges resourceAttributes into the OTEL resource", async () => {
+    const { resourceFromAttributes } = await import("@opentelemetry/resources");
+
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: OTEL_TEST_ENDPOINT,
+            protocol: OTEL_TEST_PROTOCOL,
+            traces: true,
+            resourceAttributes: {
+              "service.namespace": "my-namespace",
+              "deployment.environment": "production",
+            },
+          },
+        },
+      },
+      logger: createLogger(),
+      stateDir: OTEL_TEST_STATE_DIR,
+    };
+    await service.start(ctx);
+
+    expect(resourceFromAttributes).toHaveBeenCalledWith({
+      "service.namespace": "my-namespace",
+      "deployment.environment": "production",
+      "service.name": "openclaw",
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("serviceName always wins over resourceAttributes service.name", async () => {
+    const { resourceFromAttributes } = await import("@opentelemetry/resources");
+
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: OTEL_TEST_ENDPOINT,
+            protocol: OTEL_TEST_PROTOCOL,
+            traces: true,
+            serviceName: "my-custom-service",
+            resourceAttributes: {
+              "service.name": "should-be-overridden",
+              "service.namespace": "my-ns",
+            },
+          },
+        },
+      },
+      logger: createLogger(),
+      stateDir: OTEL_TEST_STATE_DIR,
+    };
+    await service.start(ctx);
+
+    expect(resourceFromAttributes).toHaveBeenCalledWith({
+      "service.name": "my-custom-service",
+      "service.namespace": "my-ns",
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("works without resourceAttributes (backward compat)", async () => {
+    const { resourceFromAttributes } = await import("@opentelemetry/resources");
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
+    await service.start(ctx);
+
+    expect(resourceFromAttributes).toHaveBeenCalledWith({
+      "service.name": "openclaw",
+    });
+    await service.stop?.(ctx);
+  });
+
   test("redacts sensitive reason in session.state metric attributes", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
