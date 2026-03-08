@@ -355,6 +355,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "message_observed",
   "message_received",
   "message_sending",
   "message_sent",
