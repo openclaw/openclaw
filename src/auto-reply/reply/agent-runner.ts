@@ -710,8 +710,16 @@ export async function runReplyAgent(params: {
       // we must deliver the completion notice the same way the start notice was
       // sent (via onBlockReply directly). Otherwise the user sees the "🧹
       // Compacting context..." start notice but never receives the completion.
+      // Apply replyToMode so the notice is threaded consistently with normal
+      // replies when replyToMode=all|first is configured.
       if (opts?.onBlockReply) {
-        await opts.onBlockReply({ text: completionText });
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        const noticePayload = applyReplyToMode({
+          text: completionText,
+          replyToId: currentMessageId,
+          replyToCurrent: true,
+        });
+        await opts.onBlockReply(noticePayload);
       } else {
         verboseNotices.push({ text: completionText });
       }

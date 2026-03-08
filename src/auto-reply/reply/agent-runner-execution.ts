@@ -199,6 +199,24 @@ export async function runAgentTurnWithFallback(params: {
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
+      // Build the delivery handler once so both onAgentEvent (compaction start
+      // notice) and the onBlockReply field share the same instance.  This
+      // ensures replyToId threading (replyToMode=all|first) is applied to
+      // compaction notices just like every other block reply.
+      const blockReplyHandler = params.opts?.onBlockReply
+        ? createBlockReplyDeliveryHandler({
+            onBlockReply: params.opts.onBlockReply,
+            currentMessageId:
+              params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            normalizeStreamingText,
+            applyReplyToMode: params.applyReplyToMode,
+            normalizeMediaPaths: normalizeReplyMediaPaths,
+            typingSignals: params.typingSignals,
+            blockStreamingEnabled: params.blockStreamingEnabled,
+            blockReplyPipeline,
+            directlySentBlockKeys,
+          })
+        : undefined;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
@@ -401,9 +419,9 @@ export async function runAgentTurnWithFallback(params: {
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
                       } else {
-                        // Use the universal in-run block reply path so every
-                        // channel sees a notice while compaction is pausing the run.
-                        await params.opts?.onBlockReply?.({ text: "🧹 Compacting context..." });
+                        // Route through the shared block reply handler so
+                        // reply-to threading matches other in-run notices.
+                        await blockReplyHandler?.({ text: "🧹 Compacting context..." });
                       }
                     }
                     const completed = evt.data?.completed === true;
@@ -416,20 +434,7 @@ export async function runAgentTurnWithFallback(params: {
                 // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
                 // even when regular block streaming is disabled. The handler sends directly
                 // via opts.onBlockReply when the pipeline isn't available.
-                onBlockReply: params.opts?.onBlockReply
-                  ? createBlockReplyDeliveryHandler({
-                      onBlockReply: params.opts.onBlockReply,
-                      currentMessageId:
-                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
-                      normalizeStreamingText,
-                      applyReplyToMode: params.applyReplyToMode,
-                      normalizeMediaPaths: normalizeReplyMediaPaths,
-                      typingSignals: params.typingSignals,
-                      blockStreamingEnabled: params.blockStreamingEnabled,
-                      blockReplyPipeline,
-                      directlySentBlockKeys,
-                    })
-                  : undefined,
+                onBlockReply: blockReplyHandler,
                 onBlockReplyFlush:
                   params.blockStreamingEnabled && blockReplyPipeline
                     ? async () => {
