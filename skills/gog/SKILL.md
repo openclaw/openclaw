@@ -1,6 +1,6 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, Docs, and Tasks.
 homepage: https://gogcli.sh
 metadata:
   {
@@ -24,12 +24,12 @@ metadata:
 
 # gog
 
-Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
+Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs/Tasks. Requires OAuth setup.
 
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
-- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
+- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets,tasks`
 - `gog auth list`
 
 Common commands
@@ -43,12 +43,25 @@ Common commands
 - Gmail draft: `gog gmail drafts create --to a@b.com --subject "Hi" --body-file ./message.txt`
 - Gmail send draft: `gog gmail drafts send <draftId>`
 - Gmail reply: `gog gmail send --to a@b.com --subject "Re: Hi" --body "Reply" --reply-to-message-id <msgId>`
+- Gmail get message (with attachments): `gog gmail get <messageId> --json`
+- Gmail download attachment: `gog gmail attachment <messageId> <attachmentId> --out /tmp/file.pdf`
 - Calendar list events: `gog calendar events <calendarId> --from <iso> --to <iso>`
 - Calendar create event: `gog calendar create <calendarId> --summary "Title" --from <iso> --to <iso>`
 - Calendar create with color: `gog calendar create <calendarId> --summary "Title" --from <iso> --to <iso> --event-color 7`
 - Calendar update event: `gog calendar update <calendarId> <eventId> --summary "New Title" --event-color 4`
 - Calendar show colors: `gog calendar colors`
 - Drive search: `gog drive search "query" --max 10`
+- Tasks list task lists: `gog tasks lists list`
+- Tasks list tasks: `gog tasks list <tasklistId>`
+- Tasks add: `gog tasks add <tasklistId> --title "Buy milk"`
+- Tasks add (with due date): `gog tasks add <tasklistId> --title "File taxes" --due 2025-04-15`
+- Tasks add (with notes): `gog tasks add <tasklistId> --title "Call dentist" --notes "Ask about next appointment"`
+- Tasks add (subtask): `gog tasks add <tasklistId> --title "Subtask" --parent <parentTaskId>`
+- Tasks add (recurring): `gog tasks add <tasklistId> --title "Weekly review" --due 2025-03-01 --repeat weekly --repeat-count 4`
+- Tasks complete: `gog tasks done <tasklistId> <taskId>`
+- Tasks uncomplete: `gog tasks undo <tasklistId> <taskId>`
+- Tasks update: `gog tasks update <tasklistId> <taskId> --title "New title" --due 2025-05-01`
+- Tasks delete: `gog tasks delete <tasklistId> <taskId>`
 - Contacts: `gog contacts list --max 20`
 - Sheets get: `gog sheets get <sheetId> "Tab!A1:D10" --json`
 - Sheets update: `gog sheets update <sheetId> "Tab!A1:B2" --values-json '[["A","B"],["1","2"]]' --input USER_ENTERED`
@@ -105,6 +118,37 @@ Email Formatting
     --subject "Meeting Follow-up" \
     --body-html "<p>Hi Name,</p><p>Thanks for meeting today. Here are the next steps:</p><ul><li>Item one</li><li>Item two</li></ul><p>Best regards,<br>Your Name</p>"
   ```
+
+Gmail Attachments
+
+To read email attachments (PDFs, images, etc.):
+
+1. Get the message with `--json` to find attachment metadata:
+   `gog gmail get <messageId> --json`
+   The response includes an `attachments` array with `filename`, `mimeType`, `size`, and `attachmentId` for each attachment.
+
+2. Download the attachment:
+   `gog gmail attachment <messageId> <attachmentId> --out /tmp/filename.pdf`
+
+3. Read or process the downloaded file as needed.
+
+- Gmail attachment downloads use the Gmail API directly. Tokens do not expire per-attachment; any attachment can be downloaded at any time as long as the OAuth session is valid.
+- Use `--name` to override the saved filename when `--out` is not set.
+
+Tasks
+
+- `gog tasks lists list` to see all task lists and their IDs.
+- `gog tasks list <tasklistId>` to see tasks in a list. Add `--json` for structured output.
+- `gog tasks add <tasklistId> --title "Task"` to create a task.
+- `--due YYYY-MM-DD` sets a due date (time portion may be ignored by Google Tasks).
+- `--notes "..."` adds a description/notes body.
+- `--parent <taskId>` creates a subtask under the given parent.
+- `--repeat daily|weekly|monthly|yearly` with `--repeat-count N` or `--repeat-until YYYY-MM-DD` creates recurring tasks.
+- `gog tasks done <tasklistId> <taskId>` marks a task as completed.
+- `gog tasks undo <tasklistId> <taskId>` marks it as needs action again.
+- `gog tasks update <tasklistId> <taskId>` with `--title`, `--notes`, or `--due` to modify a task.
+- `gog tasks delete <tasklistId> <taskId>` to remove a task.
+- `gog tasks clear <tasklistId>` removes all completed tasks from a list.
 
 Notes
 
