@@ -340,6 +340,58 @@ describe("agent event handler", () => {
     },
   );
 
+  it("suppresses partial NO_REPLY lead fragment in final when lifecycle ends at underscore fragment", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_150,
+    });
+    chatRunState.registry.add("run-partial", {
+      sessionKey: "session-partial",
+      clientRunId: "client-partial",
+    });
+
+    // Only a partial token arrives before lifecycle end, but the underscore
+    // distinguishes it from an intentional uppercase "NO" reply.
+    handler({
+      runId: "run-partial",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "NO_" },
+    });
+    emitLifecycleEnd(handler, "run-partial");
+
+    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    expect(payload.message).toBeUndefined();
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("keeps final uppercase 'NO' replies when no control-token provenance arrives", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_175,
+    });
+    chatRunState.registry.add("run-uppercase-no", {
+      sessionKey: "session-uppercase-no",
+      clientRunId: "client-uppercase-no",
+    });
+
+    handler({
+      runId: "run-uppercase-no",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "NO" },
+    });
+    emitLifecycleEnd(handler, "run-uppercase-no");
+
+    const payload = expectSingleFinalChatPayload(broadcast) as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("NO");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("keeps final short replies like 'No' even when lead-fragment deltas are suppressed", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_200,

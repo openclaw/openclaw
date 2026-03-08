@@ -153,6 +153,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  suppressedLeadFragmentBuffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
@@ -164,6 +165,7 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const suppressedLeadFragmentBuffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
@@ -172,6 +174,7 @@ export function createChatRunState(): ChatRunState {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    suppressedLeadFragmentBuffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
@@ -181,6 +184,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    suppressedLeadFragmentBuffers,
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
@@ -446,6 +450,7 @@ export function createAgentEventHandler({
   const clearBufferedChatState = (clientRunId: string) => {
     chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.suppressedLeadFragmentBuffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
   };
@@ -658,6 +663,11 @@ export function createAgentEventHandler({
     const projected = projectLiveAssistantBufferedText(mergedRawText);
     const mergedText = projected.text;
     chatRunState.buffers.set(clientRunId, mergedText);
+    if (projected.pendingLeadFragment && mergedText.includes("_")) {
+      chatRunState.suppressedLeadFragmentBuffers.set(clientRunId, mergedText.trim());
+    } else if (!projected.suppress) {
+      chatRunState.suppressedLeadFragmentBuffers.delete(clientRunId);
+    }
     if (projected.suppress) {
       return;
     }
@@ -702,9 +712,13 @@ export function createAgentEventHandler({
     const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
       suppressLeadFragments: options?.suppressLeadFragments,
     });
+    const suppressedLeadFragmentText = chatRunState.suppressedLeadFragmentBuffers.get(clientRunId);
+    const shouldSuppressLeadFragment =
+      Boolean(suppressedLeadFragmentText) && projected.text.trim() === suppressedLeadFragmentText;
     return {
       text: projected.text.trim(),
-      shouldSuppressSilent: normalizedHeartbeatText.suppress || projected.suppress,
+      shouldSuppressSilent:
+        normalizedHeartbeatText.suppress || projected.suppress || shouldSuppressLeadFragment,
     };
   };
 
@@ -769,6 +783,7 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.suppressedLeadFragmentBuffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
       const payload = {

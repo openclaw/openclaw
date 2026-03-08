@@ -67,6 +67,7 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  suppressedLeadFragmentBuffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
@@ -78,6 +79,7 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const suppressedLeadFragmentBuffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
@@ -86,6 +88,7 @@ export function createChatRunState(): ChatRunState {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    suppressedLeadFragmentBuffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
@@ -95,6 +98,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    suppressedLeadFragmentBuffers,
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
