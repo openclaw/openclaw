@@ -6,6 +6,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { logWarn } from "../logger.js";
 import { resolveRegisteredExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 
@@ -137,6 +138,16 @@ export function resolveExecHostApprovalContext(params: {
   // prompts even when tool/runtime defaults are stricter (for example on-miss).
   const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
+  if (hostSecurity !== params.security) {
+    logWarn(
+      `exec: agent=${params.agentId ?? "default"} security '${params.security}' clamped to '${hostSecurity}' by agent exec approvals for host=${params.host}`,
+    );
+  }
+  if (hostAsk !== params.ask) {
+    logWarn(
+      `exec: agent=${params.agentId ?? "default"} ask '${params.ask}' clamped to '${hostAsk}' by agent exec approvals for host=${params.host}`,
+    );
+  }
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
   }
