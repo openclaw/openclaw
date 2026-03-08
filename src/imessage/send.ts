@@ -18,6 +18,7 @@ export type IMessageSendOpts = {
   mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
+  audioAsVoice?: boolean;
   chatId?: number;
   client?: IMessageRpcClient;
   config?: ReturnType<typeof loadConfig>;
@@ -130,7 +131,7 @@ export async function sendMessageIMessage(
     filePath = resolved.path;
     if (!message.trim()) {
       const kind = kindFromMime(resolved.contentType ?? undefined);
-      if (kind) {
+      if (kind && !(opts.audioAsVoice && kind === "audio")) {
         message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
       }
     }

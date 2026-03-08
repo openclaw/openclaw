@@ -84,6 +84,20 @@ describe("sendMessageIMessage", () => {
     expect(params.text).toBe("<media:audio>");
   });
 
+  it("skips placeholder text for audioAsVoice attachments", async () => {
+    await sendWithDefaults("chat_id:7", "", {
+      mediaUrl: "http://x/voice",
+      audioAsVoice: true,
+      resolveAttachmentImpl: async () => ({
+        path: "/tmp/imessage-voice.m4a",
+        contentType: "audio/mp4",
+      }),
+    });
+    const params = getSentParams();
+    expect(params.file).toBe("/tmp/imessage-voice.m4a");
+    expect(params.text).toBe("");
+  });
+
   it("returns message id when rpc provides one", async () => {
     requestMock.mockResolvedValue({ ok: true, id: 123 });
     const result = await sendWithDefaults("chat_id:7", "hello");
