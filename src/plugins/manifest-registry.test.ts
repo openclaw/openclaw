@@ -162,19 +162,10 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dirA, manifest);
     writeManifest(dirB, manifest);
 
-    // The loader's first-seen-wins order means bundled always takes priority over
-    // global. The warning should explain this and tell the user how to override it.
+    // Typical discovery order: bundled first, global second. Bundled wins (first-seen).
     const candidates: PluginCandidate[] = [
-      createPluginCandidate({
-        idHint: "feishu",
-        rootDir: dirA,
-        origin: "bundled",
-      }),
-      createPluginCandidate({
-        idHint: "feishu",
-        rootDir: dirB,
-        origin: "global",
-      }),
+      createPluginCandidate({ idHint: "feishu", rootDir: dirA, origin: "bundled" }),
+      createPluginCandidate({ idHint: "feishu", rootDir: dirB, origin: "global" }),
     ];
 
     const registry = loadRegistry(candidates);
@@ -182,6 +173,25 @@ describe("loadPluginManifestRegistry", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.message).toContain("bundled copy takes priority");
     expect(warnings[0]?.message).toContain("plugins.load.paths");
+  });
+
+  it("emits actionable warning with correct winner when global is discovered before bundled", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    // Reversed order: global first, bundled second. Global wins (first-seen) —
+    // the user's installed version is already active, so no warning is needed.
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({ idHint: "feishu", rootDir: dirA, origin: "global" }),
+      createPluginCandidate({ idHint: "feishu", rootDir: dirB, origin: "bundled" }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    const warnings = registry.diagnostics.filter((d) => d.level === "warn");
+    expect(warnings).toHaveLength(0);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

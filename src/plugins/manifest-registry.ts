@@ -229,23 +229,18 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      // For a bundled-vs-global conflict the loader's first-seen-wins order means
-      // the bundled copy always takes priority over a user-installed global plugin.
-      // Emit a targeted, actionable message so the user knows their installed copy
-      // is inactive and how to fix it — rather than the generic "may be overridden" text.
-      const isBundledGlobalConflict =
-        (candidate.origin === "global" && existing.candidate.origin === "bundled") ||
-        (candidate.origin === "bundled" && existing.candidate.origin === "global");
-      if (isBundledGlobalConflict) {
-        const globalSource =
-          candidate.origin === "global" ? candidate.source : existing.candidate.source;
+      // For a bundled-vs-global conflict, use first-seen (existing) to determine
+      // the actual winner. Only warn when bundled won — the user's global install
+      // is inactive and needs an actionable hint. When global won, the user's
+      // install is already active so no warning is needed.
+      if (existing.candidate.origin === "bundled" && candidate.origin === "global") {
         diagnostics.push({
           level: "warn",
           pluginId: manifest.id,
-          source: globalSource,
-          message: `plugin '${manifest.id}' is installed in the extensions directory but the bundled copy takes priority; add it to plugins.load.paths in your config to use your installed version (${globalSource})`,
+          source: candidate.source,
+          message: `plugin '${manifest.id}' is installed in the extensions directory but the bundled copy takes priority; add it to plugins.load.paths in your config to use your installed version (${candidate.source})`,
         });
-      } else {
+      } else if (existing.candidate.origin !== "global" || candidate.origin !== "bundled") {
         diagnostics.push({
           level: "warn",
           pluginId: manifest.id,
