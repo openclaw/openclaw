@@ -1463,9 +1463,12 @@ describe("Cron issue regressions", () => {
     });
 
     const timerPromise = onTimer(state);
+    // Full-suite parallel runs can briefly delay both workers from starting
+    // even when `maxConcurrentRuns` is honored, so keep the assertion focused
+    // on concurrency rather than a sub-100ms scheduler race.
     const startTimeout = setTimeout(() => {
       bothRunsStarted.reject(new Error("timed out waiting for concurrent job starts"));
-    }, 90);
+    }, 250);
     try {
       await bothRunsStarted.promise;
     } finally {
