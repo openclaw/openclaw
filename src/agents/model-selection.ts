@@ -469,6 +469,25 @@ export function buildAllowedModelSet(params: {
     }
   }
 
+  const fallbackConfig = params.cfg.agents?.defaults?.model;
+  if (fallbackConfig && typeof fallbackConfig === "object") {
+    for (const fallback of fallbackConfig.fallbacks ?? []) {
+      const parsed = parseModelRef(String(fallback), params.defaultProvider);
+      if (parsed) {
+        const key = modelKey(parsed.provider, parsed.model);
+        allowedKeys.add(key);
+
+        if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
+          syntheticCatalogEntries.set(key, {
+            id: parsed.model,
+            name: parsed.model,
+            provider: parsed.provider,
+          });
+        }
+      }
+    }
+  }
+
   if (defaultKey) {
     allowedKeys.add(defaultKey);
   }
