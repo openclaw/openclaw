@@ -202,7 +202,17 @@ export function containsDowngradedToolCallText(text: string): boolean {
   if (!text) {
     return false;
   }
-  return /\[Tool (?:Call|Result):?/i.test(text) || /\[Tool Result for ID/i.test(text);
+  const hasDowngradedToolMarkers =
+    /\[Tool Call:/i.test(text) ||
+    /\[Tool Result for ID/i.test(text) ||
+    /\[Historical context:/i.test(text);
+  if (!hasDowngradedToolMarkers) {
+    return false;
+  }
+
+  // Only treat standalone tool-artifact payloads as downgraded tool output.
+  // Normal assistant prose may legitimately quote these markers while explaining behavior.
+  return stripDowngradedToolCallText(text).length === 0;
 }
 
 export function extractAssistantRawText(msg: AssistantMessage): string {

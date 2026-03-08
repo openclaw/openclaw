@@ -122,6 +122,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     );
   });
 
+  it("does not add a second tool warning after a synthetic downgraded-tool error", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistantMessage(
+        `[Tool Call: read (ID: toolu_1)]\nArguments: {"path":"notes.md"}`,
+      ),
+      lastToolError: { toolName: "read", error: "permission denied" },
+      verboseLevel: "on",
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "⚠️ The model emitted a text-form tool call instead of executing a real tool. No tool action was actually run. Please retry, or switch to a provider/model with reliable tool calling.",
+      true,
+    );
+  });
+
   it("surfaces short non-executing placeholder replies as an explicit error", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Let me actually check that now instead of just saying I will. One sec."],
@@ -135,6 +151,34 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       "⚠️ The agent returned a placeholder reply without starting any real tool work. Please retry, or switch to a provider/model with reliable tool execution.",
       true,
     );
+  });
+
+  it("does not add a second tool warning after a synthetic placeholder error", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Let me actually check that now instead of just saying I will. One sec."],
+      lastAssistant: makeAssistantMessage(
+        "Let me actually check that now instead of just saying I will. One sec.",
+      ),
+      lastToolError: { toolName: "read", error: "permission denied" },
+      verboseLevel: "on",
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "⚠️ The agent returned a placeholder reply without starting any real tool work. Please retry, or switch to a provider/model with reliable tool execution.",
+      true,
+    );
+  });
+
+  it("keeps normal replies that only quote downgraded tool markers", () => {
+    const quotedToolMarkerReply =
+      "For debugging, the transcript may include literal text like [Tool Call: read (ID: toolu_1)] before the real answer.";
+    const payloads = buildPayloads({
+      assistantTexts: [quotedToolMarkerReply],
+      lastAssistant: makeAssistantMessage(quotedToolMarkerReply),
+    });
+
+    expectSinglePayloadText(payloads, quotedToolMarkerReply);
   });
 
   it("keeps substantive plain-text answers that do not match placeholder heuristics", () => {

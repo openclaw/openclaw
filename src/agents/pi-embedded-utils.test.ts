@@ -52,6 +52,14 @@ describe("extractAssistantText", () => {
     expect(containsDowngradedToolCallText("normal assistant reply")).toBe(false);
   });
 
+  it("ignores normal replies that only quote tool markers inline", () => {
+    expect(
+      containsDowngradedToolCallText(
+        "For debugging, the transcript may include literal text like [Tool Call: read (ID: toolu_1)] before the real answer.",
+      ),
+    ).toBe(false);
+  });
+
   it("strips tool-only Minimax invocation XML from text", () => {
     const cases = [
       `<invoke name="Bash">

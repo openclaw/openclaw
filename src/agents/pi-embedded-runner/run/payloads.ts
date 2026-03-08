@@ -322,6 +322,7 @@ export function buildEmbeddedRunPayloads(params: {
       text: "⚠️ The model emitted a text-form tool call instead of executing a real tool. No tool action was actually run. Please retry, or switch to a provider/model with reliable tool calling.",
       isError: true,
     });
+    hasUserFacingAssistantReply = true;
   } else if (placeholderReplyDetected) {
     const { mediaUrls, audioAsVoice, replyToId, replyToTag, replyToCurrent } = parseReplyDirectives(
       answerTexts[0] ?? "",
@@ -335,6 +336,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
       isError: true,
     });
+    hasUserFacingAssistantReply = true;
   }
 
   if (params.lastToolError) {
