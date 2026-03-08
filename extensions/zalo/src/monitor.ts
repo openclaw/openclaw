@@ -72,6 +72,7 @@ export type ZaloMonitorOptions = {
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
+const ZALO_TYPING_TIMEOUT_MS = 5_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 
@@ -556,6 +557,7 @@ async function processMessageWithPipeline(params: {
           action: "typing",
         },
         fetcher,
+        ZALO_TYPING_TIMEOUT_MS,
       );
     },
     onStartError: (err) => {

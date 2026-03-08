@@ -179,8 +179,12 @@ export async function sendChatAction(
   token: string,
   params: ZaloSendChatActionParams,
   fetcher?: ZaloFetch,
+  timeoutMs?: number,
 ): Promise<ZaloApiResponse<boolean>> {
-  return callZaloApi<boolean>("sendChatAction", token, params, { fetch: fetcher });
+  return callZaloApi<boolean>("sendChatAction", token, params, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**
