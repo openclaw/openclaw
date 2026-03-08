@@ -211,22 +211,25 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  // If the first-turn block already built a fresh snapshot, skip a redundant rebuild.
+  const alreadyRefreshed = nextEntry?.skillsSnapshot?.version === snapshotVersion;
+  const skillsSnapshot =
+    shouldRefreshSnapshot && !alreadyRefreshed
+      ? buildWorkspaceSkillSnapshot(workspaceDir, {
+          config: cfg,
+          skillFilter,
+          eligibility: { remote: remoteEligibility },
+          snapshotVersion,
+        })
+      : (nextEntry?.skillsSnapshot ??
+        (isFirstTurnInSession
+          ? undefined
+          : buildWorkspaceSkillSnapshot(workspaceDir, {
+              config: cfg,
+              skillFilter,
+              eligibility: { remote: remoteEligibility },
+              snapshotVersion,
+            })));
   if (
     skillsSnapshot &&
     sessionStore &&

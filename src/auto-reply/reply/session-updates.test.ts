@@ -198,4 +198,30 @@ describe("ensureSkillSnapshot", () => {
     expect(result.skillsSnapshot?.prompt).toBe("FRESH_SNAPSHOT");
     expect(buildWorkspaceSkillSnapshot).toHaveBeenCalledOnce();
   });
+
+  it("builds only once on first turn even when versions mismatch", async () => {
+    vi.mocked(ensureSkillsSnapshotVersion).mockReturnValue(currentVersion);
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "test-session",
+        updatedAt: Date.now(),
+        systemSent: false,
+        skillsSnapshot: {
+          prompt: "STALE",
+          skills: [{ name: "old" }],
+          version: 0,
+        },
+      },
+      sessionStore: {},
+      sessionKey: "test-key",
+      isFirstTurnInSession: true,
+      workspaceDir,
+      cfg,
+    });
+
+    expect(result.skillsSnapshot?.prompt).toBe("FRESH_SNAPSHOT");
+    // First-turn block builds once; the second block should reuse it, not rebuild.
+    expect(buildWorkspaceSkillSnapshot).toHaveBeenCalledTimes(1);
+  });
 });
