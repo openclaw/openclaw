@@ -454,8 +454,8 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher, readSessionUpdatedAt } = installRuntime({
       commandAuthorized: false,
     });
-    readSessionUpdatedAt.mockImplementation(({ sessionKey }: { sessionKey: string }) =>
-      sessionKey === "agent:main:zalouser:group:321" ? 123 : undefined,
+    readSessionUpdatedAt.mockImplementation((input?: { storePath: string; sessionKey: string }) =>
+      input?.sessionKey === "agent:main:zalouser:group:321" ? 123 : undefined,
     );
     const account = createAccount();
     await __testing.processMessage({
