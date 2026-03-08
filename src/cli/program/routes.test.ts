@@ -91,7 +91,11 @@ describe("program routes", () => {
         "--json",
       ]),
     ).resolves.toBe(true);
-    expect(runConfigGetMock).toHaveBeenCalledWith({ path: "update.channel", json: true, noRedact: false });
+    expect(runConfigGetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      json: true,
+      noRedact: false,
+    });
   });
 
   it("passes config unset path correctly when root option values precede command", async () => {
@@ -116,7 +120,11 @@ describe("program routes", () => {
         "--json",
       ]),
     ).resolves.toBe(true);
-    expect(runConfigGetMock).toHaveBeenCalledWith({ path: "update.channel", json: true, noRedact: false });
+    expect(runConfigGetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      json: true,
+      noRedact: false,
+    });
   });
 
   it("passes config unset path when root value options appear after subcommand", async () => {
