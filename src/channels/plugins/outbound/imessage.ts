@@ -1,3 +1,4 @@
+import { chunkText } from "../../../auto-reply/chunk.js";
 import { sendMessageIMessage } from "../../../imessage/send.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { ChannelOutboundAdapter } from "../types.js";
@@ -9,7 +10,7 @@ function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
 
 export const imessageOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: null,
+  chunker: chunkText,
   chunkerMode: "text",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
