@@ -79,6 +79,8 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  * Applies to:
  * - direct Anthropic provider
  * - Anthropic Claude models on Bedrock when cache retention is explicitly configured
+ * - OpenAI providers when cache retention is explicitly configured
+ *   (pi-ai maps "long" → prompt_cache_retention: "24h" for api.openai.com)
  *
  * OpenRouter uses openai-completions API with hardcoded cache_control instead
  * of the cacheRetention stream option.
@@ -93,8 +95,10 @@ function resolveCacheRetention(
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+  const isOpenAI = provider === "openai" || provider === "openai-codex";
+  const hasOpenAIOverride = isOpenAI && extraParams?.cacheRetention !== undefined;
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicBedrock && !hasOpenAIOverride) {
     return undefined;
   }
 
