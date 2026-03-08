@@ -10,6 +10,7 @@ export {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
+  setRuntimeConfigSnapshotRefreshHook,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";

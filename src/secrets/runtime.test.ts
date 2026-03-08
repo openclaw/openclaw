@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig, writeConfigFile } from "../config/config.js";
+import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -524,6 +525,82 @@ describe("secrets runtime snapshot", () => {
     expect(store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
       key: "sk-runtime",
+    });
+  });
+
+  it("keeps active secrets runtime snapshots resolved after config writes", async () => {
+    await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const secretFile = path.join(configDir, "secrets.json");
+      const agentDir = path.join(configDir, "agents", "main", "agent");
+      const authStorePath = path.join(agentDir, "auth-profiles.json");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.chmod(configDir, 0o700).catch(() => {
+        // best-effort on tmp dirs that already have secure perms
+      });
+      await fs.writeFile(
+        secretFile,
+        `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      await fs.writeFile(
+        authStorePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
+            providers: {
+              default: { source: "file", path: secretFile, mode: "json" },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                models: [],
+              },
+            },
+          },
+        }),
+        agentDirs: [agentDir],
+      });
+
+      activateSecretsRuntimeSnapshot(prepared);
+
+      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
+      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        key: "sk-file-runtime",
+      });
+
+      await writeConfigFile({
+        ...loadConfig(),
+        gateway: { auth: { mode: "token" } },
+      });
+
+      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
+      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
+      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        key: "sk-file-runtime",
+      });
     });
   });
 

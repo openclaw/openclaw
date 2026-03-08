@@ -140,6 +140,14 @@ export type ReadConfigFileSnapshotForWriteResult = {
   writeOptions: ConfigWriteOptions;
 };
 
+export type RuntimeConfigSnapshotRefreshParams = {
+  sourceConfig: OpenClawConfig;
+};
+
+type RuntimeConfigSnapshotRefreshHook = (
+  params: RuntimeConfigSnapshotRefreshParams,
+) => boolean | Promise<boolean>;
+
 function hashConfigRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
@@ -1306,6 +1314,7 @@ let configCache: {
 } | null = null;
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSnapshotRefreshHook: RuntimeConfigSnapshotRefreshHook | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
@@ -1354,6 +1363,12 @@ export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
 
 export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
+}
+
+export function setRuntimeConfigSnapshotRefreshHook(
+  refreshHook: RuntimeConfigSnapshotRefreshHook | null,
+): void {
+  runtimeConfigSnapshotRefreshHook = refreshHook;
 }
 
 export function loadConfig(): OpenClawConfig {
@@ -1416,6 +1431,17 @@ export async function writeConfigFile(
   // Keep follow-up loadConfig() in sync with the just-persisted config (fixes race where a
   // second connection's agents.update fails with "agent not found" after agents.create).
   clearRuntimeConfigSnapshot();
+  if (runtimeConfigSnapshotRefreshHook) {
+    try {
+      const refreshed = await runtimeConfigSnapshotRefreshHook({ sourceConfig: nextCfg });
+      if (refreshed) {
+        return;
+      }
+    } catch {
+      // Best-effort hook: if a specialized runtime refresh fails after the write landed,
+      // fall back to plain config refresh instead of surfacing a post-persist error.
+    }
+  }
   if (hadBothSnapshots) {
     // Refresh both snapshots from disk so follow-up reads get normalized config and
     // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).

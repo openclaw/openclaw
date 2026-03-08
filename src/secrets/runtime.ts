@@ -8,6 +8,7 @@ import {
 } from "../agents/auth-profiles.js";
 import {
   clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshotRefreshHook,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
@@ -34,7 +35,18 @@ export type PreparedSecretsRuntimeSnapshot = {
   warnings: SecretResolverWarning[];
 };
 
+type SecretsRuntimeRefreshContext = {
+  env: Record<string, string | undefined>;
+  agentDirs: string[];
+  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+};
+
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
+let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
+const preparedSnapshotRefreshContext = new WeakMap<
+  PreparedSecretsRuntimeSnapshot,
+  SecretsRuntimeRefreshContext
+>();
 
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
@@ -45,6 +57,14 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
       store: structuredClone(entry.store),
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
+  };
+}
+
+function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRuntimeRefreshContext {
+  return {
+    env: { ...context.env },
+    agentDirs: [...context.agentDirs],
+    loadAuthStore: context.loadAuthStore,
   };
 }
 
@@ -104,23 +124,58 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     });
   }
 
-  return {
+  const snapshot = {
     sourceConfig,
     config: resolvedConfig,
     authStores,
     warnings: context.warnings,
   };
+  preparedSnapshotRefreshContext.set(snapshot, {
+    env: { ...(params.env ?? process.env) } as Record<string, string | undefined>,
+    agentDirs: [...candidateDirs],
+    loadAuthStore,
+  });
+  return snapshot;
 }
 
 export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): void {
   const next = cloneSnapshot(snapshot);
+  const refreshContext =
+    preparedSnapshotRefreshContext.get(snapshot) ??
+    activeRefreshContext ??
+    ({
+      env: { ...process.env } as Record<string, string | undefined>,
+      agentDirs: collectCandidateAgentDirs(next.sourceConfig),
+      loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
+    } satisfies SecretsRuntimeRefreshContext);
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
+  activeRefreshContext = cloneRefreshContext(refreshContext);
+  setRuntimeConfigSnapshotRefreshHook(async ({ sourceConfig }) => {
+    if (!activeSnapshot || !activeRefreshContext) {
+      return false;
+    }
+    const refreshed = await prepareSecretsRuntimeSnapshot({
+      config: sourceConfig,
+      env: activeRefreshContext.env,
+      agentDirs: activeRefreshContext.agentDirs,
+      loadAuthStore: activeRefreshContext.loadAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(refreshed);
+    return true;
+  });
 }
 
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
-  return activeSnapshot ? cloneSnapshot(activeSnapshot) : null;
+  if (!activeSnapshot) {
+    return null;
+  }
+  const snapshot = cloneSnapshot(activeSnapshot);
+  if (activeRefreshContext) {
+    preparedSnapshotRefreshContext.set(snapshot, cloneRefreshContext(activeRefreshContext));
+  }
+  return snapshot;
 }
 
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
@@ -156,6 +211,8 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
 
 export function clearSecretsRuntimeSnapshot(): void {
   activeSnapshot = null;
+  activeRefreshContext = null;
+  setRuntimeConfigSnapshotRefreshHook(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
 }
