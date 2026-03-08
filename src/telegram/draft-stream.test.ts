@@ -471,7 +471,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
     expect(api.editMessageText).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("telegram stream preview stopped (text length 127 > 100)"),
+      expect.stringContaining("telegram stream preview truncated (127 > 100 chars)"),
     );
   });
 });
