@@ -1,0 +1,401 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "2026-03-04T14:42:37.003Z"
+  },
+  "diagnostics": {
+    "enabled": true,
+    "stuckSessionWarnMs": 90000
+  },
+  "ui": {
+    "assistant": {
+      "name": "Rick Prime Agent",
+      "avatar": "🦞"
+    }
+  },
+  "acp": {
+    "enabled": true,
+    "dispatch": {
+      "enabled": true
+    },
+    "backend": "acpx",
+    "defaultAgent": "codex",
+    "allowedAgents": [
+      "codex",
+      "claude-code",
+      "gemini-cli"
+    ],
+    "maxConcurrentSessions": 4,
+    "stream": {
+      "coalesceIdleMs": 300,
+      "maxChunkChars": 1200,
+      "repeatSuppression": true,
+      "deliveryMode": "live"
+    },
+    "runtime": {
+      "ttlMinutes": 120,
+      "installCommand": "pnpm acpx --help"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5",
+        "fallbacks": [
+          "anthropic/claude-opus-4-1",
+          "google/gemini-2.5-pro"
+        ]
+      },
+      "pdfModel": {
+        "primary": "anthropic/claude-opus-4-1",
+        "fallbacks": [
+          "google/gemini-2.5-pro"
+        ]
+      },
+      "pdfMaxBytesMb": 20,
+      "pdfMaxPages": 50,
+      "workspace": "${OPENCLAW_WORKSPACE}",
+      "memorySearch": {
+        "enabled": true,
+        "sources": [
+          "memory",
+          "sessions"
+        ],
+        "experimental": {
+          "sessionMemory": true
+        },
+        "provider": "openai",
+        "remote": {
+          "batch": {
+            "enabled": true,
+            "wait": true,
+            "concurrency": 2,
+            "pollIntervalMs": 5000,
+            "timeoutMinutes": 45
+          }
+        },
+        "fallback": "mistral",
+        "sync": {
+          "onSessionStart": true,
+          "onSearch": true,
+          "watch": true,
+          "watchDebounceMs": 1200,
+          "intervalMinutes": 20,
+          "sessions": {
+            "deltaBytes": 2200,
+            "deltaMessages": 8
+          }
+        },
+        "query": {
+          "maxResults": 10,
+          "hybrid": {
+            "enabled": true,
+            "vectorWeight": 0.65,
+            "textWeight": 0.35,
+            "candidateMultiplier": 5,
+            "mmr": {
+              "enabled": true,
+              "lambda": 0.62
+            },
+            "temporalDecay": {
+              "enabled": true,
+              "halfLifeDays": 20
+            }
+          }
+        }
+      },
+      "compaction": {
+        "mode": "safeguard",
+        "memoryFlush": {
+          "enabled": true,
+          "forceFlushTranscriptBytes": "2mb",
+          "prompt": "Before compaction, extract durable preferences, constraints, and active commitments into memory files with clear timestamps.",
+          "systemPrompt": "Preserve user intent, operating constraints, and unresolved tasks. Reject redundant or low-signal memory writes."
+        }
+      },
+      "thinkingDefault": "high",
+      "verboseDefault": "on",
+      "heartbeat": {
+        "every": "30m",
+        "target": "none",
+        "lightContext": true
+      },
+      "maxConcurrent": 2,
+      "subagents": {
+        "maxConcurrent": 6,
+        "maxSpawnDepth": 3,
+        "maxChildrenPerAgent": 8,
+        "archiveAfterMinutes": 45,
+        "model": {
+          "primary": "openai/gpt-5-mini",
+          "fallbacks": [
+            "anthropic/claude-sonnet-4"
+          ]
+        },
+        "thinking": "medium",
+        "runTimeoutSeconds": 1200,
+        "announceTimeoutMs": 90000
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "Orchestrator",
+        "identity": {
+          "name": "Rick Prime",
+          "theme": "systems",
+          "emoji": "🧠"
+        },
+        "subagents": {
+          "allowAgents": [
+            "researcher",
+            "builder",
+            "critic"
+          ]
+        },
+        "tools": {
+          "profile": "coding"
+        }
+      },
+      {
+        "id": "researcher",
+        "name": "Research Specialist",
+        "tools": {
+          "profile": "full",
+          "allow": [
+            "web_search",
+            "web_fetch",
+            "read",
+            "grep",
+            "glob",
+            "ls"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "exec"
+          ]
+        }
+      },
+      {
+        "id": "builder",
+        "name": "Implementation Specialist",
+        "tools": {
+          "profile": "coding",
+          "allow": [
+            "read",
+            "write",
+            "edit",
+            "grep",
+            "glob",
+            "ls",
+            "exec",
+            "run_tests"
+          ],
+          "deny": [
+            "gateway"
+          ]
+        }
+      },
+      {
+        "id": "critic",
+        "name": "Verification Specialist",
+        "tools": {
+          "profile": "coding",
+          "allow": [
+            "read",
+            "grep",
+            "glob",
+            "ls",
+            "run_tests",
+            "sessions_history"
+          ],
+          "deny": [
+            "write",
+            "edit"
+          ]
+        }
+      }
+    ]
+  },
+  "tools": {
+    "profile": "coding",
+    "alsoAllow": [
+      "pdf",
+      "sessions_spawn"
+    ],
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "perplexity",
+        "maxResults": 8
+      },
+      "fetch": {
+        "enabled": true,
+        "maxChars": 30000
+      }
+    },
+    "sessions": {
+      "visibility": "tree"
+    },
+    "loopDetection": {
+      "enabled": true,
+      "warningThreshold": 8,
+      "criticalThreshold": 14,
+      "globalCircuitBreakerThreshold": 24
+    },
+    "subagents": {
+      "tools": {
+        "allow": [
+          "read",
+          "write",
+          "edit",
+          "grep",
+          "glob",
+          "ls",
+          "sessions_send",
+          "sessions_history",
+          "sessions_list"
+        ],
+        "deny": [
+          "gateway",
+          "cron"
+        ]
+      }
+    }
+  },
+  "messages": {
+    "responsePrefix": "auto",
+    "ackReactionScope": "group-mentions",
+    "statusReactions": {
+      "enabled": true
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "text": true,
+    "config": true,
+    "debug": true,
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "hooks": {
+    "enabled": true,
+    "defaultSessionKey": "agent:main:main",
+    "allowRequestSessionKey": false,
+    "allowedSessionKeyPrefixes": [
+      "agent:"
+    ],
+    "allowedAgentIds": [
+      "main",
+      "researcher",
+      "builder",
+      "critic"
+    ],
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": {
+          "enabled": true,
+          "messages": 25,
+          "llmSlug": true
+        },
+        "bootstrap-extra-files": {
+          "enabled": true,
+          "paths": [
+            "agent-kit/personality/SOUL.md",
+            "agent-kit/personality/IDENTITY.md",
+            "agent-kit/personality/TOOLS.md",
+            "agent-kit/personality/USER.md",
+            "agent-kit/personality/HEARTBEAT.md"
+          ]
+        },
+        "command-logger": {
+          "enabled": true
+        },
+        "boot-md": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "commands": {
+        "native": "auto",
+        "nativeSkills": "auto"
+      },
+      "dmPolicy": "open",
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "allowFrom": [
+        "*"
+      ],
+      "groupPolicy": "allowlist",
+      "streaming": "partial",
+      "retry": {
+        "attempts": 3
+      },
+      "network": {
+        "autoSelectFamily": true,
+        "dnsResultOrder": "ipv4first"
+      },
+      "reactionLevel": "minimal"
+    }
+  },
+  "gateway": {
+    "bind": "loopback",
+    "controlUi": {
+      "enabled": true
+    },
+    "tools": {
+      "deny": [
+        "sessions_spawn",
+        "sessions_send",
+        "gateway",
+        "whatsapp_login"
+      ]
+    },
+    "channelHealthCheckMinutes": 3
+  },
+  "memory": {
+    "backend": "qmd",
+    "citations": "auto",
+    "qmd": {
+      "searchMode": "search",
+      "includeDefaultMemory": true,
+      "sessions": {
+        "enabled": true,
+        "exportDir": "${OPENCLAW_WORKSPACE}/memory/sessions",
+        "retentionDays": 45
+      },
+      "update": {
+        "interval": "15m",
+        "debounceMs": 1500,
+        "onBoot": true,
+        "waitForBootSync": false,
+        "embedInterval": "30m"
+      },
+      "limits": {
+        "maxResults": 14,
+        "maxSnippetChars": 900,
+        "maxInjectedChars": 5500,
+        "timeoutMs": 18000
+      }
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": [
+      "acpx",
+      "telegram"
+    ],
+    "entries": {
+      "acpx": {
+        "enabled": true
+      }
+    }
+  }
+}

@@ -743,6 +743,43 @@ function createZaiToolStreamWrapper(
 }
 
 /**
+ * Inject `chat_template_kwargs` for NVIDIA models that require it (e.g., Z-AI GLM5).
+ * This enables the reasoning configuration required by the NVIDIA integration endpoint.
+ */
+function createNvidiaThinkingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.provider !== "nvidia") {
+      return underlying(model, context, options);
+    }
+    const isGlm = model.id.toLowerCase().includes("glm");
+    const isReasoning = thinkingLevel && thinkingLevel !== "off";
+
+    if (!isGlm || !isReasoning) {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          payloadObj.chat_template_kwargs = {
+            enable_thinking: true,
+            clear_thinking: false,
+          };
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
@@ -830,6 +867,9 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  // Apply chat_template_kwargs for NVIDIA models like GLM5 that require it.
+  agent.streamFn = createNvidiaThinkingWrapper(agent.streamFn, thinkingLevel);
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
