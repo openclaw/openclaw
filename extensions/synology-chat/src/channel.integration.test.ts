@@ -132,7 +132,9 @@ describe("Synology channel wiring integration", () => {
     const plugin = createSynologyChatPlugin();
     const abortController = new AbortController();
     const cfg = {
-      bindings: [{ agentId: "nas-code", match: { channel: "synology-chat", accountId: "code-developer" } }],
+      bindings: [
+        { agentId: "nas-code", match: { channel: "synology-chat", accountId: "code-developer" } },
+      ],
       channels: {
         "synology-chat": {
           enabled: true,
@@ -213,10 +215,7 @@ describe("Synology channel wiring integration", () => {
         dmScope: "per-account-channel-peer",
       },
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "nas-code" },
-        ],
+        list: [{ id: "main", default: true }, { id: "nas-code" }],
       },
       bindings: [
         {
