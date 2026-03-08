@@ -789,13 +789,20 @@ function createMoonshotThinkingWrapper(
 function isKimiCodingAnthropicEndpoint(model: {
   api?: unknown;
   provider?: unknown;
+  id?: unknown;
   baseUrl?: unknown;
 }): boolean {
   if (model.api !== "anthropic-messages") {
     return false;
   }
 
-  if (typeof model.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding") {
+  const provider = typeof model.provider === "string" ? model.provider.trim().toLowerCase() : "";
+  if (provider === "kimi-coding") {
+    return true;
+  }
+
+  const modelId = typeof model.id === "string" ? model.id.trim().toLowerCase() : "";
+  if (provider === "moonshot" && (modelId.startsWith("kimi-") || modelId.startsWith("k2"))) {
     return true;
   }
 
