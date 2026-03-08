@@ -158,6 +158,21 @@ describe("normalizeReplyPayload", () => {
 
     expect(result).toBeNull();
   });
+
+  it("keeps standalone function call wrapper lines when no tool pipe tags are present", () => {
+    const text = "These wrappers are literal:\n<function_calls>\n</function_calls>";
+    const result = normalizeReplyPayload({ text });
+
+    expect(result).toEqual({ text });
+  });
+
+  it("preserves trailing newlines after removing leaked internal tool markers", () => {
+    const result = normalizeReplyPayload({
+      text: "Hello\n<|tool_list_end|>\n\nWorld\n",
+    });
+
+    expect(result).toEqual({ text: "Hello\n\nWorld\n" });
+  });
 });
 
 describe("typing controller", () => {

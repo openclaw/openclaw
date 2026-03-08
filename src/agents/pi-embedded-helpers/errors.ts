@@ -405,11 +405,13 @@ function stripInternalToolMarkersFromText(text: string): string {
   if (!text) {
     return text;
   }
+  const shouldStripFunctionCallWrappers = text.search(INTERNAL_TOOL_PIPE_TAG_RE) !== -1;
   let removedAny = false;
   const keptLines = text.split("\n").filter((line) => {
-    const strippedLine = line
-      .replace(INTERNAL_TOOL_PIPE_TAG_RE, "")
-      .replace(FUNCTION_CALLS_TAG_RE, "");
+    const withoutPipeTags = line.replace(INTERNAL_TOOL_PIPE_TAG_RE, "");
+    const strippedLine = shouldStripFunctionCallWrappers
+      ? withoutPipeTags.replace(FUNCTION_CALLS_TAG_RE, "")
+      : withoutPipeTags;
     const isMarkerOnlyLine = strippedLine.trim().length === 0 && strippedLine !== line;
     if (isMarkerOnlyLine) {
       removedAny = true;
@@ -420,7 +422,7 @@ function stripInternalToolMarkersFromText(text: string): string {
   if (!removedAny) {
     return text;
   }
-  return keptLines.join("\n").replace(/(?:\r?\n[ \t]*)+$/, "");
+  return keptLines.join("\n");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {

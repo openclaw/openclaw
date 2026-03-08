@@ -38,6 +38,18 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("preserves standalone function call wrapper lines without tool pipe tags", () => {
+    const text = ["These wrappers are literal:", "<function_calls>", "</function_calls>"].join(
+      "\n",
+    );
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("preserves trailing newlines after removing marker-only lines", () => {
+    const input = ["Hello", "<|tool_list_end|>", "", "World", ""].join("\n");
+    expect(sanitizeUserFacingText(input)).toBe("Hello\n\nWorld\n");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
