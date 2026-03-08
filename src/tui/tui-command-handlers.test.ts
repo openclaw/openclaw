@@ -3,18 +3,19 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
+type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
-  setSession?: ReturnType<typeof vi.fn>;
+  setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
-  const setSession = params?.setSession ?? vi.fn().mockResolvedValue(undefined);
+  const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const requestRender = vi.fn();
@@ -109,7 +110,7 @@ describe("tui command handlers", () => {
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
-    const setSessionMock = vi.fn().mockResolvedValue(undefined);
+    const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;
     const { handleCommand, resetSession } = createHarness({
       loadHistory,
       setSession: setSessionMock,
