@@ -43,6 +43,19 @@ export function stripXaiUnsupportedKeywords(schema: unknown): unknown {
   return cleaned;
 }
 
+export function isVolcengineProvider(modelProvider?: string, modelId?: string): boolean {
+  const provider = modelProvider?.toLowerCase() ?? "";
+  const model = modelId?.toLowerCase() ?? "";
+  if (provider.includes("volcengine") || provider.includes("ark")) {
+    return true;
+  }
+  // Kimi models hosted on Volcengine share the same limitation
+  if (model.includes("kimi")) {
+    return true;
+  }
+  return false;
+}
+
 export function isXaiProvider(modelProvider?: string, modelId?: string): boolean {
   const provider = modelProvider?.toLowerCase() ?? "";
   if (provider.includes("xai") || provider.includes("x-ai")) {

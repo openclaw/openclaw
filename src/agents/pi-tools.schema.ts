@@ -1,6 +1,10 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
-import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
+import {
+  isVolcengineProvider,
+  isXaiProvider,
+  stripXaiUnsupportedKeywords,
+} from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -89,12 +93,13 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
+  const isVolcengine = isVolcengineProvider(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (isXai) {
+    if (isXai || isVolcengine) {
       return stripXaiUnsupportedKeywords(s);
     }
     return s;
