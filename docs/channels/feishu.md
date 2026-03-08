@@ -582,8 +582,22 @@ Use `bindings` to route Feishu DMs or groups to different agents.
 Routing fields:
 
 - `match.channel`: `"feishu"`
+- `match.accountId`: optional Feishu account scope. **Important:** if omitted, the binding matches the default account only. Use `"*"` to match any configured Feishu account.
 - `match.peer.kind`: `"direct"` or `"group"`
 - `match.peer.id`: user Open ID (`ou_xxx`) or group ID (`oc_xxx`)
+
+Example (route one DM to a specific agent regardless of which Feishu account instance receives it):
+
+```json5
+{
+  agentId: "clawd-fan",
+  match: {
+    channel: "feishu",
+    accountId: "*",
+    peer: { kind: "direct", id: "ou_xxx" },
+  },
+}
+```
 
 See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
 
