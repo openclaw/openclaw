@@ -1441,8 +1441,13 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          log.debug(
-            `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
+          const totalDurationMs = Date.now() - started;
+          const ttftMs = attempt.firstTokenMs;
+          // Subtract pre-prompt setup time so streamingMs reflects only post-first-token duration
+          const setupMs = attempt.promptStartedAt != null ? attempt.promptStartedAt - started : 0;
+          const streamingMs = ttftMs != null ? totalDurationMs - setupMs - ttftMs : undefined;
+          log.info(
+            `[PERF] embedded run done: runId=${params.runId} sessionId=${params.sessionId} provider=${provider}/${modelId} durationMs=${totalDurationMs} ttftMs=${ttftMs ?? "n/a"} streamingMs=${streamingMs ?? "n/a"} aborted=${aborted}`,
           );
           if (lastProfileId) {
             await markAuthProfileGood({
@@ -1460,7 +1465,7 @@ export async function runEmbeddedPiAgent(
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {
-              durationMs: Date.now() - started,
+              durationMs: totalDurationMs,
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,

@@ -563,6 +563,7 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
+  ChannelOnboardingStatusContext,
 } from "../channels/plugins/onboarding-types.js";
 export {
   addWildcardAllowFrom,

@@ -1507,6 +1507,19 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      // Track time to first token (TTFT) via onAssistantMessageStart callback.
+      // Declared here (before subscription) so the wrapper is in scope for subscribeEmbeddedPiSession,
+      // while promptStartedAt (set later, inside the prompt try-block) is captured by closure.
+      let firstTokenAt: number | undefined;
+      let promptStartedAt: number | undefined;
+      const originalOnAssistantMessageStart = params.onAssistantMessageStart;
+      const wrappedOnAssistantMessageStart = () => {
+        if (firstTokenAt === undefined) {
+          firstTokenAt = Date.now();
+        }
+        return originalOnAssistantMessageStart?.();
+      };
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1524,7 +1537,7 @@ export async function runEmbeddedAttempt(
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply,
-        onAssistantMessageStart: params.onAssistantMessageStart,
+        onAssistantMessageStart: wrappedOnAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
@@ -1626,7 +1639,7 @@ export async function runEmbeddedAttempt(
       let promptErrorSource: "prompt" | "compaction" | null = null;
       const prePromptMessageCount = activeSession.messages.length;
       try {
-        const promptStartedAt = Date.now();
+        promptStartedAt = Date.now();
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -2051,6 +2064,8 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        firstTokenMs: firstTokenAt && promptStartedAt ? firstTokenAt - promptStartedAt : undefined,
+        promptStartedAt,
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };

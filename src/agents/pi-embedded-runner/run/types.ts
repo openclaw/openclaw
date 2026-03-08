@@ -61,6 +61,10 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
+  /** Time to first token (ms from prompt start to first assistant message_start event). */
+  firstTokenMs?: number;
+  /** Epoch ms when the prompt was sent (used to subtract pre-prompt setup from run-level timings). */
+  promptStartedAt?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
 };

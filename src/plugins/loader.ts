@@ -136,6 +136,7 @@ const pluginSdkScopedAliasEntries = [
     distFile: "diagnostics-otel.js",
   },
   { subpath: "diffs", srcFile: "diffs.ts", distFile: "diffs.js" },
+  { subpath: "dingtalk", srcFile: "dingtalk.ts", distFile: "dingtalk.js" },
   { subpath: "feishu", srcFile: "feishu.ts", distFile: "feishu.js" },
   {
     subpath: "google-gemini-cli-auth",
