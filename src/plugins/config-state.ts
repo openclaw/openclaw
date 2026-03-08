@@ -36,6 +36,22 @@ const normalizeList = (value: unknown): string[] => {
   return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 };
 
+const normalizeTrackedInstallLoadPaths = (installs: unknown): string[] => {
+  if (!installs || typeof installs !== "object" || Array.isArray(installs)) {
+    return [];
+  }
+  return Object.values(installs)
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return "";
+      }
+      return typeof (entry as { installPath?: unknown }).installPath === "string"
+        ? (entry as { installPath: string }).installPath.trim()
+        : "";
+    })
+    .filter(Boolean);
+};
+
 const normalizeSlotValue = (value: unknown): string | null | undefined => {
   if (typeof value !== "string") {
     return undefined;
@@ -91,11 +107,17 @@ export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
   const memorySlot = normalizeSlotValue(config?.slots?.memory);
+  const loadPaths = Array.from(
+    new Set([
+      ...normalizeList(config?.load?.paths),
+      ...normalizeTrackedInstallLoadPaths(config?.installs),
+    ]),
+  );
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow),
     deny: normalizeList(config?.deny),
-    loadPaths: normalizeList(config?.load?.paths),
+    loadPaths,
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
     },

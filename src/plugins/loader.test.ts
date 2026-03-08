@@ -1116,6 +1116,57 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("prefers tracked installed plugin over broken bundled duplicate ids", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "feishu",
+      body: `require("missing-feishu-dependency"); module.exports = { id: "feishu", register() {} };`,
+      dir: bundledDir,
+      filename: "index.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "feishu");
+      fs.mkdirSync(globalDir, { recursive: true });
+      writePlugin({
+        id: "feishu",
+        body: `module.exports = { id: "feishu", register() {} };`,
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            allow: ["feishu"],
+            entries: {
+              feishu: { enabled: true },
+            },
+            installs: {
+              feishu: {
+                source: "npm",
+                spec: "@openclaw/feishu",
+                installPath: globalDir,
+              },
+            },
+          },
+        },
+      });
+
+      const entries = registry.plugins.filter((entry) => entry.id === "feishu");
+      const loaded = entries.find((entry) => entry.status === "loaded");
+      const overridden = entries.find((entry) => entry.status === "disabled");
+      const failed = entries.find((entry) => entry.status === "error");
+      expect(loaded?.origin).toBe("config");
+      expect(overridden?.origin).toBe("bundled");
+      expect(overridden?.error).toContain("overridden by config plugin");
+      expect(failed).toBeUndefined();
+    });
+  });
+
   it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -73,6 +73,30 @@ describe("normalizePluginsConfig", () => {
     });
     expect(result.entries["voice-call"]?.hooks).toBeUndefined();
   });
+
+  it("treats tracked install paths as implicit config load paths", () => {
+    const result = normalizePluginsConfig({
+      load: {
+        paths: ["  /plugins/explicit  ", "/plugins/tracked"],
+      },
+      installs: {
+        feishu: {
+          source: "npm",
+          installPath: "  /plugins/tracked  ",
+        },
+        lark: {
+          source: "path",
+          installPath: "/plugins/other",
+        },
+        broken: {
+          source: "archive",
+          installPath: "   ",
+        },
+      },
+    });
+
+    expect(result.loadPaths).toEqual(["/plugins/explicit", "/plugins/tracked", "/plugins/other"]);
+  });
 });
 
 describe("resolveEffectiveEnableState", () => {
