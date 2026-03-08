@@ -354,8 +354,8 @@ describe("models list/status", () => {
 
     await modelsListCommand({ all: true, json: true }, runtime);
 
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledWith(resolvedConfig);
+    expect(ensureOpenClawModelsJson).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJson.mock.calls[0]?.[0]).toEqual(resolvedConfig);
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
