@@ -528,8 +528,9 @@ async function maybeFetchFirecrawlWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  const policySuffix = params.ssrfPolicy?.allowRfc2544BenchmarkRange ? ":rfc2544" : "";
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${policySuffix}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
