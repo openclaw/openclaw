@@ -4,6 +4,7 @@ type HostSource = string | null | undefined;
 
 type CanvasHostUrlParams = {
   canvasPort?: number;
+  advertisedUrl?: HostSource;
   hostOverride?: HostSource;
   requestHost?: HostSource;
   forwardedProto?: HostSource | HostSource[];
@@ -58,6 +59,10 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   const port = params.canvasPort;
   if (!port) {
     return undefined;
+  }
+
+  if (params.advertisedUrl?.trim()) {
+    return new URL(params.advertisedUrl.trim()).origin;
   }
 
   const scheme =

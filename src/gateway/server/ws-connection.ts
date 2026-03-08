@@ -65,6 +65,7 @@ export type GatewayWsSharedHandlerParams = {
   gatewayHost?: string;
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
+  canvasHostAdvertisedUrl?: string;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -98,6 +99,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     gatewayHost,
     canvasHostEnabled,
     canvasHostServerPort,
+    canvasHostAdvertisedUrl,
     resolvedAuth,
     rateLimiter,
     browserRateLimiter,
@@ -131,6 +133,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const canvasHostOverride =
       gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::" ? gatewayHost : undefined;
     const canvasHostUrl = resolveCanvasHostUrl({
+      advertisedUrl: canvasHostAdvertisedUrl,
       canvasPort: canvasHostPortForWs,
       hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
       requestHost: upgradeReq.headers.host,
