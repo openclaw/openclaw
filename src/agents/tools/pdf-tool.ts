@@ -411,10 +411,10 @@ export function createPdfTool(options?: {
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()
           ? {
-            root: options.sandbox.root.trim(),
-            bridge: options.sandbox.bridge,
-            workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-          }
+              root: options.sandbox.root.trim(),
+              bridge: options.sandbox.bridge,
+              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+            }
           : null;
 
       // MARK: - Load each PDF
@@ -462,26 +462,26 @@ export function createPdfTool(options?: {
 
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = sandboxConfig
           ? await resolveSandboxedBridgeMediaPath({
-            sandbox: sandboxConfig,
-            mediaPath: resolvedPdf,
-            inboundFallbackDir: "media/inbound",
-          })
+              sandbox: sandboxConfig,
+              mediaPath: resolvedPdf,
+              inboundFallbackDir: "media/inbound",
+            })
           : {
-            resolved: resolvedPdf.startsWith("file://")
-              ? resolvedPdf.slice("file://".length)
-              : resolvedPdf,
-          };
+              resolved: resolvedPdf.startsWith("file://")
+                ? resolvedPdf.slice("file://".length)
+                : resolvedPdf,
+            };
 
         const media = sandboxConfig
           ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
-            maxBytes,
-            sandboxValidated: true,
-            readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-          })
+              maxBytes,
+              sandboxValidated: true,
+              readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+            })
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
-            maxBytes,
-            localRoots,
-          });
+              maxBytes,
+              localRoots,
+            });
 
         if (media.kind !== "document") {
           // Check MIME type more specifically
@@ -540,17 +540,17 @@ export function createPdfTool(options?: {
       const pdfDetails =
         loadedPdfs.length === 1
           ? {
-            pdf: loadedPdfs[0].resolvedPath,
-            ...(loadedPdfs[0].rewrittenFrom
-              ? { rewrittenFrom: loadedPdfs[0].rewrittenFrom }
-              : {}),
-          }
+              pdf: loadedPdfs[0].resolvedPath,
+              ...(loadedPdfs[0].rewrittenFrom
+                ? { rewrittenFrom: loadedPdfs[0].rewrittenFrom }
+                : {}),
+            }
           : {
-            pdfs: loadedPdfs.map((p) => ({
-              pdf: p.resolvedPath,
-              ...(p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {}),
-            })),
-          };
+              pdfs: loadedPdfs.map((p) => ({
+                pdf: p.resolvedPath,
+                ...(p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {}),
+              })),
+            };
 
       return buildTextToolResult(result, { native: result.native, ...pdfDetails });
     },

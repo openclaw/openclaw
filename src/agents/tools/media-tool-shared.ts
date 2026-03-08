@@ -38,7 +38,7 @@ export function applyImageModelConfigDefaults(
   };
 }
 
-function uniqueNormalized(paths: string[]): string[] {
+function uniqueNormalized(paths: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const candidate of paths) {
@@ -65,8 +65,8 @@ function globStaticPrefix(pattern: string): string {
 }
 
 function resolvePolicyRoots(
-  entries: string[] | undefined,
-  workspaceDir: string | undefined,
+  entries: readonly (string | null | undefined)[] | undefined,
+  workspaceDir: string | null | undefined,
 ): string[] {
   if (!entries || entries.length === 0) {
     return [];
@@ -97,7 +97,7 @@ export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { fsPolicy?: ToolFsPolicy },
 ): string[] {
-  const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
+  const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw) ?? undefined;
   const policy = options?.fsPolicy;
 
   if (policy?.workspaceOnly) {
