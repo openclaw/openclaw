@@ -5,14 +5,42 @@ import { stripThinkingTags } from "../format.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
-function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = role.toLowerCase() === "user";
-  if (role === "assistant") {
+/**
+ * Strip memory-lancedb plugin context tags from user messages.
+ * Reads plugin-specific metadata from `message.pluginMeta["memory-lancedb"]`
+ * which is namespaced by the hook system and cannot be spoofed by other plugins.
+ */
+function stripMemoryLancedbContext(text: string, message: Record<string, unknown>): string {
+  const pluginMeta = message.pluginMeta as Record<string, unknown> | undefined;
+  const lancedbMeta = pluginMeta?.["memory-lancedb"] as Record<string, unknown> | undefined;
+  if (!lancedbMeta?.stripTagRegex) {
+    return text;
+  }
+  try {
+    const { regex, flags } = lancedbMeta.stripTagRegex as { regex: string; flags?: string };
+    return text.replace(new RegExp(regex, flags ?? "i"), "").trim();
+  } catch {
+    return text;
+  }
+}
+
+function processMessageText(text: string, role: string, message: Record<string, unknown>): string {
+  if (role.toLowerCase() === "assistant") {
     return stripThinkingTags(text);
   }
-  return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(text))
-    : stripEnvelope(text);
+
+  const isUser = role.toLowerCase() === "user";
+  if (!isUser) {
+    return stripEnvelope(text);
+  }
+
+  // Strip inbound metadata (channel info, etc.)
+  let result = stripInboundMetadata(stripEnvelope(text));
+
+  // Strip memory-lancedb plugin context tags
+  result = stripMemoryLancedbContext(result, message);
+
+  return result;
 }
 
 export function extractText(message: unknown): string | null {
@@ -22,7 +50,7 @@ export function extractText(message: unknown): string | null {
   if (!raw) {
     return null;
   }
-  return processMessageText(raw, role);
+  return processMessageText(raw, role, m);
 }
 
 export function extractTextCached(message: unknown): string | null {

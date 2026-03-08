@@ -430,6 +430,16 @@ export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
   /**
+   * Generic key-value bag for plugins to attach metadata to the persisted user message.
+   * The hook system **automatically namespaces** each plugin's metadata under its plugin ID:
+   * `message.pluginMeta = { [pluginId]: messageMeta }`. This means plugins cannot
+   * interfere with each other's metadata or with core message fields.
+   *
+   * The UI reads plugin-specific metadata by checking known plugin IDs, e.g.
+   * `message.pluginMeta["memory-lancedb"]`.
+   */
+  messageMeta?: Record<string, unknown>;
+  /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
@@ -444,6 +454,7 @@ export type PluginHookBeforePromptBuildResult = {
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
+  "messageMeta",
   "prependSystemContext",
   "appendSystemContext",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];

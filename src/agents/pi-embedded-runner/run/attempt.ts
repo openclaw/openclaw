@@ -584,6 +584,8 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    // Both results are already namespaced by pluginId from hooks.ts, so shallow merge is safe
+    messageMeta: { ...promptBuildResult?.messageMeta, ...legacyResult?.messageMeta },
   };
 }
 
@@ -1086,6 +1088,23 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
+
+      // Mutable ref for injecting plugin message metadata into the *next* user message
+      // that gets persisted to the session transcript. This is set by the
+      // before_prompt_build hook result and consumed by the appendMessage wrapper below.
+      // Metadata is stored under `message.pluginMeta` to avoid collisions with core fields.
+      let pendingMessageMeta: Record<string, unknown> | undefined;
+      {
+        const innerAppend = sessionManager.appendMessage.bind(sessionManager);
+        sessionManager.appendMessage = ((msg: unknown) => {
+          const message = msg as Record<string, unknown>;
+          if (pendingMessageMeta && message.role === "user") {
+            message.pluginMeta = pendingMessageMeta;
+            pendingMessageMeta = undefined;
+          }
+          return innerAppend(msg as Parameters<typeof innerAppend>[0]);
+        }) as typeof sessionManager.appendMessage;
+      }
 
       if (hadSessionFile && params.contextEngine?.bootstrap) {
         try {
@@ -1642,6 +1661,12 @@ export async function runEmbeddedAttempt(
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
+        // Stage messageMeta so it gets injected into the next user message
+        // that the agent loop persists (via the appendMessage wrapper installed
+        // above). This ensures plugin metadata lands on the *new* prompt message.
+        if (hookResult?.messageMeta && Object.keys(hookResult.messageMeta).length > 0) {
+          pendingMessageMeta = hookResult.messageMeta;
+        }
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
