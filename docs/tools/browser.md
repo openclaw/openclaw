@@ -649,6 +649,9 @@ Strict-mode example (block private/internal destinations by default):
 For Linux-specific issues (especially snap Chromium), see
 [Browser troubleshooting](/tools/browser-linux-troubleshooting).
 
+For WSL2 Gateway + Windows Chrome split-host setups, see
+[WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
+
 ## Agent tools + how control works
 
 The agent gets **one tool** for browser automation:
