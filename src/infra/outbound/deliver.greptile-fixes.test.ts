@@ -272,6 +272,90 @@ describe("deliverOutboundPayloads Greptile fixes", () => {
     ]);
   });
 
+  it("preserves inherited replyToId across all googlechat sendPayload payloads (thread routing)", async () => {
+    const sendPayload = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "googlechat", messageId: "gc-1" })
+      .mockResolvedValueOnce({ channel: "googlechat", messageId: "gc-2" })
+      .mockResolvedValueOnce({ channel: "googlechat", messageId: "gc-3" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "googlechat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "googlechat",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "googlechat",
+      to: "spaces/AAAA",
+      payloads: [
+        { text: "first", channelData: { mode: "custom" } },
+        { text: "second", channelData: { mode: "custom" } },
+        { text: "third", channelData: { mode: "custom" } },
+      ],
+      replyToId: "spaces/AAAA/threads/BBBB",
+      skipQueue: true,
+    });
+
+    expect(sendPayload).toHaveBeenCalledTimes(3);
+    // All payloads must retain the thread identifier — consuming it after the
+    // first send would orphan subsequent payloads to the top level.
+    expect(sendPayload.mock.calls[0]?.[0]?.replyToId).toBe("spaces/AAAA/threads/BBBB");
+    expect(sendPayload.mock.calls[1]?.[0]?.replyToId).toBe("spaces/AAAA/threads/BBBB");
+    expect(sendPayload.mock.calls[2]?.[0]?.replyToId).toBe("spaces/AAAA/threads/BBBB");
+    expect(results).toEqual([
+      { channel: "googlechat", messageId: "gc-1" },
+      { channel: "googlechat", messageId: "gc-2" },
+      { channel: "googlechat", messageId: "gc-3" },
+    ]);
+  });
+
+  it("preserves inherited replyToId across googlechat text payloads (sendText path)", async () => {
+    const sendText = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "googlechat", messageId: "gc-t1", chatId: "spaces/X" })
+      .mockResolvedValueOnce({ channel: "googlechat", messageId: "gc-t2", chatId: "spaces/X" });
+    const sendMedia = vi.fn();
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "googlechat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "googlechat",
+            outbound: { deliveryMode: "direct", sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "googlechat",
+      to: "spaces/X",
+      payloads: [{ text: "chunk one" }, { text: "chunk two" }],
+      replyToId: "spaces/X/threads/T1",
+      skipQueue: true,
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(2);
+    // Both text sends should receive replyToId for thread routing
+    expect(sendText.mock.calls[0]?.[0]?.replyToId).toBe("spaces/X/threads/T1");
+    expect(sendText.mock.calls[1]?.[0]?.replyToId).toBe("spaces/X/threads/T1");
+    expect(results).toHaveLength(2);
+  });
+
   it("retries replyToId on later non-signal media payloads after a best-effort failure", async () => {
     const sendText = vi.fn();
     const sendMedia = vi
