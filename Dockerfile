@@ -12,13 +12,17 @@
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
+ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:22-bookworm-slim@sha256:9c2c405e3ff9b9afb2873232d24bb06367d649aa3e6259cbe314da59578e81e9"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:9c2c405e3ff9b9afb2873232d24bb06367d649aa3e6259cbe314da59578e81e9"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Trade-off: digests must be updated manually when upstream tags move.
 # To update, run: docker manifest inspect node:22-bookworm (or podman)
-# and replace the digest below with the current amd64 entry.
+# and replace the digest below with the current multi-arch manifest list entry.
 
-FROM node:22-bookworm@sha256:6d735b4d33660225271fda0a412802746658c3a1b975507b2803ed299609760a AS ext-deps
+FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
 COPY extensions /tmp/extensions
 # Copy package.json for opted-in extensions so pnpm resolves their deps.
@@ -31,7 +35,7 @@ RUN mkdir -p /out && \
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
-FROM node:22-bookworm@sha256:6d735b4d33660225271fda0a412802746658c3a1b975507b2803ed299609760a AS build
+FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
@@ -69,13 +73,15 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
 # ── Runtime base images ─────────────────────────────────────────
-FROM node:22-bookworm@sha256:6d735b4d33660225271fda0a412802746658c3a1b975507b2803ed299609760a AS base-default
+FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
+ARG OPENCLAW_NODE_BOOKWORM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
-  org.opencontainers.image.base.digest="sha256:6d735b4d33660225271fda0a412802746658c3a1b975507b2803ed299609760a"
+  org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_DIGEST}"
 
-FROM node:22-bookworm-slim@sha256:b41c15b715b5d6e3f305e9c6480a2396dd5f130b63add98d3d45760376f20823 AS base-slim
+FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-slim
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm-slim" \
-  org.opencontainers.image.base.digest="sha256:b41c15b715b5d6e3f305e9c6480a2396dd5f130b63add98d3d45760376f20823"
+  org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
@@ -111,6 +117,12 @@ COPY --from=build --chown=node:node /app/openclaw.mjs .
 COPY --from=build --chown=node:node /app/extensions ./extensions
 COPY --from=build --chown=node:node /app/skills ./skills
 COPY --from=build --chown=node:node /app/docs ./docs
+
+# Docker live-test runners invoke `pnpm` inside the runtime image.
+# Activate the exact pinned package manager now so the container does not
+# rely on a first-run network fetch or missing shims under the non-root user.
+RUN corepack enable && \
+    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate
 
 # Install additional system packages needed by your skills or extensions.
 # Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .

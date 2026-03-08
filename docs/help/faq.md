@@ -2186,7 +2186,7 @@ Fix checklist:
 2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
    exists in env/auth profiles so the provider can be injected.
 3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
-   `minimax/MiniMax-M2.5-highspeed` (legacy: `minimax/MiniMax-M2.5-Lightning`).
+   `minimax/MiniMax-M2.5-highspeed`.
 4. Run:
 
    ```bash
@@ -2241,7 +2241,7 @@ Yes. OpenClaw ships a few default shorthands (only applied when the model exists
 - `sonnet` → `anthropic/claude-sonnet-4-5`
 - `gpt` → `openai/gpt-5.2`
 - `gpt-mini` → `openai/gpt-5-mini`
-- `gemini` → `google/gemini-3-pro-preview`
+- `gemini` → `google/gemini-3.1-pro-preview`
 - `gemini-flash` → `google/gemini-3-flash-preview`
 
 If you set your own alias with the same name, your value wins.

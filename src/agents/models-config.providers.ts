@@ -547,8 +547,11 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
   }
-  if (id === "gemini-3.1-flash") {
-    return "gemini-3.1-flash-preview";
+  // Preserve compatibility with earlier OpenClaw docs/config that pointed at a
+  // non-existent Gemini Flash preview ID. Google's current Flash text model is
+  // `gemini-3-flash-preview`.
+  if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
+    return "gemini-3-flash-preview";
   }
   return id;
 }
@@ -762,11 +765,6 @@ function buildMinimaxProvider(): ProviderConfig {
         name: "MiniMax M2.5 Highspeed",
         reasoning: true,
       }),
-      buildMinimaxTextModel({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
-        reasoning: true,
-      }),
     ],
   };
 }
@@ -791,11 +789,6 @@ function buildMinimaxPortalProvider(): ProviderConfig {
       buildMinimaxTextModel({
         id: "MiniMax-M2.5-highspeed",
         name: "MiniMax M2.5 Highspeed",
-        reasoning: true,
-      }),
-      buildMinimaxTextModel({
-        id: "MiniMax-M2.5-Lightning",
-        name: "MiniMax M2.5 Lightning",
         reasoning: true,
       }),
     ],

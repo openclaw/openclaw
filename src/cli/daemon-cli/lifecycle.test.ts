@@ -222,8 +222,16 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals an unmanaged gateway process on stop", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     findGatewayPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
     runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
       await params.onNotLoaded?.();
     });
@@ -236,8 +244,16 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     findGatewayPidsOnPortSync.mockReturnValue([4200]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
         await params.onNotLoaded?.();
@@ -265,7 +281,15 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     findGatewayPidsOnPortSync.mockReturnValue([4200, 4300]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
         await params.onNotLoaded?.();
