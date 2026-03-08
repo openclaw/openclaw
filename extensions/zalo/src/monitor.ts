@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
-  resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
@@ -13,11 +12,7 @@ import type {
   OpenClawConfig,
   OutboundReplyPayload,
 } from "openclaw/plugin-sdk/zalo";
-import {
-  resolveDefaultGroupPolicy,
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/zalo";
+import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/zalo";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiAbortError,
@@ -31,7 +26,6 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
-import { evaluateZaloGroupAccess } from "./group-access.js";
 import { isZaloSenderAllowed } from "./group-access.js";
 import {
   describeInboundImagePayload,
@@ -505,49 +499,16 @@ async function enforceInboundDirectAccess(params: {
   const senderId = from.id;
   const senderName = from.name ?? from.display_name;
 
-  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
-  const configuredGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
-  const groupAllowFrom =
-    configuredGroupAllowFrom.length > 0 ? configuredGroupAllowFrom : configAllowFrom;
-
   if (isGroup) {
-    const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-    const groupAccess = evaluateZaloGroupAccess({
-      providerConfigPresent: config.channels?.zalo !== undefined,
-      configuredGroupPolicy: account.config.groupPolicy,
-      defaultGroupPolicy,
-      groupAllowFrom,
+    logVerbose(core, runtime, `zalo: drop group ${chatId} (direct-only channel)`);
+    return {
+      allowed: false,
+      isGroup,
+      chatId,
       senderId,
-    });
-
-    warnMissingProviderGroupPolicyFallbackOnce({
-      providerMissingFallbackApplied: groupAccess.providerMissingFallbackApplied,
-      providerKey: "zalo",
-      accountId: account.accountId,
-      log: (message) => logVerbose(core, runtime, message),
-    });
-
-    if (!groupAccess.allowed) {
-      if (groupAccess.reason === "disabled") {
-        logVerbose(core, runtime, `zalo: drop group ${chatId} (groupPolicy=disabled)`);
-      } else if (groupAccess.reason === "empty_allowlist") {
-        logVerbose(
-          core,
-          runtime,
-          `zalo: drop group ${chatId} (groupPolicy=allowlist, no groupAllowFrom)`,
-        );
-      } else if (groupAccess.reason === "sender_not_allowlisted") {
-        logVerbose(core, runtime, `zalo: drop group sender ${senderId} (groupPolicy=allowlist)`);
-      }
-      return {
-        allowed: false,
-        isGroup,
-        chatId,
-        senderId,
-        senderName,
-        commandAuthorized: undefined,
-      };
-    }
+      senderName,
+      commandAuthorized: undefined,
+    };
   }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -563,20 +524,6 @@ async function enforceInboundDirectAccess(params: {
     };
   }
 
-  const { senderAllowedForCommands, commandAuthorized } =
-    await resolveSenderCommandAuthorizationWithRuntime({
-      cfg: config,
-      rawBody,
-      isGroup,
-      dmPolicy,
-      configuredAllowFrom: configAllowFrom,
-      configuredGroupAllowFrom: groupAllowFrom,
-      senderId,
-      isSenderAllowed: isZaloSenderAllowed,
-      readAllowFromStore: pairing.readAllowFromStore,
-      runtime: core.channel.commands,
-    });
-
   if (dmPolicy === "open") {
     return {
       allowed: true,
@@ -584,9 +531,24 @@ async function enforceInboundDirectAccess(params: {
       chatId,
       senderId,
       senderName,
-      commandAuthorized,
+      commandAuthorized: undefined,
     };
   }
+
+  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
+
+  const { senderAllowedForCommands, commandAuthorized } =
+    await resolveSenderCommandAuthorizationWithRuntime({
+      cfg: config,
+      rawBody,
+      isGroup,
+      dmPolicy,
+      configuredAllowFrom: configAllowFrom,
+      senderId,
+      isSenderAllowed: isZaloSenderAllowed,
+      readAllowFromStore: pairing.readAllowFromStore,
+      runtime: core.channel.commands,
+    });
 
   if (!senderAllowedForCommands) {
     if (dmPolicy === "pairing") {
