@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { setThemeMode, type ThemeMode } from "../tui/theme/theme.js";
 import { runTui } from "../tui/tui.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 
@@ -18,6 +19,7 @@ export function registerTuiCli(program: Command) {
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
+    .option("--theme <mode>", "Color theme: dark, light, or auto (default: dark)")
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
@@ -31,6 +33,12 @@ export function registerTuiCli(program: Command) {
           );
         }
         const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        const themeMode = opts.theme as ThemeMode | undefined;
+        if (themeMode && !["dark", "light", "auto"].includes(themeMode)) {
+          defaultRuntime.error(`warning: invalid --theme "${themeMode}"; using dark`);
+        } else if (themeMode) {
+          setThemeMode(themeMode);
+        }
         await runTui({
           url: opts.url as string | undefined,
           token: opts.token as string | undefined,
