@@ -750,6 +750,19 @@ async function sendSubagentAnnounceDirectly(params: {
     cfg,
     params.targetRequesterSessionKey,
   );
+
+  // When completionRouteViaParent is enabled, skip direct delivery for completion
+  // messages so they route through the parent agent session instead.
+  if (
+    params.expectsCompletionMessage &&
+    cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true
+  ) {
+    return {
+      delivered: false,
+      path: "none",
+    };
+  }
+
   try {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
