@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   type AuthProfileStore,
@@ -74,7 +75,7 @@ describe("auth-profiles (chutes)", () => {
         expect(resolved?.apiKey).toBe("at_new");
         expect(fetchSpy).toHaveBeenCalled();
 
-        const persisted = JSON.parse(await fs.readFile(authProfilePath, "utf8")) as {
+        const persisted = loadSecureJsonFile(authProfilePath) as {
           profiles?: Record<string, { access?: string }>;
         };
         expect(persisted.profiles?.["chutes:default"]?.access).toBe("at_new");

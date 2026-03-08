@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import { captureEnv } from "../test-utils/env.js";
 import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -89,7 +90,7 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
       makePrompter(true),
     );
 
-    const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+    const raw = loadSecureJsonFile(authPath) as {
       profiles?: Record<string, unknown>;
     };
     expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();

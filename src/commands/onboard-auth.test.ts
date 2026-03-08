@@ -9,6 +9,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -182,11 +183,10 @@ describe("writeOAuthCredentials", () => {
     });
 
     for (const dir of [mainAgentDir, kidAgentDir, workerAgentDir]) {
-      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = loadSecureJsonFile(authProfilePathFor(dir)) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      expect(parsed?.profiles?.["openai-codex:default"]).toMatchObject({
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
@@ -214,11 +214,10 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
 
-    const kidRaw = await fs.readFile(authProfilePathFor(kidAgentDir), "utf8");
-    const kidParsed = JSON.parse(kidRaw) as {
+    const kidParsed = loadSecureJsonFile(authProfilePathFor(kidAgentDir)) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
-    expect(kidParsed.profiles?.["openai-codex:default"]).toMatchObject({
+    expect(kidParsed?.profiles?.["openai-codex:default"]).toMatchObject({
       access: "access-kid",
       type: "oauth",
     });
@@ -251,11 +250,10 @@ describe("writeOAuthCredentials", () => {
 
     // All siblings under the external root should have credentials
     for (const dir of [extMain, extKid, extWorker]) {
-      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = loadSecureJsonFile(authProfilePathFor(dir)) as {
         profiles?: Record<string, OAuthCredentials & { type?: string }>;
       };
-      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      expect(parsed?.profiles?.["openai-codex:default"]).toMatchObject({
         refresh: "refresh-ext",
         access: "access-ext",
         type: "oauth",

@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
+import { describe, expect, it, vi } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+
+const oauthFixture = {
+  access: "access-token",
+  refresh: "refresh-token",
+  expires: Date.now() + 60_000,
+  accountId: "acct_123",
+};
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -34,6 +46,87 @@ describe("resolveAwsSdkEnvVarName", () => {
 
   it("returns undefined when no AWS auth env is set", () => {
     expect(resolveAwsSdkEnvVarName({} as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+});
+
+describe("getApiKeyForModel", () => {
+  it("migrates legacy oauth.json into auth-profiles.json", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
+
+    try {
+      process.env.OPENCLAW_STATE_DIR = tempDir;
+      process.env.OPENCLAW_AGENT_DIR = path.join(tempDir, "agent");
+      process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+      const oauthDir = path.join(tempDir, "credentials");
+      await fs.mkdir(oauthDir, { recursive: true, mode: 0o700 });
+      await fs.writeFile(
+        path.join(oauthDir, "oauth.json"),
+        `${JSON.stringify({ "openai-codex": oauthFixture }, null, 2)}\n`,
+        "utf8",
+      );
+
+      vi.resetModules();
+      const { ensureAuthProfileStore } = await import("./auth-profiles.js");
+      const { getApiKeyForModel } = await import("./model-auth.js");
+
+      const model = {
+        id: "codex-mini-latest",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+      } as Model<Api>;
+
+      const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
+        allowKeychainPrompt: false,
+      });
+      const apiKey = await getApiKeyForModel({
+        model,
+        cfg: {
+          auth: {
+            profiles: {
+              "openai-codex:default": {
+                provider: "openai-codex",
+                mode: "oauth",
+              },
+            },
+          },
+        },
+        store,
+        agentDir: process.env.OPENCLAW_AGENT_DIR,
+      });
+      expect(apiKey.apiKey).toBe(oauthFixture.access);
+
+      const authProfilePath = path.join(tempDir, "agent", "auth-profiles.json");
+      const authData = loadSecureJsonFile(authProfilePath) as Record<string, unknown>;
+      expect(authData.profiles).toMatchObject({
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: oauthFixture.access,
+          refresh: oauthFixture.refresh,
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
