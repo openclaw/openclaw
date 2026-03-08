@@ -342,6 +342,23 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
+  // Resolve relative paths (e.g., ./deliverables/file.png) against localRoots.
+  // Agents write files relative to their workspace, but the media delivery context
+  // may have a different process.cwd(). Try each allowed root to find the file.
+  if (!path.isAbsolute(mediaUrl) && localRoots !== "any" && !sandboxValidated) {
+    const roots = localRoots ?? getDefaultLocalRoots();
+    for (const root of roots) {
+      const candidate = path.resolve(root, mediaUrl);
+      try {
+        await fs.access(candidate);
+        mediaUrl = candidate;
+        break;
+      } catch {
+        // File not found under this root, try next
+      }
+    }
+  }
+
   if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
     throw new LocalMediaAccessError(
       "unsafe-bypass",
