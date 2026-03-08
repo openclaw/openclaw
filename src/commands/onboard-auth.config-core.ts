@@ -505,8 +505,17 @@ export function applyAuthProfileConfig(
   const hasMixedConfiguredModes = configuredProviderProfiles.some(
     ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
   );
+  const hasExistingConfiguredProfile = configuredProviderProfiles.some(
+    ({ profileId }) => profileId !== params.profileId,
+  );
+  const shouldPinOpenAICodexReloginFirst =
+    normalizedProvider === "openai-codex" &&
+    params.mode === "oauth" &&
+    hasExistingConfiguredProfile;
   const derivedProviderOrder =
-    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
+    existingProviderOrder === undefined &&
+    preferProfileFirst &&
+    (hasMixedConfiguredModes || shouldPinOpenAICodexReloginFirst)
       ? [
           params.profileId,
           ...configuredProviderProfiles
