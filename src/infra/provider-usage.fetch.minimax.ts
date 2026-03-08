@@ -316,9 +316,19 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
+    // Surface actionable hints for common MiniMax auth/quota errors.
+    const hint =
+      res.status === 401
+        ? "Invalid or expired API key"
+        : res.status === 403
+          ? "API key lacks required permissions"
+          : res.status === 429
+            ? "Rate limit exceeded"
+            : undefined;
     return buildUsageHttpErrorSnapshot({
       provider: "minimax",
       status: res.status,
+      message: hint,
     });
   }
 
