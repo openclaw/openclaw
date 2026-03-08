@@ -159,8 +159,11 @@ async function resolveProvidersForModelsJson(params: {
   }
 
   const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
-  if (implicitCopilot && !providers["github-copilot"]) {
-    providers["github-copilot"] = implicitCopilot;
+  if (implicitCopilot) {
+    const existing = providers["github-copilot"];
+    providers["github-copilot"] = existing
+      ? mergeProviderModels(implicitCopilot, existing)
+      : implicitCopilot;
   }
   return providers;
 }

@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
 
-export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
+export type ContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentModelParams"
+  | "agentContextTokens"
+  | "default";
 
 export type ContextWindowInfo = {
   tokens: number;
@@ -34,12 +39,22 @@ export function resolveContextWindowInfo(params: {
     const match = models.find((m) => m?.id === params.modelId);
     return normalizePositiveInt(match?.contextWindow);
   })();
+  // Check agents.defaults.models["provider/modelId"].params.contextWindow
+  const fromAgentModelParams = (() => {
+    const modelKey = `${params.provider}/${params.modelId}`;
+    const agentModels = params.cfg?.agents?.defaults?.models as
+      | Record<string, { params?: { contextWindow?: number } }>
+      | undefined;
+    return normalizePositiveInt(agentModels?.[modelKey]?.params?.contextWindow);
+  })();
   const fromModel = normalizePositiveInt(params.modelContextWindow);
   const baseInfo = fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
-    : fromModel
-      ? { tokens: fromModel, source: "model" as const }
-      : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+    : fromAgentModelParams
+      ? { tokens: fromAgentModelParams, source: "agentModelParams" as const }
+      : fromModel
+        ? { tokens: fromModel, source: "model" as const }
+        : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {
