@@ -362,7 +362,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.7/OpenClaw-2026.3.7.zip" length="23263833" type="application/octet-stream" sparkle:edSignature="SO0zedZMzrvSDltLkuaSVQTWFPPPe1iu/enS4TGGb5EGckhqRCmNJWMKNID5lKwFC8vefTbfG9JTlSrZedP4Bg=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.7/OpenClaw-2026.3.7.zip" length="23263833" type="application/octet-stream" sparkle:edSignature="SO0zedZMzrvSDltLkuaSVQTWFPPPe1iu/enS4TGGb5EGckhqRCmNJWMKNID5lKwFC8vefTbfG9JTlSrZedP4Bg=="/> <!-- pragma: allowlist secret -->
         </item>
         <item>
             <title>2026.3.2</title>
