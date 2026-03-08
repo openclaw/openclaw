@@ -1,3 +1,4 @@
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
@@ -13,7 +14,6 @@ import {
   collectDiscordAuditChannelIds,
   collectDiscordStatusIssues,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   discordOnboardingAdapter,
   DiscordConfigSchema,
   getChatChannelMeta,
@@ -33,7 +33,6 @@ import {
   resolveDefaultDiscordAccountId,
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
-  setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ResolvedDiscordAccount,
@@ -61,6 +60,15 @@ const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
+});
+
+const discordConfigBase = createScopedChannelConfigBase({
+  sectionKey: "discord",
+  listAccountIds: listDiscordAccountIds,
+  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
+  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultDiscordAccountId,
+  clearBaseFields: ["token", "name"],
 });
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
@@ -93,25 +101,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   reload: { configPrefixes: ["channels.discord"] },
   configSchema: buildChannelConfigSchema(DiscordConfigSchema),
   config: {
-    listAccountIds: (cfg) => listDiscordAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-    inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultDiscordAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "discord",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "discord",
-        accountId,
-        clearBaseFields: ["token", "name"],
-      }),
+    ...discordConfigBase,
     isConfigured: (account) => Boolean(account.token?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,

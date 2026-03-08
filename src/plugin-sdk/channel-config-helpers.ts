@@ -1,3 +1,7 @@
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "../channels/plugins/config-helpers.js";
 import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -52,6 +56,51 @@ export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
       resolveOptionalConfigString(
         params.resolveDefaultTo?.(params.resolveAccount({ cfg, accountId })),
       ),
+  };
+}
+
+export function createScopedChannelConfigBase<
+  ResolvedAccount,
+  Config extends OpenClawConfig = OpenClawConfig,
+>(params: {
+  sectionKey: string;
+  listAccountIds: (cfg: Config) => string[];
+  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
+  defaultAccountId: (cfg: Config) => string;
+  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
+  clearBaseFields: string[];
+  allowTopLevel?: boolean;
+}): Pick<
+  ChannelConfigAdapter<ResolvedAccount>,
+  | "listAccountIds"
+  | "resolveAccount"
+  | "inspectAccount"
+  | "defaultAccountId"
+  | "setAccountEnabled"
+  | "deleteAccount"
+> {
+  return {
+    listAccountIds: (cfg) => params.listAccountIds(cfg as Config),
+    resolveAccount: (cfg, accountId) => params.resolveAccount(cfg as Config, accountId),
+    inspectAccount: params.inspectAccount
+      ? (cfg, accountId) => params.inspectAccount?.(cfg as Config, accountId)
+      : undefined,
+    defaultAccountId: (cfg) => params.defaultAccountId(cfg as Config),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg: cfg as Config,
+        sectionKey: params.sectionKey,
+        accountId,
+        enabled,
+        allowTopLevel: params.allowTopLevel ?? true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg: cfg as Config,
+        sectionKey: params.sectionKey,
+        accountId,
+        clearBaseFields: params.clearBaseFields,
+      }),
   };
 }
 
