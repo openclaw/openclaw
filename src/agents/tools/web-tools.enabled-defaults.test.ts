@@ -162,7 +162,10 @@ describe("web_search country and language parameters", () => {
     }>,
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      sandboxed: true,
+    });
     expect(tool).not.toBeNull();
     await tool?.execute?.("call-1", { query: "test", ...params });
     expect(mockFetch).toHaveBeenCalled();
@@ -213,7 +216,10 @@ describe("web_search country and language parameters", () => {
 
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      sandboxed: true,
+    });
     const result = await tool?.execute?.("call-1", { query: "test", freshness: "yesterday" });
 
     expect(mockFetch).not.toHaveBeenCalled();
