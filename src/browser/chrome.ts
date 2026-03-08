@@ -64,6 +64,11 @@ type SingletonLockOwner = {
   pid: number;
 };
 
+type SingletonLockState = {
+  ownerRaw: string;
+  owner: SingletonLockOwner | null;
+};
+
 function parseSingletonLockOwner(raw: string): SingletonLockOwner | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -96,13 +101,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-export function cleanupStaleChromeSingletonArtifacts(
-  userDataDir: string,
-  deps?: {
-    hostname?: string;
-    isProcessAlive?: (pid: number) => boolean;
-  },
-): { removed: boolean; reason?: string; owner?: string } {
+function readChromeSingletonLockState(userDataDir: string): SingletonLockState | null {
   const lockPath = path.join(userDataDir, "SingletonLock");
 
   let ownerRaw = "";
@@ -112,27 +111,16 @@ export function cleanupStaleChromeSingletonArtifacts(
       ? fs.readlinkSync(lockPath).trim()
       : fs.readFileSync(lockPath, "utf-8").trim();
   } catch {
-    return { removed: false };
+    return null;
   }
 
-  const owner = parseSingletonLockOwner(ownerRaw);
-  if (!owner) {
-    return { removed: false, owner: ownerRaw || undefined };
-  }
+  return {
+    ownerRaw,
+    owner: parseSingletonLockOwner(ownerRaw),
+  };
+}
 
-  const hostname = deps?.hostname ?? os.hostname();
-  const processAlive = deps?.isProcessAlive ?? isProcessAlive;
-  let reason: string | undefined;
-  if (owner.host !== hostname) {
-    reason = `owner host mismatch (${owner.host} != ${hostname})`;
-  } else if (!processAlive(owner.pid)) {
-    reason = `owner pid is not running (${owner.pid})`;
-  }
-
-  if (!reason) {
-    return { removed: false, owner: ownerRaw };
-  }
-
+function removeChromeSingletonArtifacts(userDataDir: string) {
   for (const artifact of CHROME_SINGLETON_ARTIFACTS) {
     try {
       fs.rmSync(path.join(userDataDir, artifact), { force: true });
@@ -140,7 +128,40 @@ export function cleanupStaleChromeSingletonArtifacts(
       // ignore best-effort cleanup failures
     }
   }
-  return { removed: true, reason, owner: ownerRaw };
+}
+
+export function cleanupStaleChromeSingletonArtifacts(
+  userDataDir: string,
+  deps?: {
+    hostname?: string;
+    isProcessAlive?: (pid: number) => boolean;
+  },
+): { removed: boolean; reason?: string; owner?: string } {
+  const lockState = readChromeSingletonLockState(userDataDir);
+  if (!lockState) {
+    return { removed: false };
+  }
+
+  const owner = lockState.owner;
+  if (!owner) {
+    return { removed: false, owner: lockState.ownerRaw || undefined };
+  }
+
+  const hostname = deps?.hostname ?? os.hostname();
+  const processAlive = deps?.isProcessAlive ?? isProcessAlive;
+  if (owner.host !== hostname) {
+    // Host mismatch alone is not enough to prove staleness. The profile dir may
+    // live on shared storage and still be actively used by Chromium elsewhere.
+    return { removed: false, owner: lockState.ownerRaw };
+  }
+  const reason = !processAlive(owner.pid) ? `owner pid is not running (${owner.pid})` : undefined;
+
+  if (!reason) {
+    return { removed: false, owner: lockState.ownerRaw };
+  }
+
+  removeChromeSingletonArtifacts(userDataDir);
+  return { removed: true, reason, owner: lockState.ownerRaw };
 }
 
 type ChromeSingletonCleanupResult = ReturnType<typeof cleanupStaleChromeSingletonArtifacts>;

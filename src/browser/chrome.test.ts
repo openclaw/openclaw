@@ -274,7 +274,7 @@ describe("browser chrome helpers", () => {
     }
   });
 
-  it("removes singleton lock artifacts when hostname differs", async () => {
+  it("keeps singleton lock artifacts when hostname differs", async () => {
     const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-singleton-host-"));
     try {
       await fsp.writeFile(path.join(userDataDir, "SingletonLock"), "other-host-4242", "utf-8");
@@ -286,11 +286,10 @@ describe("browser chrome helpers", () => {
         isProcessAlive: () => true,
       });
 
-      expect(result.removed).toBe(true);
-      expect(result.reason).toMatch(/host mismatch/i);
-      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
-      expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(false);
-      expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+      expect(result.removed).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(true);
     } finally {
       await fsp.rm(userDataDir, { recursive: true, force: true });
     }
@@ -302,13 +301,13 @@ describe("browser chrome helpers", () => {
     }
     const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-singleton-symlink-"));
     try {
-      await fsp.symlink("other-host-4242", path.join(userDataDir, "SingletonLock"));
+      await fsp.symlink("gateway-host-4242", path.join(userDataDir, "SingletonLock"));
       await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie", "utf-8");
       await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket", "utf-8");
 
       const result = cleanupStaleChromeSingletonArtifacts(userDataDir, {
         hostname: "gateway-host",
-        isProcessAlive: () => true,
+        isProcessAlive: () => false,
       });
 
       expect(result.removed).toBe(true);
