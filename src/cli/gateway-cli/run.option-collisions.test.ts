@@ -310,7 +310,7 @@ describe("gateway run option collisions", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(runtimeErrors).toContain("Error: Use either --password or --password-file.");
+      expect(runtimeErrors).toContain("Use either --password or --password-file.");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
