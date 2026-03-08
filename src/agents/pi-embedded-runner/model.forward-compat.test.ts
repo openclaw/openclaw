@@ -166,6 +166,7 @@ describe("pi embedded model e2e smoke", () => {
       baseUrl: "https://generativelanguage.googleapis.com",
       id: "gemini-2.5-flash",
       name: "gemini-2.5-flash",
+      reasoning: true,
     });
   });
 
@@ -178,6 +179,38 @@ describe("pi embedded model e2e smoke", () => {
       baseUrl: "https://generativelanguage.googleapis.com",
       id: "gemini-2.5-pro",
       name: "gemini-2.5-pro",
+      reasoning: true,
+    });
+  });
+
+  it("infers reasoning: false for non-flash/pro/think google models", () => {
+    const result = resolveModel("google", "gemini-nano", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-nano",
+      reasoning: false,
+    });
+  });
+
+  it("applies providerConfig overrides to google pass-through models", () => {
+    const result = resolveModel("google", "gemini-2.5-flash", "/tmp/agent", {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://my-proxy.example.com/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-2.5-flash",
+      baseUrl: "https://my-proxy.example.com/v1",
+      api: "openai-completions",
     });
   });
 

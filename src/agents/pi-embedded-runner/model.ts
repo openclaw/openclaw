@@ -200,18 +200,27 @@ export function resolveModelWithRegistry(params: {
   // pre-registered in the local catalog, create a pass-through definition so
   // canonical google/<model> identifiers resolve without "model not found".
   if (normalizedProvider === "google") {
-    return normalizeModelCompat({
+    const baseModel = {
       id: modelId,
       name: modelId,
       api: "google-generative-ai",
       provider,
       baseUrl: "https://generativelanguage.googleapis.com",
-      reasoning: false,
+      // Infer reasoning capability from model ID — Gemini 2.5 Flash/Pro and
+      // future "thinking" variants support thinking-mode output.
+      reasoning: /flash|pro|think/i.test(modelId),
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: DEFAULT_CONTEXT_TOKENS,
       maxTokens: 65536,
-    } as Model<Api>);
+    } as Model<Api>;
+    return normalizeModelCompat(
+      applyConfiguredProviderOverrides({
+        discoveredModel: baseModel,
+        providerConfig,
+        modelId,
+      }),
+    );
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
