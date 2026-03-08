@@ -52,12 +52,18 @@ describe("extractTextCached", () => {
       errorMessage: "401 unauthorized",
       content: [],
     };
-    expect(extractText(message)).toBe(
-      "Model error (anthropic/claude-sonnet-4-5): 401 unauthorized",
-    );
-    expect(extractTextCached(message)).toBe(
-      "Model error (anthropic/claude-sonnet-4-5): 401 unauthorized",
-    );
+    expect(extractText(message)).toBe("anthropic/claude-sonnet-4-5: 401 unauthorized");
+    expect(extractTextCached(message)).toBe("anthropic/claude-sonnet-4-5: 401 unauthorized");
+  });
+
+  it("renders a generic fallback when assistant stopReason is error but details are empty", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "",
+      content: [],
+    };
+    expect(extractText(message)).toBe("No error details were provided by the model.");
   });
 });
 

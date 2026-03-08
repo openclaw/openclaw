@@ -308,6 +308,31 @@ describe("chat view", () => {
     const bubble = container.querySelector(".chat-bubble--error");
     expect(bubble).not.toBeNull();
     expect(container.textContent).toContain("Model error");
+    expect(container.textContent).toContain("anthropic/claude-sonnet-4-5");
     expect(container.textContent).toContain("401 unauthorized");
+  });
+
+  it("keeps error bubbles visible even when the model returns no details", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "",
+              content: [],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-bubble--error")).not.toBeNull();
+    expect(container.textContent).toContain("Model error");
+    expect(container.textContent).toContain("No error details were provided by the model.");
   });
 });

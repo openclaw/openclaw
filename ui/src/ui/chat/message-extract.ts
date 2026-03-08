@@ -31,14 +31,16 @@ function extractAssistantErrorText(message: unknown): string | null {
   if (role !== "assistant") {
     return null;
   }
+  const stopReason = typeof m.stopReason === "string" ? m.stopReason.toLowerCase() : "";
   const errorMessage = typeof m.errorMessage === "string" ? m.errorMessage.trim() : "";
-  if (!errorMessage) {
+  if (!errorMessage && stopReason !== "error") {
     return null;
   }
   const provider = typeof m.provider === "string" ? m.provider.trim() : "";
   const model = typeof m.model === "string" ? m.model.trim() : "";
   const modelRef = provider && model ? `${provider}/${model}` : model || provider;
-  return modelRef ? `Model error (${modelRef}): ${errorMessage}` : `Model error: ${errorMessage}`;
+  const detail = errorMessage || "No error details were provided by the model.";
+  return modelRef ? `${modelRef}: ${detail}` : detail;
 }
 
 export function extractTextCached(message: unknown): string | null {
