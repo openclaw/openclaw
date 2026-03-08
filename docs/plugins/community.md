@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Cynaps3 Creative Suite** — AI-powered music creation and library management. 26 agent tools for generating tracks (Suno + Sonauto), browsing 150+ artist styles, managing projects and albums, and curating your library through natural language.
+  npm: `@cynaps3/openclaw-plugin`
+  repo: `https://github.com/B-EtterDigital/Cynaps3-OpenClaw-Plugin`
+  install: `openclaw plugins install @cynaps3/openclaw-plugin`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
