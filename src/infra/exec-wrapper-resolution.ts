@@ -103,6 +103,10 @@ export type ShellWrapperCommand = {
   command: string | null;
 };
 
+function isWithinDispatchClassificationDepth(depth: number): boolean {
+  return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
+}
+
 export function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
@@ -509,9 +513,7 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   depth: number,
   envManipulationSeen: boolean,
 ): boolean {
-  // The wrapper found exactly at the configured dispatch depth boundary still needs
-  // to participate in approval classification; only paths beyond that boundary fail closed.
-  if (depth > MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return false;
   }
 
@@ -609,9 +611,7 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  // The shell wrapper reached at the boundary depth is still semantically relevant.
-  // Only deeper wrapper stacks should be dropped as overflow.
-  if (depth > MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return { isWrapper: false, command: null };
   }
 
