@@ -9,6 +9,7 @@ const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
+const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
@@ -147,12 +148,14 @@ function mapContainerWorkspaceFileUrl(params: {
   if (parsed.protocol !== "file:") {
     return undefined;
   }
-  // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
-  // Windows hosts can still accept file:///workspace/... media references.
+  // Sandbox paths are Linux-style (/workspace/* or /agent/*). Parse the URL path directly so
+  // Windows hosts can still accept file:///workspace/... or file:///agent/... media references.
   const normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
   if (
     normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
+    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`) &&
+    normalizedPathname !== SANDBOX_AGENT_WORKSPACE_MOUNT &&
+    !normalizedPathname.startsWith(`${SANDBOX_AGENT_WORKSPACE_MOUNT}/`)
   ) {
     return undefined;
   }
@@ -167,18 +170,34 @@ function mapContainerWorkspacePath(params: {
   sandboxRoot: string;
 }): string | undefined {
   const normalized = params.candidate.replace(/\\/g, "/");
+  
+  // Handle /workspace mount (default rw workspace access)
   if (normalized === SANDBOX_CONTAINER_WORKDIR) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
-  if (!normalized.startsWith(prefix)) {
-    return undefined;
+  const workspacePrefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  if (normalized.startsWith(workspacePrefix)) {
+    const rel = normalized.slice(workspacePrefix.length);
+    if (!rel) {
+      return path.resolve(params.sandboxRoot);
+    }
+    return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
   }
-  const rel = normalized.slice(prefix.length);
-  if (!rel) {
+  
+  // Handle /agent mount (read-only workspace access)
+  if (normalized === SANDBOX_AGENT_WORKSPACE_MOUNT) {
     return path.resolve(params.sandboxRoot);
   }
-  return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
+  const agentPrefix = `${SANDBOX_AGENT_WORKSPACE_MOUNT}/`;
+  if (normalized.startsWith(agentPrefix)) {
+    const rel = normalized.slice(agentPrefix.length);
+    if (!rel) {
+      return path.resolve(params.sandboxRoot);
+    }
+    return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
+  }
+  
+  return undefined;
 }
 
 async function resolveAllowedTmpMediaPath(params: {
