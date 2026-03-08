@@ -494,7 +494,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose("imessage: dropping own reaction");
       return;
     }
-    if (reaction.added === false) {
+    if (reaction.added !== true) {
       logVerbose("imessage: dropping removed reaction");
       return;
     }
