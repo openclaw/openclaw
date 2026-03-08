@@ -12,7 +12,7 @@ import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { parseMessageWithAttachments } from "./chat-attachments.js";
+import { type ChatDocumentContent, parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
@@ -358,6 +358,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let documents: ChatDocumentContent[] = [];
       if (normalizedAttachments.length > 0) {
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
@@ -366,6 +367,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           });
           message = parsed.message.trim();
           images = parsed.images;
+          documents = parsed.documents;
         } catch {
           return;
         }
@@ -438,6 +440,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         {
           message,
           images,
+          documents: documents.length > 0 ? documents : undefined,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,

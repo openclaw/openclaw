@@ -128,6 +128,7 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
+import { createDocumentInjectionWrapper } from "./document-injection.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -1774,12 +1775,34 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          // Install document injection wrapper if PDFs are attached.
+          // This uses the onPayload hook to inject raw Anthropic document
+          // blocks that pi-ai's type system doesn't support natively.
+          const prevStreamFn = activeSession.agent.streamFn;
+          if (params.documents && params.documents.length > 0) {
+            activeSession.agent.streamFn = createDocumentInjectionWrapper(
+              prevStreamFn,
+              params.documents,
+            );
+          }
+
+          try {
+            // Only pass images option if there are actually images to pass
+            // This avoids potential issues with models that don't expect the images parameter
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          } finally {
+            // Restore original streamFn unconditionally (success AND error paths).
+            // Without this, a thrown error leaves the one-shot wrapper installed,
+            // causing nested wrappers to accumulate on subsequent retries/turns.
+            if (params.documents && params.documents.length > 0) {
+              activeSession.agent.streamFn = prevStreamFn;
+            }
           }
         } catch (err) {
           promptError = err;
