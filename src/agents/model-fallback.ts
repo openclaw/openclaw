@@ -185,10 +185,6 @@ async function runFallbackAttempt<T>(params: {
   return { error: runResult.error };
 }
 
-function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
-  return a.provider === b.provider && a.model === b.model;
-}
-
 function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
@@ -280,7 +276,6 @@ function resolveFallbackCandidates(params: {
   const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
   const modelRaw = String(params.model ?? "").trim() || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
-  const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
@@ -300,20 +295,9 @@ function resolveFallbackCandidates(params: {
     const configuredFallbacks = resolveAgentModelFallbackValues(
       params.cfg?.agents?.defaults?.model,
     );
-    // When user runs a different provider than config, only use configured fallbacks
-    // if the current model is already in that chain (e.g. session on first fallback).
-    if (normalizedPrimary.provider !== configuredPrimary.provider) {
-      const isConfiguredFallback = configuredFallbacks.some((raw) => {
-        const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
-          defaultProvider,
-          aliasIndex,
-        });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
-      });
-      return isConfiguredFallback ? configuredFallbacks : [];
-    }
-    // Same provider: always use full fallback chain (model version differences within provider).
+    // Always use configured fallbacks regardless of provider mismatch.
+    // Cross-provider requests (e.g. xai/grok when config is anthropic/claude)
+    // should still fall back through the configured chain before giving up.
     return configuredFallbacks;
   })();
 
