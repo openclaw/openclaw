@@ -112,6 +112,8 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat)
+- [Supabase handoff](/integrations/supabase-handoff)
+- [Ollama migration handoff](/integrations/ollama-handoff)
 - [Thinking + verbose](/tools/thinking)
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)

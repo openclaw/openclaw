@@ -60,5 +60,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Cron jobs](/automation/cron-jobs)
 - [Webhooks](/automation/webhook)
 - [Gmail hooks (Pub/Sub)](/automation/gmail-pubsub)
+- [Supabase handoff](/integrations/supabase-handoff)
+- [Ollama migration handoff](/integrations/ollama-handoff)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)

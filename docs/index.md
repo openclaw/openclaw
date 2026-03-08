@@ -157,6 +157,12 @@ Example:
   <Card title="Configuration" href="/gateway/configuration" icon="settings">
     Core Gateway settings, tokens, and provider config.
   </Card>
+  <Card title="Supabase handoff" href="/integrations/supabase-handoff" icon="database">
+    Setup, wiring map, and troubleshooting guide for Supabase integration.
+  </Card>
+  <Card title="Ollama migration" href="/integrations/ollama-handoff" icon="zap">
+    Migrate from OpenAI to local Ollama with Llama 3.1 8B and Qwen 2.5 7B.
+  </Card>
   <Card title="Remote access" href="/gateway/remote" icon="globe">
     SSH and tailnet access patterns.
   </Card>

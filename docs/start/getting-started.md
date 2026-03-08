@@ -120,6 +120,9 @@ Full environment variable reference: [Environment vars](/help/environment).
   <Card title="macOS app onboarding" href="/start/onboarding">
     First run flow for the macOS app.
   </Card>
+  <Card title="Supabase integration handoff" href="/integrations/supabase-handoff">
+    Setup, wiring map, and troubleshooting for Supabase-backed workflows.
+  </Card>
 </Columns>
 
 ## What you will have

@@ -2,19 +2,33 @@
   "gateway": {
     "controlUi": {
       "enabled": true,
-      "dangerouslyAllowHostHeaderOriginFallback": true,
-      "dangerouslyDisableDeviceAuth": true
+      "allowedOrigins": [
+        "https://openclaw-production-56fa.up.railway.app"
+      ],
+      "dangerouslyAllowHostHeaderOriginFallback": false,
+      "dangerouslyDisableDeviceAuth": false
+    },
+    "nodes": {
+      "browser": {
+        "mode": "manual",
+        "node": "${OPENCLAW_BROWSER_NODE}"
+      }
     }
   },
   "hooks": {
     "enabled": true,
-    "token": "znguAYjJILLSF63ZtGdLRaLYJU4HAhjW",
+    "token": "${OPENCLAW_HOOKS_TOKEN}",
     "path": "/hooks",
     "defaultSessionKey": "hook:ingress",
     "allowRequestSessionKey": false
   },
   "agents": {
     "defaults": {
+      "sandbox": {
+        "browser": {
+          "allowHostControl": true
+        }
+      },
       "model": {
         "primary": "deepseek/deepseek-chat"
       }

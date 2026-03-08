@@ -56,6 +56,7 @@ import {
 } from "./server/http-auth.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleVentureHttpRequest } from "./venture-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -438,6 +439,16 @@ export function createGatewayHttpServer(opts: {
         return;
       }
       if (await handleSlackHttpRequest(req, res)) {
+        return;
+      }
+      if (
+        await handleVentureHttpRequest(req, res, {
+          auth: resolvedAuth,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        })
+      ) {
         return;
       }
       if (openResponsesEnabled) {
