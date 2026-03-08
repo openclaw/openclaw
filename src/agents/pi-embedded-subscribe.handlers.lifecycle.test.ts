@@ -55,12 +55,14 @@ describe("handleAgentEnd", () => {
     const warn = vi.mocked(ctx.log.warn);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain("runId=run-1");
-    expect(warn.mock.calls[0]?.[0]).toContain("error=connection refused");
+    expect(warn.mock.calls[0]?.[0]).toContain(
+      "error=Something went wrong. Please try again, or use /new to start a fresh session.",
+    );
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "connection refused",
+        error: "Something went wrong. Please try again, or use /new to start a fresh session.",
       },
     });
   });
