@@ -21,6 +21,8 @@ export type TelegramUpdateKeyContext = {
     edited_message?: Message;
     channel_post?: Message;
     edited_channel_post?: Message;
+    message_reaction?: unknown;
+    message_reaction_count?: unknown;
   };
   update_id?: number;
   message?: Message;

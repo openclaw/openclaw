@@ -28,7 +28,7 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+// enqueueSystemEvent import removed: reactions now trigger full agent turns
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -760,7 +760,11 @@ export const registerTelegramHandlers = ({
       if (user?.is_bot) {
         return;
       }
-      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
+      // In private chats, skip the wasSentByBot check — all messages are either
+      // from the user or the bot, and the user can only react to bot messages.
+      // The wasSentByBot cache is unreliable due to chunk-splitting: the send path
+      // and the handler may use different module instances with separate Maps.
+      if (reactionMode === "own" && isGroup && !wasSentByBot(chatId, messageId)) {
         return;
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
@@ -828,31 +832,27 @@ export const registerTelegramHandlers = ({
       // Reactions target a specific message_id; the Telegram Bot API does not include
       // message_thread_id on MessageReactionUpdated, so we route to the chat-level
       // session (forum topic routing is not available for reactions).
-      const resolvedThreadId = isForum
-        ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
-        : undefined;
-      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
-      // Fresh config for bindings lookup; other routing inputs are payload-derived.
-      const route = resolveAgentRoute({
-        cfg: loadConfig(),
-        channel: "telegram",
-        accountId,
-        peer: { kind: isGroup ? "group" : "direct", id: peerId },
-        parentPeer,
-      });
-      const sessionKey = route.sessionKey;
+      // Build reaction text and dispatch as a synthetic inbound message
+      // so it triggers a full agent turn (not just a queued system event).
+      const reactionEmojis = addedReactions.map((r) => r.emoji).join(" ");
+      const reactionText = `[Telegram reaction: ${reactionEmojis} by ${senderLabel} on msg ${messageId}]`;
 
-      // Enqueue system event for each added reaction.
-      for (const r of addedReactions) {
-        const emoji = r.emoji;
-        const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-        enqueueSystemEvent(text, {
-          sessionKey,
-          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
-        });
-        logVerbose(`telegram: reaction event enqueued: ${text}`);
-      }
+      // Build a minimal synthetic Message for processMessage.
+      const syntheticMessage: Message = {
+        message_id: messageId,
+        date: reaction.date,
+        chat: reaction.chat,
+        text: reactionText,
+        ...(user ? { from: user as Message["from"] } : {}),
+      };
+      const syntheticCtx = buildSyntheticContext(
+        ctx as unknown as TelegramContext,
+        syntheticMessage,
+      );
+      await processMessage(syntheticCtx, [], eventAuthContext.storeAllowFrom ?? [], {
+        forceWasMentioned: true,
+        messageIdOverride: `reaction:${chatId}:${messageId}:${Date.now()}`,
+      });
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
     }

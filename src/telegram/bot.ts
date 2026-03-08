@@ -162,7 +162,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
     const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
-    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
+    // Reaction updates can arrive out-of-order with a lower update_id than
+    // already-processed message updates. Skip the watermark check for them
+    // and rely on the dedup cache below to prevent true duplicates.
+    const isReaction =
+      ctx.update?.message_reaction != null || ctx.update?.message_reaction_count != null;
+    if (
+      !isReaction &&
+      typeof updateId === "number" &&
+      skipCutoff !== null &&
+      updateId <= skipCutoff
+    ) {
       return true;
     }
     const key = buildTelegramUpdateKey(ctx);
