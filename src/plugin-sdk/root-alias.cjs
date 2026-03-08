@@ -108,26 +108,94 @@ const fastExports = {
   resolveControlCommandGate,
 };
 
-const monolithic = tryLoadMonolithicSdk();
-const rootExports =
-  monolithic && typeof monolithic === "object"
-    ? {
-        ...monolithic,
-        ...fastExports,
-      }
-    : { ...fastExports };
+const target = { ...fastExports };
+let rootExports = null;
 
-Object.defineProperty(rootExports, "__esModule", {
+function getMonolithicSdk() {
+  const loaded = tryLoadMonolithicSdk();
+  if (loaded && typeof loaded === "object") {
+    return loaded;
+  }
+  return null;
+}
+
+function getExportValue(prop) {
+  if (Reflect.has(target, prop)) {
+    return Reflect.get(target, prop);
+  }
+  const monolithic = getMonolithicSdk();
+  if (!monolithic) {
+    return undefined;
+  }
+  return Reflect.get(monolithic, prop);
+}
+
+function getExportDescriptor(prop) {
+  const ownDescriptor = Reflect.getOwnPropertyDescriptor(target, prop);
+  if (ownDescriptor) {
+    return ownDescriptor;
+  }
+
+  const monolithic = getMonolithicSdk();
+  if (!monolithic) {
+    return undefined;
+  }
+
+  const descriptor = Reflect.getOwnPropertyDescriptor(monolithic, prop);
+  if (!descriptor) {
+    return undefined;
+  }
+
+  // Proxy invariants require descriptors returned for dynamic properties to be configurable.
+  return {
+    ...descriptor,
+    configurable: true,
+  };
+}
+
+rootExports = new Proxy(target, {
+  get(_target, prop, receiver) {
+    if (Reflect.has(target, prop)) {
+      return Reflect.get(target, prop, receiver);
+    }
+    return getExportValue(prop);
+  },
+  has(_target, prop) {
+    if (Reflect.has(target, prop)) {
+      return true;
+    }
+    const monolithic = getMonolithicSdk();
+    return monolithic ? Reflect.has(monolithic, prop) : false;
+  },
+  ownKeys() {
+    const keys = new Set(Reflect.ownKeys(target));
+    const monolithic = getMonolithicSdk();
+    if (monolithic) {
+      for (const key of Reflect.ownKeys(monolithic)) {
+        if (!keys.has(key)) {
+          keys.add(key);
+        }
+      }
+    }
+    return [...keys];
+  },
+  getOwnPropertyDescriptor(_target, prop) {
+    return getExportDescriptor(prop);
+  },
+});
+
+Object.defineProperty(target, "__esModule", {
   configurable: true,
   enumerable: false,
   writable: false,
   value: true,
 });
-Object.defineProperty(rootExports, "default", {
+Object.defineProperty(target, "default", {
   configurable: true,
   enumerable: false,
-  writable: false,
-  value: rootExports,
+  get() {
+    return rootExports;
+  },
 });
 
 module.exports = rootExports;
