@@ -27,6 +27,7 @@ export type GatewayServiceCommandConfig = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 };
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openBoundaryFile, type BoundaryFileOpenResult } from "../../infra/boundary-file-read.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
@@ -49,20 +49,38 @@ export class SandboxFsPathGuard {
   }
 
   async assertPathSafety(target: SandboxResolvedFsPath, options: PathSafetyOptions) {
-    const lexicalMount = this.resolveMountByContainerPath(target.containerPath);
-    if (!lexicalMount) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
-      );
-    }
-
-    const guarded = await openBoundaryFile({
-      absolutePath: target.hostPath,
-      rootPath: lexicalMount.hostRoot,
-      boundaryLabel: "sandbox mount root",
+    const guarded = await this.openBoundaryWithinRequiredMount(target, options.action, {
       aliasPolicy: options.aliasPolicy,
       allowedType: options.allowedType,
     });
+    await this.assertGuardedPathSafety(target, options, guarded);
+  }
+
+  async openReadableFile(
+    target: SandboxResolvedFsPath,
+  ): Promise<BoundaryFileOpenResult & { ok: true }> {
+    const opened = await this.openBoundaryWithinRequiredMount(target, "read files");
+    if (!opened.ok) {
+      throw opened.error instanceof Error
+        ? opened.error
+        : new Error(`Sandbox boundary checks failed; cannot read files: ${target.containerPath}`);
+    }
+    return opened;
+  }
+
+  private resolveRequiredMount(containerPath: string, action: string): SandboxFsMount {
+    const lexicalMount = this.resolveMountByContainerPath(containerPath);
+    if (!lexicalMount) {
+      throw new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${containerPath}`);
+    }
+    return lexicalMount;
+  }
+
+  private async assertGuardedPathSafety(
+    target: SandboxResolvedFsPath,
+    options: PathSafetyOptions,
+    guarded: BoundaryFileOpenResult,
+  ) {
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
         const canFallbackToDirectoryStat =
@@ -83,17 +101,31 @@ export class SandboxFsPathGuard {
       containerPath: target.containerPath,
       allowFinalSymlinkForUnlink: options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
     });
-    const canonicalMount = this.resolveMountByContainerPath(canonicalContainerPath);
-    if (!canonicalMount) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
-      );
-    }
+    const canonicalMount = this.resolveRequiredMount(canonicalContainerPath, options.action);
     if (options.requireWritable && !canonicalMount.writable) {
       throw new Error(
         `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
       );
     }
+  }
+
+  private async openBoundaryWithinRequiredMount(
+    target: SandboxResolvedFsPath,
+    action: string,
+    options?: {
+      aliasPolicy?: PathAliasPolicy;
+      allowedType?: SafeOpenSyncAllowedType;
+    },
+  ): Promise<BoundaryFileOpenResult> {
+    const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
+    const guarded = await openBoundaryFile({
+      absolutePath: target.hostPath,
+      rootPath: lexicalMount.hostRoot,
+      boundaryLabel: "sandbox mount root",
+      aliasPolicy: options?.aliasPolicy,
+      allowedType: options?.allowedType,
+    });
+    return guarded;
   }
 
   async resolveAnchoredSandboxEntry(target: SandboxResolvedFsPath): Promise<AnchoredSandboxEntry> {

@@ -90,6 +90,14 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
 
+  it("returns true when systemd is degraded but still reachable", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      cb(createExecFileError("degraded", { stderr: "degraded\nsome-unit.service failed" }), "", "");
+    });
+
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+
   it("falls back to machine user scope when --user bus is unavailable", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -460,7 +468,7 @@ describe("readSystemdServiceExecStart", () => {
     expect(readFileSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("lets inline Environment override EnvironmentFile values", async () => {
+  it("lets EnvironmentFile override inline Environment values", async () => {
     vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
       const pathValue = pathLikeToString(pathname);
       if (pathValue.endsWith("/openclaw-gateway.service")) {
@@ -478,7 +486,8 @@ describe("readSystemdServiceExecStart", () => {
     });
 
     const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
-    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-token");
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("env-file-token");
+    expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBe("file");
   });
 
   it("ignores missing optional EnvironmentFile entries", async () => {
@@ -598,6 +607,10 @@ describe("readSystemdServiceExecStart", () => {
       OPENCLAW_GATEWAY_TOKEN: "quoted token",
       OPENCLAW_GATEWAY_PASSWORD: "quoted-password", // pragma: allowlist secret
     });
+    expect(command?.environmentValueSources).toEqual({
+      OPENCLAW_GATEWAY_TOKEN: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+    });
   });
 });
 
@@ -626,6 +639,26 @@ describe("systemd service control", () => {
     expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
   });
 
+  it("allows stop when systemd status is degraded but available", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) =>
+        cb(
+          createExecFileError("degraded", { stderr: "degraded\nsome-unit.service failed" }),
+          "",
+          "",
+        ),
+      )
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "stop", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+
+    await stopSystemdService({
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      env: {},
+    });
+  });
+
   it("restarts a profile-specific user unit", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
@@ -651,6 +684,26 @@ describe("systemd service control", () => {
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
+  });
+
+  it("throws the user-bus error before stop when systemd is unavailable", async () => {
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus", { stderr: "Failed to connect to bus" }),
+        "",
+        "",
+      );
+    });
+
+    await expect(
+      stopSystemdService({
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        env: { USER: "", LOGNAME: "" },
+      }),
+    ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
