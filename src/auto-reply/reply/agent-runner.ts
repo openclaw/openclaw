@@ -403,6 +403,27 @@ export async function runReplyAgent(params: {
 
     const payloadArray = runResult.payloads ?? [];
 
+    // If compaction completed, enqueue the completion notice into the pipeline
+    // *before* flushing so it benefits from the same timeout/abort/serial-
+    // delivery guarantees as every other block reply.  The count update and
+    // post-compaction context injection still happen later (after flush) because
+    // they don't affect the user-visible notice text at this point — we use a
+    // placeholder suffix here and the full count is logged separately.
+    if (autoCompactionCompleted && blockReplyPipeline) {
+      const verboseEnabled = resolvedVerboseLevel !== "off";
+      const completionText = verboseEnabled
+        ? `🧹 Auto-compaction complete.`
+        : `✅ Context compacted.`;
+      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+      blockReplyPipeline.enqueue(
+        applyReplyToMode({
+          text: completionText,
+          replyToId: currentMessageId,
+          replyToCurrent: true,
+        }),
+      );
+    }
+
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
@@ -693,21 +714,12 @@ export async function runReplyAgent(params: {
         ? `🧹 Auto-compaction complete${suffix}.`
         : `✅ Context compacted${suffix}.`;
 
-      // In block-streaming mode, onBlockReply bypasses buildReplyPayloads, so
-      // we must deliver the completion notice the same way the start notice was
-      // sent (via onBlockReply directly). Otherwise the user sees the "🧹
-      // Compacting context..." start notice but never receives the completion.
-      // Apply replyToMode so the notice is threaded consistently with normal
-      // replies when replyToMode=all|first is configured.
-      if (opts?.onBlockReply) {
-        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-        const noticePayload = applyReplyToMode({
-          text: completionText,
-          replyToId: currentMessageId,
-          replyToCurrent: true,
-        });
-        await opts.onBlockReply(noticePayload);
-      } else {
+      // In block-streaming mode the completion notice was already enqueued into
+      // blockReplyPipeline before flush (see above), so it travels through the
+      // normal timeout/abort/serial-delivery path without bypassing the pipeline.
+      // Here we only handle the non-streaming fallback: push into verboseNotices
+      // so it appears as a final payload alongside other verbose output.
+      if (!blockReplyPipeline) {
         verboseNotices.push({ text: completionText });
       }
     }
