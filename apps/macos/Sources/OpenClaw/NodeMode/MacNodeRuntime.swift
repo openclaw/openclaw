@@ -583,8 +583,10 @@ actor MacNodeRuntime {
             argv = command
         }
 
-        // Build rawCommand string for plan (use display formatter for proper quoting)
-        let rawCommandString = ExecCommandFormatter.displayString(for: argv)
+        // Build rawCommand string for plan: prefer the original rawCommand to preserve
+        // shell wrapper payloads. This ensures ExecShellWrapperParser.extract correctly
+        // identifies the wrapper and resolves the inner command for allowlist matching.
+        let rawCommandString = ExecCommandFormatter.displayString(for: argv, rawCommand: params.rawCommand)
 
         let plan = OpenClawSystemRunApprovalPlan(
             argv: argv,
