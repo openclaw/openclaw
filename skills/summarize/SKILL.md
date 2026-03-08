@@ -13,9 +13,17 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin"],
               "formula": "steipete/tap/summarize",
               "bins": ["summarize"],
               "label": "Install summarize (brew)",
+            },
+            {
+              "id": "npm",
+              "kind": "node",
+              "package": "@steipete/summarize",
+              "bins": ["summarize"],
+              "label": "Install summarize (npm)",
             },
           ],
       },
