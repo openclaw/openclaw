@@ -574,6 +574,111 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("applies reply_to_message_id only to the first message, not after forceNewMessage (#39718)", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      replyToMessageId: 999,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+
+    stream.forceNewMessage();
+    stream.update("After rotation");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After rotation", undefined);
+  });
+
+  it("keeps thread params when dropping reply_to_message_id after forceNewMessage", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+      replyToMessageId: 999,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+      message_thread_id: 42,
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+
+    stream.forceNewMessage();
+    stream.update("After rotation");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After rotation", {
+      message_thread_id: 42,
+    });
+  });
+
+  it("does not consume reply_to_message_id before the first successful send", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      )
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, { replyToMessageId: 999 });
+
+    stream.update("Hello");
+    await stream.flush();
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+
+    stream.forceNewMessage();
+    stream.update("After retry");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After retry", {
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it("drops reply_to_message_id after a superseded first send lands", async () => {
+    let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
+    const firstSend = new Promise<{ message_id: number }>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    const api = createMockDraftApi();
+    api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, { replyToMessageId: 999 });
+
+    stream.update("Message A");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    stream.forceNewMessage();
+    stream.update("Message B");
+
+    resolveFirstSend?.({ message_id: 17 });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Message A", {
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B", undefined);
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
