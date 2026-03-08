@@ -39,7 +39,6 @@ const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
 type SyntheticCatalogFallback = {
   provider: string;
@@ -115,9 +114,6 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
   const out: ModelCatalogEntry[] = [];
   for (const [providerRaw, providerValue] of Object.entries(providers)) {
     const provider = providerRaw.toLowerCase().trim();
-    if (!NON_PI_NATIVE_MODEL_PROVIDERS.has(provider)) {
-      continue;
-    }
     if (!providerValue || typeof providerValue !== "object") {
       continue;
     }
