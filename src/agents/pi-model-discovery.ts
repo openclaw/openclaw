@@ -171,9 +171,9 @@ function sanitizeDiscoveredHeaders(headers: unknown): Record<string, string> | u
 }
 
 function scrubDiscoveredRegistryPlaceholders(registry: PiModelRegistry): void {
-  const withInternalState = registry as PiModelRegistry & {
-    customProviderApiKeys?: Map<string, string>;
-    models?: Array<{ headers?: unknown }>;
+  const withInternalState = registry as unknown as {
+    customProviderApiKeys?: unknown;
+    models?: unknown;
   };
 
   if (withInternalState.customProviderApiKeys instanceof Map) {
@@ -190,6 +190,9 @@ function scrubDiscoveredRegistryPlaceholders(registry: PiModelRegistry): void {
     return;
   }
   for (const model of withInternalState.models) {
+    if (!isRecord(model)) {
+      continue;
+    }
     model.headers = sanitizeDiscoveredHeaders(model.headers);
   }
 }

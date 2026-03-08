@@ -162,7 +162,7 @@ describe("discoverModels", () => {
               custom: {
                 baseUrl: "https://example.com/v1",
                 api: "openai-responses",
-                apiKey: "secretref-managed",
+                apiKey: "secretref-managed", // pragma: allowlist secret -- placeholder fixture
                 authHeader: true,
                 headers: {
                   "X-Managed": "secretref-managed",
