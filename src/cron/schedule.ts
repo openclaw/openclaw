@@ -30,6 +30,22 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
+function resolveCronFromSchedule(schedule: {
+  tz?: string;
+  expr?: unknown;
+  cron?: unknown;
+}): Cron | undefined {
+  const exprSource = typeof schedule.expr === "string" ? schedule.expr : schedule.cron;
+  if (typeof exprSource !== "string") {
+    throw new Error("invalid cron schedule: expr is required");
+  }
+  const expr = exprSource.trim();
+  if (!expr) {
+    return undefined;
+  }
+  return resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
+}
+
 export function coerceFiniteScheduleNumber(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
@@ -81,16 +97,10 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
-  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
-  if (typeof exprSource !== "string") {
-    throw new Error("invalid cron schedule: expr is required");
-  }
-  const expr = exprSource.trim();
-  if (!expr) {
+  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  if (!cron) {
     return undefined;
   }
-  const cron = resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
   let next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
@@ -132,16 +142,10 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   if (schedule.kind !== "cron") {
     return undefined;
   }
-  const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
-  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
-  if (typeof exprSource !== "string") {
-    throw new Error("invalid cron schedule: expr is required");
-  }
-  const expr = exprSource.trim();
-  if (!expr) {
+  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  if (!cron) {
     return undefined;
   }
-  const cron = resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
   const previousRuns = cron.previousRuns(1, new Date(nowMs));
   const previous = previousRuns[0];
   if (!previous) {

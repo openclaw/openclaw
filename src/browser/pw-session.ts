@@ -10,7 +10,13 @@ import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
-import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  getHeadersWithAuth,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  withCdpSocket,
+} from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import {
@@ -107,8 +113,8 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 
-let cached: ConnectedBrowser | null = null;
-let connecting: Promise<ConnectedBrowser> | null = null;
+const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
+const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -322,9 +328,11 @@ function observeBrowser(browser: Browser) {
 
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
-  if (cached?.cdpUrl === normalized) {
+  const cached = cachedByCdpUrl.get(normalized);
+  if (cached) {
     return cached;
   }
+  const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
     return await connecting;
   }
@@ -342,12 +350,13 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
           chromium.connectOverCDP(endpoint, { timeout, headers }),
         );
         const onDisconnected = () => {
-          if (cached?.browser === browser) {
-            cached = null;
+          const current = cachedByCdpUrl.get(normalized);
+          if (current?.browser === browser) {
+            cachedByCdpUrl.delete(normalized);
           }
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
-        cached = connected;
+        cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
         return connected;
@@ -364,11 +373,12 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     throw new Error(message);
   };
 
-  connecting = connectWithRetry().finally(() => {
-    connecting = null;
+  const pending = connectWithRetry().finally(() => {
+    connectingByCdpUrl.delete(normalized);
   });
+  connectingByCdpUrl.set(normalized, pending);
 
-  return await connecting;
+  return await pending;
 }
 
 async function getAllPages(browser: Browser): Promise<Page[]> {
@@ -417,34 +427,29 @@ async function findPageByTargetId(
   // fall back to URL-based matching using the /json/list endpoint
   if (cdpUrl) {
     try {
-      const baseUrl = cdpUrl
-        .replace(/\/+$/, "")
-        .replace(/^ws:/, "http:")
-        .replace(/\/cdp$/, "");
-      const listUrl = `${baseUrl}/json/list`;
-      const response = await fetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
-      if (response.ok) {
-        const targets = (await response.json()) as Array<{
+      const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+      const targets = await fetchJson<
+        Array<{
           id: string;
           url: string;
           title?: string;
-        }>;
-        const target = targets.find((t) => t.id === targetId);
-        if (target) {
-          // Try to find a page with matching URL
-          const urlMatch = pages.filter((p) => p.url() === target.url);
-          if (urlMatch.length === 1) {
-            return urlMatch[0];
-          }
-          // If multiple URL matches, use index-based matching as fallback
-          // This works when Playwright and the relay enumerate tabs in the same order
-          if (urlMatch.length > 1) {
-            const sameUrlTargets = targets.filter((t) => t.url === target.url);
-            if (sameUrlTargets.length === urlMatch.length) {
-              const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
-              if (idx >= 0 && idx < urlMatch.length) {
-                return urlMatch[idx];
-              }
+        }>
+      >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
+      const target = targets.find((t) => t.id === targetId);
+      if (target) {
+        // Try to find a page with matching URL
+        const urlMatch = pages.filter((p) => p.url() === target.url);
+        if (urlMatch.length === 1) {
+          return urlMatch[0];
+        }
+        // If multiple URL matches, use index-based matching as fallback
+        // This works when Playwright and the relay enumerate tabs in the same order
+        if (urlMatch.length > 1) {
+          const sameUrlTargets = targets.filter((t) => t.url === target.url);
+          if (sameUrlTargets.length === urlMatch.length) {
+            const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
+            if (idx >= 0 && idx < urlMatch.length) {
+              return urlMatch[idx];
             }
           }
         }
@@ -533,38 +538,31 @@ export function refLocator(page: Page, ref: string) {
   return page.locator(`aria-ref=${normalized}`);
 }
 
-export async function closePlaywrightBrowserConnection(): Promise<void> {
-  const cur = cached;
-  cached = null;
-  connecting = null;
-  if (!cur) {
+export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string }): Promise<void> {
+  const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
+
+  if (normalized) {
+    const cur = cachedByCdpUrl.get(normalized);
+    cachedByCdpUrl.delete(normalized);
+    connectingByCdpUrl.delete(normalized);
+    if (!cur) {
+      return;
+    }
+    if (cur.onDisconnected && typeof cur.browser.off === "function") {
+      cur.browser.off("disconnected", cur.onDisconnected);
+    }
+    await cur.browser.close().catch(() => {});
     return;
   }
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
-    cur.browser.off("disconnected", cur.onDisconnected);
-  }
-  await cur.browser.close().catch(() => {});
-}
 
-function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
-  try {
-    const url = new URL(cdpUrl);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
+  const connections = Array.from(cachedByCdpUrl.values());
+  cachedByCdpUrl.clear();
+  connectingByCdpUrl.clear();
+  for (const cur of connections) {
+    if (cur.onDisconnected && typeof cur.browser.off === "function") {
+      cur.browser.off("disconnected", cur.onDisconnected);
     }
-    url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
-    url.pathname = url.pathname.replace(/\/cdp$/, "");
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    // Best-effort fallback for non-URL-ish inputs.
-    return cdpUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/devtools\/browser\/.*$/, "")
-      .replace(/\/cdp$/, "")
-      .replace(/\/$/, "");
+    await cur.browser.close().catch(() => {});
   }
 }
 
@@ -671,31 +669,29 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   reason?: string;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  if (cached?.cdpUrl !== normalized) {
+  const cur = cachedByCdpUrl.get(normalized);
+  if (!cur) {
     return;
   }
-  const cur = cached;
-  cached = null;
-  // Also clear `connecting` so the next call does a fresh connectOverCDP
+  cachedByCdpUrl.delete(normalized);
+  // Also clear the per-url in-flight connect so the next call does a fresh connectOverCDP
   // rather than awaiting a stale promise.
-  connecting = null;
-  if (cur) {
-    // Remove the "disconnected" listener to prevent the old browser's teardown
-    // from racing with a fresh connection and nulling the new `cached`.
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
-    }
-
-    // Best-effort: kill any stuck JS to unblock the target's execution context before we
-    // disconnect Playwright's CDP connection.
-    const targetId = opts.targetId?.trim() || "";
-    if (targetId) {
-      await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
-    }
-
-    // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-    cur.browser.close().catch(() => {});
+  connectingByCdpUrl.delete(normalized);
+  // Remove the "disconnected" listener to prevent the old browser's teardown
+  // from racing with a fresh connection and nulling the new cached entry.
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
   }
+
+  // Best-effort: kill any stuck JS to unblock the target's execution context before we
+  // disconnect Playwright's CDP connection.
+  const targetId = opts.targetId?.trim() || "";
+  if (targetId) {
+    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+  }
+
+  // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
+  cur.browser.close().catch(() => {});
 }
 
 /**

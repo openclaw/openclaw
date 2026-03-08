@@ -19,6 +19,7 @@ RUN set -eux; \
   && rm -rf /var/lib/apt/lists/*
 
 COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
+COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
 COPY install-sh-smoke/run.sh /usr/local/bin/openclaw-install-smoke
 RUN chmod +x /usr/local/bin/openclaw-install-smoke
 

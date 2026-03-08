@@ -305,6 +305,7 @@ const TARGET_KEYS = [
   "talk.modelId",
   "talk.outputFormat",
   "talk.interruptOnSpeech",
+  "talk.silenceTimeoutMs",
   "meta",
   "env",
   "env.shellEnv",
@@ -372,9 +373,12 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.maxHistoryShare",
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.recentTurnsPreserve",
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.postCompactionSections",
+  "agents.defaults.compaction.model",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -411,7 +415,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"clawd"', '"extension"'],
+  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"extension"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
@@ -773,6 +777,9 @@ describe("config help copy quality", () => {
   it("documents auth/model root semantics and provider secret handling", () => {
     const providerKey = FIELD_HELP["models.providers.*.apiKey"];
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
+    const modelsMode = FIELD_HELP["models.mode"];
+    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
+    expect(modelsMode.includes("preserve")).toBe(true);
 
     const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
     expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
@@ -794,6 +801,18 @@ describe("config help copy quality", () => {
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
+    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
+    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+
+    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
+    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

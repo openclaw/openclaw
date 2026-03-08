@@ -221,6 +221,12 @@ export const TelegramAccountSchemaBase = z
       .describe(
         "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
       ),
+    webhookCertPath: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. Required for self-signed certs (direct IP or no domain).",
+      ),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -228,6 +234,16 @@ export const TelegramAccountSchemaBase = z
         poll: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
+        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -472,6 +488,12 @@ export const DiscordAccountSchema = z
         sessionFilter: z.array(z.string()).optional(),
         cleanupAfterResolve: z.boolean().optional(),
         target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
+    agentComponents: z
+      .object({
+        enabled: z.boolean().optional(),
       })
       .strict()
       .optional(),

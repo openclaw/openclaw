@@ -56,6 +56,13 @@ describe("secrets runtime snapshot", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_PROVIDER_AUTH_HEADER",
+              },
+            },
             models: [],
           },
         },
@@ -122,21 +129,22 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
       env: {
-        OPENAI_API_KEY: "sk-env-openai",
-        GITHUB_TOKEN: "ghp-env-token",
-        REVIEW_SKILL_API_KEY: "sk-skill-ref",
-        MEMORY_REMOTE_API_KEY: "mem-ref-key",
-        TALK_API_KEY: "talk-ref-key",
-        TALK_PROVIDER_API_KEY: "talk-provider-ref-key",
+        OPENAI_API_KEY: "sk-env-openai", // pragma: allowlist secret
+        OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header", // pragma: allowlist secret
+        GITHUB_TOKEN: "ghp-env-token", // pragma: allowlist secret
+        REVIEW_SKILL_API_KEY: "sk-skill-ref", // pragma: allowlist secret
+        MEMORY_REMOTE_API_KEY: "mem-ref-key", // pragma: allowlist secret
+        TALK_API_KEY: "talk-ref-key", // pragma: allowlist secret
+        TALK_PROVIDER_API_KEY: "talk-provider-ref-key", // pragma: allowlist secret
         REMOTE_GATEWAY_TOKEN: "remote-token-ref",
-        REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
+        REMOTE_GATEWAY_PASSWORD: "remote-password-ref", // pragma: allowlist secret
         TELEGRAM_BOT_TOKEN_REF: "telegram-bot-ref",
-        TELEGRAM_WEBHOOK_SECRET_REF: "telegram-webhook-ref",
+        TELEGRAM_WEBHOOK_SECRET_REF: "telegram-webhook-ref", // pragma: allowlist secret
         TELEGRAM_WORK_BOT_TOKEN_REF: "telegram-work-ref",
-        SLACK_SIGNING_SECRET_REF: "slack-signing-ref",
+        SLACK_SIGNING_SECRET_REF: "slack-signing-ref", // pragma: allowlist secret
         SLACK_WORK_BOT_TOKEN_REF: "slack-work-bot-ref",
         SLACK_WORK_APP_TOKEN_REF: "slack-work-app-ref",
-        WEB_SEARCH_API_KEY: "web-search-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
@@ -162,6 +170,9 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
+    expect(snapshot.config.models?.providers?.openai?.headers?.Authorization).toBe(
+      "Bearer sk-env-header",
+    );
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
     expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
     expect(snapshot.config.talk?.apiKey).toBe("talk-ref-key");
@@ -305,7 +316,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        WEB_SEARCH_API_KEY: "web-search-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -343,8 +354,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        WEB_SEARCH_API_KEY: "web-search-ref",
-        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -374,7 +385,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -399,7 +410,7 @@ describe("secrets runtime snapshot", () => {
           {
             providers: {
               openai: {
-                apiKey: "sk-from-file-provider",
+                apiKey: "sk-from-file-provider", // pragma: allowlist secret
               },
             },
           },
@@ -494,7 +505,7 @@ describe("secrets runtime snapshot", () => {
           },
         },
       }),
-      env: { OPENAI_API_KEY: "sk-runtime" },
+      env: { OPENAI_API_KEY: "sk-runtime" }, // pragma: allowlist secret
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
         loadAuthStoreWithProfiles({
@@ -603,7 +614,7 @@ describe("secrets runtime snapshot", () => {
           auth: {
             mode: "password",
             token: "local-token",
-            password: "local-password",
+            password: "local-password", // pragma: allowlist secret
           },
           remote: {
             enabled: true,
@@ -642,7 +653,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+        GATEWAY_PASSWORD_REF: "resolved-gateway-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -680,7 +691,7 @@ describe("secrets runtime snapshot", () => {
           auth: {
             mode: "password",
             token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-            password: "password-123",
+            password: "password-123", // pragma: allowlist secret
           },
         },
       }),
@@ -728,7 +739,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+        GATEWAY_PASSWORD_REF: "resolved-gateway-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -822,7 +833,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {
         REMOTE_TOKEN: "resolved-remote-token",
-        REMOTE_PASSWORD: "resolved-remote-password",
+        REMOTE_PASSWORD: "resolved-remote-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -846,7 +857,7 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        REMOTE_PASSWORD: "resolved-remote-password",
+        REMOTE_PASSWORD: "resolved-remote-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -980,8 +991,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        NEXTCLOUD_BOT_SECRET: "resolved-nextcloud-bot-secret",
-        NEXTCLOUD_API_PASSWORD: "resolved-nextcloud-api-password",
+        NEXTCLOUD_BOT_SECRET: "resolved-nextcloud-bot-secret", // pragma: allowlist secret
+        NEXTCLOUD_API_PASSWORD: "resolved-nextcloud-api-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -1022,8 +1033,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
-        NEXTCLOUD_WORK_BOT_SECRET: "resolved-nextcloud-work-bot-secret",
-        NEXTCLOUD_WORK_API_PASSWORD: "resolved-nextcloud-work-api-password",
+        NEXTCLOUD_WORK_BOT_SECRET: "resolved-nextcloud-work-bot-secret", // pragma: allowlist secret
+        NEXTCLOUD_WORK_API_PASSWORD: "resolved-nextcloud-work-api-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -1058,7 +1069,7 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {
         REMOTE_GATEWAY_TOKEN: "tailscale-remote-token",
-        REMOTE_GATEWAY_PASSWORD: "tailscale-remote-password",
+        REMOTE_GATEWAY_PASSWORD: "tailscale-remote-password", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -1931,7 +1942,7 @@ describe("secrets runtime snapshot", () => {
             list: [{ id: "worker" }],
           },
         },
-        env: { OPENAI_API_KEY: "sk-runtime-worker" },
+        env: { OPENAI_API_KEY: "sk-runtime-worker" }, // pragma: allowlist secret
       });
 
       await expect(fs.access(workerStorePath)).rejects.toMatchObject({ code: "ENOENT" });
