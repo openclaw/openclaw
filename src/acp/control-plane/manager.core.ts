@@ -692,6 +692,22 @@ export class AcpSessionManager {
       };
       this.activeTurnBySession.set(actorKey, activeTurn);
 
+      // Strip images when the runtime does not advertise image support.
+      // If that leaves an empty turn (no text, no images), fail early.
+      let turnImages = input.images;
+      if (turnImages && turnImages.length > 0) {
+        const caps = await this.resolveRuntimeCapabilities({ runtime, handle });
+        if (!caps.supportsImages) {
+          turnImages = undefined;
+          if (!input.text.trim()) {
+            throw new AcpRuntimeError(
+              "ACP_BACKEND_UNSUPPORTED_CONTROL",
+              "This ACP runtime does not support image input. Send a text message instead.",
+            );
+          }
+        }
+      }
+
       let streamError: AcpRuntimeError | null = null;
       try {
         const combinedSignal =
@@ -701,6 +717,7 @@ export class AcpSessionManager {
         for await (const event of runtime.runTurn({
           handle,
           text: input.text,
+          images: turnImages,
           mode: input.mode,
           requestId: input.requestId,
           signal: combinedSignal,

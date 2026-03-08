@@ -38,6 +38,7 @@ export async function resolveManagerRuntimeCapabilities(params: {
   return {
     controls: [...controls].toSorted(),
     ...(normalizedKeys.length > 0 ? { configOptionKeys: normalizedKeys } : {}),
+    ...(reported?.supportsImages != null ? { supportsImages: reported.supportsImages } : {}),
   };
 }
 

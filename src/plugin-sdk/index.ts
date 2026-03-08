@@ -130,6 +130,8 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 
+export type { ImageContent } from "../commands/agent/types.js";
+
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
 export {

@@ -42,6 +42,7 @@ export type AcpRuntimeEnsureInput = {
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
+  images?: import("../../commands/agent/types.js").ImageContent[];
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
@@ -54,6 +55,8 @@ export type AcpRuntimeCapabilities = {
    * Empty/undefined means "backend accepts keys, but did not advertise a strict list".
    */
   configOptionKeys?: string[];
+  /** Whether the runtime can consume image content in turn input. */
+  supportsImages?: boolean;
 };
 
 export type AcpRuntimeStatus = {
