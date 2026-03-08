@@ -18,6 +18,8 @@ type SlackSendTextCtx = {
   text: string;
   accountId: string;
   replyToId: string;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
   identity?: {
     name?: string;
     avatarUrl?: string;
@@ -111,6 +113,27 @@ describe("slack outbound hook wiring", () => {
     expectSlackSendCalledWith("hello", {
       identity: { iconEmoji: ":lobster:" },
     });
+  });
+
+  it("forwards unfurl controls when provided", async () => {
+    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+
+    await sendSlackTextWithDefaults({
+      text: "hello",
+      unfurlLinks: false,
+      unfurlMedia: false,
+    });
+
+    expect(sendMessageSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: "1111.2222",
+        accountId: "default",
+        unfurlLinks: false,
+        unfurlMedia: false,
+      }),
+    );
   });
 
   it("calls message_sending hook before sending", async () => {

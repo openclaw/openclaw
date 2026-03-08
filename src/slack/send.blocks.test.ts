@@ -123,6 +123,39 @@ describe("sendMessageSlack blocks", () => {
     );
   });
 
+  it("passes unfurl controls to chat.postMessage", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "Link: https://example.com", {
+      token: "xoxb-test",
+      client,
+      unfurlLinks: false,
+      unfurlMedia: false,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    );
+  });
+
+  it("omits unfurl params from API call when not provided", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "Link: https://example.com", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        unfurl_links: expect.anything(),
+        unfurl_media: expect.anything(),
+      }),
+    );
+  });
+
   it("rejects blocks combined with mediaUrl", async () => {
     const client = createSlackSendTestClient();
     await expect(

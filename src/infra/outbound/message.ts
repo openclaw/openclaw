@@ -43,6 +43,8 @@ type MessageSendParams = {
   threadId?: string | number;
   dryRun?: boolean;
   bestEffort?: boolean;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
   deps?: OutboundSendDeps;
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
@@ -225,6 +227,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       gifPlayback: params.gifPlayback,
       deps: params.deps,
       bestEffort: params.bestEffort,
+      unfurlLinks: params.unfurlLinks,
+      unfurlMedia: params.unfurlMedia,
       abortSignal: params.abortSignal,
       silent: params.silent,
       mirror: params.mirror
@@ -258,6 +262,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       agentId: params.agentId,
       channel,
+      unfurlLinks: params.unfurlLinks,
+      unfurlMedia: params.unfurlMedia,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
     },

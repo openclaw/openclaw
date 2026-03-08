@@ -58,6 +58,8 @@ async function sendSlackOutboundMessage(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
 }) {
   const send = params.deps?.sendSlack ?? sendMessageSlack;
   // Use threadId fallback so routed tool notifications stay in the Slack thread.
@@ -88,6 +90,8 @@ async function sendSlackOutboundMessage(params: {
       ? { mediaUrl: params.mediaUrl, mediaLocalRoots: params.mediaLocalRoots }
       : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
+    ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+    ...(params.unfurlMedia !== undefined ? { unfurlMedia: params.unfurlMedia } : {}),
   });
   return { channel: "slack" as const, ...result };
 }
@@ -98,7 +102,18 @@ export const slackOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   sendPayload: async (ctx) =>
     await sendTextMediaPayload({ channel: "slack", ctx, adapter: slackOutbound }),
-  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
+  sendText: async ({
+    cfg,
+    to,
+    text,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+    identity,
+    unfurlLinks,
+    unfurlMedia,
+  }) => {
     return await sendSlackOutboundMessage({
       cfg,
       to,
@@ -108,6 +123,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
+      unfurlLinks,
+      unfurlMedia,
     });
   },
   sendMedia: async ({
@@ -121,6 +138,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
     replyToId,
     threadId,
     identity,
+    unfurlLinks,
+    unfurlMedia,
   }) => {
     return await sendSlackOutboundMessage({
       cfg,
@@ -133,6 +152,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
+      unfurlLinks,
+      unfurlMedia,
     });
   },
 };
