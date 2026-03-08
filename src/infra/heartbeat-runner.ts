@@ -1134,6 +1134,7 @@ export function startHeartbeatRunner(opts: {
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
+    let lastFailedReason: string | undefined;
 
     if (requestedSessionKey || requestedAgentId) {
       const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
@@ -1187,7 +1188,11 @@ export function startHeartbeatRunner(opts: {
         const errMsg = formatErrorMessage(err);
         log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
         advanceAgentSchedule(agent, now);
+        lastFailedReason = errMsg;
         continue;
+      }
+      if (res.status === "failed") {
+        lastFailedReason = res.reason;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
         // Do not advance the schedule — the main lane is busy and the wake
@@ -1205,6 +1210,10 @@ export function startHeartbeatRunner(opts: {
     }
 
     scheduleNext();
+    // Propagate failure status so the wake layer's circuit breaker can track it.
+    if (lastFailedReason && !ran) {
+      return { status: "failed", reason: lastFailedReason };
+    }
     if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
