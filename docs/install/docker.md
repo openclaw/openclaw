@@ -250,6 +250,30 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 
 More detail: [Dashboard](/web/dashboard), [Devices](/cli/devices).
 
+### Docker networking note (Control UI + CLI reachability)
+
+For Docker Compose deployments, a reliable default is to keep the gateway
+bound to `lan` inside the container and restrict host exposure with loopback
+port publishing (for example, `127.0.0.1:18789:18789` and
+`127.0.0.1:18790:18790`).
+
+In containerized environments, `--bind loopback` can make the gateway
+unreachable from published host ports and from sibling containers (including
+`openclaw-cli`).
+
+If you use a non-loopback bind, configure
+`gateway.controlUi.allowedOrigins` explicitly for the Control UI origins you
+expect. Keep
+`gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` only as a
+temporary troubleshooting option.
+
+If bind/origin changes appear to have no effect, check for `.env` overrides and
+inspect the effective Compose configuration with:
+
+```bash
+docker compose config
+```
+
 ### Extra mounts (optional)
 
 If you want to mount additional host directories into the containers, set
