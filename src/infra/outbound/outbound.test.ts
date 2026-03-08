@@ -1120,6 +1120,38 @@ describe("resolveOutboundSessionRoute", () => {
       }
     }
   });
+
+  it("uses resolved Discord user targets to route bare numeric ids as DMs", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
+      agentId: "main",
+      target: "123",
+      resolvedTarget: {
+        to: "user:123",
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:direct:123",
+      from: "discord:123",
+      to: "user:123",
+      chatType: "direct",
+    });
+  });
+
+  it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
+    await expect(
+      resolveOutboundSessionRoute({
+        cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+        channel: "discord",
+        agentId: "main",
+        target: "123",
+      }),
+    ).rejects.toThrow(/Ambiguous Discord recipient/);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {
