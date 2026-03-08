@@ -1,6 +1,7 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
+import { syncAotuiDesktopForRun } from "../aotui/runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -450,6 +451,17 @@ async function agentCommandInternal(
   const workspaceDir = workspace.dir;
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
+  try {
+    await syncAotuiDesktopForRun({
+      sessionKey,
+      sessionId,
+      agentId: sessionAgentId,
+      workspaceDir,
+      isNewSession,
+    });
+  } catch (err) {
+    log.warn(`AOTUI desktop sync failed for ${sessionKey ?? sessionId}: ${String(err)}`);
+  }
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
     ? acpManager.resolveSession({

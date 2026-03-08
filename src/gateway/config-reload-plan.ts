@@ -34,6 +34,9 @@ type ReloadAction =
   | `restart-channel:${ChannelId}`;
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
+  { prefix: "aotui", kind: "restart" },
+  { prefix: "agents.defaults.aotui", kind: "restart" },
+  { prefix: "agents.list.*.aotui", kind: "restart" },
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
   {
@@ -132,11 +135,35 @@ function listReloadRules(): ReloadRule[] {
 
 function matchRule(path: string): ReloadRule | null {
   for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+    if (matchesReloadPrefix(path, rule.prefix)) {
       return rule;
     }
   }
   return null;
+}
+
+function matchesReloadPrefix(path: string, prefix: string): boolean {
+  if (!prefix.includes("*")) {
+    return path === prefix || path.startsWith(`${prefix}.`);
+  }
+
+  const pathParts = path.split(".");
+  const prefixParts = prefix.split(".");
+  if (pathParts.length < prefixParts.length) {
+    return false;
+  }
+
+  for (let index = 0; index < prefixParts.length; index += 1) {
+    const expected = prefixParts[index];
+    if (expected === "*") {
+      continue;
+    }
+    if (pathParts[index] !== expected) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPlan {

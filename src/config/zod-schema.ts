@@ -3,6 +3,7 @@ import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import { AotuiConfigSchema } from "./zod-schema.aotui.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import {
   HexColorSchema,
@@ -162,6 +163,7 @@ const PluginEntrySchema = z
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
+    aotui: AotuiConfigSchema,
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),

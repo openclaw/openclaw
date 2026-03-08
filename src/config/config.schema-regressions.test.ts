@@ -175,6 +175,37 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts OpenClaw-owned AOTUI registry and agent app selections", () => {
+    const res = validateConfigObject({
+      aotui: {
+        apps: {
+          ide: {
+            source: "npm:@agentina/aotui-ide",
+            whatItIs: "IDE",
+            whenToUse: "When editing code",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          aotui: {
+            apps: ["ide"],
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            aotui: {
+              apps: [],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {

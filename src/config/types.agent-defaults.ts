@@ -1,5 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type { AotuiAgentSelectionConfig } from "./types.aotui.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -181,6 +182,8 @@ export type AgentDefaultsConfig = {
      */
     projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
   };
+  /** Default AOTUI app selection inherited by agents unless explicitly overridden. */
+  aotui?: AotuiAgentSelectionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */

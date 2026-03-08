@@ -6,6 +6,7 @@ import {
   AgentModelSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
+import { AotuiAgentSelectionSchema } from "./zod-schema.aotui.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
@@ -130,6 +131,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    aotui: AotuiAgentSelectionSchema,
     thinkingDefault: z
       .union([
         z.literal("off"),

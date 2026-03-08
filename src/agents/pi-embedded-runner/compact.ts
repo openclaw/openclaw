@@ -7,6 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { reinitializeAotuiDesktopForCompaction } from "../../aotui/runtime.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -729,6 +730,16 @@ export async function compactEmbeddedPiSessionDirect(
               `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
               `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
+          );
+        }
+        try {
+          await reinitializeAotuiDesktopForCompaction({
+            sessionKey: params.sessionKey,
+            reason: "context_compaction",
+          });
+        } catch (err) {
+          log.warn(
+            `AOTUI desktop reinitialize failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
           );
         }
         return {

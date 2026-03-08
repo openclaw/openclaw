@@ -1,0 +1,19 @@
+{
+  "folders": [
+    {
+      "path": "../../../../learning_code/AgentOrientedTUI",
+    },
+    {
+      "path": "../..",
+    },
+  ],
+  "settings": {
+    "chat.tools.terminal.autoApprove": {
+      "npx vitest": true,
+      "/^cd /Users/zhangwei/JSWorkSpace/learning_code/AgentOrientedTUI && bash setup\\.sh 2>&1 \\| tail -20$/": {
+        "approve": true,
+        "matchCommandLine": true,
+      },
+    },
+  },
+}

@@ -89,4 +89,46 @@ describe("createCacheTrace", () => {
 
     expect(trace).toBeNull();
   });
+
+  it("records provider payloads when payload tracing is enabled", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_CACHE_TRACE_PAYLOAD: "1",
+      },
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const streamFn = trace?.wrapStreamFn((_model, _context, options) => {
+      options?.onPayload?.({ model: "glm-5", messages: [{ role: "user", content: "ping" }] });
+      return {} as never;
+    });
+
+    void streamFn?.(
+      { id: "glm-5", provider: "dashscope", api: "openai-completions" } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    const payloadEvent = lines
+      .map((line) => JSON.parse(line.trim()) as Record<string, unknown>)
+      .find((entry) => entry.stage === "stream:payload");
+
+    expect(payloadEvent).toBeTruthy();
+    expect(payloadEvent?.payload).toEqual({
+      model: "glm-5",
+      messages: [{ role: "user", content: "ping" }],
+    });
+    expect(typeof payloadEvent?.payloadDigest).toBe("string");
+  });
 });

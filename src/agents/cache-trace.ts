@@ -15,6 +15,7 @@ export type CacheTraceStage =
   | "prompt:before"
   | "prompt:images"
   | "stream:context"
+  | "stream:payload"
   | "session:after";
 
 export type CacheTraceEvent = {
@@ -32,6 +33,8 @@ export type CacheTraceEvent = {
   system?: unknown;
   options?: Record<string, unknown>;
   model?: Record<string, unknown>;
+  payload?: unknown;
+  payloadDigest?: string;
   messages?: AgentMessage[];
   messageCount?: number;
   messageRoles?: Array<string | undefined>;
@@ -68,6 +71,7 @@ type CacheTraceConfig = {
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
+  includePayload: boolean;
 };
 
 type CacheTraceWriter = QueuedFileWriter;
@@ -88,6 +92,7 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
   const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
   const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+  const includePayload = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PAYLOAD);
 
   return {
     enabled,
@@ -95,6 +100,7 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
+    includePayload: includePayload ?? false,
   };
 }
 
@@ -203,6 +209,10 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     if (payload.model) {
       event.model = payload.model;
     }
+    if (payload.payload !== undefined && cfg.includePayload) {
+      event.payload = payload.payload;
+      event.payloadDigest = digest(payload.payload);
+    }
 
     const messages = payload.messages;
     if (Array.isArray(messages)) {
@@ -242,7 +252,20 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
         messages: (context as { messages?: AgentMessage[] }).messages ?? [],
         options: (options ?? {}) as Record<string, unknown>,
       });
-      return streamFn(model, context, options);
+      return streamFn(model, context, {
+        ...options,
+        onPayload: (payload) => {
+          recordStage("stream:payload", {
+            model: {
+              id: model?.id,
+              provider: model?.provider,
+              api: model?.api,
+            },
+            payload,
+          });
+          options?.onPayload?.(payload);
+        },
+      });
     };
     return wrapped;
   };

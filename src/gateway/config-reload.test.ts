@@ -197,6 +197,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
   });
 
+  it("requires gateway restart for top-level AOTUI registry changes", () => {
+    const plan = buildGatewayReloadPlan(["aotui.apps.ide.source"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("aotui.apps.ide.source");
+  });
+
+  it("requires gateway restart for per-agent AOTUI app selection changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.list.0.aotui.apps"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.aotui.apps");
+  });
+
   it.each([
     {
       path: "gateway.channelHealthCheckMinutes",

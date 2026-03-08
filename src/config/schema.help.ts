@@ -202,12 +202,41 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+  aotui:
+    "OpenClaw-owned AOTUI control plane. Define installable AOTUI app descriptors here so capability surface is determined by OpenClaw config rather than by an external runtime-global config file.",
+  "aotui.apps":
+    "Registry of installable AOTUI app descriptors keyed by stable app name. Agent-level AOTUI selections reference these names.",
+  "aotui.apps.*":
+    "Single AOTUI app registry descriptor entry. Keep names stable so agent-level selections remain deterministic across config edits.",
+  "aotui.apps.*.source":
+    'App source descriptor understood by the AOTUI runtime registry (for example "npm:@agentina/aotui-ide").',
+  "aotui.apps.*.version":
+    "Optional package/version constraint for the app source when supported by the AOTUI runtime registry.",
+  "aotui.apps.*.enabled":
+    "Enable or disable this AOTUI registry entry without deleting its descriptor. Disabled registry entries are not installed for agents.",
+  "aotui.apps.*.workerScript":
+    "Optional worker script override for this AOTUI app entry when the runtime should not use its default worker runtime.",
+  "aotui.apps.*.description": "Backward-compatible short description for the AOTUI app entry.",
+  "aotui.apps.*.whatItIs":
+    "Human-readable description of what the AOTUI app is for. This can be exposed to the runtime prompt surface.",
+  "aotui.apps.*.whenToUse":
+    "Human-readable guidance for when the AOTUI app should be used. Keep this short and operational.",
+  "aotui.apps.*.promptRole":
+    'Prompt role used by the AOTUI runtime when projecting app content ("user" or "assistant").',
   agents:
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+  "agents.defaults.aotui":
+    "Default AOTUI app selection inherited by agents unless they override it explicitly.",
+  "agents.defaults.aotui.apps":
+    "List of AOTUI registry entry names to install for agents by default. Omit to install no AOTUI apps unless an agent override is set.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].aotui":
+    "Per-agent AOTUI app selection override. Use this to give different agents different AOTUI capability surfaces.",
+  "agents.list[].aotui.apps":
+    "AOTUI registry entry names to install for this agent. Set an empty array to explicitly disable AOTUI apps for the agent.",
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":
