@@ -58,4 +58,35 @@ describe("dropThinkingBlocks", () => {
     const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
+
+  it("drops redacted_thinking blocks alongside thinking blocks", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal" },
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: "visible" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([{ type: "text", text: "visible" }]);
+  });
+
+  it("handles assistant message with only redacted_thinking blocks", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "redacted_thinking", data: "opaque" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+  });
 });
