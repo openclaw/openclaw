@@ -470,12 +470,32 @@ async function buildCompactAnnounceStatsLine(params: {
 
 type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
 
+/**
+ * Resolve the delivery origin for announce flow.
+ * @param entry - Session entry that may contain lastTo/lastChannel
+ * @param requesterOrigin - Origin from the requester (e.g., cron delivery config)
+ * @param explicitTo - If set, this explicit target should be preserved and not overridden by session values
+ */
 function resolveAnnounceOrigin(
   entry?: DeliveryContextSource,
   requesterOrigin?: DeliveryContext,
+  explicitTo?: string,
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
+
+  // If we have an explicit 'to' from delivery config, preserve it and don't let
+  // session-derived values override it. This prevents hallucinated IDs from
+  // cron subagent sessions from polluting the delivery target.
+  if (explicitTo) {
+    return {
+      channel: normalizedRequester?.channel,
+      to: explicitTo,
+      accountId: normalizedRequester?.accountId,
+      threadId: normalizedRequester?.threadId ?? normalizedEntry?.threadId,
+    };
+  }
+
   if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
     // Ignore internal channel hints (webchat) so a valid persisted route
     // can still be used for outbound delivery. Non-standard channels that
@@ -699,7 +719,11 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    const origin = resolveAnnounceOrigin(
+      entry,
+      params.requesterOrigin,
+      params.requesterOrigin?.to, // Pass explicit 'to' to preserve it
+    );
     enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
@@ -1400,7 +1424,9 @@ export async function runSubagentAnnounceFlow(params: {
     let directOrigin = targetRequesterOrigin;
     if (!requesterIsSubagent) {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
-      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
+      // Pass explicit 'to' from requesterOrigin to preserve it and prevent
+      // session-derived hallucinated IDs from overriding the configured target
+      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin, targetRequesterOrigin?.to);
     }
     const completionDirectOrigin =
       expectsCompletionMessage && !requesterIsSubagent
