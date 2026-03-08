@@ -2046,6 +2046,9 @@ export function createWebSearchTool(options?: {
         });
       }
       const goggles = readStringParam(params, "goggles");
+      // Defense-in-depth: goggles is not in the schema for non-Brave providers, so
+      // schema validation strips it before reaching here. This guard catches any
+      // caller that bypasses schema validation (e.g. raw programmatic invocation).
       if (goggles && provider !== "brave") {
         return jsonResult({
           error: "unsupported_goggles",
