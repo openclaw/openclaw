@@ -185,6 +185,48 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        announceRetry: z
+          .object({
+            attempts: z
+              .number()
+              .int()
+              .min(1)
+              .max(10)
+              .optional()
+              .describe("Number of retry attempts after initial failure (default: 3, max: 10)."),
+            minDelayMs: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .describe("Minimum retry delay in ms (default: 5000)."),
+            maxDelayMs: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .describe("Maximum retry delay cap in ms (default: 30000)."),
+            jitter: z
+              .number()
+              .min(0)
+              .max(1)
+              .optional()
+              .describe("Jitter factor (0-1) applied to delays (default: 0.1)."),
+          })
+          .strict()
+          .refine(
+            (data) => {
+              if (data.minDelayMs != null && data.maxDelayMs != null) {
+                return data.maxDelayMs >= data.minDelayMs;
+              }
+              return true;
+            },
+            {
+              message: "maxDelayMs must be greater than or equal to minDelayMs",
+            },
+          )
+          .optional()
+          .describe("Retry configuration for sub-agent announce delivery on transient failures."),
       })
       .strict()
       .optional(),

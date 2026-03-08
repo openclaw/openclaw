@@ -61,9 +61,70 @@ function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimePromise;
 }
 
-const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
-  ? ([8, 16, 32] as const)
-  : ([5_000, 10_000, 20_000] as const);
+// Default retry configuration for announce delivery
+const DEFAULT_ANNOUNCE_RETRY_ATTEMPTS = 3;
+const DEFAULT_ANNOUNCE_RETRY_MIN_DELAY_MS = 5_000;
+const DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS = 30_000;
+const DEFAULT_ANNOUNCE_RETRY_JITTER = 0.1;
+
+type AnnounceRetryConfig = {
+  attempts: number;
+  minDelayMs: number;
+  maxDelayMs: number;
+  jitter: number;
+};
+
+function resolveAnnounceRetryConfig(cfg: ReturnType<typeof loadConfig>): AnnounceRetryConfig {
+  const retry = cfg.agents?.defaults?.subagents?.announceRetry;
+  // Clamp minDelayMs to timer-safe maximum
+  const rawMinDelayMs =
+    typeof retry?.minDelayMs === "number" &&
+    Number.isFinite(retry.minDelayMs) &&
+    retry.minDelayMs > 0
+      ? Math.floor(retry.minDelayMs)
+      : DEFAULT_ANNOUNCE_RETRY_MIN_DELAY_MS;
+  const minDelayMs = Math.min(rawMinDelayMs, MAX_TIMER_SAFE_TIMEOUT_MS);
+  const rawMaxDelayMs =
+    typeof retry?.maxDelayMs === "number" &&
+    Number.isFinite(retry.maxDelayMs) &&
+    retry.maxDelayMs > 0
+      ? Math.floor(retry.maxDelayMs)
+      : DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS;
+  // Ensure maxDelayMs is at least minDelayMs and does not exceed timer-safe maximum
+  const maxDelayMs = Math.min(Math.max(minDelayMs, rawMaxDelayMs), MAX_TIMER_SAFE_TIMEOUT_MS);
+  return {
+    // attempts represents total attempts (including initial), so retries = attempts - 1
+    attempts:
+      typeof retry?.attempts === "number" && Number.isFinite(retry.attempts) && retry.attempts > 0
+        ? Math.min(Math.floor(retry.attempts), 10)
+        : DEFAULT_ANNOUNCE_RETRY_ATTEMPTS,
+    minDelayMs,
+    maxDelayMs,
+    jitter:
+      typeof retry?.jitter === "number" &&
+      Number.isFinite(retry.jitter) &&
+      retry.jitter >= 0 &&
+      retry.jitter <= 1
+        ? retry.jitter
+        : DEFAULT_ANNOUNCE_RETRY_JITTER,
+  };
+}
+
+function computeRetryDelayMs(retryIndex: number, config: AnnounceRetryConfig): number {
+  if (FAST_TEST_MODE) {
+    // Fast test mode: use short fixed delays
+    const fastDelays = [8, 16, 32];
+    return fastDelays[retryIndex] ?? 32;
+  }
+  // Exponential backoff with jitter
+  const baseDelay = config.minDelayMs * Math.pow(2, retryIndex);
+  const cappedDelay = Math.min(baseDelay, config.maxDelayMs);
+  const jitterRange = cappedDelay * config.jitter;
+  const jitterOffset = (Math.random() * 2 - 1) * jitterRange;
+  const delayWithJitter = Math.floor(cappedDelay + jitterOffset);
+  // Ensure final delay respects both min and max bounds after jitter
+  return Math.max(config.minDelayMs, Math.min(config.maxDelayMs, delayWithJitter));
+}
 
 type ToolResultMessage = {
   role?: unknown;
@@ -157,7 +218,17 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
   run: () => Promise<T>;
+  retryConfig?: AnnounceRetryConfig;
 }): Promise<T> {
+  const config = params.retryConfig ?? {
+    attempts: DEFAULT_ANNOUNCE_RETRY_ATTEMPTS,
+    minDelayMs: DEFAULT_ANNOUNCE_RETRY_MIN_DELAY_MS,
+    maxDelayMs: DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS,
+    jitter: DEFAULT_ANNOUNCE_RETRY_JITTER,
+  };
+  // attempts represents the number of retries (not total attempts)
+  // This matches the previous behavior where 3 delays = 3 retries
+  const maxRetries = config.attempts;
   let retryIndex = 0;
   for (;;) {
     if (params.signal?.aborted) {
@@ -166,14 +237,14 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
-      if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
+      const hasNextRetry = retryIndex < maxRetries;
+      if (!hasNextRetry || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
-      const nextAttempt = retryIndex + 2;
-      const maxAttempts = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS.length + 1;
+      const delayMs = computeRetryDelayMs(retryIndex, config);
+      const nextAttempt = retryIndex + 1;
       defaultRuntime.log(
-        `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
+        `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxRetries} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
       retryIndex += 1;
       await waitForAnnounceRetryDelay(delayMs, params.signal);
@@ -786,6 +857,7 @@ async function sendSubagentAnnounceDirectly(params: {
         ? "completion direct announce agent call"
         : "direct announce agent call",
       signal: params.signal,
+      retryConfig: resolveAnnounceRetryConfig(cfg),
       run: async () =>
         await callGateway({
           method: "agent",
@@ -1094,6 +1166,7 @@ async function wakeSubagentRunAfterDescendants(params: {
     const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
       operation: "descendant wake agent call",
       signal: params.signal,
+      retryConfig: resolveAnnounceRetryConfig(cfg),
       run: async () =>
         await callGateway({
           method: "agent",
