@@ -10,6 +10,7 @@ export type GatewayReloadPlan = {
   hotReasons: string[];
   reloadHooks: boolean;
   restartGmailWatcher: boolean;
+  restartWsEventsWatcher: boolean;
   restartBrowserControl: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
@@ -27,6 +28,7 @@ type ReloadRule = {
 type ReloadAction =
   | "reload-hooks"
   | "restart-gmail-watcher"
+  | "restart-ws-events-watcher"
   | "restart-browser-control"
   | "restart-cron"
   | "restart-heartbeat"
@@ -44,6 +46,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // Stuck-session warning threshold is read by the diagnostics heartbeat loop.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
+  { prefix: "hooks.workspaceEvents", kind: "hot", actions: ["restart-ws-events-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
     prefix: "agents.defaults.heartbeat",
@@ -147,6 +150,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     hotReasons: [],
     reloadHooks: false,
     restartGmailWatcher: false,
+    restartWsEventsWatcher: false,
     restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
@@ -167,6 +171,9 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
         break;
       case "restart-gmail-watcher":
         plan.restartGmailWatcher = true;
+        break;
+      case "restart-ws-events-watcher":
+        plan.restartWsEventsWatcher = true;
         break;
       case "restart-browser-control":
         plan.restartBrowserControl = true;
@@ -208,6 +215,9 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
   }
 
   if (plan.restartGmailWatcher) {
+    plan.reloadHooks = true;
+  }
+  if (plan.restartWsEventsWatcher) {
     plan.reloadHooks = true;
   }
 

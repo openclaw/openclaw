@@ -6,6 +6,8 @@ import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { startWsEventsWatcherWithLogs } from "../hooks/ws-events-watcher-lifecycle.js";
+import { stopWsEventsWatcher } from "../hooks/ws-events-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -108,6 +110,18 @@ export function createGatewayReloadHandlers(params: {
         log: params.logHooks,
         onSkipped: () =>
           params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
+      });
+    }
+
+    if (plan.restartWsEventsWatcher) {
+      await stopWsEventsWatcher().catch(() => {});
+      await startWsEventsWatcherWithLogs({
+        cfg: nextConfig,
+        log: params.logHooks,
+        onSkipped: () =>
+          params.logHooks.info(
+            "skipping ws-events watcher restart (OPENCLAW_SKIP_WS_EVENTS_WATCHER=1)",
+          ),
       });
     }
 
