@@ -60,6 +60,27 @@ const cacheGitCommit = (searchDir: string, commit: string | null) => {
   return commit;
 };
 
+const readCommitFromGit = (searchDir: string): string | null | undefined => {
+  const headPath = resolveGitHeadPath(searchDir);
+  if (!headPath) {
+    return undefined;
+  }
+  const head = fs.readFileSync(headPath, "utf-8").trim();
+  if (!head) {
+    return null;
+  }
+  if (head.startsWith("ref:")) {
+    const ref = head.replace(/^ref:\s*/i, "").trim();
+    const refPath = resolveRefPath(headPath, ref);
+    if (!refPath) {
+      return null;
+    }
+    const refHash = safeReadFilePrefix(refPath).trim();
+    return formatCommit(refHash);
+  }
+  return formatCommit(head);
+};
+
 const resolveGitRefsBase = (headPath: string) => {
   const gitDir = path.dirname(headPath);
   try {
@@ -145,6 +166,18 @@ export const resolveCommitHash = (
   if (normalized) {
     return normalized;
   }
+  const searchDir = resolveCommitSearchDir(options);
+  if (cachedGitCommitBySearchDir.has(searchDir)) {
+    return cachedGitCommitBySearchDir.get(searchDir) ?? null;
+  }
+  try {
+    const gitCommit = readCommitFromGit(searchDir);
+    if (gitCommit !== undefined) {
+      return cacheGitCommit(searchDir, gitCommit);
+    }
+  } catch {
+    // Fall through to baked metadata for packaged installs that are not in a live checkout.
+  }
   const buildInfoCommit = readCommitFromBuildInfo();
   if (buildInfoCommit) {
     return buildInfoCommit;
@@ -153,30 +186,8 @@ export const resolveCommitHash = (
   if (pkgCommit) {
     return pkgCommit;
   }
-
-  const searchDir = resolveCommitSearchDir(options);
-  if (cachedGitCommitBySearchDir.has(searchDir)) {
-    return cachedGitCommitBySearchDir.get(searchDir) ?? null;
-  }
   try {
-    const headPath = resolveGitHeadPath(searchDir);
-    if (!headPath) {
-      return cacheGitCommit(searchDir, null);
-    }
-    const head = fs.readFileSync(headPath, "utf-8").trim();
-    if (!head) {
-      return cacheGitCommit(searchDir, null);
-    }
-    if (head.startsWith("ref:")) {
-      const ref = head.replace(/^ref:\s*/i, "").trim();
-      const refPath = resolveRefPath(headPath, ref);
-      if (!refPath) {
-        return cacheGitCommit(searchDir, null);
-      }
-      const refHash = safeReadFilePrefix(refPath).trim();
-      return cacheGitCommit(searchDir, formatCommit(refHash));
-    }
-    return cacheGitCommit(searchDir, formatCommit(head));
+    return cacheGitCommit(searchDir, readCommitFromGit(searchDir) ?? null);
   } catch {
     return null;
   }

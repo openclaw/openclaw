@@ -76,6 +76,34 @@ describe("git commit resolution", () => {
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);
   });
 
+  it("prefers live git metadata over stale build info in a real checkout", async () => {
+    const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+      cwd: originalCwd,
+      encoding: "utf-8",
+    }).trim();
+
+    vi.doMock("node:module", () => ({
+      createRequire: () => {
+        return (specifier: string) => {
+          if (specifier === "../build-info.json" || specifier === "./build-info.json") {
+            return { commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" };
+          }
+          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
+            code: "MODULE_NOT_FOUND",
+          });
+        };
+      },
+    }));
+    vi.resetModules();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+    const entryModuleUrl = pathToFileURL(path.join(originalCwd, "src", "entry.ts")).href;
+
+    expect(resolveCommitHash({ moduleUrl: entryModuleUrl, env: {} })).toBe(repoHead);
+
+    vi.doUnmock("node:module");
+  });
+
   it("caches git lookups per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-cache");
     const repoA = path.join(temp, "repo-a");
