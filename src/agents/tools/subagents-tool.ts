@@ -7,7 +7,6 @@ import {
   sortSubagentRuns,
   type SubagentTargetResolution,
 } from "../../auto-reply/reply/subagents-utils.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
@@ -28,7 +27,6 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { abortEmbeddedPiRun } from "../pi-embedded.js";
 import { optionalStringEnum } from "../schema/typebox.js";
-import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
@@ -196,41 +194,14 @@ function resolveRequesterKey(params: {
     alias,
     mainKey,
   });
-  if (!isSubagentSessionKey(callerSessionKey)) {
-    return {
-      requesterSessionKey: callerSessionKey,
-      callerSessionKey,
-      callerIsSubagent: false,
-    };
-  }
-
-  // Check if this sub-agent can spawn children (orchestrator).
-  // If so, it should see its own children, not its parent's children.
-  const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, { cfg: params.cfg });
-  const maxSpawnDepth =
-    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  if (callerDepth < maxSpawnDepth) {
-    // Orchestrator sub-agent: use its own session key as requester
-    // so it sees children it spawned.
-    return {
-      requesterSessionKey: callerSessionKey,
-      callerSessionKey,
-      callerIsSubagent: true,
-    };
-  }
-
-  // Leaf sub-agent: walk up to its parent so it can see sibling runs.
-  const cache = new Map<string, Record<string, SessionEntry>>();
-  const callerEntry = resolveSessionEntryForKey({
-    cfg: params.cfg,
-    key: callerSessionKey,
-    cache,
-  }).entry;
-  const spawnedBy = typeof callerEntry?.spawnedBy === "string" ? callerEntry.spawnedBy.trim() : "";
+  // Every caller — main, orchestrator subagent, or leaf subagent — uses its own
+  // session key as requesterSessionKey so it sees only the runs it spawned.
+  // Using spawnedBy (the parent's key) leaks scope by exposing sibling runs the
+  // caller does not own (bug #24174).
   return {
-    requesterSessionKey: spawnedBy || callerSessionKey,
+    requesterSessionKey: callerSessionKey,
     callerSessionKey,
-    callerIsSubagent: true,
+    callerIsSubagent: isSubagentSessionKey(callerSessionKey),
   };
 }
 
