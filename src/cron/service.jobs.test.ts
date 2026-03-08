@@ -362,7 +362,7 @@ describe("applyJobPatch", () => {
     });
 
     expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      "cron feishu announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
+      "cron feishu/lark announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
     );
   });
 
