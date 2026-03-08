@@ -253,10 +253,14 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   }
 
   const candidateNames = new Set<string>([trimmed, normalizeToolName(trimmed)]);
-  const delimiterIndex = Math.max(trimmed.lastIndexOf("."), trimmed.lastIndexOf("/"));
-  if (delimiterIndex > -1 && delimiterIndex < trimmed.length - 1) {
-    const suffix = trimmed.slice(delimiterIndex + 1).trim();
-    if (suffix) {
+  const normalizedDelimiter = trimmed.replace(/\//g, ".");
+  const segments = normalizedDelimiter
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length > 1) {
+    for (let index = 1; index < segments.length; index += 1) {
+      const suffix = segments.slice(index).join(".");
       candidateNames.add(suffix);
       candidateNames.add(normalizeToolName(suffix));
     }
