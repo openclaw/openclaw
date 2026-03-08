@@ -76,6 +76,18 @@ Welcome to the lobster tank! 🦞
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
+### Reliability reports (recommended)
+
+For reliability bugs and operational regressions, include a compact failure trace in your issue/PR description:
+
+- Trigger / Context
+- Symptom
+- Probable Root Cause
+- Applied Fix
+- Verification Step
+
+Template and example: [`docs/help/failure-summary.md`](docs/help/failure-summary.md)
+
 ## Control UI Decorators
 
 The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
