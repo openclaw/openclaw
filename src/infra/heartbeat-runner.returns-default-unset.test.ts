@@ -1102,6 +1102,62 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("does not append workspace path hint to user-configured heartbeat prompts", async () => {
+    const tmpDir = await createCaseDir("hb-custom-prompt-no-hint");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      "- Check server logs\n",
+      "utf-8",
+    );
+    const customPrompt = "Read heartbeat.md and summarise what's pending.";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { every: "5m", target: "whatsapp", prompt: customPrompt },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Checked logs" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "interval",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      // Custom prompt should be used as-is — no workspace path hint injected.
+      expect(calledCtx.Body).toContain(customPrompt);
+      expect(calledCtx.Body).not.toContain("use workspace file");
+      expect(calledCtx.Body).not.toContain("Do not read docs/heartbeat.md");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("applies HEARTBEAT.md gating rules across file states and triggers", async () => {
     const cases: Array<{
       name: string;
