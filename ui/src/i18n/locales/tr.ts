@@ -95,7 +95,7 @@ export const tr: TranslationMap = {
     },
     auth: {
       required:
-        "Bu ağ geçidi kimlik doğrulama gerektiriyor. Bir jeton veya parola ekleyin, ardından Bağlan'a tıklayın.",
+        "Bu ağ geçidi kimlik doğrulaması gerektiriyor. Lütfen bir token veya parola ekleyin ve ardından Bağlan'a tıklayın.",
       failed:
         "Kimlik doğrulama başarısız oldu. {command} ile jetonlu bir URL'yi yeniden kopyalayın veya jetonu güncelleyip Bağlan'a tıklayın.",
     },
