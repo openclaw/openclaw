@@ -18,6 +18,7 @@ import {
 import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { cleanupSessionSanitizationArtifacts } from "../../memory/session-sanitization/service.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   isSubagentSessionKey,
@@ -548,6 +549,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: target.agentId,
       reason: "reset",
     });
+    await cleanupSessionSanitizationArtifacts({
+      agentId: target.agentId ?? resolveDefaultAgentId(cfg),
+      sessionId: oldSessionId,
+    });
     if (hadExistingEntry) {
       await emitSessionUnboundLifecycleEvent({
         targetSessionKey: target.canonicalKey ?? key,
@@ -616,6 +621,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             reason: "deleted",
           })
         : [];
+    if (deleted) {
+      await cleanupSessionSanitizationArtifacts({
+        agentId: target.agentId ?? resolveDefaultAgentId(cfg),
+        sessionId,
+      });
+    }
     if (deleted) {
       const emitLifecycleHooks = p.emitLifecycleHooks !== false;
       await emitSessionUnboundLifecycleEvent({

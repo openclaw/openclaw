@@ -71,6 +71,11 @@ export type RunEmbeddedPiAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /** Internal per-run tool policy override applied after normal policy resolution. */
+  toolPolicyOverride?: {
+    allow?: string[];
+    deny?: string[];
+  };
   provider?: string;
   model?: string;
   authProfileId?: string;
@@ -109,6 +114,8 @@ export type RunEmbeddedPiAgentParams = {
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
+  /** Internal full system prompt override. When set, replaces the generated system prompt. */
+  systemPromptOverride?: string;
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];

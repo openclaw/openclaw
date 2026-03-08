@@ -62,6 +62,22 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("rewrites invented per-file memory tool errors into corrective guidance", () => {
+    const msg = makeAssistantError('Unknown tool: "memory_2026_03_03_md"');
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain('Unknown memory tool "memory_2026_03_03_md".');
+    expect(result).toContain("memory_search");
+    expect(result).toContain("memory_get");
+    expect(result).toContain("read-only");
+    expect(result).toContain('"write"/"edit"');
+  });
+  it("explains that memory_store belongs to shared-memory MCP", () => {
+    const msg = makeAssistantError('Tool "memory_store" is not available');
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain('Unknown memory tool "memory_store".');
+    expect(result).toContain("shared-memory MCP server");
+    expect(result).toContain("standard OpenClaw agent tool set");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);

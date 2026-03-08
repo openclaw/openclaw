@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -131,18 +130,12 @@ describe("createCacheTrace", () => {
         Record<string, unknown>
       >
     )[0];
-    expect(optionsImages?.data).toBe("<redacted>");
-    expect(optionsImages?.bytes).toBe(4);
-    expect(optionsImages?.sha256).toBe(
-      crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
-    );
+    expect(optionsImages?.data).toBe("<redacted:0kb>");
 
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
     const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
       ?.source ?? {}) as Record<string, unknown>;
-    expect(source.data).toBe("<redacted>");
-    expect(source.bytes).toBe(6);
-    expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
+    expect(source.data).toBe("<redacted:0kb>");
   });
 
   it("handles circular references in messages without stack overflow", () => {

@@ -233,6 +233,40 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("auto-applies Qwen compat for LM Studio Qwen3 chat-completions models", () => {
+    const model = {
+      ...baseModel(),
+      id: "qwen3-32b",
+      name: "Qwen3 32B",
+      provider: "lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+
+    const normalized = normalizeModelCompat(model);
+
+    expect(normalized.compat).toMatchObject({
+      thinkingFormat: "qwen",
+      maxTokensField: "max_tokens",
+      supportsDeveloperRole: false,
+    });
+  });
+
+  it("does not auto-apply Qwen compat for non-Qwen LM Studio models", () => {
+    const model = {
+      ...baseModel(),
+      id: "minimax-m2.5-gs32",
+      name: "MiniMax M2.5 GS32",
+      provider: "lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+
+    const normalized = normalizeModelCompat(model);
+
+    expect(normalized.compat).toMatchObject({ supportsDeveloperRole: false });
+  });
+
   it("leaves openai-completions model with empty baseUrl untouched", () => {
     const model = {
       ...baseModel(),

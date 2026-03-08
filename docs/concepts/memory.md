@@ -35,16 +35,102 @@ OpenClaw exposes two agent-facing tools for these Markdown files:
 - `memory_search` — semantic recall over indexed snippets.
 - `memory_get` — targeted read of a specific Markdown file/line range.
 
+Those tools are read-only. In normal OpenClaw agent sessions, writing memory still
+uses the standard file tools (`write` / `edit`) against `MEMORY.md` or
+`memory/YYYY-MM-DD.md`; there is no normal-agent `memory_write` tool or per-file
+tool such as `memory_2026_03_03_md`.
+
 `memory_get` now **degrades gracefully when a file doesn't exist** (for example,
 today's daily log before the first write). Both the builtin manager and the QMD
 backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
 handle "nothing recorded yet" and continue their workflow without wrapping the
 tool call in try/catch logic.
 
+## Current session transcript memory
+
+OpenClaw can also maintain a **current-session transcript memory layer** that is
+separate from workspace Markdown memory. This is controlled by
+`memory.sessions.sanitization.*`.
+
+This path is for **transcript-derived recall inside the active session**, not
+for durable workspace memory, shared Postgres memory, or raw transcript
+browsing.
+
+### Latest helper architecture
+
+The current implementation uses a **subagent-style embedded helper run** rather
+than a special-case parser:
+
+- Incoming transcript-bearing turns are normalized into canonical message
+  context and mirrored into expiring raw sidecars under
+  `~/.openclaw/agents/<agentId>/session-memory/raw/<sessionId>/`.
+- OpenClaw then starts an internal helper run on the same embedded-agent runtime
+  used by the main agent/subagent stack, but with a dedicated helper session key
+  (`agent:<agentId>:session-memory-...`), a temporary workspace, a full system
+  prompt override, and a per-run tool policy override that allows only `read`.
+- The helper returns **strict JSON** for one of three modes: `write`, `recall`,
+  or `signal`. OpenClaw stores the derived output as summary and audit sidecars
+  under `~/.openclaw/agents/<agentId>/session-memory/summary/` and
+  `~/.openclaw/agents/<agentId>/session-memory/audit/`.
+- Raw sidecars expire after `memory.sessions.sanitization.rawMaxAge` (default:
+  `24h`). Once raw entries expire, recall can still fall back to sanitized
+  summaries, but confidence drops.
+- The feature **fails closed** when sandbox isolation is unavailable. In that
+  state the helper does not run, transcript-memory tools are not exposed, and
+  the automatic transcript-memory prompt injection path stays off.
+
+### Agent-facing tools
+
+When the helper path is available for the active session, OpenClaw exposes:
+
+- `session_memory_recall`
+  - Current-session transcript recall only
+  - Returns `result`, `source`, and `confidence`
+  - Prefer this for "what did we just decide?" style questions
+- `session_memory_signal`
+  - Compact relevance extraction over sanitized current-session material
+  - Useful when the transcript is noisy or repetitive
+  - Not a raw transcript inspection tool
+
+Related behavior:
+
+- The system prompt tells agents to prefer `session_memory_recall` for
+  transcript-derived current-session recall.
+- `sessions_history` remains the raw transcript/debugging tool. It is not the
+  normal recall path for current-session memory questions.
+- OpenClaw can also inject an automatic transcript-memory prompt before a run
+  when sanitized recall finds a useful hit for the current user message.
+
+### Config
+
+```json5
+memory: {
+  sessions: {
+    sanitization: {
+      enabled: true,
+      model: "openai/gpt-5.3-mini",
+      thinking: "low",
+      rawMaxAge: "24h",
+    }
+  }
+}
+```
+
+Notes:
+
+- `model` is optional. When omitted, OpenClaw falls back to
+  `agents.defaults.subagents.model`, then `agents.defaults.model`.
+- `thinking` defaults to `low`; keep it low unless extraction quality clearly
+  needs more reasoning.
+- This feature is **session-scoped and local**. It does not replace
+  `MEMORY.md`, `memory/YYYY-MM-DD.md`, shared Postgres memory, or QMD indexing.
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
 - Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
+- In normal OpenClaw sessions, update those files with `write` / `edit`, not
+  `memory_search` / `memory_get`.
 - If someone says "remember this," write it down (do not keep it in RAM).
 - This area is still evolving. It helps to remind the model to store memories; it will know what to do.
 - If you want something to stick, **ask the bot to write it** into memory.
@@ -224,6 +310,10 @@ out to QMD for retrieval. Key points:
   transcripts (User/Assistant turns) into a dedicated QMD collection under
   `~/.openclaw/agents/<id>/qmd/sessions/`, so `memory_search` can recall recent
   conversations without touching the builtin SQLite index.
+- This is separate from `memory.sessions.sanitization`: QMD session indexing is
+  for search/export across session transcripts, while session sanitization
+  powers the live `session_memory_recall` / `session_memory_signal` flow for the
+  current active session.
 - `memory_search` snippets now include a `Source: <path#line>` footer when
   `memory.citations` is `auto`/`on`; set `memory.citations = "off"` to keep
   the path metadata internal (the agent still receives the path for

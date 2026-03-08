@@ -109,7 +109,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
 
     <Steps>
       <Step title="Clone and build">
-        Clone the [OpenClaw repo](https://github.com/openclaw/openclaw) and build:
+        Clone the [OpenClaw fork](https://github.com/openclaw/openclaw) and build:
 
         ```bash
         git clone https://github.com/openclaw/openclaw.git

@@ -3,7 +3,7 @@ import {
   resetMemoryToolMockState,
   setMemorySearchImpl,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
-import { createMemorySearchTool } from "./memory-tool.js";
+import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
@@ -54,5 +54,31 @@ describe("memory_search unavailable payloads", () => {
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
+  });
+
+  it("describes memory_search as read-only and points writes to file tools", () => {
+    const tool = createMemorySearchTool({
+      config: { agents: { list: [{ id: "main", default: true }] } },
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    expect(tool.description).toContain("read-only");
+    expect(tool.description).toContain("write/edit");
+    expect(tool.description).toContain("memory_* write tools");
+  });
+
+  it("describes memory_get as read-only and points writes to file tools", () => {
+    const tool = createMemoryGetTool({
+      config: { agents: { list: [{ id: "main", default: true }] } },
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    expect(tool.description).toContain("Read-only");
+    expect(tool.description).toContain("write/edit");
+    expect(tool.description).toContain("memory_* write tools");
   });
 });

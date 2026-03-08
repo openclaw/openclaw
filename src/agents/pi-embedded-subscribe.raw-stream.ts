@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { sanitizePayloadForLogging } from "./payload-log-redaction.js";
 
 const RAW_STREAM_ENABLED = isTruthyEnvValue(process.env.OPENCLAW_RAW_STREAM);
 const RAW_STREAM_PATH =
@@ -23,7 +24,10 @@ export function appendRawStream(payload: Record<string, unknown>) {
     }
   }
   try {
-    void fs.promises.appendFile(RAW_STREAM_PATH, `${JSON.stringify(payload)}\n`);
+    // Keep raw-stream useful for debugging while masking structured secrets in
+    // transcript-bearing payloads before they hit disk.
+    const sanitized = sanitizePayloadForLogging(payload);
+    void fs.promises.appendFile(RAW_STREAM_PATH, `${JSON.stringify(sanitized)}\n`);
   } catch {
     // ignore raw stream write failures
   }

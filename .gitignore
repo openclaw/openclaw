@@ -88,6 +88,7 @@ USER.md
 
 # local tooling
 .serena/
+scripts/committer.ps1
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
@@ -121,3 +122,8 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# Local shared-memory import/export working files
+*.ndjson
+imports/
+exports/

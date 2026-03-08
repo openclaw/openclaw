@@ -133,6 +133,25 @@ Default file:
 
 `~/.openclaw/logs/raw-stream.jsonl`
 
+Warning: this file can contain transcript-bearing model events. OpenClaw redacts structured secrets before write, but the semantic transcript/prompt content still remains visible for debugging.
+
+Implementation note: the shared redaction path for these debug logs lives in `src/agents/payload-log-redaction.ts` and uses the structured-secret patterns from `src/logging/redact.ts`.
+
+### Anthropic payload logging
+
+For Anthropic request debugging, you can capture request payload snapshots:
+
+```bash
+OPENCLAW_ANTHROPIC_PAYLOAD_LOG=1
+OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE=~/.openclaw/logs/anthropic-payload.jsonl
+```
+
+Default file:
+
+`~/.openclaw/logs/anthropic-payload.jsonl`
+
+Warning: payload snapshots can include transcript-bearing prompts. OpenClaw redacts structured secrets before write, but the remaining prompt/transcript content is still sensitive local data.
+
 ## Raw chunk logging (pi-mono)
 
 To capture **raw OpenAI-compat chunks** before they are parsed into blocks,
@@ -154,6 +173,46 @@ Default file:
 
 > Note: this is only emitted by processes using pi-mono’s
 > `openai-completions` provider.
+
+## Debugging session sanitization
+
+The transcript-memory sanitization flow uses an **internal helper run** on the
+embedded-agent runtime. If `memory.sessions.sanitization.enabled = true`, the
+current path is:
+
+1. OpenClaw mirrors canonical transcript-bearing inbound turns into raw sidecars.
+2. A helper run executes in a temporary workspace with a strict system prompt
+   override and `read`-only tool policy.
+3. The helper writes sanitized summary/audit artifacts for later
+   `session_memory_recall` / `session_memory_signal` calls.
+
+Useful local paths:
+
+- Raw sidecars:
+  `~/.openclaw/agents/<agentId>/session-memory/raw/<sessionId>/`
+- Sanitized summaries:
+  `~/.openclaw/agents/<agentId>/session-memory/summary/<sessionId>.jsonl`
+- Audit trail:
+  `~/.openclaw/agents/<agentId>/session-memory/audit/<sessionId>.jsonl`
+
+What to check:
+
+- No artifacts appear:
+  - confirm `memory.sessions.sanitization.enabled = true`
+  - confirm the inbound turn actually carried transcript data
+  - confirm sandbox isolation is available for the helper runtime
+- Helper is unavailable:
+  - OpenClaw intentionally fails closed when sandbox isolation is unavailable
+  - in that state, `session_memory_recall` / `session_memory_signal` are not
+    exposed for the run
+- Recall quality is weak:
+  - check whether the audit file shows `raw_expired`
+  - once raw sidecars expire, recall may fall back to sanitized summaries and
+    return medium/low confidence instead of raw-backed high confidence
+
+If you enable `--raw-stream`, remember that helper runs use the same embedded
+runner and can therefore emit local transcript-bearing debug events too. Treat
+those logs with the same care as normal raw-stream captures.
 
 ## Safety notes
 

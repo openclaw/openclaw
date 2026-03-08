@@ -1,5 +1,6 @@
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
+import type { AlertingConfig } from "./types.alerting.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
 import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
@@ -14,6 +15,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { McpServersConfig } from "./types.mcp-servers.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -120,6 +122,9 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  /** MCP server registry: maps server names to the tool names they expose. */
+  mcpServers?: McpServersConfig;
+  alerting?: AlertingConfig;
 };
 
 export type ConfigValidationIssue = {

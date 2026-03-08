@@ -185,6 +185,34 @@ Plugins/extensions are loaded **in-process** with the Gateway and are treated as
 - Runtime helpers (for example `runtime.system.runCommandWithTimeout`) are convenience APIs, not a sandbox boundary.
 - Only install plugins you trust, and prefer `plugins.allow` to pin explicit trusted plugin ids.
 
+### Hook payload sensitivity
+
+Hook payloads follow the same trusted-local model as plugins/extensions.
+
+- `message:transcribed` and `message:preprocessed` can include sensitive audio-derived fields such as `transcript`, `bodyForAgent`, `mediaPath`, and `mediaType`.
+- This is intentional for local automations and does not, by itself, cross a security boundary under OpenClaw's trust model.
+- Hook authors should treat those fields as sensitive input and avoid logging, forwarding, or persisting them unless explicitly needed.
+- The current payload shape is preserved for compatibility. These sensitive fields are under review for future narrowing; prefer general-purpose hooks that rely on the minimum data required.
+
+### Transcript and debug-log capture
+
+OpenClaw includes opt-in debugging surfaces that can persist transcript-bearing content to disk.
+
+- `OPENCLAW_RAW_STREAM=1` / `--raw-stream` writes raw model stream events to jsonl for debugging.
+- `OPENCLAW_ANTHROPIC_PAYLOAD_LOG=1` writes Anthropic request payload snapshots to jsonl for debugging.
+- These logs now redact structured secrets before write, but they still retain the semantic content of prompts/transcripts.
+- The shared debug-log redaction path lives in `src/agents/payload-log-redaction.ts` and applies the structured-secret patterns from `src/logging/redact.ts`.
+- Do not enable these debugging logs in environments where transcript content itself is sensitive unless you accept that local capture.
+
+### Structured-secret redaction scope
+
+Pattern-based redaction is intentionally narrower than transcript minimization.
+
+- `redactSensitiveText(...)` is designed to mask structured secrets such as tokens, API keys, bearer strings, and private keys.
+- It does **not** summarize or minimize free-form spoken content.
+- A transcript like "my password is wintertime99" or a spoken phone number may still persist in session transcripts, memory indexing, and history tooling if it does not match the structured-secret patterns.
+- This is accepted residual risk within the trusted-local model. If you need stronger privacy guarantees, use shorter retention and avoid enabling transcript-heavy features where unnecessary.
+
 ## Temp Folder Boundary (Media/Sandbox)
 
 OpenClaw uses a dedicated temp root for local media handoff and sandbox-adjacent temp artifacts:

@@ -329,6 +329,9 @@ export async function runAgentTurnWithFallback(params: {
               groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
               ...senderContext,
               ...runBaseParams,
+              // Persisted user input is this single prompt string. Inbound body variants
+              // (Body/BodyForAgent/RawBody/CommandBody) are normalized before this point
+              // rather than being serialized separately into the session transcript.
               prompt: params.commandBody,
               extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
               toolResultFormat: (() => {

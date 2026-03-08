@@ -30,7 +30,6 @@ describe("discord route resolution helpers", () => {
       accountId: "default",
       sessionKey: "agent:main:discord:channel:c1",
       mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
       matchedBy: "default",
     };
 
@@ -55,7 +54,6 @@ describe("discord route resolution helpers", () => {
       accountId: "default",
       sessionKey: "agent:main:discord:channel:c1",
       mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
       matchedBy: "default",
     };
     const configuredRoute = {
@@ -64,7 +62,6 @@ describe("discord route resolution helpers", () => {
         agentId: "worker",
         sessionKey: "agent:worker:discord:channel:c1",
         mainSessionKey: "agent:worker:main",
-        lastRoutePolicy: "session" as const,
         matchedBy: "binding.peer" as const,
       },
     };

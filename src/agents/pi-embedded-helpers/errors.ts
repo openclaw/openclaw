@@ -53,6 +53,30 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
+function formatUnknownMemoryToolMessage(toolName: string): string | undefined {
+  const normalized = toolName.trim().toLowerCase();
+  if (
+    !normalized.startsWith("memory_") ||
+    normalized === "memory_search" ||
+    normalized === "memory_get"
+  ) {
+    return undefined;
+  }
+
+  const lines = [
+    `Unknown memory tool "${toolName}".`,
+    'Available memory tools here are "memory_search" and "memory_get".',
+    "They are read-only.",
+    'To write memory, use the normal file tools ("write"/"edit") if this session allows them.',
+  ];
+  if (normalized === "memory_store") {
+    lines.push(
+      '"memory_store" belongs to the standalone shared-memory MCP server, not the standard OpenClaw agent tool set.',
+    );
+  }
+  return lines.join(" ");
+}
+
 function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -562,6 +586,10 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
+    const memoryToolMessage = formatUnknownMemoryToolMessage(unknownTool[1]);
+    if (memoryToolMessage) {
+      return memoryToolMessage;
+    }
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,

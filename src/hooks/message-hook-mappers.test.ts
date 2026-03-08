@@ -105,10 +105,16 @@ describe("message hook mappers", () => {
 
     const transcribed = toInternalMessageTranscribedContext(canonical, cfg);
     expect(transcribed.transcript).toBe("");
+    expect(transcribed.bodyForAgent).toBe("body-for-agent");
+    expect(transcribed.mediaPath).toBe("/tmp/audio.ogg");
+    expect(transcribed.mediaType).toBe("audio/ogg");
     expect(transcribed.cfg).toBe(cfg);
 
     const preprocessed = toInternalMessagePreprocessedContext(canonical, cfg);
     expect(preprocessed.transcript).toBeUndefined();
+    expect(preprocessed.bodyForAgent).toBe("body-for-agent");
+    expect(preprocessed.mediaPath).toBe("/tmp/audio.ogg");
+    expect(preprocessed.mediaType).toBe("audio/ogg");
     expect(preprocessed.isGroup).toBe(true);
     expect(preprocessed.groupId).toBe("telegram:chat:456");
     expect(preprocessed.cfg).toBe(cfg);

@@ -755,7 +755,7 @@ Options:
 - `--claude-cli-logs`
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
-- `--raw-stream`
+- `--raw-stream` (structured secrets are redacted before write, but transcript-bearing content can still remain visible in the log)
 - `--raw-stream-path <path>`
 
 ### `gateway service`

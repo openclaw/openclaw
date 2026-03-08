@@ -13,6 +13,8 @@ const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
+  // Covers structured secrets (API keys, tokens, connection strings).
+  // Does not minimize or summarize free-form speech content carried in transcripts.
   // ENV-style assignments.
   String.raw`\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1`,
   // JSON fields.

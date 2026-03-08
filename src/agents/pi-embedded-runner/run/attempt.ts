@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { resolveSessionSanitizationMcpConfig } from "../../../memory/session-sanitization/config.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -66,7 +67,10 @@ import {
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
-import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
+import {
+  toClientToolDefinitions,
+  wrapMcpToolDefinitions,
+} from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -884,6 +888,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          toolPolicyOverride: params.toolPolicyOverride,
         });
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
@@ -995,7 +1000,7 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
-    const appendPrompt = buildEmbeddedSystemPrompt({
+    const generatedPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
@@ -1026,6 +1031,10 @@ export async function runEmbeddedAttempt(
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
+    const appendPrompt =
+      typeof params.systemPromptOverride === "string" && params.systemPromptOverride.trim()
+        ? params.systemPromptOverride.trim()
+        : generatedPrompt;
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1174,7 +1183,17 @@ export async function runEmbeddedAttempt(
           )
         : [];
 
-      const allCustomTools = [...customTools, ...clientToolDefs];
+      const mergedCustomTools = [...customTools, ...clientToolDefs];
+      const mcpSanitizationCfg = resolveSessionSanitizationMcpConfig(params.config);
+      const allCustomTools =
+        mcpSanitizationCfg.enabled && params.config && params.sessionId
+          ? wrapMcpToolDefinitions(mergedCustomTools, {
+              cfg: params.config,
+              agentId: sessionAgentId,
+              sessionId: params.sessionId,
+              lane: "background:session-memory-mcp",
+            })
+          : mergedCustomTools;
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,

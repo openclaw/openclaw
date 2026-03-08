@@ -255,6 +255,11 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Internal per-run tool policy override applied after normal policy resolution. */
+  toolPolicyOverride?: {
+    allow?: string[];
+    deny?: string[];
+  };
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -291,6 +296,7 @@ export function createOpenClawCodingTools(options?: {
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const overridePolicy = options?.toolPolicyOverride;
 
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
@@ -318,6 +324,7 @@ export function createOpenClawCodingTools(options?: {
     groupPolicy,
     sandbox?.tools,
     subagentPolicy,
+    overridePolicy,
   ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
@@ -500,6 +507,7 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         sandbox?.tools,
         subagentPolicy,
+        overridePolicy,
       ]),
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
@@ -542,6 +550,7 @@ export function createOpenClawCodingTools(options?: {
       }),
       { policy: sandbox?.tools, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
+      { policy: overridePolicy, label: "run tool policy override" },
     ],
   });
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.

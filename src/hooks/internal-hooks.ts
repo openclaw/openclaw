@@ -104,7 +104,7 @@ type MessageEnrichedBodyHookContext = {
   to?: string;
   /** Original raw message body (e.g., "🎤 [Audio]") */
   body?: string;
-  /** Enriched body shown to the agent, including transcript */
+  /** Enriched body shown to the agent, including transcript. Treat as sensitive. */
   bodyForAgent?: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
@@ -124,9 +124,9 @@ type MessageEnrichedBodyHookContext = {
   provider?: string;
   /** Surface name */
   surface?: string;
-  /** Path to the media file that was transcribed */
+  /** Path to the media file that was transcribed. Treat as sensitive. */
   mediaPath?: string;
-  /** MIME type of the media */
+  /** MIME type of the media. Treat as media metadata. */
   mediaType?: string;
 };
 

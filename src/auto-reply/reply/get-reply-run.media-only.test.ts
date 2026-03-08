@@ -396,4 +396,21 @@ describe("runPreparedReply media-only handling", () => {
     // Queue body (used by steer mode) must keep the full original text.
     expect(call?.followupRun.prompt).toContain("low steer this conversation");
   });
+
+  it("routes transcript memory recall into system prompt context, not user prompt text", async () => {
+    await runPreparedReply(
+      baseParams({
+        transcriptMemorySystemPrompt:
+          "## Transcript Session Recall\nConfidence: medium\nRemember the Alex draft follow-up.",
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.commandBody).not.toContain("Transcript Session Recall");
+    expect(call?.commandBody).not.toContain("Alex draft");
+    expect(call?.followupRun.run.extraSystemPrompt).toContain("Transcript Session Recall");
+    expect(call?.followupRun.run.extraSystemPrompt).toContain("Confidence: medium");
+    expect(call?.followupRun.run.extraSystemPrompt).toContain("Alex draft follow-up.");
+  });
 });

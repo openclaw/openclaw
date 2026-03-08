@@ -52,6 +52,8 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
     BodyForAgent: "<media:audio>",
     RawBody: "<media:audio>",
     CommandBody: "<media:audio>",
+    MediaPath: "/tmp/audio.ogg",
+    MediaType: "audio/ogg",
     SessionKey: "agent:main:telegram:-100123",
     From: "telegram:user:42",
     To: "telegram:-100123",
@@ -123,8 +125,11 @@ describe("getReplyFromConfig message hooks", () => {
       "agent:main:telegram:-100123",
       expect.objectContaining({
         transcript: "voice transcript",
+        bodyForAgent: "[Audio]\nTranscript:\nvoice transcript",
         channelId: "telegram",
         conversationId: "telegram:-100123",
+        mediaPath: "/tmp/audio.ogg",
+        mediaType: "audio/ogg",
       }),
     );
     expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
@@ -134,8 +139,11 @@ describe("getReplyFromConfig message hooks", () => {
       "agent:main:telegram:-100123",
       expect.objectContaining({
         transcript: "voice transcript",
+        bodyForAgent: "[Audio]\nTranscript:\nvoice transcript",
         isGroup: true,
         groupId: "telegram:-100123",
+        mediaPath: "/tmp/audio.ogg",
+        mediaType: "audio/ogg",
       }),
     );
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);

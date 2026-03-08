@@ -148,7 +148,7 @@ Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
 
 ### Use a remote image (skip local build)
 
-Official pre-built images are published at:
+Official upstream pre-built images are published at:
 
 - [GitHub Container Registry package](https://github.com/openclaw/openclaw/pkgs/container/openclaw)
 

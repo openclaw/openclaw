@@ -240,6 +240,81 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("makes memory recall read-only and points writes to file tools when available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get", "write", "edit"],
+    });
+
+    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain(
+      "memory_search and memory_get are recall-only tools; they never write",
+    );
+    expect(prompt).toContain(
+      "Do not invent per-file memory tool names such as memory_2026_03_03_md.",
+    );
+    expect(prompt).toContain(
+      "To write memory in normal OpenClaw sessions, use write/edit on MEMORY.md or memory/YYYY-MM-DD.md.",
+    );
+    expect(prompt).toContain(
+      "memory/imports/YYYY-MM-DD.md is shared-memory writeback output, not a dedicated agent tool.",
+    );
+  });
+
+  it("marks memory writing unavailable when write and edit are absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get"],
+    });
+
+    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain(
+      "memory_search and memory_get are recall-only tools; they never write",
+    );
+    expect(prompt).toContain(
+      "Memory writing is unavailable in this session; do not invent a write-capable memory tool",
+    );
+    expect(prompt).not.toContain(
+      "To write memory in normal OpenClaw sessions, use write/edit on MEMORY.md or memory/YYYY-MM-DD.md.",
+    );
+  });
+
+  it("documents transcript-derived current-session recall when session memory tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: [
+        "memory_search",
+        "memory_get",
+        "session_memory_recall",
+        "session_memory_signal",
+        "sessions_history",
+      ],
+    });
+
+    expect(prompt).toContain(
+      "For transcript-derived current-session recall, prefer session_memory_recall.",
+    );
+    expect(prompt).toContain(
+      "session_memory_recall is current-session only. It returns source + confidence; when confidence is medium or low, explicitly qualify the answer.",
+    );
+    expect(prompt).toContain(
+      "Use session_memory_signal when the current session transcript is noisy",
+    );
+    expect(prompt).toContain(
+      "sessions_history is for raw transcript inspection/debugging, not normal transcript-memory recall.",
+    );
+  });
+
+  it("omits transcript session-memory guidance when those tools are unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get"],
+    });
+
+    expect(prompt).not.toContain("session_memory_recall");
+    expect(prompt).not.toContain("session_memory_signal");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
