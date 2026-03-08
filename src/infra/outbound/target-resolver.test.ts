@@ -75,4 +75,41 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
+
+  it("picks the highest-ranked ambiguous match without variadic Math.max calls", async () => {
+    const originalMax = Math.max;
+    const maxSpy = vi.spyOn(Math, "max").mockImplementation((...args: number[]) => {
+      if (args.length > 2) {
+        throw new Error("variadic Math.max is not allowed");
+      }
+      return Reflect.apply(originalMax, Math, args);
+    });
+
+    const entries: ChannelDirectoryEntry[] = Array.from({ length: 64 }, (_, index) => ({
+      kind: "group",
+      id: `group-${index}`,
+      name: `support-room-${index}`,
+      rank: index === 37 ? 999 : index,
+    }));
+    mocks.listGroups.mockResolvedValue(entries);
+
+    try {
+      const result = await resolveMessagingTarget({
+        cfg,
+        channel: "discord",
+        input: "support",
+        resolveAmbiguous: "best",
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.target.source).toBe("directory");
+        expect(result.target.to).toBe("group-37");
+      }
+      expect(mocks.listGroups).toHaveBeenCalledTimes(1);
+      expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+    } finally {
+      maxSpy.mockRestore();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   tokenize,
   jaccardSimilarity,
@@ -260,6 +260,35 @@ describe("mmrRerank", () => {
   });
 
   describe("score normalization", () => {
+    it("avoids variadic Math.max/min calls when normalizing scores", () => {
+      const originalMax = Math.max;
+      const originalMin = Math.min;
+      const maxSpy = vi.spyOn(Math, "max").mockImplementation((...args: number[]) => {
+        if (args.length > 2) {
+          throw new Error("variadic Math.max is not allowed");
+        }
+        return Reflect.apply(originalMax, Math, args);
+      });
+      const minSpy = vi.spyOn(Math, "min").mockImplementation((...args: number[]) => {
+        if (args.length > 2) {
+          throw new Error("variadic Math.min is not allowed");
+        }
+        return Reflect.apply(originalMin, Math, args);
+      });
+
+      const items: MMRItem[] = Array.from({ length: 64 }, (_, index) => ({
+        id: `item-${index}`,
+        score: index,
+        content: `content-${index}`,
+      }));
+      try {
+        expect(() => mmrRerank(items, { enabled: true, lambda: 0.7 })).not.toThrow();
+      } finally {
+        maxSpy.mockRestore();
+        minSpy.mockRestore();
+      }
+    });
+
     it("handles items with same scores", () => {
       const items: MMRItem[] = [
         { id: "1", score: 0.5, content: "hello world" },
