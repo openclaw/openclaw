@@ -376,6 +376,33 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
     },
   });
 
+  // ── GET /api/v1/finance/config/notifications — Read notification config ──
+  api.registerHttpRoute({
+    auth: "plugin",
+    path: "/api/v1/finance/config/notifications",
+    handler: async (_req: HttpReq, res: HttpRes) => {
+      try {
+        const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+          .pluginConfig;
+        const notif = (pluginConfig?.notifications ?? {}) as Record<string, unknown>;
+        // Mask sensitive tokens — only reveal presence
+        const safe = {
+          telegramBotToken: notif.telegramBotToken ? "***configured***" : null,
+          telegramChatId: notif.telegramChatId ?? null,
+          discordWebhookUrl: notif.discordWebhookUrl ? "***configured***" : null,
+          emailHost: notif.emailHost ?? null,
+          emailPort: notif.emailPort ?? 587,
+          emailFrom: notif.emailFrom ?? null,
+          emailTo: notif.emailTo ?? null,
+          enabledEvents: notif.enabledEvents ?? null,
+        };
+        jsonResponse(res, 200, safe);
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
   // ── PUT /api/v1/finance/config/notifications — Update notification config ──
   api.registerHttpRoute({
     auth: "plugin",
@@ -424,6 +451,24 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
         });
 
         jsonResponse(res, 200, { status: "updated" });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── GET /api/v1/finance/config/notification-filters — Read notification event filters ──
+  api.registerHttpRoute({
+    auth: "plugin",
+    path: "/api/v1/finance/config/notification-filters",
+    handler: async (_req: HttpReq, res: HttpRes) => {
+      try {
+        const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+          .pluginConfig;
+        const notif = (pluginConfig?.notifications ?? {}) as Record<string, unknown>;
+        jsonResponse(res, 200, {
+          enabledEvents: notif.enabledEvents ?? [],
+        });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);
       }

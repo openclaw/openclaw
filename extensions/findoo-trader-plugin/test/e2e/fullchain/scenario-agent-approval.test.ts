@@ -119,7 +119,7 @@ describe("Phase F — Scenario: Agent Intermediated Approval (L2→L3)", () => {
     expect(found?.level).toBe("L2_PAPER");
 
     // ── 6. Inject paper trading data satisfying L2→L3 boundary ──
-    // L2→L3 needs: 30d, 30 trades, Sharpe ≥ 0.5, DD ≤ 20%, deviation ≤ 30%
+    // L2→L3 needs: 30d, 30 trades, Sharpe ≥ 1.5, DD ≤ 20%, deviation ≤ 30%
     // Create paper account and inject orders + equity snapshots for proper metrics
     const acctState = ctx.services.paperEngine.createAccount("Agent Approval Paper", 10_000);
     const acctId = acctState.id;

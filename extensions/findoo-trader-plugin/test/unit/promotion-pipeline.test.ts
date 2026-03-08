@@ -159,8 +159,8 @@ describe("PromotionPipeline", () => {
         paperDaysActive: 45,
         paperTradeCount: 50,
         paperMetrics: {
-          rollingSharpe7d: 1.0,
-          rollingSharpe30d: 1.2,
+          rollingSharpe7d: 1.8,
+          rollingSharpe30d: 1.8,
           sharpeMomentum: 0.83,
           consecutiveLossDays: 0,
           currentDrawdown: -5,
@@ -220,15 +220,15 @@ describe("PromotionPipeline", () => {
       expect(check.blockers.some((b) => b.includes("trades"))).toBe(true);
     });
 
-    it("blocks when paper Sharpe < 0.5", () => {
+    it("blocks when paper Sharpe < 1.5", () => {
       const profile = makeProfile({
         id: "s1",
         level: "L2_PAPER",
         paperDaysActive: 45,
         paperTradeCount: 50,
         paperMetrics: {
-          rollingSharpe7d: 0.2,
-          rollingSharpe30d: 0.3,
+          rollingSharpe7d: 0.8,
+          rollingSharpe30d: 1.2,
           sharpeMomentum: 0.67,
           consecutiveLossDays: 0,
           currentDrawdown: -5,
@@ -239,7 +239,7 @@ describe("PromotionPipeline", () => {
       const check = pipeline.checkPromotion(profile);
 
       expect(check.eligible).toBe(false);
-      expect(check.blockers.some((b) => b.includes("Sharpe") && b.includes("< 0.5"))).toBe(true);
+      expect(check.blockers.some((b) => b.includes("Sharpe") && b.includes("< 1.5"))).toBe(true);
     });
 
     it("blocks when paper drawdown > 20%", () => {
