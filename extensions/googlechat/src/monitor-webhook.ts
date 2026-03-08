@@ -183,6 +183,19 @@ export function createGoogleChatWebhookRequestHandler(params: {
 
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
+
+        // For synchronous responses in spaces, we need to return a proper message
+        const evtType = (parsedEvent.type ?? (parsedEvent as { eventType?: string }).eventType)?.toUpperCase();
+        const isGroup = parsedEvent.space?.type?.toUpperCase() !== "DM";
+
+        // For ADDED_TO_SPACE events in groups, return an acknowledgment
+        if (isGroup && evtType === "ADDED_TO_SPACE") {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ text: "Hello!" }));
+          return true;
+        }
+
         params.processEvent(parsedEvent, dispatchTarget).catch((err) => {
           dispatchTarget.runtime.error?.(
             `[${dispatchTarget.account.accountId}] Google Chat webhook failed: ${String(err)}`,
