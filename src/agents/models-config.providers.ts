@@ -415,8 +415,8 @@ function resolveEnvApiKeyVarName(
   return match ? match[1] : undefined;
 }
 
-function resolveAwsSdkApiKeyVarName(): string {
-  return resolveAwsSdkEnvVarName() ?? "AWS_PROFILE";
+function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
 }
 
 function normalizeHeaderValues(params: {
@@ -603,6 +603,7 @@ function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig 
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
+  env?: NodeJS.ProcessEnv;
   secretDefaults?: {
     env?: string;
     file?: string;
@@ -614,6 +615,7 @@ export function normalizeProviders(params: {
   if (!providers) {
     return providers;
   }
+  const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -646,6 +648,7 @@ export function normalizeProviders(params: {
     const profileApiKey = resolveApiKeyFromProfiles({
       provider: normalizedKey,
       store: authStore,
+      env,
     });
 
     if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
@@ -687,8 +690,8 @@ export function normalizeProviders(params: {
       currentApiKey.trim() &&
       !ENV_VAR_NAME_RE.test(currentApiKey.trim())
     ) {
-      const envVarName = resolveEnvApiKeyVarName(normalizedKey);
-      if (envVarName && process.env[envVarName] === currentApiKey) {
+      const envVarName = resolveEnvApiKeyVarName(normalizedKey, env);
+      if (envVarName && env[envVarName] === currentApiKey) {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
       }
@@ -704,11 +707,11 @@ export function normalizeProviders(params: {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {
-        const apiKey = resolveAwsSdkApiKeyVarName();
+        const apiKey = resolveAwsSdkApiKeyVarName(env);
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
       } else {
-        const fromEnv = resolveEnvApiKeyVarName(normalizedKey);
+        const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
         if (apiKey?.trim()) {
           if (profileApiKey && profileApiKey.source !== "plaintext") {
