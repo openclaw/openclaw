@@ -362,7 +362,8 @@ actor PortGuardian {
             return false
         case .local:
             // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
-            if full.contains("gateway-daemon") { return true }
+            // Accept both legacy `gateway-daemon` and current `openclaw-gateway` process titles.
+            if full.contains("gateway-daemon") || full.contains("openclaw-gateway") { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
@@ -417,6 +418,16 @@ extension PortGuardian {
             fullCommand: $0.fullCommand,
             user: $0.user) }
         return Self.buildReport(port: port, listeners: mapped, mode: mode, tunnelHealthy: nil)
+    }
+
+    static func _testIsExpectedLocal(listener: (pid: Int32, command: String, fullCommand: String, user: String?)) async -> Bool {
+        let guardian = PortGuardian.shared
+        let mapped = Listener(
+            pid: listener.pid,
+            command: listener.command,
+            fullCommand: listener.fullCommand,
+            user: listener.user)
+        return await guardian.isExpected(mapped, port: GatewayEnvironment.gatewayPort(), mode: .local)
     }
 }
 #endif

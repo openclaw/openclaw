@@ -109,7 +109,7 @@ struct LowCoverageHelperTests {
         _ = PresenceReporter._testPrimaryIPv4Address()
     }
 
-    @Test func portGuardianParsesListenersAndBuildsReports() {
+    @Test func portGuardianParsesListenersAndBuildsReports() async {
         let output = """
         p123
         cnode
@@ -137,6 +137,14 @@ struct LowCoverageHelperTests {
 
         let emptyReport = PortGuardian._testBuildReport(port: 18789, mode: .local, listeners: [])
         #expect(emptyReport.summary.contains("Nothing is listening"))
+
+        let expectedCurrent = await PortGuardian._testIsExpectedLocal(
+            listener: (pid: 10, command: "openclaw-gateway", fullCommand: "openclaw-gateway", user: "me"))
+        #expect(expectedCurrent)
+
+        let expectedLegacy = await PortGuardian._testIsExpectedLocal(
+            listener: (pid: 11, command: "openclaw", fullCommand: "openclaw-gateway-daemon", user: "me"))
+        #expect(expectedLegacy)
     }
 
     @Test @MainActor func canvasSchemeHandlerResolvesFilesAndErrors() throws {
