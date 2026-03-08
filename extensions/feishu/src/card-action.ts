@@ -11,6 +11,7 @@ export type FeishuCardActionEvent = {
   token: string;
   action: {
     value: Record<string, unknown>;
+    form_value?: Record<string, unknown>;
     tag: string;
   };
   context: {
@@ -31,19 +32,26 @@ export async function handleFeishuCardAction(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
 
-  // Extract action value
+  // Extract action value; merge form_value when present (form submit)
   const actionValue = event.action.value;
+  const formValue = event.action.form_value;
+  const hasFormValue = formValue != null && Object.keys(formValue).length > 0;
+  const mergedValue = hasFormValue ? { ...actionValue, ...formValue } : actionValue;
+
   let content = "";
-  if (typeof actionValue === "object" && actionValue !== null) {
-    if ("text" in actionValue && typeof actionValue.text === "string") {
-      content = actionValue.text;
-    } else if ("command" in actionValue && typeof actionValue.command === "string") {
-      content = actionValue.command;
+  if (typeof mergedValue === "object" && mergedValue !== null) {
+    if (hasFormValue) {
+      // Form submit: serialize the full merged object so the agent receives all fields
+      content = JSON.stringify(mergedValue);
+    } else if ("text" in mergedValue && typeof mergedValue.text === "string") {
+      content = mergedValue.text;
+    } else if ("command" in mergedValue && typeof mergedValue.command === "string") {
+      content = mergedValue.command;
     } else {
-      content = JSON.stringify(actionValue);
+      content = JSON.stringify(mergedValue);
     }
   } else {
-    content = String(actionValue);
+    content = String(mergedValue);
   }
 
   // Construct a synthetic message event
