@@ -65,7 +65,7 @@ function validateId(id: string): string {
   return id;
 }
 
-class MemoryDB {
+export class MemoryDB {
   private db: LanceDB.Connection | null = null;
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;

@@ -6,6 +6,7 @@
  */
 
 import { describe, test, expect } from "vitest";
+import { vi } from "vitest";
 import {
   shouldCapture,
   detectCategory,
@@ -13,8 +14,11 @@ import {
   escapeMemoryForPrompt,
   formatRelevantMemoriesContext,
 } from "./capture.js";
+import { ChatModel } from "./chat.js";
 import { memoryConfigSchema } from "./config.js";
 import { vectorDimsForModel, detectProvider } from "./embeddings.js";
+import { GraphDB } from "./graph.js";
+import { MemoryDB } from "./index.js";
 
 // ============================================================================
 // Plugin Registration
@@ -273,5 +277,69 @@ describe("formatRelevantMemoriesContext", () => {
     expect(result).toContain("[preference] likes dark mode");
     expect(result).toContain("[fact] uses TypeScript");
     expect(result).toContain("untrusted historical data");
+  });
+});
+
+// ============================================================================
+// Integration & Error Handling (NEW)
+// ============================================================================
+
+describe("MemoryDB Error Handling", () => {
+  test("should handle search failure gracefully", async () => {
+    // Mock a broken LanceDB table
+    const mockTable = {
+      vectorSearch: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockRejectedValue(new Error("LanceDB connection lost")),
+      query: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValue([]),
+      }),
+    } as any;
+
+    const db = new MemoryDB("/tmp/test-db", 3072);
+    (db as any).table = mockTable;
+    (db as any).initialized = true;
+
+    await expect(db.search(new Array(3072).fill(0), 5)).rejects.toThrow("LanceDB connection lost");
+  });
+
+  test("should handle store failure and not corrupt state", async () => {
+    const mockTable = {
+      add: vi.fn().mockRejectedValue(new Error("Write permission denied")),
+      search: vi.fn().mockResolvedValue([]),
+    } as any;
+
+    const db = new MemoryDB("/tmp/test-db", 3072);
+    (db as any).table = mockTable;
+    (db as any).initialized = true;
+
+    await expect(
+      db.store({
+        text: "test",
+        vector: new Array(3072).fill(0),
+        importance: 0.5,
+        category: "fact",
+      }),
+    ).rejects.toThrow("Write permission denied");
+  });
+});
+
+describe("Provider Switching", () => {
+  test("should switch to OpenAI if model name implies it", () => {
+    const cfg = memoryConfigSchema.parse({
+      embedding: { apiKey: "sk-123", model: "text-embedding-3-small" },
+    });
+    expect(cfg.embedding.provider).toBe("openai");
+    expect(cfg.chatModel).toBe("gpt-4o-mini");
+  });
+
+  test("should allow forcing a specific chat provider", () => {
+    const cfg = memoryConfigSchema.parse({
+      embedding: { apiKey: "key", model: "gemini-embedding-001" },
+      chatModel: "gpt-4o",
+    });
+    expect(cfg.chatModel).toBe("gpt-4o");
   });
 });
