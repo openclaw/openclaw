@@ -827,7 +827,13 @@ export type PluginHookBeforeResponseEmitResult = {
   /** Replace all assistant texts from the current run (first-writer-wins across handlers).
    *  Mutually exclusive with content: whichever field is set first by a
    *  higher-priority handler blocks the other from being set by later handlers.
-   *  Takes precedence over content at the application layer. */
+   *  Takes precedence over content at the application layer.
+   *
+   *  Length contract: must match `event.allContent.length` for a 1:1 replacement.
+   *  If fewer entries are returned, surplus assistant messages are **removed** from
+   *  session history (not blanked). This is fail-safe for PII redaction but may
+   *  surprise plugins that only intend to modify a subset — always return the full
+   *  array with unmodified entries passed through. */
   allContent?: string[];
   /** Block the response entirely (one-way latch). Clears all current-run assistant content from session history. */
   block?: boolean;

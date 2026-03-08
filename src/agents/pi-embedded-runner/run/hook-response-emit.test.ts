@@ -33,37 +33,35 @@ function makeMsg(
   return { role, content } as AgentMessage;
 }
 
+// Partial mock — only runBeforeResponseEmit and hasHooks are exercised.
+// Uses Partial<HookRunner> so new interface members cause compile errors
+// only if they're called, not just declared. If a test needs another hook,
+// add it explicitly rather than casting through unknown.
 function makeMockHookRunner(emitResult?: {
   content?: string;
   allContent?: string[];
   block?: boolean;
   blockReason?: string;
 }): HookRunner {
-  return {
+  const partial: Partial<HookRunner> = {
     hasHooks: vi.fn().mockReturnValue(true),
     runBeforeResponseEmit: vi.fn().mockResolvedValue(emitResult),
-    // Stubs for other hooks (not used)
-    runBeforeAgentStart: vi.fn(),
-    runAgentEnd: vi.fn(),
-    runBeforeCompaction: vi.fn(),
-    runAfterCompaction: vi.fn(),
-    runMessageReceived: vi.fn(),
-    runMessageSending: vi.fn(),
-    runMessageSent: vi.fn(),
-    runBeforeToolCall: vi.fn(),
-    runAfterToolCall: vi.fn(),
-    runToolResultPersist: vi.fn(),
-    runSessionStart: vi.fn(),
-    runSessionEnd: vi.fn(),
-    runGatewayStart: vi.fn(),
-    runGatewayStop: vi.fn(),
-    runBeforeLlmCall: vi.fn(),
-    runAfterLlmCall: vi.fn(),
-    runContextAssembled: vi.fn(),
-    runLoopIterationStart: vi.fn(),
-    runLoopIterationEnd: vi.fn(),
     getHookCount: vi.fn().mockReturnValue(0),
-  } as unknown as HookRunner;
+  };
+  // Proxy returns vi.fn() for any unstubbed method so tests fail with a
+  // clear "unexpected call" rather than "not a function" if new hooks are
+  // invoked. This keeps the mock exhaustive-on-call without listing every
+  // interface member.
+  return new Proxy(partial as HookRunner, {
+    get(target, prop, receiver) {
+      if (prop in target) {
+        return Reflect.get(target, prop, receiver);
+      }
+      const stub = vi.fn();
+      (target as Record<string | symbol, unknown>)[prop] = stub;
+      return stub;
+    },
+  });
 }
 
 const dummyCtx: PluginHookAgentContext = {
