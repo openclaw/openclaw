@@ -230,6 +230,9 @@ export function createExecTool(
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
       let execCommandOverride: string | undefined;
+      let bwrapSandboxParams:
+        | import("../infra/exec-bwrap-sandbox.js").BuildBwrapArgsParams
+        | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
@@ -449,11 +452,14 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          nsSandboxMode: defaults?.nsSandbox?.mode,
+          nsSandboxExtraBinds: defaults?.nsSandbox?.extraBinds,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
         }
         execCommandOverride = gatewayResult.execCommandOverride;
+        bwrapSandboxParams = gatewayResult.bwrapSandbox;
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
@@ -476,6 +482,7 @@ export function createExecTool(
         env,
         sandbox,
         containerWorkdir,
+        bwrapSandbox: bwrapSandboxParams,
         usePty,
         warnings,
         maxOutput,

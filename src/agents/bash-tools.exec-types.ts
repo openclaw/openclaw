@@ -1,4 +1,5 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import type { BwrapExtraBind, BwrapSandboxMode } from "../infra/exec-bwrap-sandbox.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
@@ -16,6 +17,11 @@ export type ExecToolDefaults = {
   timeoutSec?: number;
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
+  /** Namespace sandbox config for safeBins commands (Linux + bwrap). */
+  nsSandbox?: {
+    mode?: BwrapSandboxMode;
+    extraBinds?: BwrapExtraBind[];
+  };
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;

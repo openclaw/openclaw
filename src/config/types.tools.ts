@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { BwrapExtraBind, BwrapSandboxMode } from "../infra/exec-bwrap-sandbox.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -242,6 +243,19 @@ export type ExecToolConfig = {
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+  /**
+   * Namespace sandbox for safeBins commands (Linux only, requires bubblewrap).
+   * When mode is "bwrap", safeBins-approved commands run inside an unprivileged
+   * user namespace where only approved binaries are visible on the filesystem.
+   * Trust windows bypass the sandbox entirely.
+   * Default: { mode: "none" }.
+   */
+  nsSandbox?: {
+    /** Sandbox mode. "bwrap" = bubblewrap namespace isolation; "none" = disabled. */
+    mode?: BwrapSandboxMode;
+    /** Additional paths to bind-mount into the sandbox. */
+    extraBinds?: BwrapExtraBind[];
+  };
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */

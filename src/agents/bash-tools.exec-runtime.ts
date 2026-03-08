@@ -2,6 +2,8 @@ import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { type ExecHost } from "../infra/exec-approvals.js";
+import type { BuildBwrapArgsParams } from "../infra/exec-bwrap-sandbox.js";
+import { buildBwrapArgs } from "../infra/exec-bwrap-sandbox.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
@@ -261,6 +263,12 @@ export async function runExecProcess(opts: {
   env: Record<string, string>;
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
+  /**
+   * When set, wrap the command in a bubblewrap (bwrap) namespace sandbox.
+   * Only applied for host=gateway non-sandbox, non-PTY commands where safeBins matched.
+   * Trust windows bypass this entirely.
+   */
+  bwrapSandbox?: BuildBwrapArgsParams;
   usePty: boolean;
   warnings: string[];
   maxOutput: number;
@@ -380,6 +388,19 @@ export async function runExecProcess(opts: {
         ],
         env: process.env,
         stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+      };
+    }
+    // Bubblewrap namespace sandbox: wrap the shell command in bwrap.
+    // Only applied for non-sandbox, non-PTY host=gateway commands that matched safeBins.
+    // PTY is not supported inside bwrap (terminal allocation inside namespaces is unreliable).
+    if (opts.bwrapSandbox && !opts.usePty) {
+      const { shell, args: shellArgs } = getShellConfig();
+      const bwrapPrefix = buildBwrapArgs(opts.bwrapSandbox);
+      return {
+        mode: "child" as const,
+        argv: [...bwrapPrefix, "--", shell, ...shellArgs, execCommand],
+        env: shellRuntimeEnv,
+        stdinMode: "pipe-closed" as const,
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
