@@ -33,6 +33,7 @@ const baseParams = {
 function makeResolvedCfg(overrides: Partial<ReturnType<typeof resolveMemorySearchConfig>> = {}) {
   return {
     enabled: true,
+    query: { minScore: 0.2, maxResults: 6 },
     autoPrefetch: {
       enabled: true,
       minMessageLength: 20,

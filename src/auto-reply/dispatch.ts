@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { runMemoryPrefetch } from "../gateway/server-methods/memory-prefetch.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -40,6 +41,21 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
+
+  // Auto-prefetch: run memory_search and inject results before the LLM sees the message.
+  // Hooked here (shared dispatch) so it works for all channels, not just webchat.
+  const message = finalized.BodyStripped ?? finalized.Body ?? "";
+  const sessionKey = typeof finalized.sessionKey === "string" ? finalized.sessionKey : "main";
+  const prefetch = await runMemoryPrefetch({ message, sessionKey, cfg: params.cfg });
+  const mergedReplyOptions = prefetch.context
+    ? {
+        ...params.replyOptions,
+        runExtraSystemPrompt: [params.replyOptions?.runExtraSystemPrompt, prefetch.context]
+          .filter(Boolean)
+          .join("\n\n"),
+      }
+    : params.replyOptions;
+
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
@@ -47,7 +63,7 @@ export async function dispatchInboundMessage(params: {
         ctx: finalized,
         cfg: params.cfg,
         dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
+        replyOptions: mergedReplyOptions,
         replyResolver: params.replyResolver,
       }),
   });

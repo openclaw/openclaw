@@ -55,7 +55,6 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import { runMemoryPrefetch } from "./memory-prefetch.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
@@ -1021,21 +1020,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         config: cfg,
       });
 
-      // Auto-prefetch: run memory_search and inject results before the LLM sees the message.
-      const prefetch = await runMemoryPrefetch({
-        message: parsedMessage,
-        sessionKey,
-        cfg,
-      });
-      let prefetchSystemPrompt: string | undefined;
-      if (prefetch.context) {
-        if (prefetch.injection === "context") {
-          ctx.BodyForAgent = `${prefetch.context}\n\n${ctx.BodyForAgent ?? ""}`.trim();
-        } else {
-          prefetchSystemPrompt = prefetch.context;
-        }
-      }
-
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId,
@@ -1068,7 +1052,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId: clientRunId,
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
-          runExtraSystemPrompt: prefetchSystemPrompt,
+
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
