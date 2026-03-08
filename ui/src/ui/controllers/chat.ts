@@ -294,6 +294,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+      // Fallback: the final payload carried no displayable message (e.g. the
+      // assistant's turn ended with a tool call and the text-only buffer was
+      // empty or suppressed server-side). Rather than silently discarding the
+      // text the user already saw streaming, preserve it so it stays visible
+      // without requiring a history reload.
       state.chatMessages = [
         ...state.chatMessages,
         {
