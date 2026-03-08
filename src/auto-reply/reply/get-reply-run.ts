@@ -46,6 +46,7 @@ import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
+import { shouldRouteToTrackedExecution, routeToTrackedExecution } from "./tracked-execution.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -337,18 +338,23 @@ export async function runPreparedReply(
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
 
   // Intent-based routing logic
-  if (intentResult && intentResult.execution_required && intentResult.input_finalized) {
+  if (intentResult && shouldRouteToTrackedExecution(intentResult)) {
     // For execution intent, check if we should go to tracked orchestrator
-    // First, check if we have pending follow-ups
-    const hasPendingFollowups = false; // TODO: Implement check for pending follow-ups
-    if (hasPendingFollowups) {
-      // TODO: Implement logic for pending follow-ups
-      // For now, continue with normal flow
+    const routedResult = await routeToTrackedExecution({
+      ctx,
+      intentResult,
+      cfg,
+      agentId,
+      workspaceDir,
+    });
+
+    if (routedResult.status === "routed") {
+      // Execution intent has been routed to tracked orchestrator
+      typing.cleanup();
+      return undefined; // Return undefined to signal that we've handled the message
     } else {
-      // Check if we should start a tracked execution
-      // TODO: Implement tracked execution path
-      // For now, continue with normal flow
-      console.log("Execution intent detected, should route to tracked orchestrator");
+      // Fallback to normal flow
+      console.log(`Tracked execution routing failed: ${routedResult.reason}`);
     }
   }
   // Extract first-token think hint from the user body BEFORE prepending system events.
