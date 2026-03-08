@@ -28,7 +28,6 @@ ENV NPM_CONFIG_AUDIT=false
 
 COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
 COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
-COPY install-sh-nonroot/run.sh /usr/local/bin/openclaw-install-nonroot
-RUN sudo chmod +x /usr/local/bin/openclaw-install-nonroot
+COPY --chmod=755 install-sh-nonroot/run.sh /usr/local/bin/openclaw-install-nonroot
 
 ENTRYPOINT ["/usr/local/bin/openclaw-install-nonroot"]
