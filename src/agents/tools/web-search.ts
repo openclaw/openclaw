@@ -668,6 +668,7 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
   apiKeySource: PerplexityApiKeySource = "none",
+  // pragma: allowlist secret
   apiKey?: string,
 ): string {
   const fromConfig =
@@ -677,9 +678,11 @@ function resolvePerplexityBaseUrl(
   if (fromConfig) {
     return fromConfig;
   }
+  // pragma: allowlist secret
   if (apiKeySource === "perplexity_env") {
     return PERPLEXITY_DIRECT_BASE_URL;
   }
+  // pragma: allowlist secret
   if (apiKeySource === "openrouter_env") {
     return DEFAULT_PERPLEXITY_BASE_URL;
   }
