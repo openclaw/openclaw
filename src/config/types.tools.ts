@@ -356,13 +356,29 @@ export type MemorySearchConfig = {
   };
   /** Index storage configuration. */
   store?: {
-    driver?: "sqlite";
+    driver?: "sqlite" | "qdrant";
     path?: string;
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;
       /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
       extensionPath?: string;
+    };
+    /** Qdrant vector store configuration (required when driver is "qdrant"). */
+    qdrant?: {
+      /** Qdrant server URL (default: "http://127.0.0.1:6333"). */
+      url?: string;
+      /** Qdrant collection name (default: agentId with hyphens replaced by underscores). */
+      collection?: string;
+      /** Optional Qdrant API key. */
+      apiKey?: string;
+      /**
+       * Expected vector dimensions. When set and smaller than the embedding
+       * dimensions, the query vector is truncated and re-normalized (Matryoshka).
+       */
+      dimensions?: number;
+      /** Request timeout in milliseconds (default: 300). */
+      timeoutMs?: number;
     };
     cache?: {
       /** Enable embedding cache (default: true). */

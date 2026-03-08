@@ -2,6 +2,89 @@ import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "../utils.js";
 import { cosineSimilarity, parseEmbedding } from "./internal.js";
 
+export type QdrantSearchParams = {
+  url: string;
+  collection: string;
+  queryVec: number[];
+  /** Truncate to this many dimensions before querying (Matryoshka). */
+  dimensions?: number;
+  limit: number;
+  snippetMaxChars: number;
+  sources?: string[];
+  apiKey?: string;
+  timeoutMs?: number;
+};
+
+/**
+ * Search a Qdrant collection for the nearest neighbours of `queryVec`.
+ * When `dimensions` is set and smaller than the query vector length the
+ * vector is truncated and L2-renormalized (Matryoshka prefix trick).
+ * Throws on HTTP or network errors so the caller can decide to fall back.
+ */
+export async function searchVectorQdrant(params: QdrantSearchParams): Promise<SearchRowResult[]> {
+  if (params.queryVec.length === 0 || params.limit <= 0) {
+    return [];
+  }
+
+  // Matryoshka truncation + renormalize
+  let queryVec = params.queryVec;
+  if (params.dimensions && params.dimensions < queryVec.length) {
+    const truncated = queryVec.slice(0, params.dimensions);
+    const norm = Math.sqrt(truncated.reduce((s, x) => s + x * x, 0));
+    queryVec = norm > 1e-9 ? truncated.map((x) => x / norm) : truncated;
+  }
+
+  const body: Record<string, unknown> = {
+    vector: queryVec,
+    limit: params.limit,
+    with_payload: true,
+  };
+  if (params.sources && params.sources.length > 0) {
+    body.filter = { must: [{ key: "source", match: { any: params.sources } }] };
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (params.apiKey) {
+    headers["api-key"] = params.apiKey;
+  }
+
+  const resp = await fetch(`${params.url}/collections/${params.collection}/points/search`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(params.timeoutMs ?? 300),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Qdrant HTTP ${resp.status}: ${text}`);
+  }
+
+  const data = (await resp.json()) as {
+    result?: Array<{
+      score: number;
+      payload: {
+        chunk_id?: string;
+        path?: string;
+        start_line?: number;
+        end_line?: number;
+        text?: string;
+        source?: string;
+      };
+    }>;
+  };
+
+  return (data.result ?? []).map((r) => ({
+    id: r.payload.chunk_id ?? "",
+    path: r.payload.path ?? "",
+    startLine: r.payload.start_line ?? 0,
+    endLine: r.payload.end_line ?? 0,
+    score: r.score,
+    snippet: truncateUtf16Safe(r.payload.text ?? "", params.snippetMaxChars),
+    source: r.payload.source ?? "memory",
+  }));
+}
+
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
 

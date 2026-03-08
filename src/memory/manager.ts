@@ -21,7 +21,7 @@ import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
-import { searchKeyword, searchVector } from "./manager-search.js";
+import { searchKeyword, searchVector, searchVectorQdrant } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -355,6 +355,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.provider) {
       return [];
     }
+
+    // Qdrant vector store — falls back to sqlite-vec on error
+    if (this.settings.store.driver === "qdrant" && this.settings.store.qdrant) {
+      const qdrantCfg = this.settings.store.qdrant;
+      const collection = qdrantCfg.collection ?? this.agentId.replace(/-/g, "_");
+      try {
+        const results = await searchVectorQdrant({
+          url: qdrantCfg.url,
+          collection,
+          queryVec,
+          dimensions: qdrantCfg.dimensions,
+          limit,
+          snippetMaxChars: SNIPPET_MAX_CHARS,
+          sources: Array.from(this.sources),
+          apiKey: qdrantCfg.apiKey,
+          timeoutMs: qdrantCfg.timeoutMs,
+        });
+        return results as Array<MemorySearchResult & { id: string }>;
+      } catch (err) {
+        log.warn(`qdrant search failed, falling back to sqlite-vec: ${String(err)}`);
+      }
+    }
+
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
@@ -657,6 +680,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? { provider: this.provider.id, model: this.provider.model }
       : { provider: "none", model: undefined };
 
+    const isQdrant = this.settings.store.driver === "qdrant" && Boolean(this.settings.store.qdrant);
+    const qdrantCfg = this.settings.store.qdrant;
+
     return {
       backend: "builtin",
       files: files?.c ?? 0,
@@ -690,13 +716,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       fallback: this.fallbackReason
         ? { from: this.fallbackFrom ?? "local", reason: this.fallbackReason }
         : undefined,
-      vector: {
-        enabled: this.vector.enabled,
-        available: this.vector.available ?? undefined,
-        extensionPath: this.vector.extensionPath,
-        loadError: this.vector.loadError,
-        dims: this.vector.dims,
-      },
+      vector: isQdrant
+        ? {
+            enabled: true,
+            available: undefined,
+            dims: qdrantCfg?.dimensions,
+          }
+        : {
+            enabled: this.vector.enabled,
+            available: this.vector.available ?? undefined,
+            extensionPath: this.vector.extensionPath,
+            loadError: this.vector.loadError,
+            dims: this.vector.dims,
+          },
       batch: {
         enabled: this.batch.enabled,
         failures: this.batchFailureCount,
@@ -717,6 +749,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           failures: this.readonlyRecoveryFailures,
           lastError: this.readonlyRecoveryLastError,
         },
+        ...(isQdrant && qdrantCfg
+          ? {
+              qdrant: {
+                url: qdrantCfg.url,
+                collection: qdrantCfg.collection ?? this.agentId.replace(/-/g, "_"),
+                dimensions: qdrantCfg.dimensions,
+                timeoutMs: qdrantCfg.timeoutMs,
+              },
+            }
+          : {}),
       },
     };
   }
@@ -726,6 +768,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.provider) {
       return false;
     }
+
+    // Qdrant driver: probe by hitting the collections endpoint
+    if (this.settings.store.driver === "qdrant" && this.settings.store.qdrant) {
+      const qdrantCfg = this.settings.store.qdrant;
+      const collection = qdrantCfg.collection ?? this.agentId.replace(/-/g, "_");
+      const headers: Record<string, string> = {};
+      if (qdrantCfg.apiKey) {
+        headers["api-key"] = qdrantCfg.apiKey;
+      }
+      try {
+        const resp = await fetch(`${qdrantCfg.url}/collections/${collection}`, {
+          headers,
+          signal: AbortSignal.timeout(qdrantCfg.timeoutMs),
+        });
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    }
+
     if (!this.vector.enabled) {
       return false;
     }
