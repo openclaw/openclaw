@@ -144,7 +144,7 @@ They must use `payload.kind = "systemEvent"`.
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
 
-#### HEARTBEAT.md Integration for Main Session Jobs
+##### HEARTBEAT.md Integration for Main Session Jobs
 
 **Important:** Main session cron jobs use a specialized prompt (`buildCronEventPrompt`) that does **not** include the "Read HEARTBEAT.md" instruction from the default heartbeat prompt.
 
