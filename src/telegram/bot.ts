@@ -56,6 +56,12 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  onInboundMessage?: (params: {
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -340,6 +346,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     streamMode,
     textLimit,
     opts,
+    onInboundMessage: opts.onInboundMessage,
   });
 
   registerTelegramNativeCommands({

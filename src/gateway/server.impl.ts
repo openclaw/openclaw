@@ -75,7 +75,7 @@ import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
-import { createAgentEventHandler } from "./server-chat.js";
+import { createAgentEventHandler, createEmitInboundUserMessage } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -621,6 +621,7 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
     channelRuntime: createPluginRuntime().channel,
+    onInboundMessage: createEmitInboundUserMessage(broadcast),
   });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;

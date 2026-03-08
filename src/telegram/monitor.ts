@@ -30,6 +30,12 @@ export type MonitorTelegramOpts = {
   webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
+  onInboundMessage?: (params: {       
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
@@ -220,6 +226,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           proxyFetch,
           config: cfg,
           accountId: account.accountId,
+          onInboundMessage: opts.onInboundMessage,
           updateOffset: {
             lastUpdateId,
             onUpdateId: persistUpdateId,
