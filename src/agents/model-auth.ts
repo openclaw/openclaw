@@ -270,6 +270,7 @@ export async function resolveApiKeyForProvider(params: {
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+const OPENAI_CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
@@ -357,6 +358,37 @@ export function resolveModelAuthMode(
   }
 
   return "unknown";
+}
+
+export function resolveModelAuthCompatibilityError(params: {
+  provider?: string;
+  model?: string;
+  cfg?: OpenClawConfig;
+  store?: AuthProfileStore;
+  agentDir?: string;
+}): string | undefined {
+  const provider = normalizeProviderId(params.provider ?? "");
+  const model = String(params.model ?? "")
+    .trim()
+    .toLowerCase();
+  if (provider !== "openai-codex" || model !== OPENAI_CODEX_SPARK_MODEL) {
+    return undefined;
+  }
+
+  const authStore =
+    params.store ??
+    ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+  const authMode = resolveModelAuthMode(provider, params.cfg, authStore);
+  if (authMode !== "oauth") {
+    return undefined;
+  }
+
+  return [
+    'Model "openai-codex/gpt-5.3-codex-spark" is not supported with OpenAI Codex OAuth (ChatGPT account).',
+    "Use openai-codex/gpt-5.3-codex or openai-codex/gpt-5.4 instead.",
+  ].join(" ");
 }
 
 export async function getApiKeyForModel(params: {

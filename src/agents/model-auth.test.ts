@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import {
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveModelAuthCompatibilityError,
+  resolveModelAuthMode,
+} from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -115,5 +120,53 @@ describe("requireApiKey", () => {
         "openai",
       ),
     ).toThrow('No API key resolved for provider "openai"');
+  });
+});
+
+describe("resolveModelAuthCompatibilityError", () => {
+  it("rejects codex spark when openai-codex oauth is configured", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    expect(
+      resolveModelAuthCompatibilityError({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        store,
+      }),
+    ).toContain("not supported with OpenAI Codex OAuth");
+  });
+
+  it("allows non-spark codex models with openai-codex oauth", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    expect(
+      resolveModelAuthCompatibilityError({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        store,
+      }),
+    ).toBeUndefined();
   });
 });

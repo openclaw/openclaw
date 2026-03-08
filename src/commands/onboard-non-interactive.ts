@@ -33,5 +33,10 @@ export async function runNonInteractiveOnboarding(
     return;
   }
 
-  await runNonInteractiveOnboardingLocal({ opts, runtime, baseConfig });
+  await runNonInteractiveOnboardingLocal({
+    opts,
+    runtime,
+    baseConfig,
+    hasExistingConfig: snapshot.exists,
+  });
 }

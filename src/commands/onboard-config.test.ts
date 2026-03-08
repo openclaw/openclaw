@@ -53,4 +53,20 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
 
     expect(result.tools?.profile).toBe("full");
   });
+
+  it("preserves implicit tool access when rerunning onboarding for an existing config", () => {
+    const baseConfig: OpenClawConfig = {
+      tools: {
+        allow: ["group:fs"],
+      },
+    };
+    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace", {
+      hasExistingConfig: true,
+    });
+
+    expect(result.tools).toEqual({
+      allow: ["group:fs"],
+    });
+    expect(result.tools?.profile).toBeUndefined();
+  });
 });
