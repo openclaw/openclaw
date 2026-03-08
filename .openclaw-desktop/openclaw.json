@@ -1,6 +1,46 @@
 {
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "apiKey": "ollama-local",
+        "auth": "api-key",
+        "api": "ollama",
+        "models": [
+          {
+            "id": "qwen3.5:9b",
+            "name": "Qwen 3.5 9B (GPU)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          },
+          {
+            "id": "qwen3:4b-thinking-2507-q4_K_M",
+            "name": "Qwen3 4B Thinking",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 16384,
+            "compat": {
+              "thinkingFormat": "qwen"
+            }
+          }
+        ]
+      }
+    }
+  },
   "agents": {
     "defaults": {
+      "model": {
+        "primary": "ollama/qwen3.5:9b",
+        "fallbacks": [
+          "openai-codex/gpt-5.4",
+          "openai-codex/gpt-5.3-codex",
+          "openai-codex/gpt-5.2",
+          "ollama/qwen3:4b-thinking-2507-q4_K_M"
+        ]
+      },
       "compaction": {
         "mode": "safeguard"
       },
@@ -43,6 +83,6 @@
   },
   "meta": {
     "lastTouchedVersion": "2026.3.8",
-    "lastTouchedAt": "2026-03-08T12:03:39.641Z"
+    "lastTouchedAt": "2026-03-08T12:35:00.000Z"
   }
 }
