@@ -168,13 +168,13 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
   it("returns error without persisting model when payload model is disallowed", async () => {
     resolveAllowedModelRefMock.mockReturnValueOnce({
-      error: "Model not allowed: anthropic/claude-sonnet-4-6",
+      error: "model not allowed: anthropic/claude-sonnet-4-6",
     });
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("error");
-    expect(result.error).toContain("Model not allowed");
+    expect(result.error).toContain("model not allowed");
     // Model should remain undefined — the early return happens before the
     // pre-run persist block, so neither the session entry nor the store
     // should be touched with a rejected model.
