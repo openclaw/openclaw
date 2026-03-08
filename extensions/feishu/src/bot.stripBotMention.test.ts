@@ -37,7 +37,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("hello");
   });
 
-  it("normalizes bot mention to <at> tag in group (semantic content)", () => {
+  it("strips bot mention in group so slash commands work (#35994)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 hello",
@@ -46,7 +46,19 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ) as any,
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
+    expect(ctx.content).toBe("hello");
+  });
+
+  it("strips bot mention in group preserving slash command prefix (#35994)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 /model",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("/model");
   });
 
   it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {

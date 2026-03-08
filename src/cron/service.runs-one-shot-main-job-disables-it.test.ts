@@ -4,6 +4,7 @@ import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
+import { loadCronStore } from "./store.js";
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
@@ -192,7 +193,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   fsState.entries.clear();
   fsState.nowMs = 0;
-  fsState.fixtureCount = 0;
   ensureDir(fixturesRoot);
 });
 
@@ -470,8 +470,9 @@ async function loadLegacyDeliveryMigration(rawJob: Record<string, unknown>) {
 
   const cron = createStartedCronService(store.storePath);
   await cron.start();
-  const jobs = await cron.list({ includeDisabled: true });
-  const job = jobs.find((j) => j.id === rawJob.id);
+  cron.stop();
+  const loaded = await loadCronStore(store.storePath);
+  const job = loaded.jobs.find((j) => j.id === rawJob.id);
   return { store, cron, job };
 }
 
@@ -524,13 +525,14 @@ describe("CronService", () => {
       return now;
     };
 
+    const heartbeatStarted = createDeferred<void>();
     let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | null = null;
-    const runHeartbeatOnce = vi.fn(
-      async () =>
-        await new Promise<HeartbeatRunResult>((resolve) => {
-          resolveHeartbeat = resolve;
-        }),
-    );
+    const runHeartbeatOnce = vi.fn(async () => {
+      heartbeatStarted.resolve();
+      return await new Promise<HeartbeatRunResult>((resolve) => {
+        resolveHeartbeat = resolve;
+      });
+    });
 
     const { store, cron, enqueueSystemEvent, requestHeartbeatNow } =
       await createWakeModeNowMainHarness({
@@ -540,15 +542,7 @@ describe("CronService", () => {
     const job = await addWakeModeNowMainSystemEventJob(cron, { name: "wakeMode now waits" });
 
     const runPromise = cron.run(job.id, "force");
-    // `cron.run()` now persists the running marker before executing the job.
-    // Allow more microtask turns so the post-lock execution can start.
-    for (let i = 0; i < 500; i++) {
-      if (runHeartbeatOnce.mock.calls.length > 0) {
-        break;
-      }
-      // Let the locked() chain progress.
-      await Promise.resolve();
-    }
+    await heartbeatStarted.promise;
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNow).not.toHaveBeenCalled();

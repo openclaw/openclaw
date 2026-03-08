@@ -89,7 +89,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     Browser dashboard for chat, config, sessions, and nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone">
-    Pair iOS and Android nodes for Canvas, camera/screen, and voice-enabled workflows.
+    Pair iOS and Android nodes for Canvas, camera, and voice-enabled workflows.
   </Card>
 </Columns>
 
@@ -124,7 +124,7 @@ Open the browser Control UI after the Gateway starts.
 - Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
 </p>
 
 ## Configuration (optional)
@@ -164,7 +164,7 @@ Example:
     Channel-specific setup for WhatsApp, Telegram, Discord, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
-    iOS and Android nodes with pairing, Canvas, camera/screen, and device actions.
+    iOS and Android nodes with pairing, Canvas, camera, and device actions.
   </Card>
   <Card title="Help" href="/help" icon="life-buoy">
     Common fixes and troubleshooting entry point.

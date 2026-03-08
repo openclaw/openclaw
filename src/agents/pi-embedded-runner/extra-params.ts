@@ -3,12 +3,25 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  usesOpenAiFunctionAnthropicToolSchema,
+  usesOpenAiStringModeAnthropicToolChoice,
+} from "../provider-capabilities.js";
 import { log } from "./logger.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
+const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
+const KILOCODE_FEATURE_DEFAULT = "openclaw";
+const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
+
+function resolveKilocodeAppHeaders(): Record<string, string> {
+  const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
+  return { [KILOCODE_FEATURE_HEADER]: feature };
+}
+
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
@@ -40,10 +53,22 @@ export function resolveExtraParams(params: {
     return undefined;
   }
 
-  return Object.assign({}, globalParams, agentParams);
+  const merged = Object.assign({}, globalParams, agentParams);
+  const resolvedParallelToolCalls = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (resolvedParallelToolCalls !== undefined) {
+    merged.parallel_tool_calls = resolvedParallelToolCalls;
+    delete merged.parallelToolCalls;
+  }
+
+  return merged;
 }
 
 type CacheRetention = "none" | "short" | "long";
+type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
@@ -208,6 +233,18 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.openai.com");
+  }
+}
+
 function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
@@ -275,6 +312,42 @@ function shouldEnableOpenAIResponsesServerCompaction(
   return model.provider === "openai";
 }
 
+function shouldStripResponsesStore(
+  model: { api?: unknown; compat?: { supportsStore?: boolean } },
+  forceStore: boolean,
+): boolean {
+  if (forceStore) {
+    return false;
+  }
+  if (typeof model.api !== "string") {
+    return false;
+  }
+  return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
+}
+
+function applyOpenAIResponsesPayloadOverrides(params: {
+  payloadObj: Record<string, unknown>;
+  forceStore: boolean;
+  stripStore: boolean;
+  useServerCompaction: boolean;
+  compactThreshold: number;
+}): void {
+  if (params.forceStore) {
+    params.payloadObj.store = true;
+  }
+  if (params.stripStore) {
+    delete params.payloadObj.store;
+  }
+  if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
+    params.payloadObj.context_management = [
+      {
+        type: "compaction",
+        compact_threshold: params.compactThreshold,
+      },
+    ];
+  }
+}
+
 function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -283,7 +356,11 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    // Strip `store` from the payload when the model declares supportsStore=false.
+    // pi-ai upstream hardcodes `store: false` for Responses API; strict
+    // OpenAI-compatible endpoints (e.g. Gemini via Cloudflare) reject it.
+    const stripStore = shouldStripResponsesStore(model, forceStore);
+    if (!forceStore && !useServerCompaction && !stripStore) {
       return underlying(model, context, options);
     }
 
@@ -295,17 +372,69 @@ function createOpenAIResponsesContextManagementWrapper(
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
+          applyOpenAIResponsesPayloadOverrides({
+            payloadObj: payload as Record<string, unknown>,
+            forceStore,
+            stripStore,
+            useServerCompaction,
+            compactThreshold,
+          });
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "auto" ||
+    normalized === "default" ||
+    normalized === "flex" ||
+    normalized === "priority"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function resolveOpenAIServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+): OpenAIServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  const normalized = normalizeOpenAIServiceTier(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
+  }
+  return normalized;
+}
+
+function createOpenAIServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: OpenAIServiceTier,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "openai-responses" ||
+      model.provider !== "openai" ||
+      !isOpenAIPublicApiBaseUrl(model.baseUrl)
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          if (forceStore) {
-            payloadObj.store = true;
-          }
-          if (useServerCompaction && payloadObj.context_management === undefined) {
-            payloadObj.context_management = [
-              {
-                type: "compaction",
-                compact_threshold: compactThreshold,
-              },
-            ];
+          if (payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = serviceTier;
           }
         }
         originalOnPayload?.(payload);
@@ -661,10 +790,190 @@ function createMoonshotThinkingWrapper(
   };
 }
 
+function requiresAnthropicToolPayloadCompatibility(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (model.api !== "anthropic-messages") {
+    return false;
+  }
+
+  if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
+    return true;
+  }
+
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    return host.endsWith("kimi.com") && pathname.startsWith("/coding");
+  } catch {
+    const normalized = model.baseUrl.toLowerCase();
+    return normalized.includes("kimi.com/coding");
+  }
+}
+
+function normalizeOpenAiFunctionAnthropicToolDefinition(
+  tool: unknown,
+): Record<string, unknown> | undefined {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+    return undefined;
+  }
+
+  const toolObj = tool as Record<string, unknown>;
+  if (toolObj.function && typeof toolObj.function === "object") {
+    return toolObj;
+  }
+
+  const rawName = typeof toolObj.name === "string" ? toolObj.name.trim() : "";
+  if (!rawName) {
+    return toolObj;
+  }
+
+  const functionSpec: Record<string, unknown> = {
+    name: rawName,
+    parameters:
+      toolObj.input_schema && typeof toolObj.input_schema === "object"
+        ? toolObj.input_schema
+        : toolObj.parameters && typeof toolObj.parameters === "object"
+          ? toolObj.parameters
+          : { type: "object", properties: {} },
+  };
+
+  if (typeof toolObj.description === "string" && toolObj.description.trim()) {
+    functionSpec.description = toolObj.description;
+  }
+  if (typeof toolObj.strict === "boolean") {
+    functionSpec.strict = toolObj.strict;
+  }
+
+  return {
+    type: "function",
+    function: functionSpec,
+  };
+}
+
+function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unknown {
+  if (!toolChoice || typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
+    return toolChoice;
+  }
+
+  const choice = toolChoice as Record<string, unknown>;
+  if (choice.type === "auto") {
+    return "auto";
+  }
+  if (choice.type === "none") {
+    return "none";
+  }
+  if (choice.type === "required") {
+    return "required";
+  }
+  if (choice.type === "any") {
+    return "required";
+  }
+  if (choice.type === "tool" && typeof choice.name === "string" && choice.name.trim()) {
+    return {
+      type: "function",
+      function: { name: choice.name.trim() },
+    };
+  }
+
+  return toolChoice;
+}
+
+/**
+ * Some anthropic-messages providers accept Anthropic framing but still expect
+ * OpenAI-style tool payloads (`tools[].function`, string tool_choice modes).
+ */
+function createAnthropicToolPayloadCompatibilityWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          requiresAnthropicToolPayloadCompatibility(model)
+        ) {
+          const payloadObj = payload as Record<string, unknown>;
+          if (
+            Array.isArray(payloadObj.tools) &&
+            usesOpenAiFunctionAnthropicToolSchema(
+              typeof model.provider === "string" ? model.provider : undefined,
+            )
+          ) {
+            payloadObj.tools = payloadObj.tools
+              .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
+              .filter((tool): tool is Record<string, unknown> => !!tool);
+          }
+          if (
+            usesOpenAiStringModeAnthropicToolChoice(
+              typeof model.provider === "string" ? model.provider : undefined,
+            )
+          ) {
+            payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(
+              payloadObj.tool_choice,
+            );
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
  */
+function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const payloadObj = payload as Record<string, unknown>;
+
+  // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
+  // OpenRouter-compatible proxy gateways expect the nested reasoning.effort
+  // shape instead, and some models reject the flat field outright.
+  delete payloadObj.reasoning_effort;
+
+  // When thinking is "off", or provider/model guards disable injection,
+  // leave reasoning unset after normalizing away the legacy flat field.
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payloadObj.reasoning;
+
+  // OpenRouter treats reasoning.effort and reasoning.max_tokens as
+  // alternative controls. If max_tokens is already present, do not inject
+  // effort and do not overwrite caller-supplied reasoning.
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoningObj = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+      reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payloadObj.reasoning = {
+      effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
 function createOpenRouterWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -679,42 +988,7 @@ function createOpenRouterWrapper(
         ...options?.headers,
       },
       onPayload: (payload) => {
-        if (thinkingLevel && payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-
-          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
-          // OpenRouter expects the nested reasoning.effort format instead, and
-          // rejects payloads containing both fields. Remove the flat field so
-          // only the nested one is sent.
-          delete payloadObj.reasoning_effort;
-
-          // When thinking is "off", do not inject reasoning at all.
-          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
-          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
-          // cannot be disabled." Omitting the field lets each model use its own
-          // default reasoning behavior.
-          if (thinkingLevel !== "off") {
-            const existingReasoning = payloadObj.reasoning;
-
-            // OpenRouter treats reasoning.effort and reasoning.max_tokens as
-            // alternative controls. If max_tokens is already present, do not
-            // inject effort and do not overwrite caller-supplied reasoning.
-            if (
-              existingReasoning &&
-              typeof existingReasoning === "object" &&
-              !Array.isArray(existingReasoning)
-            ) {
-              const reasoningObj = existingReasoning as Record<string, unknown>;
-              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
-              }
-            } else if (!existingReasoning) {
-              payloadObj.reasoning = {
-                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
-              };
-            }
-          }
-        }
+        normalizeProxyReasoningPayload(payload, thinkingLevel);
         onPayload?.(payload);
       },
     });
@@ -722,12 +996,39 @@ function createOpenRouterWrapper(
 }
 
 /**
- * Models on OpenRouter that do not support the `reasoning.effort` parameter.
- * Injecting it causes "Invalid arguments passed to the model" errors.
+ * Models on OpenRouter-style proxy providers that reject `reasoning.effort`.
  */
-function isOpenRouterReasoningUnsupported(modelId: string): boolean {
+function isProxyReasoningUnsupported(modelId: string): boolean {
   const id = modelId.toLowerCase();
   return id.startsWith("x-ai/");
+}
+
+/**
+ * Create a streamFn wrapper that adds the Kilocode feature attribution header
+ * and injects reasoning.effort based on the configured thinking level.
+ *
+ * The Kilocode provider gateway manages provider-specific quirks (e.g. cache
+ * control) server-side, so we only handle header injection and reasoning here.
+ */
+function createKilocodeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...resolveKilocodeAppHeaders(),
+      },
+      onPayload: (payload) => {
+        normalizeProxyReasoningPayload(payload, thinkingLevel);
+        onPayload?.(payload);
+      },
+    });
+  };
 }
 
 function isGemini31Model(modelId: string): boolean {
@@ -852,6 +1153,53 @@ function createZaiToolStreamWrapper(
   };
 }
 
+function resolveAliasedParamValue(
+  sources: Array<Record<string, unknown> | undefined>,
+  snakeCaseKey: string,
+  camelCaseKey: string,
+): unknown {
+  let resolved: unknown = undefined;
+  let seen = false;
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    const hasSnakeCaseKey = Object.hasOwn(source, snakeCaseKey);
+    const hasCamelCaseKey = Object.hasOwn(source, camelCaseKey);
+    if (!hasSnakeCaseKey && !hasCamelCaseKey) {
+      continue;
+    }
+    resolved = hasSnakeCaseKey ? source[snakeCaseKey] : source[camelCaseKey];
+    seen = true;
+  }
+  return seen ? resolved : undefined;
+}
+
+function createParallelToolCallsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  enabled: boolean,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+      return underlying(model, context, options);
+    }
+    log.debug(
+      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
+    );
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).parallel_tool_calls = enabled;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -867,7 +1215,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
 ): void {
-  const extraParams = resolveExtraParams({
+  const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
     modelId,
@@ -886,7 +1234,7 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, extraParams, override);
+  const merged = Object.assign({}, resolvedExtraParams, override);
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {
@@ -922,6 +1270,8 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
   }
 
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     // "auto" is a dynamic routing model — we don't know which underlying model
@@ -935,10 +1285,20 @@ export function applyExtraParamsToAgent(
     // and reject payloads containing it with "Invalid arguments passed to the
     // model." Skip reasoning injection for these models.
     // See: openclaw/openclaw#32039
-    const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
+    const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  if (provider === "kilocode") {
+    log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
+    // kilo/auto is a dynamic routing model — skip reasoning injection
+    // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
+    // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
+    const kilocodeThinkingLevel =
+      modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
+    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
@@ -960,8 +1320,33 @@ export function applyExtraParamsToAgent(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
+  const openAIServiceTier = resolveOpenAIServiceTier(merged);
+  if (openAIServiceTier) {
+    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (rawParallelToolCalls !== undefined) {
+    if (typeof rawParallelToolCalls === "boolean") {
+      agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+    } else if (rawParallelToolCalls === null) {
+      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    } else {
+      const summary =
+        typeof rawParallelToolCalls === "string"
+          ? rawParallelToolCalls
+          : typeof rawParallelToolCalls;
+      log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+    }
+  }
 }

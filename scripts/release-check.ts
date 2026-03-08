@@ -8,6 +8,17 @@ import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./s
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
+type PackageJson = {
+  name?: string;
+  version?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  openclaw?: {
+    install?: {
+      npmSpec?: string;
+    };
+  };
+};
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -108,11 +119,6 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 
-type PackageJson = {
-  name?: string;
-  version?: string;
-};
-
 function normalizePluginSyncVersion(version: string): string {
   const normalized = version.trim().replace(/^v/, "");
   const base = /^([0-9]+\.[0-9]+\.[0-9]+)/.exec(normalized)?.[1];
@@ -120,6 +126,92 @@ function normalizePluginSyncVersion(version: string): string {
     return base;
   }
   return normalized.replace(/[-+].*$/, "");
+}
+
+const ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS: Record<string, string[]> = {
+  googlechat: ["google-auth-library"],
+  matrix: ["@matrix-org/matrix-sdk-crypto-nodejs", "@vector-im/matrix-bot-sdk", "music-metadata"],
+  msteams: ["@microsoft/agents-hosting"],
+  nostr: ["nostr-tools"],
+  tlon: ["@tloncorp/api", "@tloncorp/tlon-skill", "@urbit/aura"],
+  zalouser: ["zca-js"],
+};
+
+export function collectBundledExtensionRootDependencyGapErrors(params: {
+  rootPackage: PackageJson;
+  extensions: Array<{ id: string; packageJson: PackageJson }>;
+}): string[] {
+  const rootDeps = {
+    ...params.rootPackage.dependencies,
+    ...params.rootPackage.optionalDependencies,
+  };
+  const errors: string[] = [];
+
+  for (const extension of params.extensions) {
+    if (!extension.packageJson.openclaw?.install?.npmSpec) {
+      continue;
+    }
+
+    const missing = Object.keys(extension.packageJson.dependencies ?? {})
+      .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
+      .toSorted();
+    const allowlisted = [
+      ...(ALLOWLISTED_BUNDLED_EXTENSION_ROOT_DEP_GAPS[extension.id] ?? []),
+    ].toSorted();
+    if (missing.join("\n") !== allowlisted.join("\n")) {
+      const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
+      const resolved = allowlisted.filter((dep) => !missing.includes(dep));
+      const parts = [
+        `bundled extension '${extension.id}' root dependency mirror drift`,
+        `missing in root package: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+      ];
+      if (unexpected.length > 0) {
+        parts.push(`new gaps: ${unexpected.join(", ")}`);
+      }
+      if (resolved.length > 0) {
+        parts.push(`remove stale allowlist entries: ${resolved.join(", ")}`);
+      }
+      errors.push(parts.join(" | "));
+    }
+  }
+
+  return errors;
+}
+
+function collectBundledExtensions(): Array<{ id: string; packageJson: PackageJson }> {
+  const extensionsDir = resolve("extensions");
+  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  );
+
+  return entries.flatMap((entry) => {
+    const packagePath = join(extensionsDir, entry.name, "package.json");
+    try {
+      return [
+        {
+          id: entry.name,
+          packageJson: JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function checkBundledExtensionRootDependencyMirrors() {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+  const errors = collectBundledExtensionRootDependencyGapErrors({
+    rootPackage,
+    extensions: collectBundledExtensions(),
+  });
+  if (errors.length > 0) {
+    console.error("release-check: bundled extension root dependency mirror validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
 }
 
 function runPackDry(): PackResult[] {
@@ -321,6 +413,7 @@ function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
+  checkBundledExtensionRootDependencyMirrors();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);

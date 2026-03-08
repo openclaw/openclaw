@@ -15,7 +15,7 @@ Welcome to the lobster tank! 🦞
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
 - **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
-  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shad0wed](https://x.com/4shad0wed)
+  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
 - **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
   - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
@@ -74,7 +74,18 @@ Welcome to the lobster tank! 🦞
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- Reply to or resolve bot review conversations you addressed before asking for review again
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+
+## Review Conversations Are Author-Owned
+
+If a review bot leaves review conversations on your PR, you are expected to handle the follow-through:
+
+- Resolve the conversation yourself once the code or explanation fully addresses the bot's concern
+- Reply and leave it open only when you need maintainer or reviewer judgment
+- Do not leave "fixed" bot review conversations for maintainers to clean up for you
+
+This applies to both human-authored and AI-assisted PRs.
 
 ## Control UI Decorators
 
@@ -101,8 +112,9 @@ Please include in your PR:
 - [ ] Note the degree of testing (untested / lightly tested / fully tested)
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
+- [ ] Resolve or reply to bot review conversations after you address them
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for. If you are using an LLM coding agent, instruct it to resolve bot review conversations it has addressed instead of leaving them for maintainers.
 
 ## Current Focus & Roadmap 🗺
 

@@ -912,7 +912,43 @@ async function processMessageWithPipeline(params: {
     fetcher,
     sendRetryControl,
   });
-  if (!access.allowed) {
+  if (directDmOutcome === "disabled") {
+    logVerbose(core, runtime, `Blocked zalo DM from ${senderId} (dmPolicy=disabled)`);
+    return;
+  }
+  if (directDmOutcome === "unauthorized") {
+    if (dmPolicy === "pairing") {
+      await issuePairingChallenge({
+        channel: "zalo",
+        senderId,
+        senderIdLine: `Your Zalo user id: ${senderId}`,
+        meta: { name: senderName ?? undefined },
+        upsertPairingRequest: pairing.upsertPairingRequest,
+        onCreated: () => {
+          logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessage(
+            token,
+            {
+              chat_id: chatId,
+              text,
+            },
+            fetcher,
+          );
+          statusSink?.({ lastOutboundAt: Date.now() });
+        },
+        onReplyError: (err) => {
+          logVerbose(core, runtime, `zalo pairing reply failed for ${senderId}: ${String(err)}`);
+        },
+      });
+    } else {
+      logVerbose(
+        core,
+        runtime,
+        `Blocked unauthorized zalo sender ${senderId} (dmPolicy=${dmPolicy})`,
+      );
+    }
     return;
   }
   const { isGroup, chatId, senderId, senderName, commandAuthorized } = access;

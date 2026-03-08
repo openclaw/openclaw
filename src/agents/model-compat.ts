@@ -52,28 +52,28 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  // The `developer` message role is an OpenAI-native convention. All other
-  // openai-completions backends (proxies, Qwen, GLM, DeepSeek, Kimi, etc.)
-  // only recognise `system`. Force supportsDeveloperRole=false for any model
-  // whose baseUrl is not a known native OpenAI endpoint, unless the caller
-  // has already pinned the value explicitly.
+  // The `developer` role and stream usage chunks are OpenAI-native behaviors.
+  // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
+  // chunks that break strict parsers expecting choices[0]. For non-native
+  // openai-completions endpoints, force both compat flags off.
   const compat = model.compat ?? undefined;
-  if (compat?.supportsDeveloperRole === false) {
-    return model;
-  }
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
-  // leave compat unchanged and let the existing default behaviour apply.
-  // Note: an explicit supportsDeveloperRole: true is intentionally overridden
-  // here for non-native endpoints — those backends would return a 400 if we
-  // sent `developer`, so safety takes precedence over the caller's hint.
+  // leave compat unchanged and let default native behavior apply.
+  // Note: explicit true values are intentionally overridden for non-native
+  // endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
+    return model;
+  }
+  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
     return model;
   }
 
   // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
-    compat: compat ? { ...compat, supportsDeveloperRole: false } : { supportsDeveloperRole: false },
+    compat: compat
+      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
+      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
   } as typeof model;
 }

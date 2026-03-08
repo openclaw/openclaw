@@ -43,6 +43,7 @@ const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
+const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 
 function getCachedMarkdown(key: string): string | null {
@@ -110,11 +111,20 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`, {
-    renderer: htmlEscapeRenderer,
-    gfm: true,
-    breaks: true,
-  }) as string;
+  let rendered: string;
+  try {
+    rendered = marked.parse(`${truncated.text}${suffix}`, {
+      renderer: htmlEscapeRenderer,
+      gfm: true,
+      breaks: true,
+    }) as string;
+  } catch (err) {
+    // Fall back to escaped plain text when marked.parse() throws (e.g.
+    // infinite recursion on pathological markdown patterns — #36213).
+    console.warn("[markdown] marked.parse failed, falling back to plain text:", err);
+    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    rendered = `<pre class="code-block">${escaped}</pre>`;
+  }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
@@ -128,6 +138,19 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
 // pages) as formatted output is confusing UX (#13937).
 const htmlEscapeRenderer = new marked.Renderer();
 htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
+htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null }) => {
+  const label = normalizeMarkdownImageLabel(token.text);
+  const href = token.href?.trim() ?? "";
+  if (!INLINE_DATA_IMAGE_RE.test(href)) {
+    return escapeHtml(label);
+  }
+  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+};
+
+function normalizeMarkdownImageLabel(text?: string | null): string {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : "image";
+}
 
 function escapeHtml(value: string): string {
   return value

@@ -459,14 +459,17 @@ describe("handleFeishuMessage command authorization", () => {
       id: "ou-unapproved",
       meta: { name: undefined },
     });
-    expect(mockBuildPairingReply).toHaveBeenCalledWith({
-      channel: "feishu",
-      idLine: "Your Feishu user id: ou-unapproved",
-      code: "ABCDEFGH",
-    });
     expect(mockSendMessageFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat:oc-dm",
+        text: expect.stringContaining("Your Feishu user id: ou-unapproved"),
+        accountId: "default",
+      }),
+    );
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc-dm",
+        text: expect.stringContaining("Pairing code: ABCDEFGH"),
         accountId: "default",
       }),
     );
@@ -519,6 +522,42 @@ describe("handleFeishuMessage command authorization", () => {
         SenderId: "ou-attacker",
       }),
     );
+  });
+
+  it("normalizes group mention-prefixed slash commands before command-auth probing", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-group-mention-command-probe",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_user_1/model" }),
+        mentions: [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" }],
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith("/model", cfg);
   });
 
   it("falls back to top-level allowFrom for group command authorization", async () => {
@@ -1052,7 +1091,7 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "sec_test",
+          appSecret: "sec_test", // pragma: allowlist secret
           groups: {
             "oc-group": {
               requireMention: false,
@@ -1115,7 +1154,7 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           appId: "cli_scope_bug",
-          appSecret: "sec_scope_bug",
+          appSecret: "sec_scope_bug", // pragma: allowlist secret
           groups: {
             "oc-group": {
               requireMention: false,

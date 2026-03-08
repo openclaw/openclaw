@@ -26,6 +26,7 @@ const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
@@ -40,7 +41,67 @@ const KIMI_WEB_SEARCH_TOOL = {
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
-const BRAVE_SEARCH_LANG_CODE = /^[a-z]{2}$/i;
+const BRAVE_SEARCH_LANG_CODES = new Set([
+  "ar",
+  "eu",
+  "bn",
+  "bg",
+  "ca",
+  "zh-hans",
+  "zh-hant",
+  "hr",
+  "cs",
+  "da",
+  "nl",
+  "en",
+  "en-gb",
+  "et",
+  "fi",
+  "fr",
+  "gl",
+  "de",
+  "el",
+  "gu",
+  "he",
+  "hi",
+  "hu",
+  "is",
+  "it",
+  "jp",
+  "kn",
+  "ko",
+  "lv",
+  "lt",
+  "ms",
+  "ml",
+  "mr",
+  "nb",
+  "pl",
+  "pt-br",
+  "pt-pt",
+  "pa",
+  "ro",
+  "ru",
+  "sr",
+  "sk",
+  "sl",
+  "es",
+  "sv",
+  "ta",
+  "te",
+  "th",
+  "tr",
+  "uk",
+  "vi",
+]);
+const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
+  ja: "jp",
+  zh: "zh-hans",
+  "zh-cn": "zh-hans",
+  "zh-hk": "zh-hant",
+  "zh-sg": "zh-hans",
+  "zh-tw": "zh-hant",
+};
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
@@ -127,7 +188,7 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
       search_lang: Type.Optional(
         Type.String({
           description:
-            "Short ISO language code for search results (e.g., 'de', 'en', 'fr', 'tr'). Must be a 2-letter code, NOT a locale.",
+            "Brave language code for search results (e.g., 'en', 'de', 'en-gb', 'zh-hans', 'zh-hant', 'pt-br').",
         }),
       ),
       ui_lang: Type.Optional(
@@ -185,6 +246,17 @@ type BraveSearchResponse = {
   web?: {
     results?: BraveSearchResult[];
   };
+};
+
+type BraveLlmContextSnippet = { text: string };
+type BraveLlmContextResult = { url: string; title: string; snippets: BraveLlmContextSnippet[] };
+type BraveLlmContextResponse = {
+  grounding: { generic?: BraveLlmContextResult[] };
+  sources?: { url?: string; hostname?: string; date?: string }[];
+};
+
+type BraveConfig = {
+  mode?: string;
 };
 
 type PerplexityConfig = {
@@ -445,30 +517,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
 
   // Auto-detect provider from available API keys (priority order)
   if (raw === "") {
-    // 1. Brave
-    if (resolveSearchApiKey(search)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "brave" from available API keys',
-      );
-      return "brave";
-    }
-    // 2. Gemini
-    const geminiConfig = resolveGeminiConfig(search);
-    if (resolveGeminiApiKey(geminiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "gemini" from available API keys',
-      );
-      return "gemini";
-    }
-    // 3. Kimi
-    const kimiConfig = resolveKimiConfig(search);
-    if (resolveKimiApiKey(kimiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "kimi" from available API keys',
-      );
-      return "kimi";
-    }
-    // 4. Perplexity
+    // 1. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -477,7 +526,22 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
-    // 5. Grok
+    // 2. Brave
+    if (resolveSearchApiKey(search)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "brave" from available API keys',
+      );
+      return "brave";
+    }
+    // 3. Gemini
+    const geminiConfig = resolveGeminiConfig(search);
+    if (resolveGeminiApiKey(geminiConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "gemini" from available API keys',
+      );
+      return "gemini";
+    }
+    // 4. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
       logVerbose(
@@ -485,9 +549,32 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "grok";
     }
+    // 5. Kimi
+    const kimiConfig = resolveKimiConfig(search);
+    if (resolveKimiApiKey(kimiConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "kimi" from available API keys',
+      );
+      return "kimi";
+    }
   }
 
-  return "brave";
+  return "perplexity";
+}
+
+function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const brave = "brave" in search ? search.brave : undefined;
+  if (!brave || typeof brave !== "object") {
+    return {};
+  }
+  return brave as BraveConfig;
+}
+
+function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
+  return brave.mode === "llm-context" ? "llm-context" : "web";
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -731,10 +818,14 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
     return undefined;
   }
   const trimmed = value.trim();
-  if (!trimmed || !BRAVE_SEARCH_LANG_CODE.test(trimmed)) {
+  if (!trimmed) {
     return undefined;
   }
-  return trimmed.toLowerCase();
+  const canonical = BRAVE_SEARCH_LANG_ALIASES[trimmed.toLowerCase()] ?? trimmed.toLowerCase();
+  if (!BRAVE_SEARCH_LANG_CODES.has(canonical)) {
+    return undefined;
+  }
+  return canonical;
 }
 
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
@@ -1149,6 +1240,67 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runBraveLlmContextSearch(params: {
+  query: string;
+  apiKey: string;
+  timeoutSeconds: number;
+  country?: string;
+  search_lang?: string;
+  freshness?: string;
+}): Promise<{
+  results: Array<{
+    url: string;
+    title: string;
+    snippets: string[];
+    siteName?: string;
+  }>;
+  sources?: BraveLlmContextResponse["sources"];
+}> {
+  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  if (params.search_lang) {
+    url.searchParams.set("search_lang", params.search_lang);
+  }
+  if (params.freshness) {
+    url.searchParams.set("freshness", params.freshness);
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: url.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-Subscription-Token": params.apiKey,
+        },
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text;
+        throw new Error(`Brave LLM Context API error (${res.status}): ${detail || res.statusText}`);
+      }
+
+      const data = (await res.json()) as BraveLlmContextResponse;
+      const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
+      const mapped = genericResults.map((entry) => ({
+        url: entry.url ?? "",
+        title: entry.title ?? "",
+        snippets: (entry.snippets ?? []).map((s) => s.text ?? "").filter(Boolean),
+        siteName: resolveSiteName(entry.url) || undefined,
+      }));
+
+      return { results: mapped, sources: data.sources };
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1171,7 +1323,9 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
+  const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
     params.provider === "grok"
       ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
@@ -1181,7 +1335,9 @@ async function runWebSearch(params: {
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : "";
   const cacheKey = normalizeCacheKey(
-    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
+    params.provider === "brave" && effectiveBraveMode === "llm-context"
+      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
+      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1308,6 +1464,42 @@ async function runWebSearch(params: {
     throw new Error("Unsupported web search provider.");
   }
 
+  if (effectiveBraveMode === "llm-context") {
+    const { results: llmResults, sources } = await runBraveLlmContextSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+      country: params.country,
+      search_lang: params.search_lang,
+      freshness: params.freshness,
+    });
+
+    const mapped = llmResults.map((entry) => ({
+      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+      url: entry.url,
+      snippets: entry.snippets.map((s) => wrapWebContent(s, "web_search")),
+      siteName: entry.siteName,
+    }));
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      mode: "llm-context" as const,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+      sources,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
@@ -1401,6 +1593,8 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const braveConfig = resolveBraveConfig(search);
+  const braveMode = resolveBraveMode(braveConfig);
 
   const description =
     provider === "perplexity"
@@ -1411,7 +1605,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : braveMode === "llm-context"
+              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1473,7 +1669,7 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "invalid_search_lang",
           message:
-            "search_lang must be a 2-letter ISO language code like 'en' (not a locale like 'en-US').",
+            "search_lang must be a Brave-supported language code like 'en', 'en-gb', 'zh-hans', or 'zh-hant'.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1486,11 +1682,27 @@ export function createWebSearchTool(options?: {
       }
       const resolvedSearchLang = normalizedBraveLanguageParams.search_lang;
       const resolvedUiLang = normalizedBraveLanguageParams.ui_lang;
+      if (resolvedUiLang && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_ui_lang",
+          message:
+            "ui_lang is not supported by Brave llm-context mode. Remove ui_lang or use Brave web mode for locale-based UI hints.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const rawFreshness = readStringParam(params, "freshness");
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_freshness",
           message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      if (rawFreshness && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message:
+            "freshness filtering is not supported by Brave llm-context mode. Remove freshness or use Brave web mode.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1516,6 +1728,14 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "unsupported_date_filter",
           message: `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave and Perplexity support date filtering.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      if ((rawDateAfter || rawDateBefore) && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_date_filter",
+          message:
+            "date_after/date_before filtering is not supported by Brave llm-context mode. Use Brave web mode for date filters.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1596,6 +1816,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        braveMode,
       });
       return jsonResult(result);
     },
@@ -1620,4 +1841,5 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveBraveMode,
 } as const;
