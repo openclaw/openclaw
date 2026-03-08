@@ -415,11 +415,6 @@ describe("legacy config detection", () => {
   it('enforces dmPolicy="open" allowFrom wildcard for supported providers', async () => {
     const cases = [
       {
-        provider: "telegram",
-        allowFrom: ["123456789"],
-        expectedIssuePath: "channels.telegram.allowFrom",
-      },
-      {
         provider: "whatsapp",
         allowFrom: ["+15555550123"],
         expectedIssuePath: "channels.whatsapp.allowFrom",
@@ -459,6 +454,22 @@ describe("legacy config detection", () => {
         const channel = getChannelConfig(res.config, provider);
         expect(channel?.dmPolicy, provider).toBe("open");
       }
+    }
+  });
+
+  it('auto-heals telegram dmPolicy="open" allowFrom without wildcard', async () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.telegram?.dmPolicy).toBe("open");
+      expect(res.config.channels?.telegram?.allowFrom).toContain("*");
     }
   });
 

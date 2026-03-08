@@ -134,6 +134,73 @@ function normalizeTelegramStreamingConfig(value: { streaming?: unknown; streamMo
   delete value.streamMode;
 }
 
+let didWarnTelegramOpenAllowFromAutoheal = false;
+
+function normalizeTelegramOpenAllowFrom(value: {
+  dmPolicy?: unknown;
+  allowFrom?: Array<string | number>;
+  accounts?: Record<string, { dmPolicy?: unknown; allowFrom?: Array<string | number> } | undefined>;
+}) {
+  if (value.dmPolicy !== "open" && !value.accounts) {
+    return;
+  }
+
+  const ensureStar = (list?: Array<string | number>) => {
+    if (!Array.isArray(list) || list.length === 0) {
+      return { list: ["*"] as Array<string | number>, changed: true };
+    }
+    const hasStar = list.some((entry) => String(entry).trim() === "*");
+    if (hasStar) {
+      return { list, changed: false };
+    }
+    return { list: [...list, "*"] as Array<string | number>, changed: true };
+  };
+
+  let changed = false;
+
+  // Top-level policy.
+  if (value.dmPolicy === "open") {
+    const next = ensureStar(value.allowFrom);
+    if (next.changed) {
+      value.allowFrom = next.list;
+      changed = true;
+    }
+  }
+
+  // Account policies: ensure the effective allowFrom includes '*'.
+  if (value.accounts) {
+    for (const account of Object.values(value.accounts)) {
+      if (!account) {
+        continue;
+      }
+      const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
+      if (effectivePolicy !== "open") {
+        continue;
+      }
+      if (Array.isArray(account.allowFrom)) {
+        const next = ensureStar(account.allowFrom);
+        if (next.changed) {
+          account.allowFrom = next.list;
+          changed = true;
+        }
+      } else {
+        // Do NOT mutate shared top-level allowFrom to satisfy an account-level open intent.
+        // If this account is open and does not provide allowFrom, default it to ["*"].
+        account.allowFrom = ["*"];
+        changed = true;
+      }
+    }
+  }
+
+  if (changed && !didWarnTelegramOpenAllowFromAutoheal) {
+    didWarnTelegramOpenAllowFromAutoheal = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[config] Auto-healed channels.telegram.allowFrom to include "*" because dmPolicy="open"',
+    );
+  }
+}
+
 function normalizeDiscordStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
   value.streaming = resolveDiscordPreviewStreamMode(value);
   delete value.streamMode;
@@ -270,6 +337,7 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
+  normalizeTelegramOpenAllowFrom(value);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
