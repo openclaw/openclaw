@@ -800,6 +800,61 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
+  it("#38822: one-shot job retries Bedrock too-many-tokens-per-day errors", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-03-08T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-bedrock-too-many-tokens-per-day",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "error",
+        error: "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
+      })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
+      },
+    });
+
+    await onTimer(state);
+    const jobAfterRetry = state.store?.jobs.find(
+      (j) => j.id === "oneshot-bedrock-too-many-tokens-per-day",
+    );
+    expect(jobAfterRetry).toBeDefined();
+    expect(jobAfterRetry!.enabled).toBe(true);
+    expect(jobAfterRetry!.state.lastStatus).toBe("error");
+    expect(jobAfterRetry!.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+    now = (jobAfterRetry!.state.nextRunAtMs ?? now) + 1;
+    await onTimer(state);
+
+    const finishedJob = state.store?.jobs.find(
+      (j) => j.id === "oneshot-bedrock-too-many-tokens-per-day",
+    );
+    expect(finishedJob).toBeDefined();
+    expect(finishedJob!.state.lastStatus).toBe("ok");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
   it("#24355: one-shot job disabled immediately on permanent error", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");

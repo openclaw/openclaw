@@ -416,10 +416,17 @@ describe("isLikelyContextOverflowError", () => {
       "exceeded your current quota",
       "This request would exceed your account's rate limit",
       "429 Too Many Requests: request exceeds rate limit",
+      "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+
+  it("keeps too-many-tokens-per-request context overflow errors out of the rate-limit lane", () => {
+    const sample = "Context window exceeded: too many tokens per request.";
+    expect(isLikelyContextOverflowError(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBeNull();
   });
 
   it("excludes reasoning-required invalid-request errors", () => {
@@ -653,6 +660,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+  it("classifies AWS Bedrock too-many-tokens-per-day errors as rate_limit", () => {
+    expect(
+      classifyFailoverReason("AWS Bedrock: Too many tokens per day. Please try again tomorrow."),
+    ).toBe("rate_limit");
   });
   it("classifies provider high-demand / service-unavailable messages as overloaded", () => {
     expect(
