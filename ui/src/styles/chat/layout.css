@@ -152,6 +152,27 @@
   z-index: 10;
 }
 
+.field--inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field--inline span {
+  margin-right: 4px;
+}
+
+.field--inline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.field--inline input[type="number"] {
+  width: 110px;
+}
+
 /* Image attachments preview */
 .chat-attachments {
   display: inline-flex;

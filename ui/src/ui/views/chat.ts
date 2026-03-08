@@ -73,6 +73,7 @@ export type ChatProps = {
   onRefresh: () => void;
   onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
+  onDraftInput?: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -452,7 +453,11 @@ export function renderChat(props: ChatProps) {
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
-                props.onDraftChange(target.value);
+                if (props.onDraftInput) {
+                  props.onDraftInput(target.value);
+                } else {
+                  props.onDraftChange(target.value);
+                }
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
