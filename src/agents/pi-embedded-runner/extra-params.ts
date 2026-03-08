@@ -44,6 +44,7 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetention = "none" | "short" | "long";
+type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
@@ -208,6 +209,18 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.openai.com");
+  }
+}
+
 function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
@@ -306,6 +319,63 @@ function createOpenAIResponsesContextManagementWrapper(
                 compact_threshold: compactThreshold,
               },
             ];
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "auto" ||
+    normalized === "default" ||
+    normalized === "flex" ||
+    normalized === "priority"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function resolveOpenAIServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+): OpenAIServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  const normalized = normalizeOpenAIServiceTier(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
+  }
+  return normalized;
+}
+
+function createOpenAIServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: OpenAIServiceTier,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "openai-responses" ||
+      model.provider !== "openai" ||
+      !isOpenAIPublicApiBaseUrl(model.baseUrl)
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = serviceTier;
           }
         }
         originalOnPayload?.(payload);
@@ -661,6 +731,117 @@ function createMoonshotThinkingWrapper(
   };
 }
 
+function isKimiCodingAnthropicEndpoint(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (model.api !== "anthropic-messages") {
+    return false;
+  }
+
+  if (typeof model.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding") {
+    return true;
+  }
+
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    return host.endsWith("kimi.com") && pathname.startsWith("/coding");
+  } catch {
+    const normalized = model.baseUrl.toLowerCase();
+    return normalized.includes("kimi.com/coding");
+  }
+}
+
+function normalizeKimiCodingToolDefinition(tool: unknown): Record<string, unknown> | undefined {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+    return undefined;
+  }
+
+  const toolObj = tool as Record<string, unknown>;
+  if (toolObj.function && typeof toolObj.function === "object") {
+    return toolObj;
+  }
+
+  const rawName = typeof toolObj.name === "string" ? toolObj.name.trim() : "";
+  if (!rawName) {
+    return toolObj;
+  }
+
+  const functionSpec: Record<string, unknown> = {
+    name: rawName,
+    parameters:
+      toolObj.input_schema && typeof toolObj.input_schema === "object"
+        ? toolObj.input_schema
+        : toolObj.parameters && typeof toolObj.parameters === "object"
+          ? toolObj.parameters
+          : { type: "object", properties: {} },
+  };
+
+  if (typeof toolObj.description === "string" && toolObj.description.trim()) {
+    functionSpec.description = toolObj.description;
+  }
+  if (typeof toolObj.strict === "boolean") {
+    functionSpec.strict = toolObj.strict;
+  }
+
+  return {
+    type: "function",
+    function: functionSpec,
+  };
+}
+
+function normalizeKimiCodingToolChoice(toolChoice: unknown): unknown {
+  if (!toolChoice || typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
+    return toolChoice;
+  }
+
+  const choice = toolChoice as Record<string, unknown>;
+  if (choice.type === "any") {
+    return "required";
+  }
+  if (choice.type === "tool" && typeof choice.name === "string" && choice.name.trim()) {
+    return {
+      type: "function",
+      function: { name: choice.name.trim() },
+    };
+  }
+
+  return toolChoice;
+}
+
+/**
+ * Kimi Coding's anthropic-messages endpoint expects OpenAI-style tool payloads
+ * (`tools[].function`) even when messages use Anthropic request framing.
+ */
+function createKimiCodingAnthropicToolSchemaWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object" && isKimiCodingAnthropicEndpoint(model)) {
+          const payloadObj = payload as Record<string, unknown>;
+          if (Array.isArray(payloadObj.tools)) {
+            payloadObj.tools = payloadObj.tools
+              .map((tool) => normalizeKimiCodingToolDefinition(tool))
+              .filter((tool): tool is Record<string, unknown> => !!tool);
+          }
+          payloadObj.tool_choice = normalizeKimiCodingToolChoice(payloadObj.tool_choice);
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
@@ -922,6 +1103,8 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
   }
 
+  agent.streamFn = createKimiCodingAnthropicToolSchemaWrapper(agent.streamFn);
+
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     // "auto" is a dynamic routing model — we don't know which underlying model
@@ -959,6 +1142,12 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  const openAIServiceTier = resolveOpenAIServiceTier(merged);
+  if (openAIServiceTier) {
+    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
@@ -64,7 +65,7 @@ export type EmbeddingProviderOptions = {
   provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
   };
   model: string;
@@ -111,19 +112,34 @@ async function createLocalEmbeddingProvider(
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
+  let initPromise: Promise<LlamaEmbeddingContext> | null = null;
 
-  const ensureContext = async () => {
-    if (!llama) {
-      llama = await getLlama({ logLevel: LlamaLogLevel.error });
+  const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
+    if (embeddingContext) {
+      return embeddingContext;
     }
-    if (!embeddingModel) {
-      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-      embeddingModel = await llama.loadModel({ modelPath: resolved });
+    if (initPromise) {
+      return initPromise;
     }
-    if (!embeddingContext) {
-      embeddingContext = await embeddingModel.createEmbeddingContext();
-    }
-    return embeddingContext;
+    initPromise = (async () => {
+      try {
+        if (!llama) {
+          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+        }
+        if (!embeddingModel) {
+          const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
+          embeddingModel = await llama.loadModel({ modelPath: resolved });
+        }
+        if (!embeddingContext) {
+          embeddingContext = await embeddingModel.createEmbeddingContext();
+        }
+        return embeddingContext;
+      } catch (err) {
+        initPromise = null;
+        throw err;
+      }
+    })();
+    return initPromise;
   };
 
   return {

@@ -10,6 +10,8 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import { isAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
@@ -124,26 +126,6 @@ function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
   return label === "disabled" ? "off" : label;
 }
 
-function dedupeSkillCommandsForDiscord(
-  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
-) {
-  const seen = new Set<string>();
-  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
-  for (const command of skillCommands) {
-    const key = command.skillName.trim().toLowerCase();
-    if (!key) {
-      deduped.push(command);
-      continue;
-    }
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(command);
-  }
-  return deduped;
-}
-
 function appendPluginCommandSpecs(params: {
   commandSpecs: NativeCommandSpec[];
   runtime: RuntimeEnv;
@@ -173,6 +155,92 @@ function appendPluginCommandSpecs(params: {
     });
   }
   return merged;
+}
+
+const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
+const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
+
+function isLegacyMissingSessionError(message: string): boolean {
+  return (
+    message.includes("Session is not ACP-enabled") ||
+    message.includes("ACP session metadata missing")
+  );
+}
+
+function classifyAcpStatusProbeError(params: { error: unknown; isStaleRunning: boolean }): {
+  status: "stale" | "uncertain";
+  reason: string;
+} {
+  if (isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
+    return { status: "stale", reason: "session-init-failed" };
+  }
+
+  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  if (isLegacyMissingSessionError(message)) {
+    return { status: "stale", reason: "session-missing" };
+  }
+
+  return params.isStaleRunning
+    ? { status: "stale", reason: "status-error-running-stale" }
+    : { status: "uncertain", reason: "status-error" };
+}
+
+async function probeDiscordAcpBindingHealth(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  storedState?: "idle" | "running" | "error";
+  lastActivityAt?: number;
+}): Promise<{ status: "healthy" | "stale" | "uncertain"; reason?: string }> {
+  const manager = getAcpSessionManager();
+  const statusProbeAbortController = new AbortController();
+  const statusPromise = manager
+    .getSessionStatus({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      signal: statusProbeAbortController.signal,
+    })
+    .then((status) => ({ kind: "status" as const, status }))
+    .catch((error: unknown) => ({ kind: "error" as const, error }));
+
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timeoutTimer = setTimeout(
+      () => resolve({ kind: "timeout" }),
+      DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
+    );
+    timeoutTimer.unref?.();
+  });
+  const result = await Promise.race([statusPromise, timeoutPromise]);
+  if (timeoutTimer) {
+    clearTimeout(timeoutTimer);
+  }
+  if (result.kind === "timeout") {
+    statusProbeAbortController.abort();
+  }
+  const runningForMs =
+    params.storedState === "running" && Number.isFinite(params.lastActivityAt)
+      ? Date.now() - Math.max(0, Math.floor(params.lastActivityAt ?? 0))
+      : 0;
+  const isStaleRunning =
+    params.storedState === "running" && runningForMs >= DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS;
+
+  if (result.kind === "timeout") {
+    return isStaleRunning
+      ? { status: "stale", reason: "status-timeout-running-stale" }
+      : { status: "uncertain", reason: "status-timeout" };
+  }
+  if (result.kind === "error") {
+    return classifyAcpStatusProbeError({
+      error: result.error,
+      isStaleRunning,
+    });
+  }
+  if (result.status.state === "error") {
+    // ACP error state is recoverable (next turn can clear it), so keep the
+    // binding unless stronger stale signals exist.
+    return { status: "uncertain", reason: "status-error-state" };
+  }
+  return { status: "healthy" };
 }
 
 async function deployDiscordCommands(params: {
@@ -369,9 +437,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const maxDiscordCommands = 100;
   let skillCommands =
-    nativeEnabled && nativeSkillsEnabled
-      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
-      : [];
+    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
@@ -406,14 +472,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       })
     : createNoopThreadBindingManager(account.accountId);
   if (threadBindingsEnabled) {
-    const reconciliation = reconcileAcpThreadBindingsOnStartup({
+    const uncertainProbeKeys = new Set<string>();
+    const reconciliation = await reconcileAcpThreadBindingsOnStartup({
       cfg,
       accountId: account.accountId,
       sendFarewell: false,
+      healthProbe: async ({ sessionKey, session }) => {
+        const probe = await probeDiscordAcpBindingHealth({
+          cfg,
+          sessionKey,
+          storedState: session.acp?.state,
+          lastActivityAt: session.acp?.lastActivityAt,
+        });
+        if (probe.status === "uncertain") {
+          uncertainProbeKeys.add(`${sessionKey}${probe.reason ? ` (${probe.reason})` : ""}`);
+        }
+        return probe;
+      },
     });
     if (reconciliation.removed > 0) {
       logVerbose(
-        `discord: removed ${reconciliation.removed}/${reconciliation.checked} stale ACP thread bindings on startup for account ${account.accountId}`,
+        `discord: removed ${reconciliation.removed}/${reconciliation.checked} stale ACP thread bindings on startup for account ${account.accountId}: ${reconciliation.staleSessionKeys.join(", ")}`,
+      );
+    }
+    if (uncertainProbeKeys.size > 0) {
+      logVerbose(
+        `discord: ACP thread-binding health probe uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
       );
     }
   }
@@ -540,8 +624,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (voiceEnabled) {
       clientPlugins.push(new VoicePlugin());
     }
-    // Pass eventQueue config to Carbon so the listener timeout can be tuned.
-    // Default listenerTimeout is 120s (Carbon defaults to 30s which is too short for LLM calls).
+    // Pass eventQueue config to Carbon so the gateway listener budget can be tuned.
+    // Default listenerTimeout is 120s (Carbon defaults to 30s, which is too short for some
+    // Discord normalization/enqueue work).
     const eventQueueOpts = {
       listenerTimeout: 120_000,
       ...discordCfg.eventQueue,
@@ -623,6 +708,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
+      workerRunTimeoutMs: discordCfg.inboundWorker?.runTimeoutMs,
       botUserId,
       guildHistories,
       historyLimit,
@@ -647,7 +733,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     registerDiscordListener(
       client.listeners,
-      new DiscordMessageListener(messageHandler, logger, trackInboundEvent),
+      new DiscordMessageListener(messageHandler, logger, trackInboundEvent, {
+        timeoutMs: eventQueueOpts.listenerTimeout,
+      }),
     );
     const reactionListenerOptions = {
       cfg,
@@ -734,7 +822,6 @@ async function clearDiscordNativeCommands(params: {
 
 export const __testing = {
   createDiscordGatewayPlugin,
-  dedupeSkillCommandsForDiscord,
   resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDiscordRestFetch,

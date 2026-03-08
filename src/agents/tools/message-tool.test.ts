@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -45,7 +45,8 @@ function createChannelPlugin(params: {
   label: string;
   docsPath: string;
   blurb: string;
-  actions: string[];
+  actions?: ChannelMessageActionName[];
+  listActions?: NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>;
   supportsButtons?: boolean;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
@@ -65,7 +66,11 @@ function createChannelPlugin(params: {
     },
     ...(params.messaging ? { messaging: params.messaging } : {}),
     actions: {
-      listActions: () => params.actions as never,
+      listActions:
+        params.listActions ??
+        (() => {
+          return (params.actions ?? []) as never;
+        }),
       ...(params.supportsButtons ? { supportsButtons: () => true } : {}),
     },
   };
@@ -139,7 +144,7 @@ describe("message tool schema scoping", () => {
     label: "Telegram",
     docsPath: "/channels/telegram",
     blurb: "Telegram test plugin.",
-    actions: ["send", "react"],
+    actions: ["send", "react", "poll"],
     supportsButtons: true,
   });
 
@@ -148,7 +153,7 @@ describe("message tool schema scoping", () => {
     label: "Discord",
     docsPath: "/channels/discord",
     blurb: "Discord test plugin.",
-    actions: ["send", "poll"],
+    actions: ["send", "poll", "poll-vote"],
   });
 
   afterEach(() => {
@@ -161,18 +166,27 @@ describe("message tool schema scoping", () => {
       expectComponents: false,
       expectButtons: true,
       expectButtonStyle: true,
-      expectedActions: ["send", "react", "poll"],
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "react", "poll", "poll-vote"],
     },
     {
       provider: "discord",
       expectComponents: true,
       expectButtons: false,
       expectButtonStyle: false,
-      expectedActions: ["send", "poll", "react"],
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "poll", "poll-vote", "react"],
     },
   ])(
     "scopes schema fields for $provider",
-    ({ provider, expectComponents, expectButtons, expectButtonStyle, expectedActions }) => {
+    ({
+      provider,
+      expectComponents,
+      expectButtons,
+      expectButtonStyle,
+      expectTelegramPollExtras,
+      expectedActions,
+    }) => {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
@@ -209,8 +223,75 @@ describe("message tool schema scoping", () => {
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }
+      if (expectTelegramPollExtras) {
+        expect(properties.pollDurationSeconds).toBeDefined();
+        expect(properties.pollAnonymous).toBeDefined();
+        expect(properties.pollPublic).toBeDefined();
+      } else {
+        expect(properties.pollDurationSeconds).toBeUndefined();
+        expect(properties.pollAnonymous).toBeUndefined();
+        expect(properties.pollPublic).toBeUndefined();
+      }
+      expect(properties.pollId).toBeDefined();
+      expect(properties.pollOptionIndex).toBeDefined();
+      expect(properties.pollOptionId).toBeDefined();
     },
   );
+
+  it("includes poll in the action enum when the current channel supports poll actions", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const actionEnum = getActionEnum(getToolProperties(tool));
+
+    expect(actionEnum).toContain("poll");
+  });
+
+  it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
+    const telegramPluginWithConfig = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      listActions: ({ cfg }) => {
+        const telegramCfg = (cfg as { channels?: { telegram?: { actions?: { poll?: boolean } } } })
+          .channels?.telegram;
+        return telegramCfg?.actions?.poll === false ? ["send", "react"] : ["send", "react", "poll"];
+      },
+      supportsButtons: true,
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPluginWithConfig },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          telegram: {
+            actions: {
+              poll: false,
+            },
+          },
+        },
+      } as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
+
+    expect(actionEnum).not.toContain("poll");
+    expect(properties.pollDurationSeconds).toBeUndefined();
+    expect(properties.pollAnonymous).toBeUndefined();
+    expect(properties.pollPublic).toBeUndefined();
+  });
 
   it("includes cross-channel actions from X plugin when scoped to feishu", () => {
     const feishuPlugin: ChannelPlugin = {
@@ -262,8 +343,7 @@ describe("message tool schema scoping", () => {
       config: {} as never,
       currentChannelProvider: "feishu",
     });
-    const properties = getToolProperties(tool);
-    const actionEnum = getActionEnum(properties);
+    const actionEnum = getActionEnum(getToolProperties(tool));
 
     expect(actionEnum).toContain("send");
     expect(actionEnum).toContain("x-quote");

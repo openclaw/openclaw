@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
@@ -41,7 +41,7 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
             {
               enabled: true,
               appId: `cli_${accountId}`,
-              appSecret: `secret_${accountId}`,
+              appSecret: `secret_${accountId}`, // pragma: allowlist secret
               connectionMode: "websocket",
             },
           ]),

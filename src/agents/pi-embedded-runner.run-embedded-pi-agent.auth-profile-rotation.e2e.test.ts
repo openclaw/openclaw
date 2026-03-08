@@ -9,9 +9,26 @@ import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
+const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
+  computeBackoffMock: vi.fn(
+    (
+      _policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      _attempt: number,
+    ) => 321,
+  ),
+  sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
+}));
 
 vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+}));
+
+vi.mock("../infra/backoff.js", () => ({
+  computeBackoff: (
+    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+    attempt: number,
+  ) => computeBackoffMock(policy, attempt),
+  sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
 }));
 
 vi.mock("../providers/github-copilot-token.js", () => ({
@@ -43,6 +60,8 @@ beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockClear();
   resolveCopilotApiTokenMock.mockReset();
+  computeBackoffMock.mockClear();
+  sleepWithAbortMock.mockClear();
 });
 
 const baseUsage = {
@@ -252,6 +271,24 @@ const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
     );
 };
 
+const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
+  runEmbeddedAttemptMock
+    .mockResolvedValueOnce(
+      makeAttempt({
+        promptError: new Error(errorMessage),
+      }),
+    )
+    .mockResolvedValueOnce(
+      makeAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildAssistant({
+          stopReason: "stop",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+};
+
 async function runAutoPinnedOpenAiTurn(params: {
   agentDir: string;
   workspaceDir: string;
@@ -307,6 +344,28 @@ async function runAutoPinnedRotationCase(params: {
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
     mockFailedThenSuccessfulAttempt(params.errorMessage);
+    await runAutoPinnedOpenAiTurn({
+      agentDir,
+      workspaceDir,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    const usageStats = await readUsageStats(agentDir);
+    return { usageStats };
+  });
+}
+
+async function runAutoPinnedPromptErrorRotationCase(params: {
+  errorMessage: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  runEmbeddedAttemptMock.mockClear();
+  return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+    await writeAuthStore(agentDir);
+    mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
       workspaceDir,
@@ -639,11 +698,67 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
   });
 
+  it("rotates for overloaded assistant failures across auto-pinned profiles", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      sessionKey: "agent:test:overloaded-rotation",
+      runId: "run:overloaded-rotation",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(computeBackoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMs: 250,
+        maxMs: 1500,
+        factor: 2,
+        jitter: 0.2,
+      }),
+      1,
+    );
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+  });
+
+  it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
+    const { usageStats } = await runAutoPinnedPromptErrorRotationCase({
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      sessionKey: "agent:test:overloaded-prompt-rotation",
+      runId: "run:overloaded-prompt-rotation",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(computeBackoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMs: 250,
+        maxMs: 1500,
+        factor: 2,
+        jitter: 0.2,
+      }),
+      1,
+    );
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+  });
+
   it("rotates on timeout without cooling down the timed-out profile", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: "request ended without sending any chunks",
       sessionKey: "agent:test:timeout-no-cooldown",
       runId: "run:timeout-no-cooldown",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
+  it("rotates on bare service unavailable without cooling down the profile", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: "LLM error: service unavailable",
+      sessionKey: "agent:test:service-unavailable-no-cooldown",
+      runId: "run:service-unavailable-no-cooldown",
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
@@ -807,6 +922,94 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       });
 
       expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("can probe one cooldowned profile when transient cooldown probe is explicitly allowed", async () => {
+    await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
+      await writeAuthStore(agentDir, {
+        usageStats: {
+          "openai:p1": { lastUsed: 1, cooldownUntil: now + 60 * 60 * 1000 },
+          "openai:p2": { lastUsed: 2, cooldownUntil: now + 60 * 60 * 1000 },
+        },
+      });
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:cooldown-probe",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig({ fallbacks: ["openai/mock-2"] }),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        allowTransientCooldownProbe: true,
+        timeoutMs: 5_000,
+        runId: "run:cooldown-probe",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text ?? "").toContain("ok");
+    });
+  });
+
+  it("can probe one cooldowned profile when overloaded cooldown is explicitly probeable", async () => {
+    await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
+      await writeAuthStore(agentDir, {
+        usageStats: {
+          "openai:p1": {
+            lastUsed: 1,
+            cooldownUntil: now + 60 * 60 * 1000,
+            failureCounts: { overloaded: 4 },
+          },
+          "openai:p2": {
+            lastUsed: 2,
+            cooldownUntil: now + 60 * 60 * 1000,
+            failureCounts: { overloaded: 4 },
+          },
+        },
+      });
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:overloaded-cooldown-probe",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig({ fallbacks: ["openai/mock-2"] }),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        allowTransientCooldownProbe: true,
+        timeoutMs: 5_000,
+        runId: "run:overloaded-cooldown-probe",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text ?? "").toContain("ok");
     });
   });
 

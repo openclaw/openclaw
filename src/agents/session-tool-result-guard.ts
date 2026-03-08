@@ -104,6 +104,7 @@ export function installSessionToolResultGuard(
   },
 ): {
   flushPendingToolResults: () => void;
+  clearPendingToolResults: () => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
@@ -161,6 +162,10 @@ export function installSessionToolResultGuard(
         }
       }
     }
+    pendingState.clear();
+  };
+
+  const clearPendingToolResults = () => {
     pendingState.clear();
   };
 
@@ -255,6 +260,7 @@ export function installSessionToolResultGuard(
 
   return {
     flushPendingToolResults,
+    clearPendingToolResults,
     getPendingIds: pendingState.getPendingIds,
   };
 }

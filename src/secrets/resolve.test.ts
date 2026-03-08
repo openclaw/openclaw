@@ -153,7 +153,7 @@ describe("secret ref resolver", () => {
       { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       {
         config,
-        env: { OPENAI_API_KEY: "sk-env-value" },
+        env: { OPENAI_API_KEY: "sk-env-value" }, // pragma: allowlist secret
       },
     );
     expect(value).toBe("sk-env-value");
@@ -167,7 +167,7 @@ describe("secret ref resolver", () => {
       JSON.stringify({
         providers: {
           openai: {
-            apiKey: "sk-file-value",
+            apiKey: "sk-file-value", // pragma: allowlist secret
           },
         },
       }),
@@ -377,7 +377,7 @@ describe("secret ref resolver", () => {
       JSON.stringify({
         providers: {
           openai: {
-            apiKey: "sk-file-value",
+            apiKey: "sk-file-value", // pragma: allowlist secret
           },
         },
       }),

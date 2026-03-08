@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/compat";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/compat";
 import { xPlugin } from "./src/plugin.js";
 import { setXRuntime } from "./src/runtime.js";
 

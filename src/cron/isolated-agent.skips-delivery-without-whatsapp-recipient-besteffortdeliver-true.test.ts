@@ -192,6 +192,44 @@ async function runAnnounceFlowResult(bestEffort: boolean) {
   return outcome;
 }
 
+async function runSignalAnnounceFlowResult(bestEffort: boolean) {
+  let outcome:
+    | {
+        res: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>;
+        deps: CliDeps;
+      }
+    | undefined;
+  await withTempHome(async (home) => {
+    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+    const deps = createCliDeps();
+    mockAgentPayloads([{ text: "hello from cron" }]);
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValueOnce(false);
+    const res = await runCronIsolatedAgentTurn({
+      cfg: makeCfg(home, storePath, {
+        channels: { signal: {} },
+      }),
+      deps,
+      job: {
+        ...makeJob({ kind: "agentTurn", message: "do it" }),
+        delivery: {
+          mode: "announce",
+          channel: "signal",
+          to: "+15551234567",
+          bestEffort,
+        },
+      },
+      message: "do it",
+      sessionKey: "cron:job-1",
+      lane: "cron",
+    });
+    outcome = { res, deps };
+  });
+  if (!outcome) {
+    throw new Error("signal announce flow did not produce an outcome");
+  }
+  return outcome;
+}
+
 async function assertExplicitTelegramTargetAnnounce(params: {
   home: string;
   storePath: string;
@@ -393,7 +431,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("returns ok when announce delivery reports false and best-effort is disabled", async () => {
+  it("falls back to direct delivery when announce reports false and best-effort is disabled", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
@@ -412,26 +450,34 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       });
 
-      // Announce delivery failure should not mark a successful agent execution
-      // as error. The execution succeeded; only delivery failed.
+      // When announce delivery fails, the direct-delivery fallback fires
+      // so the message still reaches the target channel.
       expect(res.status).toBe("ok");
-      expect(res.delivered).toBe(false);
+      expect(res.delivered).toBe(true);
       expect(res.deliveryAttempted).toBe(true);
-      expect(res.error).toBe("cron announce delivery failed");
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
     });
   });
 
-  it("marks attempted when announce delivery reports false and best-effort is enabled", async () => {
+  it("falls back to direct delivery when announce reports false and best-effort is enabled", async () => {
     const { res, deps } = await runAnnounceFlowResult(true);
     expect(res.status).toBe("ok");
-    expect(res.delivered).toBe(false);
+    expect(res.delivered).toBe(true);
     expect(res.deliveryAttempted).toBe(true);
     expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
   });
 
-  it("returns ok when announce flow throws and best-effort is disabled", async () => {
+  it("falls back to direct delivery for signal when announce reports false and best-effort is enabled", async () => {
+    const { res, deps } = await runSignalAnnounceFlowResult(true);
+    expect(res.status).toBe("ok");
+    expect(res.delivered).toBe(true);
+    expect(res.deliveryAttempted).toBe(true);
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(deps.sendMessageSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to direct delivery when announce flow throws and best-effort is disabled", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
@@ -452,13 +498,12 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       });
 
-      // Even when announce throws (e.g. "pairing required"), the agent
-      // execution succeeded so the job status should be ok.
+      // When announce throws (e.g. "pairing required"), the direct-delivery
+      // fallback fires so the message still reaches the target channel.
       expect(res.status).toBe("ok");
-      expect(res.delivered).toBe(false);
+      expect(res.delivered).toBe(true);
       expect(res.deliveryAttempted).toBe(true);
-      expect(res.error).toContain("pairing required");
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -182,4 +182,53 @@ describe("slackPlugin config", () => {
     expect(configured).toBe(false);
     expect(snapshot?.configured).toBe(false);
   });
+
+  it("does not mark partial configured-unavailable token status as configured", async () => {
+    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        configured: false,
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "missing",
+        botTokenSource: "config",
+        appTokenSource: "none",
+        config: {},
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: undefined,
+    });
+
+    expect(snapshot?.configured).toBe(false);
+    expect(snapshot?.botTokenStatus).toBe("configured_unavailable");
+    expect(snapshot?.appTokenStatus).toBe("missing");
+  });
+
+  it("keeps HTTP mode signing-secret unavailable accounts configured in snapshots", async () => {
+    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        configured: true,
+        mode: "http",
+        botTokenStatus: "available",
+        signingSecretStatus: "configured_unavailable",
+        botTokenSource: "config",
+        signingSecretSource: "config",
+        config: {
+          mode: "http",
+          botToken: "xoxb-http",
+          signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
+        },
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: undefined,
+    });
+
+    expect(snapshot?.configured).toBe(true);
+    expect(snapshot?.botTokenStatus).toBe("available");
+    expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
+  });
 });

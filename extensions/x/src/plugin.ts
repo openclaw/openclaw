@@ -12,11 +12,11 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
-import { handleXAction, buildChannelConfigSchema } from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
+import { handleXAction, buildChannelConfigSchema } from "openclaw/plugin-sdk/compat";
 import { XConfigSchema } from "./config-schema.js";
 import { xOnboardingAdapter } from "./onboarding.js";
-import { getXRuntime } from "./runtime.js";
+import { getXChannel, getXRuntime } from "./runtime.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -146,16 +146,16 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
 
   config: {
     listAccountIds: (cfg: OpenClawConfig): string[] => {
-      const runtime = getXRuntime();
-      if (!runtime.channel?.x) {
-        console.warn('X channel not available in runtime');
+      const xChannel = getXChannel();
+      if (!xChannel) {
+        console.warn("X channel not available in runtime");
         return [];
       }
-      return runtime.channel.x.listXAccountIds(cfg);
+      return xChannel.listXAccountIds(cfg);
     },
 
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): XAccountConfig => {
-      const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
+      const account = getXChannel().resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
       if (!account) {
         return {
           consumerKey: "",
@@ -168,11 +168,11 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       return account;
     },
 
-    defaultAccountId: (): string => getXRuntime().channel.x.defaultAccountId,
+    defaultAccountId: (): string => getXChannel().defaultAccountId,
 
     isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean => {
-      const account = getXRuntime().channel.x.resolveXAccount(cfg, DEFAULT_ACCOUNT_ID);
-      return getXRuntime().channel.x.isXAccountConfigured(account);
+      const account = getXChannel().resolveXAccount(cfg, DEFAULT_ACCOUNT_ID);
+      return getXChannel().isXAccountConfigured(account);
     },
 
     isEnabled: (account: XAccountConfig | undefined): boolean => account?.enabled !== false,
@@ -180,7 +180,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
     describeAccount: (account: XAccountConfig | undefined) => ({
       accountId: DEFAULT_ACCOUNT_ID,
       enabled: account?.enabled !== false,
-      configured: getXRuntime().channel.x.isXAccountConfigured(account ?? null),
+      configured: getXChannel().isXAccountConfigured(account ?? null),
     }),
   },
 
@@ -189,8 +189,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
     textChunkLimit: 280,
     chunkerMode: "text",
 
-    chunker: (text: string, limit: number): string[] =>
-      getXRuntime().channel.x.chunkTextForX(text, limit),
+    chunker: (text: string, limit: number): string[] => getXChannel().chunkTextForX(text, limit),
 
     sendText: async (ctx) => {
       const { to, text, accountId } = ctx;
@@ -200,7 +199,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
         return { channel: "x", ok: false, error: "No config provided", messageId: "" };
       }
 
-      const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
+      const account = getXChannel().resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
       if (!account) {
         return { channel: "x", ok: false, error: "Account not configured", messageId: "" };
       }
@@ -214,7 +213,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
 
       const replyToTweetId = to?.startsWith("x:tweet:") ? to.slice(8) : undefined;
 
-      const result = await getXRuntime().channel.x.sendMessageX(to, text, {
+      const result = await getXChannel().sendMessageX(to, text, {
         account,
         accountId: accountId ?? DEFAULT_ACCOUNT_ID,
         replyToTweetId,
@@ -261,7 +260,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       account: XAccountConfig;
       timeoutMs: number;
     }): Promise<unknown> => {
-      return await getXRuntime().channel.x.probeX(account, timeoutMs);
+      return await getXChannel().probeX(account, timeoutMs);
     },
 
     buildAccountSnapshot: ({
@@ -286,7 +285,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       return {
         accountId: resolvedAccountId,
         enabled: account?.enabled !== false,
-        configured: getXRuntime().channel.x.isXAccountConfigured(account),
+        configured: getXChannel().isXAccountConfigured(account),
         running: runtime?.running ?? false,
         lastStartAt: runtime?.lastStartAt ?? null,
         lastStopAt: runtime?.lastStopAt ?? null,
@@ -349,7 +348,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
         debug: (msg: string) => ctx.log?.debug?.(msg),
       };
 
-      await runtime.channel.x.monitorXProvider({
+      await getXChannel().monitorXProvider({
         account,
         accountId,
         config: ctx.cfg,
@@ -382,7 +381,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
     stopAccount: async (ctx): Promise<void> => {
       const accountId = ctx.accountId;
 
-      getXRuntime().channel.x.removeClientManager(accountId);
+      getXChannel().removeClientManager(accountId);
 
       ctx.setStatus?.({
         accountId,
