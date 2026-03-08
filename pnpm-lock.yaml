@@ -18,6 +18,8 @@ overrides:
   tar: 7.5.10
   tough-cookie: 4.1.3
 
+packageExtensionsChecksum: sha256-mU+kBmOSIlbVW/HRtT2LQ5LMzXiJv9d3cBEa3Pueqxw=
+
 importers:
 
   .:
@@ -10511,6 +10513,7 @@ snapshots:
       '@hapi/boom': 9.1.4
       async-mutex: 0.5.0
       libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
+      long: 5.3.2
       lru-cache: 11.2.6
       music-metadata: 11.12.1
       p-queue: 9.1.0

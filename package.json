@@ -443,6 +443,13 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "packageExtensions": {
+      "@whiskeysockets/baileys": {
+        "dependencies": {
+          "long": "^5.2.3"
+        }
+      }
+    }
   }
 }
