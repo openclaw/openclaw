@@ -2972,7 +2972,7 @@ describe("subagent announce formatting", () => {
 
   describe("security: timeout does not leak tool results", () => {
     it("does not forward toolResult content when no assistant message exists (timeout scenario)", async () => {
-      const sensitiveCode = 'const API_KEY = "sk-secret-1234"; export default handler;';
+      const sensitiveCode = 'const API_KEY = "sk-secret-1234"; export default handler;'; // pragma: allowlist secret
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
           { role: "user", content: "investigate the bug" },
