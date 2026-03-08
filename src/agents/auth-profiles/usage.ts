@@ -19,7 +19,8 @@ const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
 );
 
 function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
-  return normalizeProviderId(provider ?? "") === "openrouter";
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === "openrouter" || normalized === "kilocode";
 }
 
 export function resolveProfileUnusableUntil(
@@ -261,14 +262,13 @@ export async function markAuthProfileUsed(params: {
   saveAuthProfileStore(store, agentDir);
 }
 
-export function calculateAuthProfileCooldownMs(errorCount: number): number {
+export function calculateAuthProfileCooldownMs(_errorCount: number): number {
   // Flat 30-second cooldown replaces exponential backoff.
   // Original formula: 60s * 5^(errors-1), capped at 1 hour.
   // At 3 errors = 25 min, 4 errors = 60 min — far exceeds real provider
   // rate-limit windows (Anthropic ~60s). The exponential curve makes profiles
   // unusable long after the provider has cleared the limit.
-  void errorCount; // preserve signature
-  return 30 * 1000;
+  return 30_000;
 }
 
 type ResolvedAuthCooldownConfig = {
