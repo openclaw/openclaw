@@ -743,6 +743,51 @@ describe("followup queue deduplication", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("does not collide recent message-id keys when routing contains delimiters", async () => {
+    const key = `test-dedup-key-collision-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal|group",
+        originatingTo: "peer",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    // Different routing dimensions can produce identical pipe-joined strings.
+    // This must not be deduplicated as a replay of the first run.
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "group|peer",
+      }),
+      settings,
+    );
+    expect(second).toBe(true);
+  });
+
   it("deduplicates exact prompt when routing matches and no message id", async () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
     const settings: QueueSettings = {
