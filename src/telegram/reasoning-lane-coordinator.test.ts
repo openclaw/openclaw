@@ -26,4 +26,16 @@ describe("splitTelegramReasoningText", () => {
   it("does not emit partial reasoning tag prefixes", () => {
     expect(splitTelegramReasoningText("  <thi")).toEqual({});
   });
+
+  it("suppresses bare 'Reasoning:' without content (streaming partial)", () => {
+    expect(splitTelegramReasoningText("Reasoning:")).toEqual({});
+    expect(splitTelegramReasoningText("Reasoning:\n")).toEqual({});
+    expect(splitTelegramReasoningText("Reasoning:  \n")).toEqual({});
+  });
+
+  it("classifies raw Gemini reasoning as reasoningText", () => {
+    expect(splitTelegramReasoningText("Reasoning:\nFirst thought.\n\nSecond thought.")).toEqual({
+      reasoningText: "Reasoning:\nFirst thought.\n\nSecond thought.",
+    });
+  });
 });
