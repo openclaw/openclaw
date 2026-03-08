@@ -34,6 +34,8 @@ export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
+/** @internal Exported for testing. */
+export const MAX_PLAINTEXT_LENGTH = 65536; // 64 KiB cap on decrypted messages
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -442,6 +444,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
+      // Guard against oversized ciphertext before spending CPU on decrypt
+      if (event.content.length > MAX_PLAINTEXT_LENGTH * 2) {
+        metrics.emit("event.rejected.oversized_ciphertext");
+        onError?.(
+          new Error(`Ciphertext too long (${event.content.length} chars)`),
+          `event ${event.id}`,
+        );
+        return;
+      }
+
       // Mark seen AFTER verify (don't cache invalid IDs)
       seen.add(event.id);
       metrics.emit("memory.seen_tracker_size", seen.size());
@@ -455,6 +467,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
         onError?.(err as Error, `decrypt from ${event.pubkey}`);
+        return;
+      }
+
+      // Guard against oversized decrypted payloads
+      if (plaintext.length > MAX_PLAINTEXT_LENGTH) {
+        metrics.emit("event.rejected.oversized_plaintext");
+        onError?.(
+          new Error(`Decrypted message too long (${plaintext.length} chars)`),
+          `event ${event.id}`,
+        );
         return;
       }
 
