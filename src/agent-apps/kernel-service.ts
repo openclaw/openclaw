@@ -1,7 +1,11 @@
 import { AppRegistry, createRuntime } from "@aotui/runtime";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAotuiAgentAppNames, resolveAotuiRegistryEntries } from "./policy.js";
+import {
+  isAotuiEnabled,
+  resolveAotuiAgentAppNames,
+  resolveAotuiRegistryEntries,
+} from "./policy.js";
 import { InMemorySessionDesktopManager } from "./session-desktop-manager.js";
 import type { AotuiKernelService, SessionDesktopManager } from "./types.js";
 
@@ -53,6 +57,10 @@ export class DefaultAotuiKernelService implements AotuiKernelService {
     return this.started;
   }
 
+  isEnabled(): boolean {
+    return isAotuiEnabled(this.config);
+  }
+
   getKernel() {
     if (!this.kernel) {
       throw new Error("AOTUI kernel service has not been started");
@@ -75,7 +83,7 @@ export class DefaultAotuiKernelService implements AotuiKernelService {
   }): Promise<void> {
     const kernel = this.kernel;
     const appRegistry = this.appRegistry;
-    if (!kernel || !appRegistry) {
+    if (!kernel || !appRegistry || !this.isEnabled()) {
       return;
     }
 

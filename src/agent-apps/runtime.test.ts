@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
     isStarted: vi.fn(() => true),
+    isEnabled: vi.fn(() => true),
     getKernel: vi.fn(() => kernel),
     getDesktopManager: vi.fn(() => desktopManager),
   };
@@ -51,6 +52,7 @@ describe("AOTUI runtime registry", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    mocks.service.isEnabled.mockReturnValue(true);
     mocks.desktopManager.getDesktop.mockReturnValue(undefined);
     mocks.kernel.reinitializeDesktopApps.mockResolvedValue({ reinitializedAppIds: [] });
   });
@@ -137,6 +139,35 @@ describe("AOTUI runtime registry", () => {
     expect(mocks.adapterInstance.install).toHaveBeenCalledTimes(1);
   });
 
+  it("skips desktop sync and adapter install when Agent Apps are disabled", async () => {
+    const runtime = await import("./runtime.js");
+    await runtime.startAotuiGatewayRuntime();
+    mocks.service.isEnabled.mockReturnValue(false);
+
+    await runtime.syncAotuiDesktopForRun({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_1",
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      isNewSession: false,
+    });
+
+    const adapter = await runtime.installAotuiAdapterForRun({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_1",
+      agentId: "main",
+      runId: "run_1",
+      agent: {
+        state: { tools: [] },
+        setTools: vi.fn(),
+      },
+    });
+
+    expect(adapter).toBeNull();
+    expect(mocks.desktopManager.ensureDesktop).not.toHaveBeenCalled();
+    expect(mocks.OpenClawAgentAdapter).not.toHaveBeenCalled();
+  });
+
   it("stops and clears the active runtime service", async () => {
     const runtime = await import("./runtime.js");
     await runtime.startAotuiGatewayRuntime();
@@ -163,5 +194,21 @@ describe("AOTUI runtime registry", () => {
       "agent:main:discord:channel:dev",
       { reason: "context_compaction" },
     );
+  });
+
+  it("does not reinitialize when Agent Apps are disabled", async () => {
+    const runtime = await import("./runtime.js");
+    await runtime.startAotuiGatewayRuntime();
+    mocks.service.isEnabled.mockReturnValue(false);
+    mocks.desktopManager.getDesktop.mockReturnValue({
+      desktopId: "agent:main:discord:channel:dev",
+    });
+
+    const result = await runtime.reinitializeAotuiDesktopForCompaction({
+      sessionKey: "agent:main:discord:channel:dev",
+    });
+
+    expect(result).toBe(false);
+    expect(mocks.kernel.reinitializeDesktopApps).not.toHaveBeenCalled();
   });
 });

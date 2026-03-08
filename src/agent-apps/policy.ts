@@ -6,6 +6,10 @@ function normalizeRegistryName(name: string): string {
   return name.trim();
 }
 
+export function isAotuiEnabled(cfg?: OpenClawConfig): boolean {
+  return cfg?.aotui?.enabled !== false;
+}
+
 export function resolveAotuiRegistryEntries(cfg?: OpenClawConfig): AppRegistryEntry[] {
   const entries = cfg?.aotui?.apps;
   if (!entries) {

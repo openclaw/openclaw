@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
 import {
+  agentsAppsDisableCommand,
+  agentsAppsEnableCommand,
+  agentsAppsInstallCommand,
+  agentsAppsUninstallCommand,
   agentsAddCommand,
   agentsBindingsCommand,
   agentsBindCommand,
@@ -90,6 +94,70 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.openclaw.ai/cli/agents")}\n`,
     );
+
+  const apps = program
+    .command("apps")
+    .description("Manage Agent Apps (AOTUI) capability and installed app registry");
+
+  apps
+    .command("enable")
+    .description("Enable Agent Apps globally")
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsAppsEnableCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
+
+  apps
+    .command("disable")
+    .description("Disable Agent Apps globally")
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsAppsDisableCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
+
+  apps
+    .command("install <source>")
+    .description("Install an Agent App from an npm package or local path")
+    .option("--as <name>", "Registry name override")
+    .option("--agent <id>", "Also add this app to a specific agent selection")
+    .option("--force", "Replace an existing registry entry", false)
+    .option("--no-select", "Install into the registry without changing agent selection")
+    .option("--json", "Output JSON summary", false)
+    .action(async (source, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsAppsInstallCommand(
+          {
+            source: String(source),
+            as: opts.as as string | undefined,
+            agent: opts.agent as string | undefined,
+            force: Boolean(opts.force),
+            select: opts.select !== false,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  apps
+    .command("uninstall <name>")
+    .description("Uninstall an Agent App and remove it from agent selections")
+    .option("--json", "Output JSON summary", false)
+    .action(async (name, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsAppsUninstallCommand(
+          {
+            name: String(name),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 
   agents
     .command("list")

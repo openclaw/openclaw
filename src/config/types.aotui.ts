@@ -28,6 +28,8 @@ export type AotuiAgentSelectionConfig = {
 };
 
 export type AotuiConfig = {
+  /** Global kill switch for Agent Apps. Default: true. */
+  enabled?: boolean;
   /** Global registry of installable AOTUI app descriptors owned by OpenClaw config. */
   apps?: Record<string, AotuiAppRegistryEntryConfig>;
 };

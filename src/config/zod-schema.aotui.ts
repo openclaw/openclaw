@@ -26,6 +26,7 @@ export const AotuiAgentSelectionSchema = z
 
 export const AotuiConfigSchema = z
   .object({
+    enabled: z.boolean().optional(),
     apps: z.record(z.string(), AotuiAppRegistryEntrySchema).optional(),
   })
   .strict()

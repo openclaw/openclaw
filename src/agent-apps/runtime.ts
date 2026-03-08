@@ -42,7 +42,7 @@ export async function syncAotuiDesktopForRun(params: {
   isNewSession: boolean;
 }): Promise<void> {
   const service = getAotuiGatewayRuntime();
-  if (!service || !params.sessionKey) {
+  if (!service || !service.isEnabled() || !params.sessionKey) {
     return;
   }
 
@@ -73,7 +73,7 @@ export async function installAotuiAdapterForRun(params: {
   agent: OpenClawAgentHandle;
 }): Promise<OpenClawAgentAdapter | null> {
   const service = getAotuiGatewayRuntime();
-  if (!service || !params.sessionKey) {
+  if (!service || !service.isEnabled() || !params.sessionKey) {
     return null;
   }
 
@@ -97,7 +97,7 @@ export async function reinitializeAotuiDesktopForCompaction(params: {
   reason?: string;
 }): Promise<boolean> {
   const service = getAotuiGatewayRuntime();
-  if (!service || !params.sessionKey) {
+  if (!service || !service.isEnabled() || !params.sessionKey) {
     return false;
   }
 

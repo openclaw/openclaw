@@ -204,6 +204,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   aotui:
     "OpenClaw-owned AOTUI control plane. Define installable AOTUI app descriptors here so capability surface is determined by OpenClaw config rather than by an external runtime-global config file.",
+  "aotui.enabled":
+    "Global Agent Apps kill switch. Set false to stop injecting AOTUI desktop state and tools into agent runs without deleting the configured app registry.",
   "aotui.apps":
     "Registry of installable AOTUI app descriptors keyed by stable app name. Agent-level AOTUI selections reference these names.",
   "aotui.apps.*":

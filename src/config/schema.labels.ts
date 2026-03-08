@@ -64,6 +64,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].runtime.acp.mode": "Agent ACP Mode",
   "agents.list[].runtime.acp.cwd": "Agent ACP Working Directory",
   aotui: "AOTUI",
+  "aotui.enabled": "AOTUI Enabled",
   "aotui.apps": "AOTUI App Registry",
   "aotui.apps.*": "AOTUI App Entry",
   "aotui.apps.*.source": "AOTUI App Source",

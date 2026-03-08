@@ -107,6 +107,7 @@ export interface AotuiKernelService {
   start(): Promise<void>;
   stop(reason?: string): Promise<void>;
   isStarted(): boolean;
+  isEnabled(): boolean;
   getKernel(): IKernel;
   getDesktopManager(): SessionDesktopManager;
 }
