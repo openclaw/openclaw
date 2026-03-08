@@ -497,7 +497,7 @@ export function createAgentEventHandler({
       sessionKey,
       seq,
       state: "error" as const,
-      errorMessage: error ? formatForLog(error) : undefined,
+      errorMessage: error ? formatForLog(error) : "Agent run failed.",
     };
     broadcast("chat", payload);
     nodeSendToSession(sessionKey, "chat", payload);

@@ -268,11 +268,28 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
+        const logUa = sanitizeLogValue(requestUserAgent);
+        const logOrigin = sanitizeLogValue(requestOrigin);
         setCloseCause("handshake-timeout", {
           handshakeMs: Date.now() - openedAt,
+          userAgent: logUa,
+          origin: logOrigin,
         });
-        logWsControl.warn(`handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`);
-        close();
+        logWsControl.warn(
+          `handshake timeout conn=${connId} remote=${remoteAddr ?? "?"} ua=${logUa || "n/a"} origin=${logOrigin || "n/a"}`,
+        );
+        // Send an error frame before closing so incompatible clients receive a
+        // clear rejection rather than a silent TCP close.
+        send({
+          type: "event",
+          event: "connect.error",
+          payload: {
+            code: "HANDSHAKE_TIMEOUT",
+            message:
+              "Handshake was not completed in time. Ensure your client uses the challenge/connect protocol.",
+          },
+        });
+        close(1002, "handshake timeout");
       }
     }, handshakeTimeoutMs);
 
