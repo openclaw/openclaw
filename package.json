@@ -385,6 +385,7 @@
     "ws": "^8.19.0",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
+    "http-proxy": "^1.18.1"
   },
   "devDependencies": {
     "@grammyjs/types": "^3.25.0",
