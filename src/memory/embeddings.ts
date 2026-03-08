@@ -14,6 +14,15 @@ import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./emb
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
+// node-llama-cpp LlamaModel exposes tokenizer and context size methods at
+// runtime, but tsgo's type resolution does not surface them from the
+// published declarations.  Define a minimal interface for the subset we use.
+type LlamaModelWithTokenizer = LlamaModel & {
+  trainContextSize: number;
+  tokenize(text: string): unknown[];
+  detokenize(tokens: unknown[]): string;
+};
+
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
   const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
@@ -110,7 +119,7 @@ async function createLocalEmbeddingProvider(
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
 
   let llama: Llama | null = null;
-  let embeddingModel: LlamaModel | null = null;
+  let embeddingModel: LlamaModelWithTokenizer | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
   let initPromise: Promise<LlamaEmbeddingContext> | null = null;
 
@@ -167,7 +176,9 @@ async function createLocalEmbeddingProvider(
         }
         if (!embeddingModel) {
           const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-          embeddingModel = await llama.loadModel({ modelPath: resolved });
+          embeddingModel = (await llama.loadModel({
+            modelPath: resolved,
+          })) as LlamaModelWithTokenizer;
         }
         if (!embeddingContext) {
           embeddingContext = await embeddingModel.createEmbeddingContext();
