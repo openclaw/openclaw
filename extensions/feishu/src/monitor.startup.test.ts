@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import { botOpenIds } from "./monitor.state.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const feishuClientMockModule = vi.hoisted(() => ({
@@ -166,6 +167,90 @@ describe("Feishu monitor startup preflight", () => {
       abortController.abort();
       await monitorPromise;
     }
+  });
+
+  it("single-account startup prefetches bot open_id without duplicate fetch", async () => {
+    probeFeishuMock.mockReset();
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_solo" });
+
+    const abortController = new AbortController();
+    const cfg = buildMultiAccountWebsocketConfig(["solo"]);
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      accountId: "solo",
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      // Let the prefetch and monitorSingleAccount resolve.
+      for (let i = 0; i < 10 && !botOpenIds.has("solo"); i += 1) {
+        await Promise.resolve();
+      }
+
+      // probeFeishu should be called exactly once (prefetch in monitorFeishuProvider),
+      // not twice (prefetch + monitorSingleAccount fallback fetch).
+      expect(probeFeishuMock).toHaveBeenCalledTimes(1);
+      // Verify the prefetched value was stored correctly.
+      expect(botOpenIds.get("solo")).toBe("bot_solo");
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("single-account startup does not re-fetch when probe returns undefined", async () => {
+    probeFeishuMock.mockReset();
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "probe timed out after 10000ms" });
+
+    const abortController = new AbortController();
+    const cfg = buildMultiAccountWebsocketConfig(["solo"]);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      accountId: "solo",
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      for (let i = 0; i < 10 && !botOpenIds.has("solo"); i += 1) {
+        await Promise.resolve();
+      }
+
+      // Probe failed but should still only be called once, not retried by monitorSingleAccount.
+      expect(probeFeishuMock).toHaveBeenCalledTimes(1);
+      // botOpenId stored as empty string when probe fails.
+      expect(botOpenIds.get("solo")).toBe("");
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("single-account startup skips monitor when aborted during prefetch", async () => {
+    probeFeishuMock.mockReset();
+    const abortController = new AbortController();
+    probeFeishuMock.mockImplementation(async () => {
+      abortController.abort();
+      return { ok: false, error: "aborted" };
+    });
+
+    const cfg = buildMultiAccountWebsocketConfig(["solo"]);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await monitorFeishuProvider({
+      config: cfg,
+      accountId: "solo",
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    // Probe was called once (the prefetch), but monitorSingleAccount should
+    // not have run because the abort was detected after prefetch.
+    expect(probeFeishuMock).toHaveBeenCalledTimes(1);
+    expect(botOpenIds.has("solo")).toBe(false);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("abort signal received during startup prefetch"),
+    );
   });
 
   it("stops sequential preflight when aborted during probe", async () => {
