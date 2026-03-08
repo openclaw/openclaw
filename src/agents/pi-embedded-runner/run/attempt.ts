@@ -2808,10 +2808,7 @@ export async function runEmbeddedAttempt(
       // so payloads.ts doesn't fall back to a prior turn's assistant text.
       const lastAssistant = responseEmitBlocked
         ? undefined
-        : messagesSnapshot
-            .slice()
-            .toReversed()
-            .find((m) => m.role === "assistant");
+        : messagesSnapshot.findLast((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(
