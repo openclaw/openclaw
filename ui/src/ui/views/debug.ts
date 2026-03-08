@@ -44,7 +44,9 @@ export function renderDebug(props: DebugProps) {
             ${props.loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-          <div class="stack" style="margin-top: 12px;">
+         <div class="stack" style="margin-top: 12px;">
+           <div>
+             <div class="muted">Status</div>
             ${
               props.loading
                 ? html`<div class="callout" style="margin-top: 8px;">Loading snapshot data...</div>`
