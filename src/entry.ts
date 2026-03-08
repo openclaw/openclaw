@@ -127,9 +127,10 @@ if (
     if (!isRootVersionInvocation(argv)) {
       return false;
     }
-    import("./version.js")
-      .then(({ VERSION }) => {
-        console.log(VERSION);
+    Promise.all([import("./version.js"), import("./infra/git-commit.js")])
+      .then(([{ VERSION }, { resolveCommitHash }]) => {
+        const commit = resolveCommitHash();
+        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
       })
       .catch((error) => {
         console.error(
