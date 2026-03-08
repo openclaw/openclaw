@@ -31,6 +31,8 @@ const createHost = (tab: Tab): SettingsHost => ({
   eventLog: [],
   eventLogBuffer: [],
   basePath: "",
+  execApprovalsTarget: "gateway",
+  execApprovalsTargetNodeId: null,
   themeMedia: null,
   themeMediaHandler: null,
   logsPollInterval: null,
