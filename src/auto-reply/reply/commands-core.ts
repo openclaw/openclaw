@@ -63,6 +63,7 @@ export async function emitResetCommandHooks(params: {
     previousSessionEntry: params.previousSessionEntry,
     commandSource: params.command.surface,
     senderId: params.command.senderId,
+    workspaceDir: params.workspaceDir,
     cfg: params.cfg, // Pass config for LLM slug generation
   });
   await triggerInternalHook(hookEvent);

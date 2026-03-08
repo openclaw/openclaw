@@ -65,15 +65,23 @@ async function runNewWithPreviousSessionEntry(params: {
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
+  sessionKey?: string;
+  workspaceDirOverride?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
-  const event = createHookEvent("command", params.action ?? "new", "agent:main:main", {
-    cfg:
-      params.cfg ??
-      ({
-        agents: { defaults: { workspace: params.tempDir } },
-      } satisfies OpenClawConfig),
-    previousSessionEntry: params.previousSessionEntry,
-  });
+  const event = createHookEvent(
+    "command",
+    params.action ?? "new",
+    params.sessionKey ?? "agent:main:main",
+    {
+      cfg:
+        params.cfg ??
+        ({
+          agents: { defaults: { workspace: params.tempDir } },
+        } satisfies OpenClawConfig),
+      previousSessionEntry: params.previousSessionEntry,
+      ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
+    },
+  );
 
   await handler(event);
 
@@ -240,6 +248,45 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Please reset and keep notes");
     expect(memoryContent).toContain("assistant: Captured before reset");
+  });
+
+  it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
+    const mainWorkspace = await createCaseWorkspace("workspace-main");
+    const naviWorkspace = await createCaseWorkspace("workspace-navi");
+    const naviSessionsDir = path.join(naviWorkspace, "sessions");
+    await fs.mkdir(naviSessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: naviSessionsDir,
+      name: "navi-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Remember this under Navi" },
+        { role: "assistant", content: "Stored in the bound workspace" },
+      ]),
+    });
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir: naviWorkspace,
+      cfg: {
+        agents: {
+          defaults: { workspace: mainWorkspace },
+          list: {
+            navi: { workspace: naviWorkspace },
+          },
+        },
+      } satisfies OpenClawConfig,
+      sessionKey: "agent:main:main",
+      workspaceDirOverride: naviWorkspace,
+      previousSessionEntry: {
+        sessionId: "navi-session",
+        sessionFile,
+      },
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Remember this under Navi");
+    expect(memoryContent).toContain("assistant: Stored in the bound workspace");
+    await expect(fs.access(path.join(mainWorkspace, "memory"))).rejects.toThrow();
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {

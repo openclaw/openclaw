@@ -182,10 +182,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
+    const contextWorkspaceDir =
+      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
+        ? context.workspaceDir
+        : undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
-    const workspaceDir = cfg
-      ? resolveAgentWorkspaceDir(cfg, agentId)
-      : path.join(resolveStateDir(process.env, os.homedir), "workspace");
+    const workspaceDir =
+      contextWorkspaceDir ||
+      (cfg
+        ? resolveAgentWorkspaceDir(cfg, agentId)
+        : path.join(resolveStateDir(process.env, os.homedir), "workspace"));
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
