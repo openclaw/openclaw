@@ -328,6 +328,19 @@ Notes:
 
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
+- Leave the relay loopback-only by default. If the relay must be reachable from a different network namespace (for example Gateway in WSL2, Chrome on Windows), set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0` while keeping the surrounding network private and authenticated.
+
+WSL2 / cross-namespace example:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    relayBindHost: "0.0.0.0",
+    defaultProfile: "chrome",
+  },
+}
+```
 
 ## Isolation guarantees
 

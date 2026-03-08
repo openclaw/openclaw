@@ -1202,4 +1202,23 @@ describe("chrome extension relay server", () => {
     },
     RELAY_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "restarts the relay when bindHost changes for the same port",
+    async () => {
+      const port = await getFreePort();
+      cdpUrl = `http://127.0.0.1:${port}`;
+
+      const initial = await ensureChromeExtensionRelayServer({ cdpUrl });
+      expect(initial.bindHost).toBe("127.0.0.1");
+
+      const rebound = await ensureChromeExtensionRelayServer({
+        cdpUrl,
+        bindHost: "0.0.0.0",
+      });
+      expect(rebound.bindHost).toBe("0.0.0.0");
+      expect(rebound.port).toBe(port);
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
 });
