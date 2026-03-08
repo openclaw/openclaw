@@ -70,11 +70,30 @@ fi
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
 ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
+
+resolve_bind_mount_options() {
+  if [[ -n "${OPENCLAW_BIND_MOUNT_OPTIONS:-}" ]]; then
+    printf '%s' "$OPENCLAW_BIND_MOUNT_OPTIONS"
+    return 0
+  fi
+  if command -v getenforce >/dev/null 2>&1; then
+    case "$(getenforce 2>/dev/null || true)" in
+      Enforcing|Permissive)
+        printf '%s' ':rw,Z'
+        return 0
+        ;;
+    esac
+  fi
+  printf '%s' ':rw'
+}
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-openclaw:local}"
 PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
+BIND_MOUNT_OPTIONS="$(resolve_bind_mount_options)"
+CONFIG_MOUNT="$CONFIG_DIR:/home/node/.openclaw$BIND_MOUNT_OPTIONS"
+WORKSPACE_MOUNT="$WORKSPACE_DIR:/home/node/.openclaw/workspace$BIND_MOUNT_OPTIONS"
 
 # Safe cwd for podman (openclaw is nologin; avoid inherited cwd from sudo)
 cd "$EFFECTIVE_HOME" 2>/dev/null || cd /tmp 2>/dev/null || true
@@ -189,8 +208,8 @@ if [[ "$RUN_SETUP" == true ]]; then
     "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
     -e HOME=/home/node -e TERM=xterm-256color -e BROWSER=echo \
     -e OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" \
-    -v "$CONFIG_DIR:/home/node/.openclaw:rw" \
-    -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw" \
+    -v "$CONFIG_MOUNT" \
+    -v "$WORKSPACE_MOUNT" \
     "${ENV_FILE_ARGS[@]}" \
     "$OPENCLAW_IMAGE" \
     node dist/index.js onboard "$@"
@@ -203,8 +222,8 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   -e HOME=/home/node -e TERM=xterm-256color \
   -e OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" \
   "${ENV_FILE_ARGS[@]}" \
-  -v "$CONFIG_DIR:/home/node/.openclaw:rw" \
-  -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw" \
+  -v "$CONFIG_MOUNT" \
+  -v "$WORKSPACE_MOUNT" \
   -p "${HOST_GATEWAY_PORT}:18789" \
   -p "${HOST_BRIDGE_PORT}:18790" \
   "$OPENCLAW_IMAGE" \
