@@ -460,7 +460,7 @@ describe("readSystemdServiceExecStart", () => {
     expect(readFileSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("lets inline Environment override EnvironmentFile values", async () => {
+  it("lets EnvironmentFile override inline Environment values", async () => {
     vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
       const pathValue = pathLikeToString(pathname);
       if (pathValue.endsWith("/openclaw-gateway.service")) {
@@ -478,7 +478,8 @@ describe("readSystemdServiceExecStart", () => {
     });
 
     const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
-    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-token");
+    expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("env-file-token");
+    expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN).toBe("file");
   });
 
   it("ignores missing optional EnvironmentFile entries", async () => {
@@ -597,6 +598,10 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environment).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "quoted token",
       OPENCLAW_GATEWAY_PASSWORD: "quoted-password", // pragma: allowlist secret
+    });
+    expect(command?.environmentValueSources).toEqual({
+      OPENCLAW_GATEWAY_TOKEN: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file",
     });
   });
 });
