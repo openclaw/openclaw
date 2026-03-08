@@ -77,6 +77,7 @@ const BASE_METHODS = [
   "node.list",
   "node.describe",
   "node.invoke",
+  "node.pending.pull",
   "node.invoke.result",
   "node.event",
   "node.canvas.capability.refresh",
