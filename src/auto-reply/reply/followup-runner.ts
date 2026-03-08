@@ -243,10 +243,17 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      // Only fall back to the session's cached contextTokens when neither model nor
+      // provider has changed; otherwise the stale value from a previous model/provider
+      // gets stuck (#35372).
+      const sessionContextTokensFallback =
+        modelUsed === sessionEntry?.model && fallbackProvider === sessionEntry?.modelProvider
+          ? sessionEntry?.contextTokens
+          : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
+        sessionContextTokensFallback ??
         DEFAULT_CONTEXT_TOKENS;
 
       if (storePath && sessionKey) {

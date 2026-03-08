@@ -261,6 +261,46 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("only marks the current provider's model, not other providers with same modelId", () => {
+    // When currentModel is "nexus-a/claude-opus-4-6", viewing "nexus-d" models
+    // should NOT show a checkmark on "claude-opus-4-6".
+    const result = buildModelsKeyboard({
+      provider: "nexus-d",
+      models: ["claude-opus-4-6", "claude-sonnet-4"],
+      currentModel: "nexus-a/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    // Neither model should be marked as current (wrong provider).
+    expect(result[0]?.[0]?.text).toBe("claude-opus-4-6");
+    expect(result[1]?.[0]?.text).toBe("claude-sonnet-4");
+
+    // Same modelId under the correct provider should show checkmark.
+    const result2 = buildModelsKeyboard({
+      provider: "nexus-a",
+      models: ["claude-opus-4-6", "claude-sonnet-4"],
+      currentModel: "nexus-a/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result2[0]?.[0]?.text).toBe("claude-opus-4-6 ✓");
+    expect(result2[1]?.[0]?.text).toBe("claude-sonnet-4");
+  });
+
+  it("falls back to bare modelId comparison when currentModel has no provider prefix", () => {
+    // Session override without provider (storedOverride.provider is undefined)
+    // passes a bare model ID like "gpt-4" as currentModel.
+    const result = buildModelsKeyboard({
+      provider: "openai",
+      models: ["gpt-4", "gpt-3.5-turbo"],
+      currentModel: "gpt-4",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("gpt-4 ✓");
+    expect(result[1]?.[0]?.text).toBe("gpt-3.5-turbo");
+  });
+
   it("keeps short display IDs untouched and truncates overly long IDs", () => {
     const cases = [
       {
