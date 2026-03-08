@@ -53,6 +53,19 @@ Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discove
 - **Safety First**: If your skill uses `bash`, ensure the prompts don't allow arbitrary command injection from untrusted user input.
 - **Test Locally**: Use `openclaw agent --message "use my new skill"` to test.
 
+## Advanced Features
+
+Once you've created a basic skill, you can enhance it with these advanced features:
+
+- **Conditional activation**: Use `requires.bins`, `requires.env`, or `requires.config` to gate your skill — [see Skills Reference](./skills.md#gating)
+- **API key injection**: Skills can receive API keys and environment variables via the `apiKey` field — [see Skills Reference](./skills.md#env-injection)
+- **Multi-command skills**: Use `command-dispatch` for skills with multiple subcommands — [see Skills Reference](./skills.md#command-dispatch)
+- **Template variables**: Use `{baseDir}` and other templating for portable paths — [see Skills Reference](./skills.md#template-variables)
+- **Invocation control**: Control when your skill can be invoked with `user-invocable` and `disable-model-invocation` flags — [see Skills Reference](./skills.md#invocation-control)
+- **Testing strategies**: Run `openclaw skill test <name>` to validate your skill locally — [see Skills Reference](./skills.md#testing)
+
+For a complete reference of all supported SKILL.md frontmatter fields, see the [Skills Reference](./skills.md#frontmatter-reference).
+
 ## Shared Skills
 
 You can also browse and contribute skills to [ClawHub](https://clawhub.com).
