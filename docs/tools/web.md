@@ -56,10 +56,14 @@ Use `openclaw configure --section web` to set up your API key and choose a provi
 ### Brave Search
 
 1. Create a Brave Search API account at [brave.com/search/api](https://brave.com/search/api/)
-2. In the dashboard, choose the **Data for Search** plan (not "Data for AI") and generate an API key.
+2. In the dashboard, choose the **Search** plan and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config, or set `BRAVE_API_KEY` in your environment.
 
-Brave provides paid plans; check the Brave API portal for the current limits and pricing.
+Each Brave plan includes **$5/month in free credit** (renewing). The Search
+plan costs $5 per 1,000 requests, so the credit covers 1,000 queries/month. Set
+your usage limit in the Brave dashboard to avoid unexpected charges. See the
+[Brave API portal](https://brave.com/search/api/) for current plans and
+pricing.
 
 ### Perplexity Search
 
@@ -146,7 +150,7 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
         enabled: true,
         provider: "perplexity",
         perplexity: {
-          apiKey: "sk-or-v1-...", // optional if OPENROUTER_API_KEY is set
+          apiKey: "<openrouter-api-key>", // optional if OPENROUTER_API_KEY is set
           baseUrl: "https://openrouter.ai/api/v1",
           model: "perplexity/sonar-pro",
         },

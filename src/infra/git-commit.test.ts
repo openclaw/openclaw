@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 async function makeTempDir(label: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
@@ -39,18 +39,35 @@ async function makeFakeGitRepo(
 }
 
 describe("git commit resolution", () => {
-  const originalCwd = process.cwd();
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-  afterEach(() => {
-    process.chdir(originalCwd);
+  beforeEach(async () => {
+    process.chdir(repoRoot);
+    vi.restoreAllMocks();
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
     vi.resetModules();
+    const { __testing } = await import("./git-commit.js");
+    __testing.clearCachedGitCommits();
+  });
+
+  afterEach(async () => {
+    process.chdir(repoRoot);
+    vi.restoreAllMocks();
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
+    vi.resetModules();
+    const { __testing } = await import("./git-commit.js");
+    __testing.clearCachedGitCommits();
   });
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: originalCwd,
+      cwd: repoRoot,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     const temp = await makeTempDir("git-commit-cwd");
     const otherRepo = path.join(temp, "other");
@@ -66,11 +83,13 @@ describe("git commit resolution", () => {
     const otherHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
       cwd: otherRepo,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     process.chdir(otherRepo);
     const { resolveCommitHash } = await import("./git-commit.js");
-    const entryModuleUrl = pathToFileURL(path.join(originalCwd, "src", "entry.ts")).href;
+    const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);
@@ -78,103 +97,86 @@ describe("git commit resolution", () => {
 
   it("prefers live git metadata over stale build info in a real checkout", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: originalCwd,
+      cwd: repoRoot,
       encoding: "utf-8",
-    }).trim();
-
-    vi.doMock("node:module", () => ({
-      createRequire: () => {
-        return (specifier: string) => {
-          if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-            return { commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" };
-          }
-          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-            code: "MODULE_NOT_FOUND",
-          });
-        };
-      },
-    }));
-    vi.resetModules();
+    })
+      .trim()
+      .slice(0, 7);
 
     const { resolveCommitHash } = await import("./git-commit.js");
-    const entryModuleUrl = pathToFileURL(path.join(originalCwd, "src", "entry.ts")).href;
+    const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
-    expect(resolveCommitHash({ moduleUrl: entryModuleUrl, env: {} })).toBe(repoHead);
-
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        moduleUrl: entryModuleUrl,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => "deadbee",
+        },
+      }),
+    ).toBe(repoHead);
   });
 
   it("caches build-info fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-build-info-cache");
-    const moduleRequire = vi.fn((specifier: string) => {
-      if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-        return { commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" };
-      }
-      throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-        code: "MODULE_NOT_FOUND",
-      });
-    });
-
-    vi.doMock("node:module", () => ({
-      createRequire: () => moduleRequire,
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readBuildInfoCommit = vi.fn(() => "deadbee");
 
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("deadbee");
-    const firstCallRequires = moduleRequire.mock.calls.length;
+    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
+      "deadbee",
+    );
+    const firstCallRequires = readBuildInfoCommit.mock.calls.length;
     expect(firstCallRequires).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("deadbee");
-    expect(moduleRequire.mock.calls.length).toBe(firstCallRequires);
-
-    vi.doUnmock("node:module");
+    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
+      "deadbee",
+    );
+    expect(readBuildInfoCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
   it("caches package.json fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-package-json-cache");
-    const moduleRequire = vi.fn((specifier: string) => {
-      if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-        throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-          code: "MODULE_NOT_FOUND",
-        });
-      }
-      if (specifier === "../../package.json") {
-        return { gitHead: "badc0ffee0ddf00d" };
-      }
-      throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-        code: "MODULE_NOT_FOUND",
-      });
-    });
-
-    vi.doMock("node:module", () => ({
-      createRequire: () => moduleRequire,
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readPackageJsonCommit = vi.fn(() => "badc0ff");
 
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("badc0ff");
-    const firstCallRequires = moduleRequire.mock.calls.length;
+    expect(
+      resolveCommitHash({
+        cwd: temp,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit,
+        },
+      }),
+    ).toBe("badc0ff");
+    const firstCallRequires = readPackageJsonCommit.mock.calls.length;
     expect(firstCallRequires).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("badc0ff");
-    expect(moduleRequire.mock.calls.length).toBe(firstCallRequires);
-
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        cwd: temp,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit,
+        },
+      }),
+    ).toBe("badc0ff");
+    expect(readPackageJsonCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
   it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
     const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: originalCwd,
+      cwd: repoRoot,
       encoding: "utf-8",
-    }).trim();
+    })
+      .trim()
+      .slice(0, 7);
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
     expect(() =>
-      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: originalCwd, env: {} }),
+      resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} }),
     ).not.toThrow();
-    expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: originalCwd, env: {} })).toBe(
+    expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
       repoHead,
     );
   });
@@ -201,28 +203,19 @@ describe("git commit resolution", () => {
     );
     const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "entry.js")).href;
 
-    vi.doMock("node:module", () => ({
-      createRequire: () => {
-        return (specifier: string) => {
-          if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-            return { commit: "feedfacefeedfacefeedfacefeedfacefeedface" };
-          }
-          if (specifier === "../../package.json") {
-            return { name: "openclaw", version: "2026.3.8", gitHead: "badc0ffee0ddf00d" };
-          }
-          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-            code: "MODULE_NOT_FOUND",
-          });
-        };
-      },
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
 
-    expect(resolveCommitHash({ moduleUrl, cwd: packageRoot, env: {} })).toBe("feedfac");
-
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        moduleUrl,
+        cwd: packageRoot,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => "feedfac",
+          readPackageJsonCommit: () => "badc0ff",
+        },
+      }),
+    ).toBe("feedfac");
   });
 
   it("caches git lookups per resolved search directory", async () => {
@@ -250,27 +243,14 @@ describe("git commit resolution", () => {
       head: "not-a-commit\n",
     });
 
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const readFileSyncSpy = vi.fn(actualFs.readFileSync);
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
-      default: {
-        ...actualFs,
-        readFileSync: readFileSyncSpy,
-      },
-      readFileSync: readFileSyncSpy,
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readGitCommit = vi.fn(() => null);
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    const firstCallReads = readFileSyncSpy.mock.calls.length;
+    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    const firstCallReads = readGitCommit.mock.calls.length;
     expect(firstCallReads).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(readFileSyncSpy.mock.calls.length).toBe(firstCallReads);
-
-    vi.doUnmock("node:fs");
+    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("caches caught null fallback results per resolved search directory", async () => {
@@ -279,49 +259,39 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(repoRoot, {
       head: "0123456789abcdef0123456789abcdef01234567\n",
     });
-    const headPath = path.join(repoRoot, ".git", "HEAD");
-
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const readFileSyncSpy = vi.fn((filePath: string, ...args: unknown[]) => {
-      if (path.resolve(filePath) === path.resolve(headPath)) {
-        const error = Object.assign(new Error(`EACCES: permission denied, open '${filePath}'`), {
-          code: "EACCES",
-        });
-        throw error;
-      }
-      return Reflect.apply(actualFs.readFileSync, actualFs, [filePath, ...args]);
-    });
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
-      default: {
-        ...actualFs,
-        readFileSync: readFileSyncSpy,
-      },
-      readFileSync: readFileSyncSpy,
-    }));
-    vi.doMock("node:module", () => ({
-      createRequire: () => {
-        return (specifier: string) => {
-          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-            code: "MODULE_NOT_FOUND",
-          });
-        };
-      },
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readGitCommit = vi.fn(() => {
+      const error = Object.assign(new Error(`EACCES: permission denied`), {
+        code: "EACCES",
+      });
+      throw error;
+    });
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    const headReadCount = () =>
-      readFileSyncSpy.mock.calls.filter(([filePath]) => path.resolve(filePath) === headPath).length;
-    const firstCallReads = headReadCount();
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: {
+          readGitCommit,
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      }),
+    ).toBeNull();
+    const firstCallReads = readGitCommit.mock.calls.length;
     expect(firstCallReads).toBe(2);
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(headReadCount()).toBe(firstCallReads);
-
-    vi.doUnmock("node:fs");
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: {
+          readGitCommit,
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      }),
+    ).toBeNull();
+    expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("formats env-provided commit strings consistently", async () => {
@@ -358,10 +328,10 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(validRepo, {
       head: "ref: refs/heads/main\n",
       refs: {
-        "refs/heads/main": "fedcba9876543210fedcba9876543210fedcba98",
+        "refs/heads/main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       },
     });
-    expect(resolveCommitHash({ cwd: validRepo, env: {} })).toBe("fedcba9");
+    expect(resolveCommitHash({ cwd: validRepo, env: {} })).toBe("aaaaaaa");
   });
 
   it("resolves refs from the git commondir in worktree layouts", async () => {
@@ -372,7 +342,7 @@ describe("git commit resolution", () => {
     await fs.mkdir(commonGitDir, { recursive: true });
     const refPath = path.join(commonGitDir, "refs", "heads", "main");
     await fs.mkdir(path.dirname(refPath), { recursive: true });
-    await fs.writeFile(refPath, "76543210fedcba9876543210fedcba9876543210\n", "utf-8");
+    await fs.writeFile(refPath, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", "utf-8");
     await makeFakeGitRepo(repoRoot, {
       gitdir: worktreeGitDir,
       head: "ref: refs/heads/main\n",
@@ -381,7 +351,7 @@ describe("git commit resolution", () => {
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("7654321");
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("bbbbbbb");
   });
 
   it("reads full HEAD refs before parsing long branch names", async () => {
@@ -391,12 +361,12 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(repoRoot, {
       head: `ref: ${longRefName}\n`,
       refs: {
-        [longRefName]: "0123456789abcdef0123456789abcdef01234567",
+        [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
       },
     });
 
     const { resolveCommitHash } = await import("./git-commit.js");
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("0123456");
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ccccccc");
   });
 });
