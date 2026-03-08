@@ -148,6 +148,10 @@ export function createExecApprovalHandlers(
         turnSourceAccountId:
           typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
         turnSourceThreadId: p.turnSourceThreadId ?? null,
+        source:
+          typeof (p as Record<string, unknown>).source === "string"
+            ? ((p as Record<string, unknown>).source as string).trim() || null
+            : null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
       record.requestedByConnId = client?.connId ?? null;

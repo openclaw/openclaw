@@ -77,6 +77,8 @@ export type ExecApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
+  /** Approval source — "camel" bypasses the forwarding enabled gate. */
+  source?: string | null;
 };
 
 export type ExecApprovalRequest = {

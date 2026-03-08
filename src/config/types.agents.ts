@@ -5,6 +5,19 @@ import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+export type AgentCaMeLPolicyConfig = {
+  trustedRecipients?: string[];
+  requireApproval?: string[];
+  noSideEffectTools?: string[];
+};
+
+export type AgentCaMeLConfig = {
+  enabled?: boolean;
+  mode?: "strict" | "permissive";
+  qModel?: string;
+  policies?: AgentCaMeLPolicyConfig;
+};
+
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
   agent?: string;
@@ -84,6 +97,8 @@ export type AgentConfig = {
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
+  /** Optional per-agent CaMeL overrides. */
+  camel?: AgentCaMeLConfig;
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
@@ -91,5 +106,7 @@ export type AgentConfig = {
 
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
+  /** Optional global CaMeL defaults. */
+  camel?: AgentCaMeLConfig;
   list?: AgentConfig[];
 };

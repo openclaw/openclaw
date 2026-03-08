@@ -68,11 +68,14 @@ function shouldForward(params: {
   config?: ExecApprovalForwardingConfig;
   request: ExecApprovalRequest;
 }): boolean {
+  const isCamel = params.request.request.source === "camel";
   const config = params.config;
-  if (!config?.enabled) {
+  // CaMeL approvals bypass the forwarding enabled gate — they must work
+  // out of the box without extra config. Disable CaMeL itself to opt out.
+  if (!isCamel && !config?.enabled) {
     return false;
   }
-  if (config.agentFilter?.length) {
+  if (config?.agentFilter?.length) {
     const agentId =
       params.request.request.agentId ??
       parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
@@ -83,7 +86,7 @@ function shouldForward(params: {
       return false;
     }
   }
-  if (config.sessionFilter?.length) {
+  if (config?.sessionFilter?.length) {
     const sessionKey = params.request.request.sessionKey;
     if (!sessionKey) {
       return false;

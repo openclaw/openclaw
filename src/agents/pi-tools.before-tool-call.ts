@@ -1,8 +1,16 @@
+import { loadConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import { activeCaMeLOrchestratorScopes, resolveCaMeLScopeKey } from "./camel/active-scopes.js";
+import { createApprovalPromptHandler, requestApproval } from "./camel/approval-flow.js";
+import { createCapabilities } from "./camel/capabilities.js";
+import { resolveCaMeLConfig } from "./camel/config.js";
+import { createDefaultPolicies } from "./camel/security-policy.js";
+import { SourceKind } from "./camel/types.js";
+import { createValue } from "./camel/value.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -13,6 +21,11 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /** Channel routing context for headless CaMeL approval prompts. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -23,9 +36,204 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const CAMEL_TAINT_SOURCE_TOOLS = new Set(["web_fetch", "web_search", "browser", "read"]);
+const camelTaintStateByScope = new Map<string, Array<{ text: string; sourceTool: string }>>();
+const MAX_CAMEL_TAINT_SCOPES = 128;
+const MAX_CAMEL_TAINT_VALUES_PER_SCOPE = 256;
 let beforeToolCallRuntimePromise: Promise<
   typeof import("./pi-tools.before-tool-call.runtime.js")
 > | null = null;
+
+function getCaMeLTaintState(ctx?: HookContext): Array<{ text: string; sourceTool: string }> {
+  const scopeKey = resolveCaMeLScopeKey(ctx);
+  const existing = camelTaintStateByScope.get(scopeKey);
+  if (existing) {
+    return existing;
+  }
+  const created: Array<{ text: string; sourceTool: string }> = [];
+  camelTaintStateByScope.set(scopeKey, created);
+  while (camelTaintStateByScope.size > MAX_CAMEL_TAINT_SCOPES) {
+    let evicted = false;
+    for (const key of camelTaintStateByScope.keys()) {
+      if (!activeCaMeLOrchestratorScopes.has(key)) {
+        camelTaintStateByScope.delete(key);
+        evicted = true;
+        break;
+      }
+    }
+    if (!evicted) {
+      break;
+    }
+  }
+  return created;
+}
+
+function collectStringLeaves(value: unknown, into: Set<string>): void {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length >= 3) {
+      into.add(trimmed);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectStringLeaves(entry, into);
+    }
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      collectStringLeaves(nested, into);
+    }
+  }
+}
+
+function wrapArgsForCaMeLPolicy(params: {
+  args: Record<string, unknown>;
+  taintValues: Array<{ text: string; sourceTool: string }>;
+}): Record<string, ReturnType<typeof createValue>> {
+  const wrapped: Record<string, ReturnType<typeof createValue>> = {};
+  // Once untrusted data enters the session context, ALL subsequent args are
+  // tainted — the LLM can paraphrase/summarize tainted content, defeating
+  // substring matching. Session-level taint is the safe default.
+  if (params.taintValues.length > 0) {
+    const sourceTool = params.taintValues[0].sourceTool;
+    for (const [key, value] of Object.entries(params.args)) {
+      wrapped[key] = createValue(
+        value,
+        createCapabilities({
+          sources: [{ kind: "tool", toolName: sourceTool }],
+        }),
+      );
+    }
+    return wrapped;
+  }
+  for (const [key, value] of Object.entries(params.args)) {
+    wrapped[key] = createValue(
+      value,
+      createCapabilities({
+        sources: [SourceKind.Assistant],
+      }),
+    );
+  }
+  return wrapped;
+}
+
+function trackCaMeLToolResultTaint(args: {
+  toolName: string;
+  result: unknown;
+  ctx?: HookContext;
+}): void {
+  const normalized = normalizeToolName(args.toolName);
+  if (!CAMEL_TAINT_SOURCE_TOOLS.has(normalized)) {
+    return;
+  }
+  const taintValues = getCaMeLTaintState(args.ctx);
+  const leaves = new Set<string>();
+  collectStringLeaves(args.result, leaves);
+  for (const text of leaves) {
+    taintValues.push({ text, sourceTool: normalized });
+  }
+  while (taintValues.length > MAX_CAMEL_TAINT_VALUES_PER_SCOPE) {
+    taintValues.shift();
+  }
+}
+
+const SUMMARY_MAX_CHARS = 500;
+
+function truncate(value: unknown, max = SUMMARY_MAX_CHARS): string {
+  const str = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+  return str.length <= max ? str : `${str.slice(0, max)}…`;
+}
+
+function summarizeToolArgs(toolName: string, params: Record<string, unknown>): string {
+  const normalized = normalizeToolName(toolName);
+  const lines: string[] = [];
+  const push = (label: string, value: unknown, max = SUMMARY_MAX_CHARS) => {
+    if (value !== undefined && value !== null) {
+      lines.push(`${label}: ${truncate(value, max)}`);
+    }
+  };
+  if (normalized === "write" || normalized === "edit") {
+    push("file", params.file_path, 200);
+    push("content", params.content);
+    push("old_string", params.old_string);
+    push("new_string", params.new_string);
+  } else if (normalized === "exec") {
+    push("command", params.command);
+  } else if (normalized.startsWith("message")) {
+    push("to", params.to, 200);
+    push("message", params.message);
+    push("body", params.body);
+  } else {
+    for (const [key, value] of Object.entries(params).slice(0, 4)) {
+      push(key, value, 300);
+    }
+  }
+  return lines.join("\n") || `(${normalized} with ${Object.keys(params).length} args)`;
+}
+
+async function runCaMeLSecurityCheck(args: {
+  toolName: string;
+  params: unknown;
+  ctx?: HookContext;
+}): Promise<HookOutcome | null> {
+  const scopeKey = resolveCaMeLScopeKey(args.ctx);
+  if (activeCaMeLOrchestratorScopes.has(scopeKey)) {
+    return null;
+  }
+  const cfg = loadConfig();
+  const globalCamel = cfg?.agents?.camel;
+  const agentCamel = cfg?.agents?.list?.find((entry) => entry.id === args.ctx?.agentId)?.camel;
+  const camelConfig = resolveCaMeLConfig({
+    ...globalCamel,
+    ...agentCamel,
+    policies: {
+      ...globalCamel?.policies,
+      ...agentCamel?.policies,
+    },
+  });
+  if (!camelConfig.enabled) {
+    return null;
+  }
+  const params = isPlainObject(args.params) ? args.params : {};
+  const policyEngine = createDefaultPolicies(camelConfig);
+  const wrappedArgs = wrapArgsForCaMeLPolicy({
+    args: params,
+    taintValues: getCaMeLTaintState(args.ctx),
+  });
+  const policyResult = policyEngine.checkPolicy(
+    args.toolName,
+    wrappedArgs,
+    Object.values(wrappedArgs),
+  );
+  if ("allowed" in policyResult) {
+    return null;
+  }
+  const approvalHandler = createApprovalPromptHandler({
+    gatewayApproval: {
+      sessionKey: args.ctx?.sessionKey,
+      agentId: args.ctx?.agentId,
+      turnSourceChannel: args.ctx?.turnSourceChannel,
+      turnSourceTo: args.ctx?.turnSourceTo,
+      turnSourceAccountId: args.ctx?.turnSourceAccountId,
+      turnSourceThreadId: args.ctx?.turnSourceThreadId,
+    },
+  });
+  const approved = await requestApproval(
+    {
+      toolName: args.toolName,
+      reason: policyResult.reason,
+      content: summarizeToolArgs(args.toolName, params),
+    },
+    approvalHandler,
+  );
+  if (approved) {
+    return null;
+  }
+  return { blocked: true, reason: `CaMeL blocked tool execution: ${policyResult.reason}` };
+}
 
 function loadBeforeToolCallRuntime() {
   beforeToolCallRuntimePromise ??= import("./pi-tools.before-tool-call.runtime.js");
@@ -147,6 +355,11 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
   }
 
+  const camelOutcome = await runCaMeLSecurityCheck({ toolName, params, ctx: args.ctx });
+  if (camelOutcome?.blocked) {
+    return camelOutcome;
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
     return { blocked: false, params: args.params };
@@ -227,6 +440,11 @@ export function wrapToolWithBeforeToolCallHook(
       const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        trackCaMeLToolResultTaint({
+          toolName: normalizedToolName,
+          result,
+          ctx,
+        });
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -270,6 +488,8 @@ export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
+  camelTaintStateByScope,
+  trackCaMeLToolResultTaint,
   runBeforeToolCallHook,
   isPlainObject,
 };

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
+  CaMeLConfigSchema,
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentModelSchema,
@@ -189,6 +190,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    camel: CaMeLConfigSchema,
   })
   .strict()
   .optional();

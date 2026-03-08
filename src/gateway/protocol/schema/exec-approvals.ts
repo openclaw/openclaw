@@ -130,6 +130,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
     twoPhase: Type.Optional(Type.Boolean()),
+    source: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   },
   { additionalProperties: false },
 );

@@ -12,6 +12,25 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+export const CaMeLPolicySchema = z
+  .object({
+    trustedRecipients: z.array(z.string()).optional(),
+    requireApproval: z.array(z.string()).optional(),
+    noSideEffectTools: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
+export const CaMeLConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(["strict", "permissive"]).optional(),
+    qModel: z.string().optional(),
+    policies: CaMeLPolicySchema,
+  })
+  .strict()
+  .optional();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -745,6 +764,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    camel: CaMeLConfigSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })
