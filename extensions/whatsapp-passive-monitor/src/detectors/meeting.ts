@@ -159,10 +159,9 @@ ${conversation}`;
    * Build the prompt sent to the main agent when both models agree (add calendar event).
    */
   const buildCalendarAgentPrompt = (conversation: string): string =>
-    `Two independent classifiers have both confirmed that the following WhatsApp conversation contains arrangements to meet up in person. Please process this as a calendar event.
+    `Two independent classifiers have both confirmed that the following WhatsApp conversation contains arrangements to meet up in person.
 
-If the calendar-guard skill is available, use it to process this event.
-Otherwise, ask me if I'd like to create a calendar event. Provide a brief summary including who is meeting, when, and where (if mentioned).
+Use the calendar-guard skill to process this as a calendar event.
 
 --- Conversation ---
 ${conversation}`;
@@ -171,12 +170,12 @@ ${conversation}`;
    * Build the prompt sent to the main agent when models disagree (confirm with customer).
    */
   const buildConfirmationAgentPrompt = (conversation: string, reasons: string[]): string =>
-    `A classifier has flagged the following WhatsApp conversation as potentially containing arrangements to meet up in person, but there is disagreement between models. Please confirm with me whether this is actually a meeting arrangement.
+    `A classifier has flagged the following WhatsApp conversation as potentially containing arrangements to meet up in person, but there is disagreement between models.
 
 Model reasons:
 ${reasons.map((r) => `- ${r}`).join("\n")}
 
-Please review the conversation and ask me to confirm whether I'd like to create a calendar event.
+Use the calendar-guard skill to review the conversation and confirm whether a calendar event should be created.
 
 --- Conversation ---
 ${conversation}`;
