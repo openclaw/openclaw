@@ -4,6 +4,7 @@
  */
 
 import { isRecord } from "../../utils.js";
+import { buildGeminiUrl } from "../../utils/gemini-url.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 
 type PdfInput = {
@@ -137,11 +138,12 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
-    "",
-  );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = buildGeminiUrl({
+    baseUrl: params.baseUrl,
+    modelId: params.modelId,
+    endpoint: ":generateContent",
+    apiKey: apiKey,
+  });
 
   const res = await fetch(url, {
     method: "POST",

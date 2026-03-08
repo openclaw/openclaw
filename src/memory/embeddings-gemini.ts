@@ -5,6 +5,7 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { buildGeminiUrl } from "../utils/gemini-url.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
@@ -70,9 +71,18 @@ export async function createGeminiEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<{ provider: EmbeddingProvider; client: GeminiEmbeddingClient }> {
   const client = await resolveGeminiEmbeddingClient(options);
-  const baseUrl = client.baseUrl.replace(/\/$/, "");
-  const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
-  const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
+  const embedUrl = buildGeminiUrl({
+    baseUrl: client.baseUrl,
+    modelId: client.modelPath,
+    endpoint: ":embedContent",
+    modelHasPrefix: true,
+  });
+  const batchUrl = buildGeminiUrl({
+    baseUrl: client.baseUrl,
+    modelId: client.modelPath,
+    endpoint: ":batchEmbedContents",
+    modelHasPrefix: true,
+  });
 
   const fetchWithGeminiAuth = async (apiKey: string, endpoint: string, body: unknown) => {
     const authHeaders = parseGeminiAuth(apiKey);
@@ -188,8 +198,6 @@ export async function resolveGeminiEmbeddingClient(
     baseUrl,
     model,
     modelPath,
-    embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
-    batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
   });
   return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys };
 }
