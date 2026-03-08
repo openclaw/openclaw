@@ -1,4 +1,4 @@
-import { CheckCircle2, AlertTriangle, X } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Info, X } from "lucide-react";
 import {
   createContext,
   useContext,
@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 // ─── Types ───
 
-type ToastVariant = "success" | "error";
+type ToastVariant = "success" | "error" | "info" | "warning";
 
 type Toast = {
   id: string;
@@ -125,16 +125,28 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const Icon = toast.variant === "success" ? CheckCircle2 : AlertTriangle;
+  const Icon =
+    toast.variant === "success"
+      ? CheckCircle2
+      : toast.variant === "info"
+        ? Info
+        : toast.variant === "warning"
+          ? AlertTriangle
+          : AlertTriangle;
+
+  const variantStyles: Record<ToastVariant, string> = {
+    success: "border-emerald-500/30 bg-emerald-950/80 text-emerald-200",
+    error: "border-destructive/30 bg-destructive/10 text-destructive",
+    info: "border-blue-500/30 bg-blue-950/80 text-blue-200",
+    warning: "border-amber-500/30 bg-amber-950/80 text-amber-200",
+  };
 
   return (
     <div
       className={cn(
         "pointer-events-auto flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg backdrop-blur-md transition-all duration-300 ease-out min-w-[280px] max-w-[400px]",
         visible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
-        toast.variant === "success"
-          ? "border-emerald-500/30 bg-emerald-950/80 text-emerald-200"
-          : "border-destructive/30 bg-destructive/10 text-destructive",
+        variantStyles[toast.variant],
       )}
       role="status"
     >

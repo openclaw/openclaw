@@ -210,6 +210,22 @@ export const SkillsUpdateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SkillsListParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsInvokeParamsSchema = Type.Object(
+  {
+    skillName: NonEmptyString,
+    args: Type.Optional(Type.String()),
+    sessionKey: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const ToolsCatalogParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),

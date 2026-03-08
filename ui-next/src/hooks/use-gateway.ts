@@ -183,6 +183,10 @@ function handleEvent(evt: GatewayEventFrame) {
     notifyTeamEventListeners(evt.payload);
   }
 
+  if (evt.event === "agent") {
+    notifyAgentEventListeners(evt.payload);
+  }
+
   // Forward events to visualize store when active
   const vizState = useVisualizeStore.getState();
   if (vizState.isActive) {
@@ -231,6 +235,29 @@ function notifyTeamEventListeners(payload: unknown) {
 export function onTeamPushEvent(listener: TeamEventListener): () => void {
   teamEventListeners.add(listener);
   return () => teamEventListeners.delete(listener);
+}
+
+// ─── Agent event push listener registry ───────────────────────────────
+// Allows chat page to subscribe to agent events (compaction, fallback)
+// for system event toasts.
+
+type AgentEventListener = (payload: unknown) => void;
+const agentEventListeners = new Set<AgentEventListener>();
+
+function notifyAgentEventListeners(payload: unknown) {
+  for (const listener of agentEventListeners) {
+    try {
+      listener(payload);
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+}
+
+/** Subscribe to agent events pushed via WebSocket. Returns an unsubscribe function. */
+export function onAgentPushEvent(listener: AgentEventListener): () => void {
+  agentEventListeners.add(listener);
+  return () => agentEventListeners.delete(listener);
 }
 
 function handleChatEvent(payload: unknown) {

@@ -1,7 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { listMemoryFiles } from "../../memory/internal.js";
 import type { MemoryProviderStatus, MemorySearchResult } from "../../memory/types.js";
@@ -28,6 +30,21 @@ export type MemorySearchPayload = {
 export type MemoryReindexPayload = {
   ok: boolean;
   error?: string;
+};
+
+export type MemoryActivityEntry = {
+  timestamp: number;
+  operation: "search" | "read" | "write" | "edit";
+  toolName: string;
+  filePath?: string;
+  query?: string;
+  snippet?: string;
+  sessionFile: string;
+};
+
+export type MemoryActivityPayload = {
+  entries: MemoryActivityEntry[];
+  sessionsScanned: number;
 };
 
 export const memoryDashboardHandlers: GatewayRequestHandlers = {
@@ -180,6 +197,22 @@ export const memoryDashboardHandlers: GatewayRequestHandlers = {
       await manager.close?.().catch(() => {});
     }
   },
+
+  "memory.activity": async ({ respond }) => {
+    try {
+      const cfg = loadConfig();
+      const agentId = resolveDefaultAgentId(cfg);
+      const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+      const payload = await scanMemoryActivity(sessionsDir);
+      respond(true, payload, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `memory activity scan failed: ${formatError(err)}`),
+      );
+    }
+  },
 };
 
 /**
@@ -292,4 +325,129 @@ async function textSearchFallback(
   // Sort by score descending so best matches come first
   results.sort((a, b) => b.score - a.score);
   return results;
+}
+
+/**
+ * Scans all session JSONL files in the sessions directory and extracts memory
+ * tool calls directly from the raw transcript. This bypasses chat.history's
+ * message count and byte-size limits to capture ALL memory activity.
+ */
+async function scanMemoryActivity(sessionsDir: string): Promise<MemoryActivityPayload> {
+  const entries: MemoryActivityEntry[] = [];
+  let sessionsScanned = 0;
+
+  let files: string[];
+  try {
+    files = (await fs.readdir(sessionsDir)).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return { entries, sessionsScanned: 0 };
+  }
+
+  for (const file of files) {
+    sessionsScanned++;
+    try {
+      const content = fsSync.readFileSync(path.join(sessionsDir, file), "utf-8");
+      const lines = content.split(/\r?\n/);
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed?.type !== "message") continue;
+          const msg = parsed.message;
+          if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+
+          const timestamp =
+            typeof parsed.timestamp === "string"
+              ? new Date(parsed.timestamp).getTime()
+              : typeof msg.timestamp === "number"
+                ? msg.timestamp
+                : 0;
+
+          for (const block of msg.content) {
+            if (block.type !== "toolCall" && block.type !== "tool_use") continue;
+
+            const toolName = (block.name ?? "") as string;
+            const toolInput = (block.arguments ?? block.input) as
+              | Record<string, unknown>
+              | undefined;
+
+            if (!isMemoryActivityToolCall(toolName, toolInput)) continue;
+
+            entries.push({
+              timestamp,
+              operation: getActivityOperation(toolName, toolInput),
+              toolName,
+              filePath: getActivityFilePath(toolName, toolInput),
+              query: toolInput?.query as string | undefined,
+              snippet: getActivitySnippet(toolName, toolInput),
+              sessionFile: file,
+            });
+          }
+        } catch {
+          // Skip unparseable lines
+        }
+      }
+    } catch {
+      // Skip unreadable files
+    }
+  }
+
+  entries.sort((a, b) => b.timestamp - a.timestamp);
+  return { entries, sessionsScanned };
+}
+
+function isMemoryActivityToolCall(toolName: string, toolInput?: Record<string, unknown>): boolean {
+  if (toolName === "memory_search" || toolName === "memory_get" || toolName === "memory_read") {
+    return true;
+  }
+  const filePath = (toolInput?.path ?? toolInput?.file_path ?? toolInput?.relPath) as
+    | string
+    | undefined;
+  if (!filePath) return false;
+  const lower = filePath.toLowerCase();
+  if (toolName === "write" || toolName === "edit" || toolName === "read") {
+    return lower.includes("memory") || lower.includes("/workspace/");
+  }
+  return false;
+}
+
+function getActivityOperation(
+  toolName: string,
+  toolInput?: Record<string, unknown>,
+): MemoryActivityEntry["operation"] {
+  if (toolName === "memory_search") return "search";
+  if (toolName === "memory_get" || toolName === "memory_read" || toolName === "read") return "read";
+  if (toolName === "write") return "write";
+  if (toolName === "edit") return "edit";
+  if (toolInput?.content !== undefined) return "write";
+  return "read";
+}
+
+function getActivityFilePath(
+  toolName: string,
+  toolInput?: Record<string, unknown>,
+): string | undefined {
+  if (toolName === "memory_search") return undefined;
+  return (toolInput?.path ?? toolInput?.file_path ?? toolInput?.relPath) as string | undefined;
+}
+
+function getActivitySnippet(
+  toolName: string,
+  toolInput?: Record<string, unknown>,
+): string | undefined {
+  if (!toolInput) return undefined;
+  if (toolName === "memory_search" && toolInput.query) {
+    const q = String(toolInput.query);
+    return q.length > 120 ? q.slice(0, 120) + "..." : q;
+  }
+  const content = (toolInput.content ?? toolInput.new_string ?? toolInput.newText) as
+    | string
+    | undefined;
+  if (content) {
+    return content.length > 120 ? content.slice(0, 120) + "..." : content;
+  }
+  const filePath = (toolInput.path ?? toolInput.file_path) as string | undefined;
+  if (filePath) return filePath;
+  return undefined;
 }

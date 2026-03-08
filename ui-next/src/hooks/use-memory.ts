@@ -46,26 +46,17 @@ type MemoryReindexResult = {
   error?: string;
 };
 
-type SessionEntry = {
-  key: string;
-  sessionId?: string;
-  updatedAt?: number | null;
-  [key: string]: unknown;
-};
-
-type SessionsListResult = {
-  sessions: SessionEntry[];
-};
-
-type ChatHistoryResult = {
-  messages: Array<{
-    role: string;
-    content: string | Array<{ type: string; text?: string; [key: string]: unknown }>;
-    timestamp?: number;
-    toolName?: string;
-    toolInput?: Record<string, unknown>;
-    [key: string]: unknown;
+type MemoryActivityResult = {
+  entries: Array<{
+    timestamp: number;
+    operation: "search" | "read" | "write" | "edit";
+    toolName: string;
+    filePath?: string;
+    query?: string;
+    snippet?: string;
+    sessionFile: string;
   }>;
+  sessionsScanned: number;
 };
 
 let activityIdCounter = 0;
@@ -219,82 +210,21 @@ export function useMemory() {
     const store = useMemoryStore.getState();
     store.setActivityLoading(true);
     try {
-      // Scan ALL sessions (active + archived) and build the full activity log.
-      // The component handles pagination via activityDisplayLimit.
-      const sessionsResult = await sendRpc<SessionsListResult>("sessions.list", {
-        limit: 500,
-        includeArchived: true,
-      });
-      const allSessions = (sessionsResult.sessions ?? [])
-        .slice()
-        .toSorted((a, b) => ((b.updatedAt as number) ?? 0) - ((a.updatedAt as number) ?? 0));
-
-      const allEntries: ActivityEntry[] = [];
-
-      for (const session of allSessions) {
-        try {
-          const history = await sendRpc<ChatHistoryResult>("chat.history", {
-            sessionKey: session.key,
-            limit: 200,
-          });
-
-          for (const msg of history.messages ?? []) {
-            if (msg.role === "assistant" && Array.isArray(msg.content)) {
-              for (const block of msg.content) {
-                if (block.type !== "toolCall" && block.type !== "tool_use") {
-                  continue;
-                }
-                const toolName = (block.name ?? "") as string;
-                const toolInput = (block.arguments ?? block.input) as
-                  | Record<string, unknown>
-                  | undefined;
-
-                if (!isMemoryToolCall(toolName, toolInput)) {
-                  continue;
-                }
-
-                allEntries.push({
-                  id: `activity-${++activityIdCounter}`,
-                  timestamp: msg.timestamp ?? 0,
-                  operation: getOperation(toolName, toolInput),
-                  toolName,
-                  filePath: getFilePath(toolName, toolInput),
-                  query: toolInput?.query as string | undefined,
-                  snippet: getToolUseSnippet(toolName, toolInput),
-                  sessionKey: session.key,
-                });
-              }
-            }
-
-            if (
-              msg.role === "toolResult" &&
-              typeof (msg as Record<string, unknown>).toolName === "string"
-            ) {
-              const toolName = (msg as Record<string, unknown>).toolName as string;
-              if (!isMemoryToolCall(toolName, undefined)) {
-                continue;
-              }
-
-              allEntries.push({
-                id: `activity-${++activityIdCounter}`,
-                timestamp: msg.timestamp ?? 0,
-                operation: getOperation(toolName, undefined),
-                toolName,
-                filePath: undefined,
-                query: undefined,
-                snippet: getToolResultSnippet(msg.content),
-                sessionKey: session.key,
-              });
-            }
-          }
-        } catch {
-          // Skip sessions that fail to load
-        }
-      }
-
-      allEntries.sort((a, b) => b.timestamp - a.timestamp);
+      // Use the dedicated server-side RPC that scans raw JSONL files directly,
+      // bypassing chat.history's message count and byte-size limits.
+      const result = await sendRpc<MemoryActivityResult>("memory.activity");
+      const allEntries: ActivityEntry[] = (result.entries ?? []).map((e) => ({
+        id: `activity-${++activityIdCounter}`,
+        timestamp: e.timestamp,
+        operation: e.operation,
+        toolName: e.toolName,
+        filePath: e.filePath,
+        query: e.query,
+        snippet: e.snippet,
+        sessionKey: e.sessionFile,
+      }));
       store.setActivityLog(allEntries);
-      store.setActivitySessionsScanned(allSessions.length);
+      store.setActivitySessionsScanned(result.sessionsScanned);
       store.setActivityHasMore(false);
     } catch (err) {
       if (!isGatewayTeardownError(err)) {
@@ -314,106 +244,4 @@ export function useMemory() {
     setMemoryFile,
     loadActivityLog,
   };
-}
-
-function isMemoryToolCall(toolName: string, toolInput?: Record<string, unknown>): boolean {
-  if (toolName === "memory_search" || toolName === "memory_get" || toolName === "memory_read") {
-    return true;
-  }
-  if (toolName === "write" && isMemoryPath(toolInput?.path as string)) {
-    return true;
-  }
-  if (toolName === "edit" && isMemoryPath(toolInput?.file_path as string)) {
-    return true;
-  }
-  if (toolName === "read" && isMemoryPath(toolInput?.file_path as string)) {
-    return true;
-  }
-  return false;
-}
-
-function getToolResultSnippet(
-  content: string | Array<{ type: string; text?: string; [key: string]: unknown }>,
-): string | undefined {
-  const text = typeof content === "string" ? content : content?.find((b) => b.text)?.text;
-  if (!text) {
-    return undefined;
-  }
-  // Try to parse JSON results for a cleaner snippet
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.results?.length) {
-      return `${parsed.results.length} result(s) found`;
-    }
-  } catch {
-    // Not JSON, use raw text
-  }
-  return text.length > 120 ? text.slice(0, 120) + "..." : text;
-}
-
-function isMemoryPath(path?: string): boolean {
-  if (!path) {
-    return false;
-  }
-  const lower = path.toLowerCase();
-  return lower.includes("memory") || lower.includes("MEMORY");
-}
-
-function getOperation(
-  toolName: string,
-  toolInput?: Record<string, unknown>,
-): ActivityEntry["operation"] {
-  if (toolName === "memory_search") {
-    return "search";
-  }
-  if (toolName === "memory_get" || toolName === "memory_read" || toolName === "read") {
-    return "read";
-  }
-  if (toolName === "write") {
-    return "write";
-  }
-  if (toolName === "edit") {
-    return "edit";
-  }
-  // Fallback based on toolInput
-  if (toolInput?.content !== undefined) {
-    return "write";
-  }
-  return "read";
-}
-
-function getFilePath(toolName: string, toolInput?: Record<string, unknown>): string | undefined {
-  if (toolName === "memory_search") {
-    return undefined;
-  }
-  return (toolInput?.path ?? toolInput?.file_path ?? toolInput?.relPath) as string | undefined;
-}
-
-function getToolUseSnippet(
-  toolName: string,
-  toolInput?: Record<string, unknown>,
-): string | undefined {
-  if (!toolInput) {
-    return undefined;
-  }
-
-  // For search tools, show the query
-  if (toolName === "memory_search" && toolInput.query) {
-    const q = String(toolInput.query as string);
-    return q.length > 120 ? q.slice(0, 120) + "..." : q;
-  }
-
-  // For write/edit, show a snippet of the content
-  const content = (toolInput.content ?? toolInput.new_string) as string | undefined;
-  if (content) {
-    return content.length > 120 ? content.slice(0, 120) + "..." : content;
-  }
-
-  // For read, show the path
-  const path = (toolInput.path ?? toolInput.file_path) as string | undefined;
-  if (path) {
-    return path;
-  }
-
-  return undefined;
 }

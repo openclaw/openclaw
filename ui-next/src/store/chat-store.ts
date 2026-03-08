@@ -15,6 +15,8 @@ export type ChatMessage = {
   // Server fields (from session transcript)
   errorMessage?: string;
   stopReason?: string;
+  /** Metadata marker injected by the gateway (e.g. compaction dividers). */
+  __openclaw?: { kind?: string; id?: string; [key: string]: unknown };
   // UI-only fields
   id: string;
   /** 1-based sequential position in the session history (stable across reloads). */
