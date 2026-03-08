@@ -427,7 +427,9 @@ export function buildIMessageInboundContext(params: {
     });
   }
 
-  const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
+  // Force SMS for DM replies — "imessage:" hardcodes iMessage delivery,
+  // "sms:" guarantees SMS delivery for recipients without iMessage.
+  const imessageTo = (decision.isGroup ? chatTarget : undefined) || `sms:${decision.sender}`;
   const inboundHistory =
     decision.isGroup && decision.historyKey && params.historyLimit > 0
       ? (params.groupHistories.get(decision.historyKey) ?? []).map((entry) => ({
