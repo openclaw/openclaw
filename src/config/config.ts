@@ -1,5 +1,6 @@
 export {
   clearConfigCache,
+  ConfigRuntimeRefreshError,
   clearRuntimeConfigSnapshot,
   createConfigIO,
   getRuntimeConfigSnapshot,
@@ -10,6 +11,7 @@ export {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
+  setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
