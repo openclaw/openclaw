@@ -4,6 +4,7 @@ import { callGatewayFromCli } from "./gateway-rpc.js";
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
   browserProfile?: string;
+  timeoutSource?: string;
 };
 
 type BrowserRequestParams = {
@@ -34,6 +35,9 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
 }
 
 function parseParentTimeoutMs(opts: BrowserParentOpts): number | undefined {
+  if (opts.timeoutSource === "default") {
+    return undefined;
+  }
   return typeof opts.timeout === "string"
     ? normalizeTimeoutMs(Number.parseInt(opts.timeout, 10))
     : undefined;

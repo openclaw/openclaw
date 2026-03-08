@@ -80,4 +80,19 @@ describe("browser manage start timeout option", () => {
     expect(startCall?.[0]).toMatchObject({ timeout: "60000" });
     expect(startCall?.[2]).toBeUndefined();
   });
+
+  it("keeps the shorter status default when parent timeout is still implicit", async () => {
+    const program = createProgram();
+    await program.parseAsync(["browser", "status"], { from: "user" });
+
+    const statusCall = mocks.callBrowserRequest.mock.calls.find(
+      (call) => ((call[1] ?? {}) as { path?: string }).path === "/",
+    ) as
+      | [Record<string, unknown>, { path?: string }, { timeoutMs?: number } | undefined]
+      | undefined;
+
+    expect(statusCall).toBeDefined();
+    expect(statusCall?.[0]).toMatchObject({ timeout: "30000", timeoutSource: "default" });
+    expect(statusCall?.[2]).toEqual({ timeoutMs: 1500 });
+  });
 });

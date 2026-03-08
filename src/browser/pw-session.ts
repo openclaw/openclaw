@@ -671,31 +671,36 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   reason?: string;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  if (cached?.cdpUrl !== normalized) {
+  const cur = cached;
+  if (cur?.cdpUrl !== normalized) {
     return;
   }
-  const cur = cached;
-  cached = null;
+  // Best-effort: kill any stuck JS to unblock the target's execution context before we
+  // consider disconnecting Playwright's shared CDP connection.
+  const targetId = opts.targetId?.trim() || "";
+  if (targetId) {
+    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+    const pages = await getAllPages(cur.browser).catch(() => []);
+    if (pages.length > 1) {
+      return;
+    }
+  }
+
+  if (cached?.browser === cur.browser) {
+    cached = null;
+  }
   // Also clear `connecting` so the next call does a fresh connectOverCDP
   // rather than awaiting a stale promise.
   connecting = null;
-  if (cur) {
-    // Remove the "disconnected" listener to prevent the old browser's teardown
-    // from racing with a fresh connection and nulling the new `cached`.
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
-    }
 
-    // Best-effort: kill any stuck JS to unblock the target's execution context before we
-    // disconnect Playwright's CDP connection.
-    const targetId = opts.targetId?.trim() || "";
-    if (targetId) {
-      await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
-    }
-
-    // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-    cur.browser.close().catch(() => {});
+  // Remove the "disconnected" listener to prevent the old browser's teardown
+  // from racing with a fresh connection and nulling the new `cached`.
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
   }
+
+  // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
+  cur.browser.close().catch(() => {});
 }
 
 /**
