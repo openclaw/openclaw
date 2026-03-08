@@ -1123,9 +1123,9 @@ function SearchTab() {
 // --- Activity Log Tab ---
 
 function ActivityLogTab() {
-  const { activityLog, activityLoading, activityFilter, activityHasMore } = useMemoryStore();
+  const { activityLog, activityLoading, activityFilter, activityHasMore, activitySessionsScanned } =
+    useMemoryStore();
   const { loadActivityLog } = useMemory();
-  const [sessionLimit, setSessionLimit] = useState(5);
   const loadedRef = useRef(false);
 
   // Initial load only — Load More calls loadActivityLog directly with append=true
@@ -1150,8 +1150,8 @@ function ActivityLogTab() {
   });
 
   const handleLoadMore = () => {
-    const newLimit = sessionLimit + 10;
-    setSessionLimit(newLimit);
+    // Use the store's tracked count (accounts for auto-advancement past empty batches)
+    const newLimit = activitySessionsScanned + 10;
     void loadActivityLog(newLimit, true);
   };
 

@@ -221,7 +221,6 @@ export function useMemory() {
       store.setActivityLoading(true);
       try {
         // Fetch a large pool so Load More can reach older sessions.
-        // sessionLimit controls how many get scanned; pool must be >= sessionLimit.
         const sessionsResult = await sendRpc<SessionsListResult>("sessions.list", {
           limit: Math.max(sessionLimit * 4, 200),
         });
@@ -229,78 +228,93 @@ export function useMemory() {
           .slice()
           .toSorted((a, b) => ((b.updatedAt as number) ?? 0) - ((a.updatedAt as number) ?? 0));
 
-        // When appending, only scan the newly added window (matches Load More step of 10).
-        // This avoids re-scanning sessions already processed on previous loads.
+        // Scan sessions in batches. When appending, auto-advance through batches
+        // that yield no results so "Load more" always shows new entries or exhausts.
         const LOAD_BATCH = 10;
-        const sessions = append
-          ? allSessions.slice(Math.max(0, sessionLimit - LOAD_BATCH), sessionLimit)
-          : allSessions.slice(0, sessionLimit);
+        let currentLimit = sessionLimit;
+        let entries: ActivityEntry[] = [];
 
-        const entries: ActivityEntry[] = [];
+        // Allow up to 5 auto-advance rounds when appending yields nothing
+        const maxRounds = append ? 5 : 1;
+        for (let round = 0; round < maxRounds; round++) {
+          const sessions =
+            append && round === 0
+              ? allSessions.slice(Math.max(0, currentLimit - LOAD_BATCH), currentLimit)
+              : round > 0
+                ? allSessions.slice(Math.max(0, currentLimit - LOAD_BATCH), currentLimit)
+                : allSessions.slice(0, currentLimit);
 
-        for (const session of sessions) {
-          try {
-            const history = await sendRpc<ChatHistoryResult>("chat.history", {
-              sessionKey: session.key,
-              limit: 200,
-            });
+          entries = [];
 
-            for (const msg of history.messages ?? []) {
-              // Strategy 1: assistant messages with toolCall content blocks
-              // JSONL format: { type: "toolCall", name: "...", arguments: {...} }
-              if (msg.role === "assistant" && Array.isArray(msg.content)) {
-                for (const block of msg.content) {
-                  // Handle both "toolCall" (Pi transcript) and "tool_use" (Anthropic API) formats
-                  if (block.type !== "toolCall" && block.type !== "tool_use") {
-                    continue;
+          for (const session of sessions) {
+            try {
+              const history = await sendRpc<ChatHistoryResult>("chat.history", {
+                sessionKey: session.key,
+                limit: 200,
+              });
+
+              for (const msg of history.messages ?? []) {
+                // Strategy 1: assistant messages with toolCall content blocks
+                if (msg.role === "assistant" && Array.isArray(msg.content)) {
+                  for (const block of msg.content) {
+                    if (block.type !== "toolCall" && block.type !== "tool_use") {
+                      continue;
+                    }
+                    const toolName = (block.name ?? "") as string;
+                    const toolInput = (block.arguments ?? block.input) as
+                      | Record<string, unknown>
+                      | undefined;
+
+                    if (!isMemoryToolCall(toolName, toolInput)) {
+                      continue;
+                    }
+
+                    entries.push({
+                      id: `activity-${++activityIdCounter}`,
+                      timestamp: msg.timestamp ?? 0,
+                      operation: getOperation(toolName, toolInput),
+                      toolName,
+                      filePath: getFilePath(toolName, toolInput),
+                      query: toolInput?.query as string | undefined,
+                      snippet: getToolUseSnippet(toolName, toolInput),
+                      sessionKey: session.key,
+                    });
                   }
-                  const toolName = (block.name ?? "") as string;
-                  const toolInput = (block.arguments ?? block.input) as
-                    | Record<string, unknown>
-                    | undefined;
+                }
 
-                  if (!isMemoryToolCall(toolName, toolInput)) {
+                // Strategy 2: toolResult messages with top-level toolName
+                if (
+                  msg.role === "toolResult" &&
+                  typeof (msg as Record<string, unknown>).toolName === "string"
+                ) {
+                  const toolName = (msg as Record<string, unknown>).toolName as string;
+                  if (!isMemoryToolCall(toolName, undefined)) {
                     continue;
                   }
 
                   entries.push({
                     id: `activity-${++activityIdCounter}`,
                     timestamp: msg.timestamp ?? 0,
-                    operation: getOperation(toolName, toolInput),
+                    operation: getOperation(toolName, undefined),
                     toolName,
-                    filePath: getFilePath(toolName, toolInput),
-                    query: toolInput?.query as string | undefined,
-                    snippet: getToolUseSnippet(toolName, toolInput),
+                    filePath: undefined,
+                    query: undefined,
+                    snippet: getToolResultSnippet(msg.content),
                     sessionKey: session.key,
                   });
                 }
               }
-
-              // Strategy 2: toolResult messages with top-level toolName
-              if (
-                msg.role === "toolResult" &&
-                typeof (msg as Record<string, unknown>).toolName === "string"
-              ) {
-                const toolName = (msg as Record<string, unknown>).toolName as string;
-                if (!isMemoryToolCall(toolName, undefined)) {
-                  continue;
-                }
-
-                entries.push({
-                  id: `activity-${++activityIdCounter}`,
-                  timestamp: msg.timestamp ?? 0,
-                  operation: getOperation(toolName, undefined),
-                  toolName,
-                  filePath: undefined,
-                  query: undefined,
-                  snippet: getToolResultSnippet(msg.content),
-                  sessionKey: session.key,
-                });
-              }
+            } catch {
+              // Skip sessions that fail to load
             }
-          } catch {
-            // Skip sessions that fail to load
           }
+
+          // If we found entries or exhausted all sessions, stop advancing
+          if (entries.length > 0 || currentLimit >= allSessions.length) {
+            break;
+          }
+          // Auto-advance to next batch
+          currentLimit += LOAD_BATCH;
         }
 
         // Merge with existing entries when appending, then re-sort
@@ -308,8 +322,9 @@ export function useMemory() {
         merged.sort((a, b) => b.timestamp - a.timestamp);
         store.setActivityLog(merged);
 
-        // Determine if there are more sessions to scan beyond the current window
-        store.setActivityHasMore(sessionLimit < allSessions.length);
+        // Track how far we've scanned and whether more sessions remain
+        store.setActivitySessionsScanned(currentLimit);
+        store.setActivityHasMore(currentLimit < allSessions.length);
       } catch (err) {
         if (!isGatewayTeardownError(err)) {
           console.error("[memory] failed to load activity:", err);
