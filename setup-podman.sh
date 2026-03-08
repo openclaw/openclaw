@@ -267,7 +267,8 @@ podman save openclaw:local -o "$TMP_IMAGE"
 chmod 600 "$TMP_IMAGE"
 # Stream the image into the target user's podman load so private temp directories
 # do not need to be traversable by $OPENCLAW_USER.
-cat "$TMP_IMAGE" | run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load
+# cd to /tmp so podman load (running as openclaw) doesn't inherit a cwd it can't access.
+(cd "${TMPDIR:-/tmp}" && cat "$TMP_IMAGE" | run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load)
 rm -rf "$TMP_STAGE_DIR"
 trap - EXIT
 
