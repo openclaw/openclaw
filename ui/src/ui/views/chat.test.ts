@@ -283,4 +283,31 @@ describe("chat view", () => {
     expect(senderLabels).toContain("Iris");
     expect(senderLabels).toContain("Joaquin De Rojas");
   });
+
+  it("renders assistant model errors as highlighted chat bubbles", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              provider: "anthropic",
+              model: "claude-sonnet-4-5",
+              stopReason: "error",
+              errorMessage: "401 unauthorized",
+              content: [],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const bubble = container.querySelector(".chat-bubble--error");
+    expect(bubble).not.toBeNull();
+    expect(container.textContent).toContain("Model error");
+    expect(container.textContent).toContain("401 unauthorized");
+  });
 });

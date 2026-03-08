@@ -25,6 +25,22 @@ export function extractText(message: unknown): string | null {
   return processMessageText(raw, role);
 }
 
+function extractAssistantErrorText(message: unknown): string | null {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  if (role !== "assistant") {
+    return null;
+  }
+  const errorMessage = typeof m.errorMessage === "string" ? m.errorMessage.trim() : "";
+  if (!errorMessage) {
+    return null;
+  }
+  const provider = typeof m.provider === "string" ? m.provider.trim() : "";
+  const model = typeof m.model === "string" ? m.model.trim() : "";
+  const modelRef = provider && model ? `${provider}/${model}` : model || provider;
+  return modelRef ? `Model error (${modelRef}): ${errorMessage}` : `Model error: ${errorMessage}`;
+}
+
 export function extractTextCached(message: unknown): string | null {
   if (!message || typeof message !== "object") {
     return extractText(message);
@@ -105,7 +121,7 @@ export function extractRawText(message: unknown): string | null {
   if (typeof m.text === "string") {
     return m.text;
   }
-  return null;
+  return extractAssistantErrorText(message);
 }
 
 export function formatReasoningMarkdown(text: string): string {

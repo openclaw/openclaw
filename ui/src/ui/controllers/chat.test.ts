@@ -534,6 +534,30 @@ describe("loadChatHistory", () => {
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("keeps assistant error-only history entries visible", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        stopReason: "error",
+        errorMessage: "rate limit reached",
+        content: [],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(messages);
+  });
 });
 
 describe("loadChatHistory", () => {
@@ -564,5 +588,33 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+});
+
+describe("handleChatEvent errors", () => {
+  it("appends an inline assistant error message for own-run failures", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "partial",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "HTTP 401: invalid model binding",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.lastError).toBe("HTTP 401: invalid model binding");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "HTTP 401: invalid model binding",
+    });
   });
 });

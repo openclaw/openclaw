@@ -42,6 +42,23 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("falls back to assistant errorMessage when no text blocks exist", () => {
+    const message = {
+      role: "assistant",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      stopReason: "error",
+      errorMessage: "401 unauthorized",
+      content: [],
+    };
+    expect(extractText(message)).toBe(
+      "Model error (anthropic/claude-sonnet-4-5): 401 unauthorized",
+    );
+    expect(extractTextCached(message)).toBe(
+      "Model error (anthropic/claude-sonnet-4-5): 401 unauthorized",
+    );
+  });
 });
 
 describe("extractThinkingCached", () => {
