@@ -966,7 +966,17 @@ export async function runEmbeddedPiAgent(
                   // inspect prior assistant errors from history for this attempt.
                   return null;
                 }
-                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
+                // If the model reported zero input tokens, it never processed the
+                // prompt — so the error cannot be a context overflow regardless of
+                // the error message. This guards against provider errors like Jinja
+                // template failures that superficially resemble overflow messages.
+                const zeroInputTokens =
+                  lastAssistantUsage !== undefined && lastAssistantUsage.input === 0;
+                if (
+                  assistantErrorText &&
+                  !zeroInputTokens &&
+                  isLikelyContextOverflowError(assistantErrorText)
+                ) {
                   return { text: assistantErrorText, source: "assistantError" as const };
                 }
                 return null;

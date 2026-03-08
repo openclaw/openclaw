@@ -46,7 +46,8 @@ describe("overflow compaction in run loop", () => {
         lower.includes("request_too_large") ||
         lower.includes("request size exceeds") ||
         lower.includes("context window exceeded") ||
-        lower.includes("prompt too large")
+        lower.includes("prompt too large") ||
+        lower.includes("prompt is too long")
       );
     });
     mockedCompactDirect.mockResolvedValue({
@@ -334,5 +335,36 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
     expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
+  });
+
+  it("does not trigger overflow compaction when input tokens are zero (e.g. provider-side Jinja template error)", async () => {
+    // Simulate a provider error that superficially resembles an overflow message
+    // but occurred before the model processed any tokens (input=0). This is the
+    // failure mode for LM Studio + Qwen3 Jinja template errors.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        lastAssistant: {
+          stopReason: "error",
+          // Use a message that genuinely matches isLikelyContextOverflowError to
+          // confirm the guard prevents compaction even when the pattern fires.
+          errorMessage:
+            'Error rendering prompt with jinja template: "No user query found in messages." prompt is too long',
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent(baseParams);
+
+    // Compaction must NOT have been attempted — the error is not a real overflow.
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("context overflow detected"));
   });
 });
