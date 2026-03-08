@@ -1163,10 +1163,9 @@ private fun queryInstalledApps(context: Context): List<InstalledApp> {
 
   val recentNotificationPackages =
     DeviceNotificationListenerService
-      .snapshot(context)
-      .notifications
+      .recentPackages(context)
       .asSequence()
-      .map { it.packageName.trim() }
+      .map { it.trim() }
       .filter { it.isNotEmpty() }
       .toSet()
 

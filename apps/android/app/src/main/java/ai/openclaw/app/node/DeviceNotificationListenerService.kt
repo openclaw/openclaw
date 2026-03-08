@@ -225,10 +225,11 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (!policy.allowsPackage(normalizedPackage)) {
       return null
     }
-    if (policy.isWithinQuietHours(nowEpochMs = postTimeMs)) {
+    val nowEpochMs = System.currentTimeMillis()
+    if (policy.isWithinQuietHours(nowEpochMs = nowEpochMs)) {
       return null
     }
-    if (change == "posted" && !forwardingLimiter.allow(postTimeMs, policy.maxEventsPerMinute)) {
+    if (change == "posted" && !forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
       return null
     }
     return buildJsonObject {
