@@ -84,14 +84,16 @@ export function normalizeToolParameters(
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
+  // google-antigravity proxies Anthropic models through Google's Cloud Code
+  // Assist API, which validates schemas against Gemini's JSON Schema subset.
+  // Cleaning must apply to ALL Google-routed providers regardless of target model.
   const isGeminiProvider =
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
-    if (isGeminiProvider && !isAnthropicProvider) {
+    if (isGeminiProvider) {
       return cleanSchemaForGemini(s);
     }
     if (isXai) {
