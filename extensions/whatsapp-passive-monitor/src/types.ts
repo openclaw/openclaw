@@ -20,9 +20,7 @@ export type Logger = {
 // Plugin configuration with defaults
 export type PluginConfig = {
   ollamaUrl: string;
-  agents: Array<{ name: string; model: string }>;
   debounceMs: number;
-  contextMessageLimit: number;
   dbPath: string;
   outputDir: string;
 };
