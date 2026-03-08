@@ -42,27 +42,33 @@ describe("web_search perplexity compatibility routing", () => {
   });
 
   it("resolves OpenRouter env auth and transport", () => {
-    withEnv({ PERPLEXITY_API_KEY: undefined, OPENROUTER_API_KEY: "sk-or-v1-test" }, () => {
-      expect(resolvePerplexityApiKey(undefined)).toEqual({
-        apiKey: "sk-or-v1-test",
-        source: "openrouter_env",
-      });
-      expect(resolvePerplexityTransport(undefined)).toMatchObject({
-        baseUrl: "https://openrouter.ai/api/v1",
-        model: "perplexity/sonar-pro",
-        transport: "chat_completions",
-      });
-    });
+    withEnv(
+      { PERPLEXITY_API_KEY: undefined, OPENROUTER_API_KEY: "sk-or-v1-test" }, // pragma: allowlist secret
+      () => {
+        expect(resolvePerplexityApiKey(undefined)).toEqual({
+          apiKey: "sk-or-v1-test",
+          source: "openrouter_env",
+        });
+        expect(resolvePerplexityTransport(undefined)).toMatchObject({
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "perplexity/sonar-pro",
+          transport: "chat_completions",
+        });
+      },
+    );
   });
 
   it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
-    withEnv({ PERPLEXITY_API_KEY: "pplx-test", OPENROUTER_API_KEY: undefined }, () => {
-      expect(resolvePerplexityTransport(undefined)).toMatchObject({
-        baseUrl: "https://api.perplexity.ai",
-        model: "perplexity/sonar-pro",
-        transport: "search_api",
-      });
-    });
+    withEnv(
+      { PERPLEXITY_API_KEY: "pplx-test", OPENROUTER_API_KEY: undefined }, // pragma: allowlist secret
+      () => {
+        expect(resolvePerplexityTransport(undefined)).toMatchObject({
+          baseUrl: "https://api.perplexity.ai",
+          model: "perplexity/sonar-pro",
+          transport: "search_api",
+        });
+      },
+    );
   });
 
   it("switches direct Perplexity to chat completions when model override is configured", () => {
@@ -84,7 +90,7 @@ describe("web_search perplexity compatibility routing", () => {
   it("treats unrecognized configured keys as direct Perplexity by default", () => {
     expect(
       resolvePerplexityTransport({
-        apiKey: "enterprise-perplexity-test",
+        apiKey: "enterprise-perplexity-test", // pragma: allowlist secret
       }),
     ).toMatchObject({
       baseUrl: "https://api.perplexity.ai",

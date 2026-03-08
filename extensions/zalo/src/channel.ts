@@ -28,6 +28,7 @@ import {
   isNumericTargetId,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelAccountConfigBasePath,
+  sendPayloadWithChunkedTextAndMedia,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/zalo";
 import {
