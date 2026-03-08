@@ -255,6 +255,23 @@ export function renderChatControls(state: AppViewState) {
         ${icons.brain}
       </button>
       <button
+        class="btn btn--sm btn--icon"
+        ?disabled=${disableThinkingToggle || showThinking}
+        @click=${() => {
+          if (disableThinkingToggle || showThinking) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatShowThinking: true,
+          });
+        }}
+        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : "Show deliverables (tool output)"}
+        aria-label="Show deliverables (tool output)"
+      >
+        ${icons.folder}
+      </button>
+      <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
         @click=${() => {

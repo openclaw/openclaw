@@ -1007,6 +1007,15 @@ export function renderApp(state: AppViewState) {
                     chatFocusMode: !state.settings.chatFocusMode,
                   });
                 },
+                onToggleThinking: () => {
+                  if (state.onboarding) {
+                    return;
+                  }
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowThinking: !state.settings.chatShowThinking,
+                  });
+                },
                 onChatScroll: (event) => state.handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
                 attachments: state.chatAttachments,

@@ -72,6 +72,7 @@ export type ChatProps = {
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
+  onToggleThinking?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
@@ -344,6 +345,36 @@ export function renderChat(props: ChatProps) {
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
+          ${
+            (() => {
+              if (props.showThinking) {
+                return false;
+              }
+              const toolStreamHasEntries = (props.toolMessages?.length ?? 0) > 0;
+              const historyHasHiddenToolResults = (props.messages ?? []).some((msg) => {
+                const role = normalizeMessage(msg).role.toLowerCase();
+                return role === "toolresult";
+              });
+              return toolStreamHasEntries || historyHasHiddenToolResults;
+            })()
+              ? html`
+                <div class="callout info" style="margin-bottom: 10px;">
+                  <strong>Tool output hidden.</strong> Deliverables and file paths often show up there.
+                  ${
+                    props.onToggleThinking
+                      ? html`
+                        <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                          <button class="btn btn--sm primary" type="button" @click=${props.onToggleThinking}>
+                            Show tool output
+                          </button>
+                        </div>
+                      `
+                      : nothing
+                  }
+                </div>
+              `
+              : nothing
+          }
           ${thread}
         </div>
 
