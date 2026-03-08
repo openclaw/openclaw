@@ -7,6 +7,10 @@ export function isValidTimeZone(tz: string): boolean {
   }
 }
 
+/**
+ * @deprecated Use formatTimestamp from "../infra/format-time/format-datetime.js" instead.
+ * This function will be removed in a future version.
+ */
 export function formatLocalIsoWithOffset(now: Date, timeZone?: string): string {
   const explicit = timeZone ?? process.env.TZ;
   const tz =
