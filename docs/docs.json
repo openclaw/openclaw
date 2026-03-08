@@ -861,7 +861,8 @@
                   "install/podman",
                   "install/nix",
                   "install/ansible",
-                  "install/bun"
+                  "install/bun",
+                  "install/claworc"
                 ]
               },
               {
