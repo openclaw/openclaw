@@ -369,17 +369,22 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         chatUserId: replyUserId,
       });
 
-      const timeoutPromise = new Promise<null>((_, reject) =>
-        setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
-      );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<null>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000);
+      });
 
-      const reply = await Promise.race([deliverPromise, timeoutPromise]);
+      try {
+        const reply = await Promise.race([deliverPromise, timeoutPromise]);
 
-      // Send reply back to Synology Chat using the resolved Chat user_id
-      if (reply) {
-        await sendMessage(account.incomingUrl, reply, replyUserId, account.allowInsecureSsl);
-        const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
-        log?.info(`Reply sent to ${payload.username} (${replyUserId}): ${replyPreview}`);
+        // Send reply back to Synology Chat using the resolved Chat user_id
+        if (reply) {
+          await sendMessage(account.incomingUrl, reply, replyUserId, account.allowInsecureSsl);
+          const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
+          log?.info(`Reply sent to ${payload.username} (${replyUserId}): ${replyPreview}`);
+        }
+      } finally {
+        clearTimeout(timer);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
