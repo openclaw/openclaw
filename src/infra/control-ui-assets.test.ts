@@ -123,6 +123,18 @@ describe("control UI assets helpers (fs-mocked)", () => {
     );
   });
 
+  it("resolves dist control-ui index path for symlinked argv1 via realpath", async () => {
+    const pkgRoot = abs("fixtures/bun-global/openclaw");
+    const wrapperArgv1 = abs("fixtures/bin/openclaw");
+    const realEntrypoint = path.join(pkgRoot, "dist", "index.js");
+
+    state.realpaths.set(wrapperArgv1, realEntrypoint);
+
+    await expect(resolveControlUiDistIndexPath(wrapperArgv1)).resolves.toBe(
+      path.join(pkgRoot, "dist", "control-ui", "index.html"),
+    );
+  });
+
   it("uses resolveOpenClawPackageRoot when available", async () => {
     const pkgRoot = abs("fixtures/openclaw");
     (
@@ -198,5 +210,17 @@ describe("control UI assets helpers (fs-mocked)", () => {
     // moduleUrl candidate: <moduleDir>/control-ui
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
+  });
+
+  it("resolves control-ui root for symlinked argv1 via realpath", () => {
+    const pkgRoot = abs("fixtures/bun-global/openclaw");
+    const wrapperArgv1 = abs("fixtures/bin/openclaw");
+    const realEntrypoint = path.join(pkgRoot, "dist", "index.js");
+    const uiDir = path.join(pkgRoot, "dist", "control-ui");
+
+    state.realpaths.set(wrapperArgv1, realEntrypoint);
+    setFile(path.join(uiDir, "index.html"), "<html></html>\n");
+
+    expect(resolveControlUiRootSync({ argv1: wrapperArgv1 })).toBe(uiDir);
   });
 });
