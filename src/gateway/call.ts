@@ -21,6 +21,7 @@ import { GatewayClient } from "./client.js";
 import {
   GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
+  trimCredentialToUndefined,
   trimToUndefined,
   type GatewayCredentialMode,
   type GatewayCredentialPrecedence,
@@ -87,12 +88,8 @@ export type ExplicitGatewayAuth = {
 };
 
 export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
-  const token =
-    typeof opts?.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
-  const password =
-    typeof opts?.password === "string" && opts.password.trim().length > 0
-      ? opts.password.trim()
-      : undefined;
+  const token = trimCredentialToUndefined(opts?.token);
+  const password = trimCredentialToUndefined(opts?.password);
   return { token, password };
 }
 

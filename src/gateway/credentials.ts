@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -65,11 +66,14 @@ export function trimToUndefined(value: unknown): string | undefined {
  * also be rejected, but this is an extremely unlikely edge case.
  */
 export function trimCredentialToUndefined(value: unknown): string | undefined {
-  const trimmed = trimToUndefined(value);
-  if (trimmed && containsEnvVarReference(trimmed)) {
+  const normalized = normalizeSecretInput(value);
+  if (!normalized) {
     return undefined;
   }
-  return trimmed;
+  if (containsEnvVarReference(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function firstDefined(values: Array<string | undefined>): string | undefined {
@@ -89,28 +93,28 @@ export function readGatewayTokenEnv(
   env: NodeJS.ProcessEnv = process.env,
   includeLegacyEnv = true,
 ): string | undefined {
-  const primary = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+  const primary = trimCredentialToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   if (primary) {
     return primary;
   }
   if (!includeLegacyEnv) {
     return undefined;
   }
-  return trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
+  return trimCredentialToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
 }
 
 export function readGatewayPasswordEnv(
   env: NodeJS.ProcessEnv = process.env,
   includeLegacyEnv = true,
 ): string | undefined {
-  const primary = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
+  const primary = trimCredentialToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
   if (primary) {
     return primary;
   }
   if (!includeLegacyEnv) {
     return undefined;
   }
-  return trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
+  return trimCredentialToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
 }
 
 export function hasGatewayTokenEnvCandidate(
@@ -173,8 +177,8 @@ export function resolveGatewayCredentialsFromConfig(params: {
 }): ResolvedGatewayCredentials {
   const env = params.env ?? process.env;
   const includeLegacyEnv = params.includeLegacyEnv ?? true;
-  const explicitToken = trimToUndefined(params.explicitAuth?.token);
-  const explicitPassword = trimToUndefined(params.explicitAuth?.password);
+  const explicitToken = trimCredentialToUndefined(params.explicitAuth?.token);
+  const explicitPassword = trimCredentialToUndefined(params.explicitAuth?.password);
   if (explicitToken || explicitPassword) {
     return { token: explicitToken, password: explicitPassword };
   }
@@ -216,12 +220,16 @@ export function resolveGatewayCredentialsFromConfig(params: {
     value: remote?.password,
     defaults,
   }).ref;
-  const remoteToken = remoteTokenRef ? undefined : trimToUndefined(remote?.token);
-  const remotePassword = remotePasswordRef ? undefined : trimToUndefined(remote?.password);
-  const localToken = localTokenRef ? undefined : trimToUndefined(params.cfg.gateway?.auth?.token);
+  const remoteToken = remoteTokenRef ? undefined : trimCredentialToUndefined(remote?.token);
+  const remotePassword = remotePasswordRef
+    ? undefined
+    : trimCredentialToUndefined(remote?.password);
+  const localToken = localTokenRef
+    ? undefined
+    : trimCredentialToUndefined(params.cfg.gateway?.auth?.token);
   const localPassword = localPasswordRef
     ? undefined
-    : trimToUndefined(params.cfg.gateway?.auth?.password);
+    : trimCredentialToUndefined(params.cfg.gateway?.auth?.password);
 
   const localTokenPrecedence =
     params.localTokenPrecedence ??
