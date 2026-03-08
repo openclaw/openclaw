@@ -475,17 +475,9 @@ export function buildAllowedModelSet(params: {
     ...syntheticCatalogEntries.values(),
   ];
 
-  if (allowedCatalog.length === 0 && allowedKeys.size === 0) {
-    if (defaultKey) {
-      catalogKeys.add(defaultKey);
-    }
-    return {
-      allowAny: true,
-      allowedCatalog: params.catalog,
-      allowedKeys: catalogKeys,
-    };
-  }
-
+  // When the user explicitly configured an allowlist (rawAllowlist.length > 0),
+  // never fall back to allowAny — even if none of the entries matched the
+  // catalog.  This ensures the picker only shows allowed models.
   return { allowAny: false, allowedCatalog, allowedKeys };
 }
 

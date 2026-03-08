@@ -25,12 +25,15 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = loadConfig();
-      const { allowedCatalog } = buildAllowedModelSet({
+      const { allowAny, allowedCatalog } = buildAllowedModelSet({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
       });
-      const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+      // When an allowlist is configured (allowAny === false), return only
+      // the filtered catalog — even when it is empty — so the picker does
+      // not unexpectedly show every known model.
+      const models = allowAny ? catalog : allowedCatalog;
       respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
