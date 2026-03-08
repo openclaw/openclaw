@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import { isCacheEnabled, resolveCacheTtlMs } from "../../config/cache-utils.js";
 
 type SessionManagerCacheEntry = {
-  sessionFile: string;
   loadedAt: number;
 };
 
@@ -27,7 +26,6 @@ export function trackSessionManagerAccess(sessionFile: string): void {
   }
   const now = Date.now();
   SESSION_MANAGER_CACHE.set(sessionFile, {
-    sessionFile,
     loadedAt: now,
   });
 }

@@ -14,8 +14,6 @@ import type { ChannelLogSink } from "./types.js";
 type RegistryEntry = {
   /** The client manager instance */
   manager: TwitchClientManager;
-  /** The account ID this manager is for */
-  accountId: string;
   /** Logger for this entry */
   logger: ChannelLogSink;
   /** When this entry was created */
@@ -47,7 +45,6 @@ export function getOrCreateClientManager(
   const manager = new TwitchClientManager(logger);
   registry.set(accountId, {
     manager,
-    accountId,
     logger,
     createdAt: Date.now(),
   });
