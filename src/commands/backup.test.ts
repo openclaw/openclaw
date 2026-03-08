@@ -235,4 +235,52 @@ describe("backup commands", () => {
     expect(result.archivePath).toBe(existingArchive);
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
+
+  it("fails fast when config is invalid and workspace backup is enabled", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
+        /--no-include-workspace/i,
+      );
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+  });
+
+  it("allows explicit partial backups when config is invalid", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+        includeWorkspace: false,
+      });
+
+      expect(result.includeWorkspace).toBe(false);
+      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+  });
 });

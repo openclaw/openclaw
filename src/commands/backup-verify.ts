@@ -5,6 +5,8 @@ import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
+const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+
 type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
@@ -55,12 +57,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function stripTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/u, "");
+}
+
+function normalizeArchivePath(entryPath: string, label: string): string {
+  const trimmed = stripTrailingSlashes(entryPath.trim());
+  if (!trimmed) {
+    throw new Error(`${label} is empty.`);
+  }
+  if (trimmed.startsWith("/") || WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE.test(trimmed)) {
+    throw new Error(`${label} must be relative: ${entryPath}`);
+  }
+  if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`${label} contains path traversal segments: ${entryPath}`);
+  }
+
+  const normalized = stripTrailingSlashes(path.posix.normalize(trimmed));
+  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`${label} resolves outside the archive root: ${entryPath}`);
+  }
+  return normalized;
+}
+
+function normalizeArchiveRoot(rootName: string): string {
+  const normalized = normalizeArchivePath(rootName, "Backup manifest archiveRoot");
+  if (normalized.includes("/")) {
+    throw new Error(`Backup manifest archiveRoot must be a single path segment: ${rootName}`);
+  }
+  return normalized;
+}
+
+function isArchivePathWithin(child: string, parent: string): boolean {
+  const relative = path.posix.relative(parent, child);
+  return relative === "" || (!relative.startsWith("../") && relative !== "..");
+}
+
 function parseManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Backup manifest is not valid JSON: ${String(err)}`);
+    throw new Error(`Backup manifest is not valid JSON: ${String(err)}`, { cause: err });
   }
 
   if (!isRecord(parsed)) {
@@ -164,25 +202,35 @@ async function extractManifest(params: {
 }
 
 function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
-  const manifestEntryPath = path.posix.join(manifest.archiveRoot, "manifest.json");
-  if (!entries.has(manifestEntryPath)) {
+  const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
+  const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
+  const normalizedEntries = [...entries].map((entry) =>
+    normalizeArchivePath(entry, "Archive entry"),
+  );
+  const normalizedEntrySet = new Set(normalizedEntries);
+
+  if (!normalizedEntrySet.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
 
-  for (const entry of entries) {
-    if (!entry.startsWith(`${manifest.archiveRoot}/`)) {
+  for (const entry of normalizedEntries) {
+    if (!isArchivePathWithin(entry, archiveRoot)) {
       throw new Error(`Archive entry is outside the declared archive root: ${entry}`);
     }
   }
 
+  const payloadRoot = path.posix.join(archiveRoot, "payload");
   for (const asset of manifest.assets) {
-    if (!asset.archivePath.startsWith(`${manifest.archiveRoot}/payload/`)) {
+    const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
+    if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
-    const exact = entries.has(asset.archivePath);
-    const nested = [...entries].some((entry) => entry.startsWith(`${asset.archivePath}/`));
+    const exact = normalizedEntrySet.has(assetArchivePath);
+    const nested = normalizedEntries.some(
+      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
+    );
     if (!exact && !nested) {
-      throw new Error(`Archive is missing payload for manifest asset: ${asset.archivePath}`);
+      throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }
 }
@@ -208,11 +256,16 @@ export async function backupVerifyCommand(
     throw new Error("Backup archive is empty.");
   }
 
-  const manifestMatches = [...entries].filter((entry) => entry.endsWith("/manifest.json"));
+  const manifestMatches = [...entries]
+    .map((entry) => ({
+      raw: entry,
+      normalized: normalizeArchivePath(entry, "Archive entry"),
+    }))
+    .filter((entry) => entry.normalized.endsWith("/manifest.json"));
   if (manifestMatches.length !== 1) {
     throw new Error(`Expected exactly one backup manifest entry, found ${manifestMatches.length}.`);
   }
-  const manifestEntryPath = manifestMatches[0];
+  const manifestEntryPath = manifestMatches[0]?.raw;
   if (!manifestEntryPath) {
     throw new Error("Backup archive manifest entry could not be resolved.");
   }

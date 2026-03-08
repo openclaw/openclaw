@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  readBestEffortConfig,
+  readConfigFileSnapshot,
   resolveConfigPath,
   resolveOAuthDir,
   resolveStateDir,
@@ -107,11 +107,23 @@ export async function resolveBackupPlanFromDisk(
     nowMs?: number;
   } = {},
 ): Promise<BackupPlan> {
-  const cfg = await readBestEffortConfig();
+  const includeWorkspace = params.includeWorkspace ?? true;
+  const configSnapshot = await readConfigFileSnapshot();
   const stateDir = resolveStateDir();
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();
-  const cleanupPlan = buildCleanupPlan({ cfg, stateDir, configPath, oauthDir });
+  if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
+    throw new Error(
+      `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
+    );
+  }
+  const cleanupPlan = buildCleanupPlan({
+    cfg: configSnapshot.config,
+    stateDir,
+    configPath,
+    oauthDir,
+  });
+  const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
 
   const candidates: BackupAssetCandidate[] = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
@@ -121,8 +133,8 @@ export async function resolveBackupPlanFromDisk(
     ...(cleanupPlan.oauthInsideState
       ? []
       : [{ kind: "credentials" as const, sourcePath: path.resolve(oauthDir) }]),
-    ...((params.includeWorkspace ?? true)
-      ? cleanupPlan.workspaceDirs.map((workspaceDir) => ({
+    ...(includeWorkspace
+      ? workspaceDirs.map((workspaceDir) => ({
           kind: "workspace" as const,
           sourcePath: path.resolve(workspaceDir),
         }))
@@ -131,7 +143,7 @@ export async function resolveBackupPlanFromDisk(
 
   const uniqueCandidates = [
     ...new Map(candidates.map((candidate) => [candidate.sourcePath, candidate])).values(),
-  ].sort(compareCandidates);
+  ].toSorted(compareCandidates);
   const archiveRoot = buildBackupArchiveRoot(params.nowMs);
 
   const included: BackupAsset[] = [];
@@ -173,7 +185,7 @@ export async function resolveBackupPlanFromDisk(
     stateDir,
     configPath,
     oauthDir,
-    workspaceDirs: cleanupPlan.workspaceDirs.map((entry) => path.resolve(entry)),
+    workspaceDirs: workspaceDirs.map((entry) => path.resolve(entry)),
     included,
     skipped,
   };
