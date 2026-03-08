@@ -13,6 +13,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnRecoverTextToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -421,6 +422,141 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
+  });
+});
+
+describe("wrapStreamFnRecoverTextToolCalls", () => {
+  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
+    result: () => Promise<unknown>;
+    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+  } {
+    return {
+      async result() {
+        return params.resultMessage;
+      },
+      [Symbol.asyncIterator]() {
+        return (async function* () {
+          for (const event of params.events) {
+            yield event;
+          }
+        })();
+      },
+    };
+  }
+
+  async function invokeRecoveredStream(
+    baseFn: (...args: never[]) => unknown,
+    allowedToolNames?: Set<string>,
+  ) {
+    const wrappedFn = wrapStreamFnRecoverTextToolCalls(baseFn as never, allowedToolNames);
+    return await wrappedFn({} as never, {} as never, {} as never);
+  }
+
+  it("recovers bare Kimi text tool calls into structured toolCall blocks", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: 'exec({"command":"pwd","timeout":120000})' }],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "exec",
+          arguments: { command: "pwd", timeout: 120000 },
+        },
+      ],
+    });
+  });
+
+  it("recovers XML invoke blocks into structured toolCall blocks", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<invoke name="Read">
+<parameter name="path">/tmp/demo.txt</parameter>
+</invoke>`,
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["read"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "read",
+          arguments: { path: "/tmp/demo.txt" },
+        },
+      ],
+    });
+  });
+
+  it("preserves surrounding prose while recovering tool calls", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "I'll check that. exec({\"command\":\"ls\"}) Done.",
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["exec"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "I'll check that." },
+        {
+          type: "toolCall",
+          name: "exec",
+          arguments: { command: "ls" },
+        },
+        { type: "text", text: "Done." },
+      ],
+    });
+  });
+
+  it("maps recovered prefixed tool names to canonical allowed tools", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'functions.read({"path":"/tmp/a"})',
+        },
+      ],
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeRecoveredStream(baseFn, new Set(["read"]));
+    const result = await stream.result();
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          name: "read",
+          arguments: { path: "/tmp/a" },
+        },
+      ],
+    });
   });
 });
 
