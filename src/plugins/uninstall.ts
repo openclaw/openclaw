@@ -11,6 +11,7 @@ export type UninstallActions = {
   allowlist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  channelConfig: boolean;
   directory: boolean;
 };
 
@@ -65,6 +66,7 @@ export function resolveUninstallDirectoryTarget(params: {
 export function removePluginFromConfig(
   cfg: OpenClawConfig,
   pluginId: string,
+  opts?: { channelIds?: string[] },
 ): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
   const actions: Omit<UninstallActions, "directory"> = {
     entry: false,
@@ -72,6 +74,7 @@ export function removePluginFromConfig(
     allowlist: false,
     loadPath: false,
     memorySlot: false,
+    channelConfig: false,
   };
 
   const pluginsConfig = cfg.plugins ?? {};
@@ -128,6 +131,26 @@ export function removePluginFromConfig(
     slots = undefined;
   }
 
+  // Remove channel config entries for channels provided by the plugin.
+  // This must happen before config validation to avoid "unknown channel id" errors
+  // when the plugin is no longer loaded.
+  let channels = cfg.channels;
+  const channelIds = opts?.channelIds ?? [];
+  if (channels && channelIds.length > 0) {
+    let changed = false;
+    const next = { ...channels };
+    for (const channelId of channelIds) {
+      if (channelId in next) {
+        delete next[channelId];
+        changed = true;
+      }
+    }
+    if (changed) {
+      channels = Object.keys(next).length > 0 ? next : undefined;
+      actions.channelConfig = true;
+    }
+  }
+
   const newPlugins = {
     ...pluginsConfig,
     entries,
@@ -158,6 +181,7 @@ export function removePluginFromConfig(
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    channels,
   };
 
   return { config, actions };
@@ -168,6 +192,8 @@ export type UninstallPluginParams = {
   pluginId: string;
   deleteFiles?: boolean;
   extensionsDir?: string;
+  /** Channel IDs provided by the plugin, removed from channels config during uninstall. */
+  channelIds?: string[];
 };
 
 /**
@@ -177,7 +203,7 @@ export type UninstallPluginParams = {
 export async function uninstallPlugin(
   params: UninstallPluginParams,
 ): Promise<UninstallPluginResult> {
-  const { config, pluginId, deleteFiles = true, extensionsDir } = params;
+  const { config, pluginId, deleteFiles = true, extensionsDir, channelIds } = params;
 
   // Validate plugin exists
   const hasEntry = pluginId in (config.plugins?.entries ?? {});
@@ -191,7 +217,9 @@ export async function uninstallPlugin(
   const isLinked = installRecord?.source === "path";
 
   // Remove from config
-  const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId);
+  const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {
+    channelIds,
+  });
 
   const actions: UninstallActions = {
     ...configActions,

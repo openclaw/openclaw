@@ -308,6 +308,85 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins?.enabled).toBe(true);
     expect(result.plugins?.deny).toEqual(["denied-plugin"]);
   });
+
+  it("removes channel config entries for plugin-provided channels", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          chatmax: { enabled: true },
+        },
+      },
+      channels: {
+        chatmax: { dmPolicy: "open", allowFrom: ["*"] },
+        discord: { dmPolicy: "open" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "chatmax", {
+      channelIds: ["chatmax"],
+    });
+
+    expect(result.channels).toEqual({ discord: { dmPolicy: "open" } });
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("removes all channel config when plugin provides the only configured channel", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          chatmax: { enabled: true },
+        },
+      },
+      channels: {
+        chatmax: { dmPolicy: "open" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "chatmax", {
+      channelIds: ["chatmax"],
+    });
+
+    expect(result.channels).toBeUndefined();
+    expect(actions.channelConfig).toBe(true);
+  });
+
+  it("does not set channelConfig action when no channel IDs match", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "my-plugin": { enabled: true },
+        },
+      },
+      channels: {
+        discord: { dmPolicy: "open" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "my-plugin", {
+      channelIds: ["chatmax"],
+    });
+
+    expect(result.channels).toEqual({ discord: { dmPolicy: "open" } });
+    expect(actions.channelConfig).toBe(false);
+  });
+
+  it("does not modify channels when no channelIds provided", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          chatmax: { enabled: true },
+        },
+      },
+      channels: {
+        chatmax: { dmPolicy: "open" },
+      },
+    };
+
+    const { config: result, actions } = removePluginFromConfig(config, "chatmax");
+
+    expect(result.channels).toEqual({ chatmax: { dmPolicy: "open" } });
+    expect(actions.channelConfig).toBe(false);
+  });
 });
 
 describe("uninstallPlugin", () => {
@@ -459,6 +538,37 @@ describe("uninstallPlugin", () => {
       }
     } finally {
       rmSpy.mockRestore();
+    }
+  });
+
+  it("removes channel config entries when channelIds provided", async () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          chatmax: { enabled: true },
+        },
+        installs: {
+          chatmax: { source: "npm", spec: "chatmax@1.0.0" },
+        },
+      },
+      channels: {
+        chatmax: { dmPolicy: "open", allowFrom: ["*"] },
+        discord: { dmPolicy: "open" },
+      },
+    };
+
+    const result = await uninstallPlugin({
+      config,
+      pluginId: "chatmax",
+      deleteFiles: false,
+      channelIds: ["chatmax"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels).toEqual({ discord: { dmPolicy: "open" } });
+      expect(result.actions.channelConfig).toBe(true);
+      expect(result.config.plugins).toBeUndefined();
     }
   });
 
