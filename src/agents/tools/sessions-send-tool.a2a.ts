@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
@@ -120,6 +121,10 @@ export async function runSessionsSendA2AFlow(params: {
     });
     if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
       try {
+        const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
+        const requesterAgentId = requesterSessionKey
+          ? parseAgentSessionKey(requesterSessionKey)?.agentId
+          : undefined;
         await callGateway({
           method: "send",
           params: {
@@ -127,6 +132,8 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            ...(requesterSessionKey ? { sessionKey: requesterSessionKey } : {}),
+            ...(requesterAgentId ? { agentId: requesterAgentId } : {}),
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,

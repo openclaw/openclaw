@@ -110,6 +110,7 @@ export function createOpenClawTools(
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        requesterAgentIdOverride: options?.requesterAgentIdOverride,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
         currentChannelProvider: options?.agentChannel,

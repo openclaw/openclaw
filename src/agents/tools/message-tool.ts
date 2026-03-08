@@ -18,7 +18,7 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { POLL_CREATION_PARAM_DEFS, POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -488,6 +488,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   config?: OpenClawConfig;
   currentChannelId?: string;
   currentChannelProvider?: string;
@@ -583,6 +584,14 @@ function resolveAgentAccountId(value?: string): string | undefined {
     return undefined;
   }
   return normalizeAccountId(trimmed);
+}
+
+function resolveRequesterAgentId(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return normalizeAgentId(trimmed);
 }
 
 function filterActionsForContext(params: {
@@ -777,7 +786,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sessionKey: options?.agentSessionKey,
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
-          : undefined,
+          : resolveRequesterAgentId(options?.requesterAgentIdOverride),
         sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });
