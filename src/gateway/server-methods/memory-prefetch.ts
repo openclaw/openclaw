@@ -59,6 +59,7 @@ export async function runMemoryPrefetch(params: {
 
     const results = await manager.search(message, {
       maxResults: ap.maxResults,
+      minScore: memCfg.query.minScore,
       sessionKey,
     });
 
