@@ -198,6 +198,14 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
       throw new Error(telegramError);
     }
   }
+  if (job.delivery.channel === "feishu" || job.delivery.channel === "lark") {
+    const hasTarget = typeof job.delivery.to === "string" && job.delivery.to.trim().length > 0;
+    if (!hasTarget) {
+      throw new Error(
+        "cron feishu announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
+      );
+    }
+  }
 }
 
 function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
