@@ -2,6 +2,7 @@ import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDeliveryPlan,
@@ -215,6 +216,26 @@ export async function deliverAgentCommandResult(params: {
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
+    }
+  }
+  // Mirror nested agent output to child session transcript so sessions_history reflects the result.
+  if (
+    !deliver &&
+    opts.lane === AGENT_LANE_NESTED &&
+    effectiveSessionKey &&
+    deliveryPayloads.length > 0
+  ) {
+    const combinedText = deliveryPayloads
+      .map((p) => p.text)
+      .filter(Boolean)
+      .join("\n\n");
+    const mediaUrls = deliveryPayloads.flatMap((p) => p.mediaUrls ?? []).filter(Boolean);
+    if (combinedText.trim() || mediaUrls.length > 0) {
+      await appendAssistantMessageToSessionTranscript({
+        sessionKey: effectiveSessionKey,
+        text: combinedText || undefined,
+        mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+      });
     }
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
