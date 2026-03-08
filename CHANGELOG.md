@@ -361,6 +361,7 @@ Docs: https://docs.openclaw.ai
 - Discord/config schema parity: add `channels.discord.agentComponents` to the strict Zod config schema so valid `agentComponents.enabled` settings (root and account-scoped) no longer fail with unrecognized-key validation errors. Landed from contributor PR #39378 by @gambletan. Thanks @gambletan and @thewilloftheshadow.
 - ACPX/MCP session bootstrap: inject configured MCP servers into ACP `session/new` and `session/load` for acpx-backed sessions, restoring Canva and other external MCP tools. Landed from contributor PR #39337. Thanks @goodspeed-apps.
 - Control UI/Telegram sender labels: preserve inbound sender labels in sanitized chat history so dashboard user-message groups split correctly and show real group-member names instead of `You`. (#39414) Thanks @obviyus.
+- Install/Windows PowerShell: keep the installer window open on failure so users can read error messages, check `$LASTEXITCODE` after native commands (`npm`, `git`, `pnpm`) to detect silent failures, rename `$ERROR` to `$CLR_ERROR` to avoid collision with PowerShell's automatic `$Error` variable, and fix the `Write-Host` module qualifier. (#38634) Thanks @ademczuk.
 
 ## 2026.3.2
 
