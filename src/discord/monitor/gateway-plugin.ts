@@ -65,10 +65,15 @@ export function createDiscordGatewayPlugin(params: {
             } as Record<string, unknown>);
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
-            throw new Error(
-              `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
+            // Carbon's Client constructor calls registerClient without awaiting, so
+            // any thrown error here becomes an unhandled rejection that crashes the
+            // gateway. Log and bail instead — the health monitor will retry later.
+            params.runtime.error?.(
+              danger(
+                `discord: failed to fetch gateway info: ${error instanceof Error ? error.message : String(error)}`,
+              ),
             );
+            return;
           }
         }
         return super.registerClient(client);
