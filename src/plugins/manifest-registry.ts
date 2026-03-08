@@ -12,12 +12,24 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
-// Precedence: config > workspace > global > bundled
+// Same-path dedup precedence: config > workspace > global > bundled
+// Used when the same physical directory is discovered via multiple routes.
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
   global: 2,
   bundled: 3,
+};
+
+// Genuine-duplicate precedence: config > bundled > workspace > global
+// Used when genuinely different copies of a plugin (same id, different paths)
+// exist. Bundled plugins ship with the binary and are the known-good version,
+// so they take precedence over auto-discovered global/npm-installed copies.
+const GENUINE_DUPLICATE_RANK: Readonly<Record<PluginOrigin, number>> = {
+  config: 0,
+  bundled: 1,
+  workspace: 2,
+  global: 3,
 };
 
 export type PluginManifestRecord = {
@@ -233,8 +245,24 @@ export function loadPluginManifestRegistry(params: {
         level: "warn",
         pluginId: manifest.id,
         source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        message: `duplicate plugin id detected; skipping duplicate from ${candidate.source}`,
       });
+      // Genuine duplicate from a different physical path: apply
+      // bundled-first precedence to avoid registering two records with
+      // the same plugin id (which causes Gateway instability).
+      if (
+        GENUINE_DUPLICATE_RANK[candidate.origin] < GENUINE_DUPLICATE_RANK[existing.candidate.origin]
+      ) {
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+      }
+      continue;
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

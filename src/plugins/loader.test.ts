@@ -1068,10 +1068,11 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const entries = registry.plugins.filter((entry) => entry.id === "shadow");
-    const loaded = entries.find((entry) => entry.status === "loaded");
-    const overridden = entries.find((entry) => entry.status === "disabled");
-    expect(loaded?.origin).toBe("config");
-    expect(overridden?.origin).toBe("bundled");
+    // Manifest registry deduplicates genuine duplicates (same id, different paths),
+    // so only the higher-precedence record survives to the loader.
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.status).toBe("loaded");
+    expect(entries[0]?.origin).toBe("config");
   });
 
   it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
@@ -1108,11 +1109,11 @@ describe("loadOpenClawPlugins", () => {
       });
 
       const entries = registry.plugins.filter((entry) => entry.id === "feishu");
-      const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
-      expect(loaded?.origin).toBe("bundled");
-      expect(overridden?.origin).toBe("global");
-      expect(overridden?.error).toContain("overridden by bundled plugin");
+      // Manifest registry deduplicates genuine duplicates (same id, different paths),
+      // keeping the bundled copy over the auto-discovered global copy.
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.status).toBe("loaded");
+      expect(entries[0]?.origin).toBe("bundled");
     });
   });
 
