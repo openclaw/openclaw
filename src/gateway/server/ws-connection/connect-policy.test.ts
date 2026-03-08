@@ -113,6 +113,26 @@ describe("ws connect policy", () => {
       }).kind,
     ).toBe("reject-control-ui-insecure-auth");
 
+    // Control UI with dangerouslyDisableDeviceAuth -> allowed (even remote).
+    const controlUiBypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiBypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
     expect(
       evaluateMissingDeviceIdentity({
         hasDeviceIdentity: false,
