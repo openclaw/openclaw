@@ -136,6 +136,21 @@ export class MemoryDB {
     return fullEntry;
   }
 
+  /** Bulk fetch memories by their IDs */
+  async getByIds(ids: string[]): Promise<MemoryEntry[]> {
+    if (ids.length === 0) return [];
+    await this.ensureInitialized();
+
+    // Filter to only valid UUIDs
+    const validIds = ids.filter((id) => UUID_REGEX.test(id));
+    if (validIds.length === 0) return [];
+
+    const idList = validIds.map((id) => `'${id}'`).join(", ");
+    const results = await this.table!.query().where(`id IN (${idList})`).toArray();
+
+    return results as unknown as MemoryEntry[];
+  }
+
   /**
    * Multi-Retrieval Search
    * 1. Fetches top N by vector similarity (semantic search)
@@ -214,6 +229,64 @@ export class MemoryDB {
     });
 
     return mapped.filter((r) => r.score >= minScore);
+  }
+
+  /**
+   * Associative Multi-Hop Retrieval (AMHR)
+   * 1. Performs standard hybrid search
+   * 2. Traverses the knowledge graph from result entities
+   * 3. Fetches connected memories that weren't in the initial results
+   */
+  async searchWithAMHR(
+    vector: number[],
+    limit = 5,
+    graphDB: GraphDB,
+    minScore = 0.5,
+  ): Promise<MemorySearchResult[]> {
+    // Phase 1: Standard Search
+    const initialResults = await this.search(vector, limit, minScore);
+    if (initialResults.length === 0) return [];
+
+    // Phase 2: Graph Discovery
+    // Extract entities from current results and traverse
+    const entities = initialResults.map((r) => r.entry.text);
+    const traversal = graphDB.traverse(entities, 1, 10);
+
+    const discoveredEntities = new Set<string>();
+    for (const edge of traversal.edges) {
+      discoveredEntities.add(edge.target);
+      discoveredEntities.add(edge.source);
+    }
+
+    // Remove entities already in initial results to avoid redundancy
+    for (const r of initialResults) {
+      discoveredEntities.delete(r.entry.text);
+    }
+
+    if (discoveredEntities.size === 0) return initialResults;
+
+    // Phase 3: Fetch Associative Memories
+    // We search the DB for memories matching discovered entities
+    const associativeResults: MemorySearchResult[] = [];
+
+    // Construct a compatible WHERE clause for multiple entities
+    // LanceDB 2.0's DataFusion has some limitations with ARRAY/LIKE ANY
+    const conditions = Array.from(discoveredEntities).map(
+      (e) => `text LIKE '%${e.replace(/'/g, "''")}%'`,
+    );
+    const whereClause = `(${conditions.join(" OR ")}) OR category = 'fact'`;
+
+    await this.ensureInitialized();
+    const matchedMemories = await this.table!.query().where(whereClause).limit(10).toArray();
+
+    for (const m of matchedMemories) {
+      const entry = m as unknown as MemoryEntry;
+      if (!initialResults.some((r) => r.entry.id === entry.id)) {
+        associativeResults.push({ entry, score: 0.6 }); // Associative boost
+      }
+    }
+
+    return [...initialResults, ...associativeResults].sort((a, b) => b.score - a.score);
   }
 
   async getById(id: string): Promise<MemoryEntry | null> {
@@ -1065,7 +1138,7 @@ const memoryPlugin = {
         try {
           // Single embed call for both recall injection AND reinforcement
           const vector = await embeddings.embed(event.prompt);
-          const rawResults = await db.search(vector, 3, 0.3);
+          const rawResults = await db.searchWithAMHR(vector, 3, graphDB, 0.3);
 
           if (rawResults.length === 0) return;
 
