@@ -165,7 +165,13 @@ const FeishuSharedConfigShape = {
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
-  /** Allowed roots for local media paths, or "any" to allow any path. Used by sendMedia/local file uploads. */
+  /**
+   * Allowed roots for local media paths (sendMedia / local file uploads). Array of absolute
+   * directory paths, or "any" to allow any local path.
+   * Security: "any" bypasses path-containment checks and grants unrestricted filesystem read
+   * access to the process. Prefer explicit path arrays in production; use "any" only in
+   * trusted environments (e.g. dev or locked-down hosts).
+   */
   localRoots: z.union([z.literal("any"), z.array(z.string())]).optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
