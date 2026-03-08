@@ -151,18 +151,34 @@ describe("config plugin validation", () => {
             issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
         ),
       ).toBe(true);
+      // slots.memory with a missing plugin is still a hard error
       expect(res.issues).toEqual(
         expect.arrayContaining([
-          { path: "plugins.allow", message: "plugin not found: missing-allow" },
-          { path: "plugins.deny", message: "plugin not found: missing-deny" },
           { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
         ]),
       );
-      expect(res.warnings).toContainEqual({
-        path: "plugins.entries.missing-plugin",
-        message:
-          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
-      });
+      // allow/deny with missing plugins are now warnings, not hard errors —
+      // a broken or uninstalled plugin in these filter lists should not
+      // crash the gateway (refs #5052, #28404, #38217).
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: "plugins.entries.missing-plugin",
+            message:
+              "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+          },
+        ]),
+      );
     }
   });
 
@@ -318,6 +334,36 @@ describe("config plugin validation", () => {
         path: "agents.defaults.heartbeat.target",
         message: "unknown heartbeat target: not-a-channel",
       });
+    }
+  });
+
+  it("warns instead of crashing when allow/deny reference a missing plugin", async () => {
+    // A plugin in allow/deny that has a broken manifest or was uninstalled
+    // should not crash the gateway — just warn and skip (refs #5052, #28404, #38217).
+    clearPluginManifestRegistryCache();
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        allow: ["missing-allowed-plugin"],
+        deny: ["missing-denied-plugin"],
+      },
+    });
+    // Should NOT fail — missing plugins in allow/deny are warnings, not fatal errors
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("missing-allowed-plugin"),
+        }),
+      );
+      expect(res.warnings).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.deny",
+          message: expect.stringContaining("missing-denied-plugin"),
+        }),
+      );
     }
   });
 
