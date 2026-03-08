@@ -325,7 +325,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain('`runtime: "acp"`');
     expect(prompt).toContain('Use `runtime: "subagent"` instead.');
   });
-
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
