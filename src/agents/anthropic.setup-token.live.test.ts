@@ -5,7 +5,7 @@ import path from "node:path";
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_SETUP_TOKEN_PREFIX,
+  ANTHROPIC_SETUP_TOKEN_PREFIXES,
   validateAnthropicSetupToken,
 } from "../commands/auth-token.js";
 import { loadConfig } from "../config/config.js";
@@ -37,7 +37,7 @@ type TokenSource = {
 };
 
 function isSetupToken(value: string): boolean {
-  return value.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX);
+  return ANTHROPIC_SETUP_TOKEN_PREFIXES.some((prefix) => value.startsWith(prefix));
 }
 
 function listSetupTokenProfiles(store: {

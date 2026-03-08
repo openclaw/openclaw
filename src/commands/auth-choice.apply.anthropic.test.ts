@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
-import { ANTHROPIC_SETUP_TOKEN_PREFIX } from "./auth-token.js";
+import { ANTHROPIC_SETUP_TOKEN_PREFIXES } from "./auth-token.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
@@ -29,7 +29,7 @@ describe("applyAuthChoiceAnthropic", () => {
 
   it("persists setup-token ref without plaintext token in auth-profiles store", async () => {
     const agentDir = await setupTempState();
-    process.env.ANTHROPIC_SETUP_TOKEN = `${ANTHROPIC_SETUP_TOKEN_PREFIX}${"x".repeat(100)}`;
+    process.env.ANTHROPIC_SETUP_TOKEN = `${ANTHROPIC_SETUP_TOKEN_PREFIXES[0]}${"x".repeat(100)}`;
 
     const prompter = createWizardPrompter({}, { defaultSelect: "ref" });
     const runtime = createExitThrowingRuntime();
