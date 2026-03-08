@@ -439,6 +439,67 @@ describe("convertMessagesToInputItems", () => {
     expect(items).toEqual([]);
   });
 
+  it("ignores null entries in user message content array without throwing", () => {
+    const msg = {
+      role: "user" as const,
+      content: [null, { type: "text", text: "hello" }],
+      timestamp: 0,
+    };
+    expect(() =>
+      convertMessagesToInputItems([msg] as unknown as Parameters<
+        typeof convertMessagesToInputItems
+      >[0]),
+    ).not.toThrow();
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "message", role: "user", content: "hello" });
+  });
+
+  it("ignores null entries in assistant message content array without throwing", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [null, { type: "text", text: "response" }],
+      timestamp: 0,
+    };
+    expect(() =>
+      convertMessagesToInputItems([msg] as unknown as Parameters<
+        typeof convertMessagesToInputItems
+      >[0]),
+    ).not.toThrow();
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "message", role: "assistant", content: "response" });
+  });
+
+  it("ignores null entries in toolResult content array without throwing", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolCallId: "call_null_test",
+      toolName: "test_tool",
+      content: [null, { type: "text", text: "ok" }],
+      isError: false,
+      timestamp: 0,
+    };
+    expect(() =>
+      convertMessagesToInputItems([msg] as unknown as Parameters<
+        typeof convertMessagesToInputItems
+      >[0]),
+    ).not.toThrow();
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_null_test",
+      output: "ok",
+    });
+  });
+
   it("falls back to toolUseId when toolCallId is missing", () => {
     const msg = {
       role: "toolResult" as const,

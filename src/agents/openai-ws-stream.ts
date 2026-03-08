@@ -118,7 +118,7 @@ function contentToText(content: unknown): string {
     return "";
   }
   return (content as Array<{ type?: string; text?: string }>)
-    .filter((p) => p.type === "text" && typeof p.text === "string")
+    .filter((p) => p != null && typeof p === "object" && p.type === "text" && typeof p.text === "string")
     .map((p) => p.text as string)
     .join("");
 }
@@ -138,6 +138,9 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
     data?: string;
     mimeType?: string;
   }>) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
     if (part.type === "text" && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
     } else if (part.type === "image" && typeof part.data === "string") {
@@ -205,6 +208,9 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
           arguments?: Record<string, unknown>;
           thinking?: string;
         }>) {
+          if (!block || typeof block !== "object") {
+            continue;
+          }
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
           } else if (block.type === "thinking" && typeof block.thinking === "string") {
