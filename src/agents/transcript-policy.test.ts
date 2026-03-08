@@ -56,13 +56,24 @@ describe("resolveTranscriptPolicy", () => {
 
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
-      provider: "moonshot",
-      modelId: "kimi-k2.5",
+      provider: "deepseek",
+      modelId: "deepseek-chat",
       modelApi: "openai-completions",
     });
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("excludes moonshot from strict OpenAI-compatible turn validation", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      modelApi: "openai-completions",
+    });
+    expect(policy.applyGoogleTurnOrdering).toBe(false);
+    expect(policy.validateGeminiTurns).toBe(false);
+    expect(policy.validateAnthropicTurns).toBe(false);
   });
 
   it("enables Anthropic-compatible policies for Bedrock provider", () => {

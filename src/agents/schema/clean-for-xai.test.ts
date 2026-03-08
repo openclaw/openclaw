@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isXaiProvider, stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
+import { isMoonshotProvider, isXaiProvider, stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
 
 describe("isXaiProvider", () => {
   it("matches direct xai provider", () => {
@@ -151,5 +151,42 @@ describe("stripXaiUnsupportedKeywords", () => {
     expect(stripXaiUnsupportedKeywords(null)).toBeNull();
     expect(stripXaiUnsupportedKeywords("string")).toBe("string");
     expect(stripXaiUnsupportedKeywords(42)).toBe(42);
+  });
+});
+
+describe("isMoonshotProvider", () => {
+  it("matches direct moonshot provider", () => {
+    expect(isMoonshotProvider("moonshot")).toBe(true);
+  });
+
+  it("matches case-insensitively on provider id", () => {
+    expect(isMoonshotProvider("Moonshot")).toBe(true);
+    expect(isMoonshotProvider("MOONSHOT")).toBe(true);
+  });
+
+  it("matches openrouter with moonshotai/ model prefix", () => {
+    expect(isMoonshotProvider("openrouter", "moonshotai/Kimi-K2.5")).toBe(true);
+  });
+
+  it("matches together with moonshotai/ model prefix", () => {
+    expect(isMoonshotProvider("together", "moonshotai/Kimi-K2-Instruct-0905")).toBe(true);
+  });
+
+  it("matches openrouter with kimi in model id", () => {
+    expect(isMoonshotProvider("openrouter", "kimi-k2.5")).toBe(true);
+  });
+
+  it("does not match openrouter with non-moonshot model", () => {
+    expect(isMoonshotProvider("openrouter", "openai/gpt-4o")).toBe(false);
+  });
+
+  it("does not match unrelated providers", () => {
+    expect(isMoonshotProvider("openai")).toBe(false);
+    expect(isMoonshotProvider("anthropic")).toBe(false);
+    expect(isMoonshotProvider("google")).toBe(false);
+  });
+
+  it("handles undefined provider", () => {
+    expect(isMoonshotProvider(undefined)).toBe(false);
   });
 });
