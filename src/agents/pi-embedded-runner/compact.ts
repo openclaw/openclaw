@@ -34,12 +34,14 @@ import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { streamOllamaApi } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
   ensureSessionHeader,
@@ -617,6 +619,9 @@ export async function compactEmbeddedPiSessionDirect(
         resourceLoader,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
+      if (model.api === "ollama") {
+        ensureCustomApiRegistered(model.api, streamOllamaApi);
+      }
 
       try {
         const prior = await sanitizeSessionHistory({
