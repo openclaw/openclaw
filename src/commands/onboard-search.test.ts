@@ -286,6 +286,6 @@ describe("setupSearch", () => {
   it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["perplexity", "brave", "gemini", "grok", "kimi"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
   });
 });
