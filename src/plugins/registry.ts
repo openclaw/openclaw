@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
+import { registerMemoryPromptSection } from "../memory/prompt-section.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
@@ -978,6 +979,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             message: `context engine already registered: ${id} (${result.existingOwner})`,
           });
         }
+      },
+      registerMemoryPromptSection: (builder) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        if (record.kind !== "memory") {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: "only memory plugins can register a memory prompt section",
+          });
+          return;
+        }
+        registerMemoryPromptSection(builder);
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
