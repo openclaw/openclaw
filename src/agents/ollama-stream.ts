@@ -406,6 +406,15 @@ function resolveOllamaChatUrl(baseUrl: string): string {
   return `${apiBase}/api/chat`;
 }
 
+function resolveOllamaModelHeaders(model: {
+  headers?: unknown;
+}): Record<string, string> | undefined {
+  if (!model.headers || typeof model.headers !== "object" || Array.isArray(model.headers)) {
+    return undefined;
+  }
+  return model.headers as Record<string, string>;
+}
+
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
@@ -539,3 +548,11 @@ export function createOllamaStreamFn(
     return stream;
   };
 }
+
+export const streamOllamaApi: StreamFn = (model, context, options) => {
+  const baseUrl =
+    typeof model.baseUrl === "string" && model.baseUrl.trim().length > 0
+      ? model.baseUrl
+      : OLLAMA_NATIVE_BASE_URL;
+  return createOllamaStreamFn(baseUrl, resolveOllamaModelHeaders(model))(model, context, options);
+};
