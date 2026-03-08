@@ -7,7 +7,7 @@ describe("Telegram webhookPort config", () => {
       channels: {
         telegram: {
           webhookUrl: "https://example.com/telegram-webhook",
-          webhookSecret: "secret",
+          webhookSecret: "secret", // pragma: allowlist secret
           webhookPort: 8787,
         },
       },
@@ -20,7 +20,7 @@ describe("Telegram webhookPort config", () => {
       channels: {
         telegram: {
           webhookUrl: "https://example.com/telegram-webhook",
-          webhookSecret: "secret",
+          webhookSecret: "secret", // pragma: allowlist secret
           webhookPort: 0,
         },
       },
@@ -33,7 +33,7 @@ describe("Telegram webhookPort config", () => {
       channels: {
         telegram: {
           webhookUrl: "https://example.com/telegram-webhook",
-          webhookSecret: "secret",
+          webhookSecret: "secret", // pragma: allowlist secret
           webhookPort: -1,
         },
       },

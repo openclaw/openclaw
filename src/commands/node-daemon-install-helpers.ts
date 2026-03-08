@@ -1,12 +1,11 @@
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
-import { resolveGatewayDevMode } from "./daemon-install-helpers.js";
 import {
-  emitNodeRuntimeWarning,
-  type DaemonInstallWarnFn,
-} from "./daemon-install-runtime-warning.js";
+  emitDaemonInstallRuntimeWarning,
+  resolveDaemonInstallRuntimeInputs,
+} from "./daemon-install-plan.shared.js";
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 
 export type NodeInstallPlan = {
@@ -29,13 +28,12 @@ export async function buildNodeInstallPlan(params: {
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
-  const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
-    params.nodePath ??
-    (await resolvePreferredNodePath({
-      env: params.env,
-      runtime: params.runtime,
-    }));
+  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    nodePath: params.nodePath,
+  });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
     port: params.port,
@@ -48,10 +46,10 @@ export async function buildNodeInstallPlan(params: {
     nodePath,
   });
 
-  await emitNodeRuntimeWarning({
+  await emitDaemonInstallRuntimeWarning({
     env: params.env,
     runtime: params.runtime,
-    nodeProgram: programArguments[0],
+    programArguments,
     warn: params.warn,
     title: "Node daemon runtime",
   });
