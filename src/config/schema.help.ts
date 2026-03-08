@@ -101,6 +101,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
+  "gateway.healthMonitor.timing.staleEventThresholdMs":
+    "How long (ms) a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Increase for low-traffic channels to avoid false-positive restarts during quiet periods (e.g. nighttime). Default: 1800000 (30 min).",
+  "gateway.healthMonitor.timing.monitorStartupGraceMs":
+    "Grace period (ms) after the health monitor starts before stale-socket checks begin. Default: 60000 (1 min).",
+  "gateway.healthMonitor.timing.channelConnectGraceMs":
+    "Grace period (ms) after a channel connects before stale-socket checks apply to it. Default: 120000 (2 min).",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
