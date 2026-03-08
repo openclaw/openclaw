@@ -19,6 +19,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.
 - [iMessage (legacy)](/channels/imessage) — Legacy macOS integration via imsg CLI (deprecated, use BlueBubbles for new setups).
 - [IRC](/channels/irc) — Classic IRC servers; channels + DMs with pairing/allowlist controls.
+- [Lanxin](/channels/lanxin) — Lanxin (蓝信) enterprise messaging (plugin, installed separately).
 - [LINE](/channels/line) — LINE Messaging API bot (plugin, installed separately).
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
 - [Mattermost](/channels/mattermost) — Bot API + WebSocket; channels, groups, DMs (plugin, installed separately).

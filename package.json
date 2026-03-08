@@ -128,6 +128,10 @@
       "types": "./dist/plugin-sdk/lobster.d.ts",
       "default": "./dist/plugin-sdk/lobster.js"
     },
+    "./plugin-sdk/lanxin": {
+      "types": "./dist/plugin-sdk/lanxin.d.ts",
+      "default": "./dist/plugin-sdk/lanxin.js"
+    },
     "./plugin-sdk/matrix": {
       "types": "./dist/plugin-sdk/matrix.d.ts",
       "default": "./dist/plugin-sdk/matrix.js"

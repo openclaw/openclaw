@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/lanxin",
+  "version": "2026.3.2",
+  "description": "OpenClaw Lanxin (蓝信) channel plugin",
+  "type": "module",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "lanxin",
+      "label": "Lanxin",
+      "selectionLabel": "Lanxin (蓝信)",
+      "docsPath": "/channels/lanxin",
+      "docsLabel": "lanxin",
+      "blurb": "蓝信 enterprise messaging.",
+      "aliases": [
+        "lanxin"
+      ],
+      "order": 75,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/lanxin",
+      "localPath": "extensions/lanxin",
+      "defaultChoice": "npm"
+    }
+  }
+}
