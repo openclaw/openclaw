@@ -288,6 +288,9 @@ export async function runServiceRestart(params: {
         cfg,
         env: process.env,
         modeOverride: "local",
+        // Drift checks should compare the persisted gateway token against the
+        // service token, not let an exported shell env mask config drift.
+        localTokenPrecedence: "config-first",
       }).token;
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
