@@ -7,6 +7,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { maybeBootstrapChannelPlugin } from "./channel-resolution.js";
 
 export type MessageChannelId = DeliverableMessageChannel;
 export type MessageChannelSelectionSource =
@@ -95,15 +96,21 @@ export async function resolveMessageChannelSelection(params: {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
     if (!isKnownChannel(normalized)) {
-      const fallback = resolveKnownChannel(params.fallbackChannel);
-      if (fallback) {
-        return {
-          channel: fallback,
-          configured: await listConfiguredMessageChannels(params.cfg),
-          source: "tool-context-fallback",
-        };
+      // Bootstrap recovery: the plugin registry may not be loaded yet (e.g.
+      // after a provider restart or in an early outbound-only context).
+      // Trigger plugin loading, then re-check.
+      maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+      if (!isKnownChannel(normalized)) {
+        const fallback = resolveKnownChannel(params.fallbackChannel);
+        if (fallback) {
+          return {
+            channel: fallback,
+            configured: await listConfiguredMessageChannels(params.cfg),
+            source: "tool-context-fallback",
+          };
+        }
+        throw new Error(`Unknown channel: ${String(normalized)}`);
       }
-      throw new Error(`Unknown channel: ${String(normalized)}`);
     }
     return {
       channel: normalized as MessageChannelId,

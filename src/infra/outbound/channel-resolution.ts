@@ -23,8 +23,15 @@ export function normalizeDeliverableOutboundChannel(
   return normalized;
 }
 
-function maybeBootstrapChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
+/**
+ * Attempt to load channel plugins when the registry is empty.
+ * Unlike `resolveOutboundChannelPlugin`, this does not require the channel to
+ * already be recognized as deliverable — it bootstraps unconditionally when
+ * plugins have not been loaded yet. Useful when `isKnownChannel` fails for a
+ * channel name that *would* be valid after plugins are loaded.
+ */
+export function maybeBootstrapChannelPlugin(params: {
+  channel: string;
   cfg?: OpenClawConfig;
 }): void {
   const cfg = params.cfg;
