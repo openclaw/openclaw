@@ -472,9 +472,9 @@ export async function runAgentTurnWithFallback(params: {
                         // Non-critical notice — swallow delivery failures so a downstream
                         // send/TTS error does not create an unhandled rejection inside the
                         // fire-and-forget onAgentEvent callback.
-                        params.logger?.warn(
-                          { err },
+                        console.warn(
                           "compaction start notice delivery failed (non-fatal)",
+                          err,
                         );
                       }
                     }
