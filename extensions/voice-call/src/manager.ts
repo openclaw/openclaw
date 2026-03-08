@@ -256,7 +256,11 @@ export class CallManager {
       activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
-      onCallAnswered: undefined,
+      onCallAnswered: this.config.streaming?.enabled
+        ? undefined
+        : (call) => {
+            this.maybeSpeakInitialMessageOnAnswered(call);
+          },
     };
   }
 
@@ -265,6 +269,25 @@ export class CallManager {
    */
   processEvent(event: NormalizedEvent): void {
     processManagerEvent(this.getContext(), event);
+  }
+
+  /**
+   * For non-streaming providers (e.g. Plivo), speak the initial message
+   * immediately on call.answered since there is no media stream onConnect.
+   */
+  private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
+    const initialMessage =
+      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+
+    if (!initialMessage) {
+      return;
+    }
+
+    if (!this.provider || !call.providerCallId) {
+      return;
+    }
+
+    void this.speakInitialMessage(call.providerCallId);
   }
 
   /**
