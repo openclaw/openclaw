@@ -20,10 +20,15 @@ vi.mock("../../media/local-roots.js", () => ({
   getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
 }));
 
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  __resetOutboundCircuitBreakerForTest,
+  executePollAction,
+  executeSendAction,
+} from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
   beforeEach(() => {
+    __resetOutboundCircuitBreakerForTest();
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
@@ -118,6 +123,33 @@ describe("executeSendAction", () => {
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("trips circuit breaker after repeated duplicate sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "telegram",
+      to: "channel:123",
+      via: "gateway",
+      mediaUrl: null,
+    });
+
+    const base = {
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: { __sessionKey: "s1" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "👌",
+    } as const;
+
+    await executeSendAction(base);
+    await executeSendAction(base);
+    await executeSendAction(base);
+
+    await expect(executeSendAction(base)).rejects.toThrow(/circuit breaker/i);
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
