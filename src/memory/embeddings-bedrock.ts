@@ -66,7 +66,7 @@ export async function createBedrockEmbeddingProvider(
   }
 
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
-  const baseUrl = providerConfig?.baseUrl?.trim();
+  const baseUrl = options.remote?.baseUrl?.trim() || providerConfig?.baseUrl?.trim();
   // Prefer region extracted from an explicit base URL; otherwise let the AWS SDK
   // resolve the region from the environment (AWS_REGION, AWS_DEFAULT_REGION,
   // shared-config profile, EC2 metadata, etc.).  Hard-coding "us-east-1" would
