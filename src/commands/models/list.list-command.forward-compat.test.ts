@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => {
     loadModelRegistry: vi
       .fn()
       .mockResolvedValue({ models: [], availableKeys: new Set(), registry: {} }),
+    loadModelCatalog: vi.fn().mockResolvedValue([]),
     resolveConfiguredEntries: vi.fn().mockReturnValue({
       entries: [
         {
@@ -76,6 +77,10 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
     listProfilesForProvider: mocks.listProfilesForProvider,
   };
 });
+
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+}));
 
 vi.mock("./list.registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./list.registry.js")>();
@@ -196,6 +201,133 @@ describe("modelsListCommand forward-compat", () => {
         available: true,
       }),
     );
+  });
+
+  it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
+    mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+    mocks.loadModelRegistry.mockResolvedValueOnce({
+      models: [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.3-codex",
+          name: "GPT-5.3 Codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          input: ["text"],
+          contextWindow: 272000,
+          maxTokens: 128000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+      availableKeys: new Set(["openai-codex/gpt-5.3-codex"]),
+      registry: {},
+    });
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "openai-codex",
+        id: "gpt-5.3-codex",
+        name: "GPT-5.3 Codex",
+        input: ["text"],
+        contextWindow: 272000,
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        input: ["text"],
+        contextWindow: 272000,
+      },
+    ]);
+    mocks.listProfilesForProvider.mockImplementationOnce((_: unknown, provider: string) =>
+      provider === "openai-codex" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
+    );
+    mocks.resolveModelWithRegistry.mockImplementation(
+      ({ provider, modelId }: { provider: string; modelId: string }) => {
+        if (provider !== "openai-codex") {
+          return undefined;
+        }
+        if (modelId === "gpt-5.3-codex") {
+          return {
+            provider: "openai-codex",
+            id: "gpt-5.3-codex",
+            name: "GPT-5.3 Codex",
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            input: ["text"],
+            contextWindow: 272000,
+            maxTokens: 128000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          };
+        }
+        if (modelId === "gpt-5.4") {
+          return {
+            provider: "openai-codex",
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            input: ["text"],
+            contextWindow: 272000,
+            maxTokens: 128000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          };
+        }
+        return undefined;
+      },
+    );
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ all: true, provider: "openai-codex", json: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
+      key: string;
+      available: boolean;
+    }>;
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.3-codex",
+      }),
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.4",
+        available: true,
+      }),
+    ]);
+  });
+
+  it("keeps discovered rows in --all output when catalog lookup is empty", async () => {
+    mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+    mocks.loadModelRegistry.mockResolvedValueOnce({
+      models: [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.3-codex",
+          name: "GPT-5.3 Codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          input: ["text"],
+          contextWindow: 272000,
+          maxTokens: 128000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+      availableKeys: new Set(["openai-codex/gpt-5.3-codex"]),
+      registry: {},
+    });
+    mocks.loadModelCatalog.mockResolvedValueOnce([]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ all: true, provider: "openai-codex", json: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{ key: string }>;
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.3-codex",
+      }),
+    ]);
   });
 
   it("exits with an error when configured-mode listing has no model registry", async () => {
