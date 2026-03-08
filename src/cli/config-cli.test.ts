@@ -243,13 +243,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand([
-        "config",
-        "get",
-        "gateway.auth.token",
-        "--no-redact",
-        "--json",
-      ]);
+      await runConfigCommand(["config", "get", "gateway.auth.token", "--no-redact", "--json"]);
 
       const output = mockLog.mock.calls.at(0)?.[0];
       expect(output).toBe(JSON.stringify("super-secret-token", null, 2));
