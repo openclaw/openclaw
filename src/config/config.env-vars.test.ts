@@ -3,7 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { applyConfigEnvVars, collectConfigRuntimeEnvVars } from "./env-vars.js";
+import {
+  applyConfigEnvVars,
+  collectConfigRuntimeEnvVars,
+  createConfigRuntimeEnv,
+} from "./env-vars.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -26,6 +30,16 @@ describe("config env vars", () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
       expect(process.env.GROQ_API_KEY).toBe("gsk-config");
+    });
+  });
+
+  it("can build a merged runtime env without mutating process.env", async () => {
+    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+      const merged = createConfigRuntimeEnv({
+        env: { vars: { OPENROUTER_API_KEY: "config-key" } },
+      } as OpenClawConfig);
+      expect(merged.OPENROUTER_API_KEY).toBe("config-key");
+      expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
     });
   });
 
