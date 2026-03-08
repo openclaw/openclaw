@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -423,6 +424,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "new":
+        try {
+          // Clear token counts immediately to avoid stale display (#1523)
+          state.sessionInfo.inputTokens = null;
+          state.sessionInfo.outputTokens = null;
+          state.sessionInfo.totalTokens = null;
+          tui.requestRender();
+
+          // Generate unique session key to isolate this TUI client (#39217)
+          // This ensures /new creates a fresh session that doesn't broadcast
+          // to other connected TUI clients sharing the original session key.
+          const uniqueKey = `tui-${randomUUID()}`;
+          await setSession(uniqueKey);
+          chatLog.addSystem(`new session: ${uniqueKey}`);
+        } catch (err) {
+          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+        }
+        break;
       case "reset":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
@@ -435,7 +453,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${String(err)}`);
+          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }
         break;
       case "abort":
