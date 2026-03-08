@@ -125,6 +125,10 @@ export async function applyBeforeResponseEmitHook(
   // (e.g. downgraded tool-call text). Over-counting would cause
   // rewriteAllAssistantContent to index replacements against extra messages.
   const rawTurnCount = countCurrentRunAssistantTurns(activeSession.messages);
+  // When rawTurnCount === 0, the session was likely compacted mid-turn.
+  // The fallback value is irrelevant in practice — getRunScopedMessages will
+  // also return [] and the fail-closed guards below handle that. We pass
+  // assistantTexts.length as a best-effort hint, not a functional bound.
   const scopeCount = Math.min(rawTurnCount, assistantTexts.length) || assistantTexts.length;
 
   // Scope to only current-run messages so we never corrupt prior history.
