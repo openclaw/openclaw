@@ -137,4 +137,39 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBeUndefined();
     expect(stream.channelId()).toBeUndefined();
   });
+
+  it("flush resolves in-flight send so messageId is available (race condition fix)", async () => {
+    let resolveDeferred!: (value: { channelId: string; messageId: string }) => void;
+    const send = vi.fn<DraftSendFn>(
+      () =>
+        new Promise((resolve) => {
+          resolveDeferred = resolve;
+        }),
+    );
+    const { stream } = createDraftStreamHarness({ send });
+
+    stream.update("hello");
+    // Start flush — send is in-flight but hasn't resolved
+    const flushPromise = stream.flush();
+
+    // At this point, sendMessageSlack is in-flight but hasn't resolved
+    expect(stream.messageId()).toBeUndefined();
+
+    // Simulate send completing
+    resolveDeferred({ channelId: "C123", messageId: "999.888" });
+    await flushPromise;
+
+    // Now messageId should be populated
+    expect(stream.messageId()).toBe("999.888");
+  });
+
+  it("flush is safe to call when no draft has been started", async () => {
+    const { stream, send } = createDraftStreamHarness();
+
+    // Flush without any update — should be a no-op
+    await stream.flush();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBeUndefined();
+  });
 });
