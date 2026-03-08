@@ -139,6 +139,7 @@ export abstract class MemoryManagerSyncOps {
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
+  protected abstract readonly purpose: "default" | "status";
   protected abstract db: DatabaseSync;
   protected abstract computeProviderKey(): string;
   protected abstract sync(params?: {
@@ -251,14 +252,22 @@ export abstract class MemoryManagerSyncOps {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
-    return this.openDatabaseAtPath(dbPath);
+    const readOnly = this.purpose === "status";
+    return this.openDatabaseAtPath(dbPath, { readOnly });
   }
 
-  private openDatabaseAtPath(dbPath: string): DatabaseSync {
+  private openDatabaseAtPath(dbPath: string, opts?: { readOnly?: boolean }): DatabaseSync {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    const readOnly = opts?.readOnly ?? false;
+    const db = new DatabaseSync(dbPath, {
+      allowExtension: !readOnly && this.settings.store.vector.enabled,
+      readOnly,
+    });
+    // WAL mode is crash-safe and survives SIGTERM/SIGKILL mid-write.
+    // It also allows concurrent reads during writes.
+    db.exec("PRAGMA journal_mode = WAL");
     // busy_timeout is per-connection and resets to 0 on restart.
     // Set it on every open so concurrent processes retry instead of
     // failing immediately with SQLITE_BUSY.
