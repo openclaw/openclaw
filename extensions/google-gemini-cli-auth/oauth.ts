@@ -245,6 +245,7 @@ async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    proxy: "env",
   });
   try {
     const body = await response.arrayBuffer();
