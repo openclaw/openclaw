@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { expectedOpenAICodexProfileId, makeJwt } from "../test-utils/openai-codex-profile-id.js";
 import { deriveOpenAICodexCanonicalProfileId } from "./auth-profiles/openai-codex-profile-id.js";
-
-function makeJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" }), "utf8").toString(
-    "base64url",
-  );
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  return `${header}.${body}.sig`;
-}
 
 describe("deriveOpenAICodexCanonicalProfileId", () => {
   it("derives a canonical profile id from accountId, iss, and sub", () => {
@@ -22,7 +15,11 @@ describe("deriveOpenAICodexCanonicalProfileId", () => {
         accountId: "acct_456",
       }),
     ).toBe(
-      `openai-codex:acct_456:${Buffer.from("https://auth.openai.com", "utf8").toString("base64url")}:${Buffer.from("user_123", "utf8").toString("base64url")}`,
+      expectedOpenAICodexProfileId({
+        accountId: "acct_456",
+        iss: "https://auth.openai.com",
+        sub: "user_123",
+      }),
     );
   });
 
@@ -37,7 +34,27 @@ describe("deriveOpenAICodexCanonicalProfileId", () => {
         }),
       }),
     ).toBe(
-      `openai-codex:acct_payload:${Buffer.from("https://auth.openai.com", "utf8").toString("base64url")}:${Buffer.from("user_789", "utf8").toString("base64url")}`,
+      expectedOpenAICodexProfileId({
+        accountId: "acct_payload",
+        iss: "https://auth.openai.com",
+        sub: "user_789",
+      }),
+    );
+  });
+
+  it("sanitizes account ids before building the canonical profile id", () => {
+    expect(
+      deriveOpenAICodexCanonicalProfileId({
+        provider: "openai-codex",
+        access: makeJwt({
+          iss: "https://auth.openai.com",
+          sub: "user_special",
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct / special?" },
+        }),
+        accountId: "acct / special?",
+      }),
+    ).toBe(
+      `openai-codex:acct-special:${Buffer.from("https://auth.openai.com", "utf8").toString("base64url")}:${Buffer.from("user_special", "utf8").toString("base64url")}`,
     );
   });
 
