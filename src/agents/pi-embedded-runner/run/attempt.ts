@@ -1995,7 +1995,7 @@ export async function runEmbeddedAttempt(
         .toReversed()
         .find((m) => m.role === "assistant");
 
-      const toolMetasNormalized = toolMetas
+      const toolMetasNormalized = (toolMetas ?? [])
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
