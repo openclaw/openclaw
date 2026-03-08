@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
 
 describe("normalizeExplicitDiscordSessionKey", () => {
+  it("rewrites bare discord:dm keys for direct chats", () => {
+    expect(
+      normalizeExplicitDiscordSessionKey("discord:dm:123456", {
+        ChatType: "direct",
+        From: "discord:123456",
+        SenderId: "123456",
+      }),
+    ).toBe("discord:direct:123456");
+  });
+
   it("rewrites legacy discord:dm keys for direct chats", () => {
     expect(
       normalizeExplicitDiscordSessionKey("agent:fina:discord:dm:123456", {
