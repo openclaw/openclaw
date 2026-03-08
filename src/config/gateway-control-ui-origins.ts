@@ -45,13 +45,17 @@ export function buildDefaultControlUiAllowedOrigins(params: {
 
 export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   config: OpenClawConfig,
-  opts?: { defaultPort?: number; requireControlUiEnabled?: boolean },
+  opts?: {
+    defaultPort?: number;
+    requireControlUiEnabled?: boolean;
+    bindOverride?: GatewayNonLoopbackBindMode;
+  },
 ): {
   config: OpenClawConfig;
   seededOrigins: string[] | null;
   bind: GatewayNonLoopbackBindMode | null;
 } {
-  const bind = config.gateway?.bind;
+  const bind = opts?.bindOverride ?? config.gateway?.bind;
   if (!isGatewayNonLoopbackBindMode(bind)) {
     return { config, seededOrigins: null, bind: null };
   }
