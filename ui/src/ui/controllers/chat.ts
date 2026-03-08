@@ -196,6 +196,20 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
+  // Timeout guard: reset state if stream hangs for 60 seconds
+  // Fixes #32400 - UI hangs when WebSocket disconnects during streaming
+  const timeoutMs = 60000;
+  const timeoutId = setTimeout(() => {
+    if (state.chatRunId === runId && state.chatSending) {
+      console.warn("[chat] Stream timeout, resetting state");
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      state.chatSending = false;
+      state.lastError = "Response timed out. Please try again.";
+    }
+  }, timeoutMs);
+
   // Convert attachments to API format
   const apiAttachments = hasAttachments
     ? attachments
@@ -223,6 +237,7 @@ export async function sendChatMessage(
     });
     return runId;
   } catch (err) {
+    clearTimeout(timeoutId);
     const error = String(err);
     state.chatRunId = null;
     state.chatStream = null;
@@ -238,6 +253,7 @@ export async function sendChatMessage(
     ];
     return null;
   } finally {
+    clearTimeout(timeoutId);
     state.chatSending = false;
   }
 }

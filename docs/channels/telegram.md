@@ -342,6 +342,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+:::tip Define accounts.default explicitly
+When using `channels.telegram.accounts`, always define `accounts.default` explicitly to avoid confusing routing behavior. Without it, the system may use unexpected default values for inbound/outbound messages.
+:::
+
     Per-account override:
 
 ```json5

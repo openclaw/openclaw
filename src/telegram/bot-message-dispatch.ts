@@ -774,6 +774,30 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (!hasFinalResponse) {
+    // Remove ack reaction on silent turns (NO_REPLY)
+    if (statusReactionController) {
+      void statusReactionController.clear().catch((err) => {
+        logVerbose(`telegram: status reaction clear on no-response failed: ${String(err)}`);
+      });
+    } else {
+      removeAckReactionAfterReply({
+        removeAfterReply: removeAckAfterReply,
+        ackReactionPromise,
+        ackReactionValue: ackReactionPromise ? "ack" : null,
+        remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+        onError: (err) => {
+          if (!msg.message_id) {
+            return;
+          }
+          logAckFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: `${chatId}/${msg.message_id}`,
+            error: err,
+          });
+        },
+      });
+    }
     clearGroupHistory();
     return;
   }

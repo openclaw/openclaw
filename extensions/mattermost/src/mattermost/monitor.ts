@@ -1425,6 +1425,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       ? stripOncharPrefix(rawText, oncharPrefixes)
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
+
+    const shouldRequireMention =
+      kind !== "direct" &&
+      core.channel.groups.resolveRequireMention({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+        groupId: channelId,
+        requireMentionOverride: account.requireMention,
+      });
+    const shouldBypassMention =
+      isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
+    const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
     const mentionDecision = evaluateMattermostMentionGate({
       kind,

@@ -27,7 +27,7 @@ const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
 function normalizeMentionPattern(pattern: string): string {
-  if (!pattern.includes(BACKSPACE_CHAR)) {
+  if (!pattern || !pattern.includes(BACKSPACE_CHAR)) {
     return pattern;
   }
   return pattern.split(BACKSPACE_CHAR).join("\\b");
@@ -132,7 +132,7 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
+  const afterMarker = text?.includes(CURRENT_MESSAGE_MARKER)
     ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
     : text;
 

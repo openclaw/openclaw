@@ -91,6 +91,15 @@ function getColorForConsole(): ChalkInstance {
   return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
 }
 
+// Cache the Chalk instance - environment doesn't change during process lifetime
+let cachedChalkInstance: ChalkInstance | undefined;
+function getCachedChalk(): ChalkInstance {
+  if (!cachedChalkInstance) {
+    cachedChalkInstance = getColorForConsole();
+  }
+  return cachedChalkInstance;
+}
+
 const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
 const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number]> = {
   "gmail-watcher": "blue",
@@ -208,7 +217,7 @@ function formatConsoleLine(opts: {
       ...opts.meta,
     });
   }
-  const color = getColorForConsole();
+  const color = getCachedChalk();
   const prefix = `[${displaySubsystem}]`;
   const prefixColor = pickSubsystemColor(color, displaySubsystem);
   const levelColor =

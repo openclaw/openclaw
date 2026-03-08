@@ -69,12 +69,22 @@ export function isSilentReplyPrefixText(
   if (!normalized) {
     return false;
   }
+  const upperToken = token.toUpperCase();
+  // Only match if the entire normalized text is a prefix of the token
+  // AND it matches a complete word boundary (token itself or token + _)
+  // This prevents "No" or "N" from matching NO_REPLY
+  if (normalized === upperToken || upperToken.startsWith(normalized + "_")) {
+    return true;
   if (normalized.length < 2) {
     return false;
   }
+  // Legacy check: catch all-uppercase prefixes for backwards compatibility
+  // but only if the token is exactly the prefix (no partial matches)
   if (/[^A-Z_]/.test(normalized)) {
+    // Mixed-case or lowercase - likely natural language, not a prefix
     return false;
   }
+  return upperToken === normalized;
   const tokenUpper = token.toUpperCase();
   if (!tokenUpper.startsWith(normalized)) {
     return false;
