@@ -80,12 +80,23 @@ run_root() {
 }
 
 run_as_user() {
+  # When switching users, the current working directory may become unreadable
+  # to the target user (e.g. caller runs this script from a private dir like
+  # chmod 700). `sudo -u` (and runuser) will fail before executing the command
+  # with: "cannot chdir".
+  #
+  # Force a safe cwd so rootless podman operations (and any other call sites)
+  # don't inherit an inaccessible directory.
   local user="$1"
   shift
+  local safe_cwd="${TMPDIR:-/tmp}"
+  if [[ -z "$safe_cwd" || ! -d "$safe_cwd" || ! -x "$safe_cwd" ]]; then
+    safe_cwd="/tmp"
+  fi
   if command -v sudo >/dev/null 2>&1; then
-    sudo -u "$user" "$@"
+    ( cd "$safe_cwd" 2>/dev/null || cd / 2>/dev/null || true; sudo -u "$user" "$@" )
   elif is_root && command -v runuser >/dev/null 2>&1; then
-    runuser -u "$user" -- "$@"
+    ( cd "$safe_cwd" 2>/dev/null || cd / 2>/dev/null || true; runuser -u "$user" -- "$@" )
   else
     echo "Need sudo (or root+runuser) to run commands as $user." >&2
     exit 1
