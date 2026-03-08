@@ -215,16 +215,20 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
         role,
       })?.token;
-      deviceToken = !(explicitGatewayToken || this.opts.password?.trim())
-        ? (storedToken ?? undefined)
-        : undefined;
+      // Always resolve the device token independently of shared credentials.
+      // The gateway server supports deviceToken fallback when the shared
+      // token/password is absent or invalid.  Suppressing the stored token
+      // caused reconnects to fail with "device identity required" after SPA
+      // navigation dropped the shared token from the URL hash (#39611).
+      deviceToken = storedToken ?? undefined;
       canFallbackToShared = Boolean(deviceToken && explicitGatewayToken);
     }
     authToken = explicitGatewayToken ?? deviceToken;
     const auth =
-      authToken || this.opts.password
+      authToken || this.opts.password || deviceToken
         ? {
             token: authToken,
+            deviceToken,
             password: this.opts.password,
           }
         : undefined;

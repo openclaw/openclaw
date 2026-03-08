@@ -109,7 +109,7 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("prefers explicit shared auth over cached device tokens", async () => {
+  it("sends stored device token alongside explicit shared auth for fallback", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -128,15 +128,19 @@ describe("GatewayBrowserClient", () => {
     const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
       id?: string;
       method?: string;
-      params?: { auth?: { token?: string } };
+      params?: { auth?: { token?: string; deviceToken?: string } };
     };
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
+    // Shared token takes priority for auth.token; device token is sent
+    // alongside for gateway-side fallback (#39611).
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
     expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    // The signed payload still uses the shared token (authToken), not the
+    // stored device token, because explicitGatewayToken takes precedence.
     expect(signedPayload).toContain("|shared-auth-token|nonce-1");
-    expect(signedPayload).not.toContain("stored-device-token");
   });
 
   it("uses cached device tokens only when no explicit shared auth is provided", async () => {

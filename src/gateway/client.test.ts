@@ -385,9 +385,15 @@ describe("GatewayClient connect auth payload", () => {
 
   it("sends stored device token alongside explicit shared token for fallback auth", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const identity: DeviceIdentity = {
+      deviceId: "dev-fallback-1",
+      privateKeyPem: "private-key", // pragma: allowlist secret
+      publicKeyPem: "public-key",
+    };
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
+      deviceIdentity: identity,
     });
 
     client.start();
@@ -404,9 +410,15 @@ describe("GatewayClient connect auth payload", () => {
 
   it("sends stored device token alongside explicit shared password for fallback auth", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const identity: DeviceIdentity = {
+      deviceId: "dev-fallback-2",
+      privateKeyPem: "private-key", // pragma: allowlist secret
+      publicKeyPem: "public-key",
+    };
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       password: "shared-password", // pragma: allowlist secret
+      deviceIdentity: identity,
     });
 
     client.start();
