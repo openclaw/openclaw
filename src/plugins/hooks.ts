@@ -24,6 +24,8 @@ import type {
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookToolResultBeforeModelEvent,
+  PluginHookToolResultBeforeModelResult,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -75,6 +77,8 @@ export type {
   PluginHookToolContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookToolResultBeforeModelEvent,
+  PluginHookToolResultBeforeModelResult,
   PluginHookAfterToolCallEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -447,6 +451,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         params: next.params ?? acc?.params,
         block: next.block ?? acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
+        result: next.result !== undefined ? next.result : acc?.result,
       }),
     );
   }
@@ -460,6 +465,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookToolContext,
   ): Promise<void> {
     return runVoidHook("after_tool_call", event, ctx);
+  }
+
+  /**
+   * Run tool_result_before_model hook.
+   * Allows plugins to replace the tool result before the LLM sees it.
+   * Runs sequentially; each handler receives the original event and results
+   * are merged via the accumulator (later hooks override earlier ones).
+   */
+  async function runToolResultBeforeModel(
+    event: PluginHookToolResultBeforeModelEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<PluginHookToolResultBeforeModelResult | undefined> {
+    return runModifyingHook<"tool_result_before_model", PluginHookToolResultBeforeModelResult>(
+      "tool_result_before_model",
+      event,
+      ctx,
+      (acc, next) => ({
+        result: next.result !== undefined ? next.result : acc?.result,
+      }),
+    );
   }
 
   /**
@@ -740,6 +765,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runToolResultBeforeModel,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,

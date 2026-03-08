@@ -1,7 +1,9 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookToolResultBeforeModelEvent } from "../plugins/types.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -13,9 +15,14 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /** When true, plugins may inject or replace tool results. Default: false. */
+  allowResultModification?: boolean;
 };
 
-type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
+type HookOutcome =
+  | { blocked: true; reason: string }
+  | { blocked: false; params: unknown; injectedResult?: undefined }
+  | { blocked: false; params: unknown; injectedResult: unknown };
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -179,6 +186,21 @@ export async function runBeforeToolCallHook(args: {
       };
     }
 
+    if (hookResult?.result !== undefined) {
+      if (args.ctx?.allowResultModification !== true) {
+        log.warn(
+          `[security] before_tool_call result injection blocked for ${toolName}: ` +
+            `plugins.allowResultModification is not enabled`,
+        );
+      } else {
+        const mergedParams =
+          hookResult.params && isPlainObject(hookResult.params) && isPlainObject(params)
+            ? { ...params, ...hookResult.params }
+            : params;
+        return { blocked: false, params: mergedParams, injectedResult: hookResult.result };
+      }
+    }
+
     if (hookResult?.params && isPlainObject(hookResult.params)) {
       if (isPlainObject(params)) {
         return { blocked: false, params: { ...params, ...hookResult.params } };
@@ -191,6 +213,49 @@ export async function runBeforeToolCallHook(args: {
   }
 
   return { blocked: false, params };
+}
+
+export async function runToolResultBeforeModelHook(args: {
+  toolName: string;
+  toolCallId?: string;
+  params: unknown;
+  result: unknown;
+  ctx?: HookContext;
+}): Promise<AgentToolResult<unknown>> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("tool_result_before_model")) {
+    return args.result as AgentToolResult<unknown>;
+  }
+  try {
+    const normalizedParams = isPlainObject(args.params) ? args.params : {};
+    const event: PluginHookToolResultBeforeModelEvent = {
+      toolName: normalizeToolName(args.toolName),
+      toolCallId: args.toolCallId,
+      params: normalizedParams,
+      result: args.result,
+    };
+    const hookResult = await hookRunner.runToolResultBeforeModel(event, {
+      toolName: normalizeToolName(args.toolName),
+      toolCallId: args.toolCallId,
+      agentId: args.ctx?.agentId,
+      sessionKey: args.ctx?.sessionKey,
+      sessionId: args.ctx?.sessionId,
+      runId: args.ctx?.runId,
+    });
+    if (hookResult?.result !== undefined) {
+      if (args.ctx?.allowResultModification !== true) {
+        log.warn(
+          `[security] tool_result_before_model result replacement blocked for ${args.toolName}: ` +
+            `plugins.allowResultModification is not enabled`,
+        );
+        return args.result as AgentToolResult<unknown>;
+      }
+      return hookResult.result as AgentToolResult<unknown>;
+    }
+  } catch (err) {
+    log.warn(`tool_result_before_model hook failed: tool=${args.toolName} error=${String(err)}`);
+  }
+  return args.result as AgentToolResult<unknown>;
 }
 
 export function wrapToolWithBeforeToolCallHook(
@@ -214,6 +279,25 @@ export function wrapToolWithBeforeToolCallHook(
       if (outcome.blocked) {
         throw new Error(outcome.reason);
       }
+      if (!outcome.blocked && outcome.injectedResult !== undefined) {
+        if (toolCallId) {
+          const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
+          adjustedParamsByToolCallId.set(adjustedParamsKey, outcome.params);
+          if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+            const oldest = adjustedParamsByToolCallId.keys().next().value;
+            if (oldest) {
+              adjustedParamsByToolCallId.delete(oldest);
+            }
+          }
+        }
+        return runToolResultBeforeModelHook({
+          toolName,
+          toolCallId,
+          params: outcome.params,
+          result: outcome.injectedResult,
+          ctx,
+        });
+      }
       if (toolCallId) {
         const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
         adjustedParamsByToolCallId.set(adjustedParamsKey, outcome.params);
@@ -234,7 +318,13 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
-        return result;
+        return runToolResultBeforeModelHook({
+          toolName,
+          toolCallId,
+          params: outcome.params,
+          result,
+          ctx,
+        });
       } catch (err) {
         await recordLoopOutcome({
           ctx,
@@ -243,6 +333,22 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           error: err,
         });
+        // Let tool_result_before_model intercept error results too.
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorResult: AgentToolResult<unknown> = {
+          content: [{ type: "text", text: `Error: ${errorMessage}` }],
+          details: { error: true },
+        };
+        const hookProcessed = await runToolResultBeforeModelHook({
+          toolName,
+          toolCallId,
+          params: outcome.params,
+          result: errorResult,
+          ctx,
+        });
+        if (hookProcessed !== errorResult) {
+          return hookProcessed;
+        }
         throw err;
       }
     },
