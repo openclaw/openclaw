@@ -1168,4 +1168,38 @@ describe("chrome extension relay server", () => {
     );
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
+
+  it(
+    "respects bindHost override to bind on a non-loopback address",
+    async () => {
+      const port = await getFreePort();
+      cdpUrl = `http://127.0.0.1:${port}`;
+      const relay = await ensureChromeExtensionRelayServer({
+        cdpUrl,
+        bindHost: "0.0.0.0",
+      });
+      expect(relay.port).toBe(port);
+      // Verify the server actually bound to 0.0.0.0, not the cdpUrl host.
+      expect(relay.bindHost).toBe("0.0.0.0");
+
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      expect(res.status).toBe(200);
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "defaults bindHost to cdpUrl host when not specified",
+    async () => {
+      const port = await getFreePort();
+      cdpUrl = `http://127.0.0.1:${port}`;
+      const relay = await ensureChromeExtensionRelayServer({ cdpUrl });
+      expect(relay.host).toBe("127.0.0.1");
+      expect(relay.bindHost).toBe("127.0.0.1");
+
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      expect(res.status).toBe(200);
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
 });

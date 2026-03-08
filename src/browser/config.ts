@@ -36,6 +36,7 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  relayBindHost?: string;
 };
 
 export type ResolvedBrowserProfile = {
@@ -276,6 +277,7 @@ export function resolveBrowserConfig(
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
+  const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
 
   return {
     enabled,
@@ -297,6 +299,7 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
+    relayBindHost,
   };
 }
 
