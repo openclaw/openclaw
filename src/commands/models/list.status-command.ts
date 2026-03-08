@@ -95,7 +95,20 @@ export async function modelsStatusCommand(
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
   const resolvedLabel = `${resolved.provider}/${resolved.model}`;
-  const defaultLabel = rawModel || resolvedLabel;
+  // Validate that rawModel's provider still exists in config before using it;
+  // otherwise fall back to the properly resolved label (prevents stale provider names).
+  const rawModelProviderValid = (() => {
+    if (!rawModel) {
+      return false;
+    }
+    const parsed = parseModelRef(rawModel, DEFAULT_PROVIDER);
+    if (!parsed?.provider) {
+      return false;
+    }
+    const configProviders = cfg.models?.providers ?? {};
+    return parsed.provider in configProviders;
+  })();
+  const defaultLabel = rawModelProviderValid ? rawModel : resolvedLabel;
   const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
   const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
