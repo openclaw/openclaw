@@ -79,8 +79,9 @@ for (const entry of extensions) {
     });
   } catch (err) {
     // Non-fatal: the extension's own ensure/startup logic may retry later.
+    const stderr = err.stderr ? err.stderr.toString().trim() : "";
     console.warn(
-      `[postinstall] WARNING: Failed to install deps for extension "${entry.name}": ${err.message}`,
+      `[postinstall] WARNING: Failed to install deps for extension "${entry.name}": ${err.message}${stderr ? `\n${stderr}` : ""}`,
     );
   }
 }
