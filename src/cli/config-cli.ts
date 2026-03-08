@@ -276,13 +276,17 @@ function ensureValidOllamaProviderForApiKeySet(
   });
 }
 
-export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
+export async function runConfigGet(opts: { path: string; json?: boolean; noRedact?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
-    const redacted = redactConfigObject(snapshot.config);
-    const res = getAtPath(redacted, parsedPath);
+    // By default we redact sensitive values so they do not leak to terminal
+    // history or logs.  Callers can request the raw value with
+    // `--no-redact` for debugging purposes (the value may still be
+    // redacted elsewhere, e.g. when writing snapshots).
+    const configToQuery = opts.noRedact ? snapshot.config : redactConfigObject(snapshot.config);
+    const res = getAtPath(configToQuery, parsedPath);
     if (!res.found) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);
@@ -419,8 +423,17 @@ export function registerConfigCli(program: Command) {
     .description("Get a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
     .option("--json", "Output JSON", false)
+    .option(
+      "--no-redact",
+      "Do not redact sensitive values (use with caution, may expose secrets)",
+      false,
+    )
     .action(async (path: string, opts) => {
-      await runConfigGet({ path, json: Boolean(opts.json) });
+      await runConfigGet({
+        path,
+        json: Boolean(opts.json),
+        noRedact: Boolean(opts.noRedact),
+      });
     });
 
   cmd
