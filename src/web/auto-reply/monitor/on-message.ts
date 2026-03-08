@@ -40,7 +40,7 @@ export function createWebOnMessageHandler(params: {
     },
   ) =>
     processMessage({
-      cfg: params.cfg,
+      cfg,
       msg,
       route,
       groupHistoryKey,
@@ -63,9 +63,11 @@ export function createWebOnMessageHandler(params: {
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
-    // Fresh config for bindings lookup; other routing inputs are payload-derived.
+    // Load fresh config per-message so runtime changes (requireMention, group
+    // policy, allowlists) take effect without a channel restart (#33974).
+    const cfg = loadConfig();
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -113,7 +115,7 @@ export function createWebOnMessageHandler(params: {
         OriginatingTo: conversationId,
       } satisfies MsgContext;
       updateLastRouteInBackground({
-        cfg: params.cfg,
+        cfg,
         backgroundTasks: params.backgroundTasks,
         storeAgentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -125,7 +127,7 @@ export function createWebOnMessageHandler(params: {
       });
 
       const gating = applyGroupGating({
-        cfg: params.cfg,
+        cfg,
         msg,
         conversationId,
         groupHistoryKey,
@@ -153,7 +155,7 @@ export function createWebOnMessageHandler(params: {
     // Does not bypass group mention/activation gating above.
     if (
       await maybeBroadcastMessage({
-        cfg: params.cfg,
+        cfg,
         msg,
         peerId,
         route,
