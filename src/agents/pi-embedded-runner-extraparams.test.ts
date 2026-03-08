@@ -116,6 +116,39 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("preserves higher-precedence agent parallelToolCalls override across alias styles", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4.1": {
+                params: {
+                  parallel_tool_calls: true,
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                parallelToolCalls: false,
+              },
+            },
+          ],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-4.1",
+      agentId: "main",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: false,
+    });
+  });
+
   it("ignores per-agent params when agentId does not match", () => {
     const result = resolveExtraParams({
       cfg: {
@@ -187,6 +220,32 @@ describe("applyExtraParamsToAgent", () => {
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
+    return payload;
+  }
+
+  function runParallelToolCallsPayloadMutationCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"openai-completions"> | Model<"openai-responses"> | Model<"anthropic-messages">;
+    cfg?: Record<string, unknown>;
+    extraParamsOverride?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+  }) {
+    const payload = params.payload ?? {};
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+      params.extraParamsOverride,
+    );
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
     return payload;
   }
 
@@ -348,6 +407,181 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning");
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "nvidia-nim",
+      applyModelId: "moonshotai/kimi-k2.5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia-nim/moonshotai/kimi-k2.5": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "nvidia-nim",
+        id: "moonshotai/kimi-k2.5",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("injects parallel_tool_calls for openai-responses payloads when configured", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  parallelToolCalls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("does not inject parallel_tool_calls for unsupported APIs", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("lets runtime override win across alias styles for parallel_tool_calls", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "nvidia-nim",
+      applyModelId: "moonshotai/kimi-k2.5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia-nim/moonshotai/kimi-k2.5": {
+                params: {
+                  parallel_tool_calls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      extraParamsOverride: {
+        parallelToolCalls: false,
+      },
+      model: {
+        api: "openai-completions",
+        provider: "nvidia-nim",
+        id: "moonshotai/kimi-k2.5",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("lets null runtime override suppress inherited parallel_tool_calls injection", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "nvidia-nim",
+      applyModelId: "moonshotai/kimi-k2.5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia-nim/moonshotai/kimi-k2.5": {
+                params: {
+                  parallel_tool_calls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      extraParamsOverride: {
+        parallelToolCalls: null,
+      },
+      model: {
+        api: "openai-completions",
+        provider: "nvidia-nim",
+        id: "moonshotai/kimi-k2.5",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("warns and skips invalid parallel_tool_calls values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runParallelToolCallsPayloadMutationCase({
+        applyProvider: "nvidia-nim",
+        applyModelId: "moonshotai/kimi-k2.5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "nvidia-nim/moonshotai/kimi-k2.5": {
+                  params: {
+                    parallelToolCalls: "false",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "nvidia-nim",
+          id: "moonshotai/kimi-k2.5",
+        } as Model<"openai-completions">,
+      });
+
+      expect(payload).not.toHaveProperty("parallel_tool_calls");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid parallel_tool_calls param: false");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {

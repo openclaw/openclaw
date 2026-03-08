@@ -49,7 +49,18 @@ export function resolveExtraParams(params: {
     return undefined;
   }
 
-  return Object.assign({}, globalParams, agentParams);
+  const merged = Object.assign({}, globalParams, agentParams);
+  const resolvedParallelToolCalls = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (resolvedParallelToolCalls !== undefined) {
+    merged.parallel_tool_calls = resolvedParallelToolCalls;
+    delete merged.parallelToolCalls;
+  }
+
+  return merged;
 }
 
 type CacheRetention = "none" | "short" | "long";
@@ -1108,6 +1119,53 @@ function createZaiToolStreamWrapper(
   };
 }
 
+function resolveAliasedParamValue(
+  sources: Array<Record<string, unknown> | undefined>,
+  snakeCaseKey: string,
+  camelCaseKey: string,
+): unknown {
+  let resolved: unknown = undefined;
+  let seen = false;
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    const hasSnakeCaseKey = Object.hasOwn(source, snakeCaseKey);
+    const hasCamelCaseKey = Object.hasOwn(source, camelCaseKey);
+    if (!hasSnakeCaseKey && !hasCamelCaseKey) {
+      continue;
+    }
+    resolved = hasSnakeCaseKey ? source[snakeCaseKey] : source[camelCaseKey];
+    seen = true;
+  }
+  return seen ? resolved : undefined;
+}
+
+function createParallelToolCallsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  enabled: boolean,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+      return underlying(model, context, options);
+    }
+    log.debug(
+      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
+    );
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).parallel_tool_calls = enabled;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -1123,7 +1181,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
 ): void {
-  const extraParams = resolveExtraParams({
+  const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
     modelId,
@@ -1142,7 +1200,7 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, extraParams, override);
+  const merged = Object.assign({}, resolvedExtraParams, override);
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {
@@ -1238,4 +1296,23 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (rawParallelToolCalls !== undefined) {
+    if (typeof rawParallelToolCalls === "boolean") {
+      agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+    } else if (rawParallelToolCalls === null) {
+      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    } else {
+      const summary =
+        typeof rawParallelToolCalls === "string"
+          ? rawParallelToolCalls
+          : typeof rawParallelToolCalls;
+      log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+    }
+  }
 }
