@@ -193,6 +193,9 @@ export function createSessionStatusTool(opts?: {
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
+      if (requestedKeyRaw.trim().toLowerCase() === "current") {
+        requestedKeyRaw = "main";
+      }
 
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? requestedKeyRaw,
