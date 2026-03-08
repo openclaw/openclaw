@@ -446,13 +446,22 @@ export function rewriteAllAssistantContent(
             break;
           }
           if (prev.role === "toolResult") {
-            // Before removing a toolResult, check whether the element
-            // immediately preceding it is a kept assistant.  If so, this
-            // toolResult belongs to that kept assistant's tool_use blocks —
-            // removing it would leave an orphaned tool_use and cause
-            // Anthropic API rejection on the next turn.
-            const prevPrev = idx - 2 >= 0 ? sourceMessages[idx - 2] : undefined;
-            if (prevPrev && prevPrev.role === "assistant" && keptAssistants.has(prevPrev)) {
+            // Before removing a toolResult, scan backward past any consecutive
+            // toolResult messages to find the owning assistant.  If that
+            // assistant is kept, ALL these toolResults belong to it (one per
+            // tool_use block) — removing any of them would orphan a tool_use
+            // and cause Anthropic API rejection on the next turn.
+            // A single-depth prevPrev check fails when the kept assistant has
+            // multiple tool_use blocks (multiple consecutive toolResults).
+            let scanIdx = idx - 2;
+            while (scanIdx >= 0 && sourceMessages[scanIdx].role === "toolResult") {
+              scanIdx--;
+            }
+            if (
+              scanIdx >= 0 &&
+              sourceMessages[scanIdx].role === "assistant" &&
+              keptAssistants.has(sourceMessages[scanIdx])
+            ) {
               break;
             }
             sourceMessages.splice(idx - 1, 1);

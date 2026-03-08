@@ -631,6 +631,54 @@ describe("rewriteAllAssistantContent", () => {
     expect(messages).not.toContain(extraAssistant);
   });
 
+  it("preserves ALL toolResults for kept assistant with multiple tool_use blocks", () => {
+    // Scenario: kept assistant has TWO tool_use blocks, producing two consecutive
+    // toolResult messages. The backward scan must preserve BOTH toolResults —
+    // not just the one immediately adjacent to the kept assistant.
+    const keptAssistant = {
+      role: "assistant" as const,
+      content: [
+        { type: "text", text: "let me search both" },
+        { type: "tool_use", id: "tu_1", name: "search", input: { q: "a" } },
+        { type: "tool_use", id: "tu_2", name: "search", input: { q: "b" } },
+      ],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const toolResult1 = {
+      role: "toolResult" as const,
+      content: "result for a",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const toolResult2 = {
+      role: "toolResult" as const,
+      content: "result for b",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const extraAssistant = makeMsg("assistant", "extra turn to remove");
+
+    const messages = [
+      makeMsg("user", "question"),
+      keptAssistant,
+      toolResult1,
+      toolResult2,
+      extraAssistant,
+    ];
+
+    rewriteAllAssistantContent(messages, messages, ["[REDACTED]"]);
+
+    // Both toolResults must survive
+    expect(messages).toContain(toolResult1);
+    expect(messages).toContain(toolResult2);
+    // extraAssistant must be removed
+    expect(messages).not.toContain(extraAssistant);
+    // keptAssistant should be rewritten
+    const parts = (keptAssistant as { content: unknown[] }).content as Array<{
+      type: string;
+      text?: string;
+    }>;
+    expect(parts.find((p) => p.type === "text")?.text).toBe("[REDACTED]");
+  });
+
   it("handles content-part arrays", () => {
     const messages = [
       makeMsg("assistant", [
