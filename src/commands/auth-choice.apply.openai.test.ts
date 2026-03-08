@@ -79,7 +79,7 @@ describe("applyAuthChoiceOpenAI", () => {
     const prompter = createWizardPrompter({});
     const runtime = createExitThrowingRuntime();
 
-    await applyAuthChoiceOpenAI({
+    const result = await applyAuthChoiceOpenAI({
       authChoice: "apiKey",
       config: {},
       prompter,

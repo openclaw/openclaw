@@ -58,6 +58,7 @@ export type GatewayService = {
     programArguments: string[];
     workingDirectory?: string;
     environment?: Record<string, string>;
+    environmentValueSources?: Record<string, "inline" | "file">;
     sourcePath?: string;
   } | null>;
   readRuntime: (env: Record<string, string | undefined>) => Promise<GatewayServiceRuntime>;

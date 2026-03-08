@@ -65,6 +65,7 @@ export async function readSystemdServiceExecStart(
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 } | null> {
   const unitPath = resolveSystemdUnitPath(env);
