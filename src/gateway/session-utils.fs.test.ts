@@ -2,9 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { formatSessionArchiveTimestamp } from "../config/sessions.js";
+import * as transcriptEvents from "../sessions/transcript-events.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
+  archiveFileOnDisk,
   archiveSessionTranscripts,
+  cleanupArchivedSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
@@ -176,6 +180,67 @@ describe("readFirstUserMessageFromTranscript", () => {
 
     const result = readFirstUserMessageFromTranscript(sessionId, storePath);
     expect(result).toBe("Second message");
+  });
+});
+
+describe("cleanupArchivedSessionTranscripts", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-cleanup-archive-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  beforeAll(() => {
+    vi.stubEnv("OPENCLAW_HOME", tmpDir);
+  });
+
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("emits transcript updates when removing expired reset archives", async () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const now = Date.now();
+    const resetName = `cleanup-reset.jsonl.reset.${formatSessionArchiveTimestamp(now - 10_000)}`;
+    const resetPath = path.join(tmpDir, resetName);
+    fs.writeFileSync(resetPath, '{"type":"session"}\n', "utf-8");
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [tmpDir, path.dirname(storePath)],
+      olderThanMs: 1_000,
+      reason: "reset",
+      nowMs: now,
+    });
+
+    expect(result.removed).toBe(1);
+    expect(fs.existsSync(resetPath)).toBe(false);
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith(resetPath);
+  });
+
+  test("does not emit transcript updates when removing deleted archives", async () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const now = Date.now();
+    const deletedName = `cleanup-deleted.jsonl.deleted.${formatSessionArchiveTimestamp(now - 10_000)}`;
+    const deletedPath = path.join(tmpDir, deletedName);
+    fs.writeFileSync(deletedPath, '{"type":"session"}\n', "utf-8");
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [tmpDir],
+      olderThanMs: 1_000,
+      reason: "deleted",
+      nowMs: now,
+    });
+
+    expect(result.removed).toBe(1);
+    expect(fs.existsSync(deletedPath)).toBe(false);
+    expect(emitSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -731,6 +796,29 @@ describe("archiveSessionTranscripts", () => {
     vi.unstubAllEnvs();
   });
 
+  test("emits transcript updates for reset archives", () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const resetPath = path.join(tmpDir, "emit-reset.jsonl");
+    fs.writeFileSync(resetPath, '{"type":"session"}\n', "utf-8");
+
+    const archivedReset = archiveFileOnDisk(resetPath, "reset");
+
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenNthCalledWith(1, archivedReset);
+    emitSpy.mockRestore();
+  });
+
+  test("does not emit transcript updates for bak archives", () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const bakPath = path.join(tmpDir, "emit-bak.jsonl");
+    fs.writeFileSync(bakPath, '{"type":"session"}\n', "utf-8");
+
+    archiveFileOnDisk(bakPath, "bak");
+
+    expect(emitSpy).not.toHaveBeenCalled();
+    emitSpy.mockRestore();
+  });
+
   test("archives transcript from default and explicit sessionFile paths", () => {
     const cases = [
       {
@@ -758,6 +846,22 @@ describe("archiveSessionTranscripts", () => {
       expect(fs.existsSync(testCase.transcriptPath)).toBe(false);
       expect(fs.existsSync(archived[0])).toBe(true);
     }
+  });
+
+  test("does not re-archive already archived transcript files", () => {
+    const ts = formatSessionArchiveTimestamp(Date.now() - 1_000);
+    const resetArchivePath = path.join(tmpDir, `sess-archive-4.jsonl.reset.${ts}`);
+    fs.writeFileSync(resetArchivePath, '{"type":"session"}\n', "utf-8");
+
+    const archived = archiveSessionTranscripts({
+      sessionId: "sess-archive-4",
+      storePath,
+      sessionFile: resetArchivePath,
+      reason: "deleted",
+    });
+
+    expect(archived).toEqual([]);
+    expect(fs.existsSync(resetArchivePath)).toBe(true);
   });
 
   test("returns empty array when no transcript files exist", () => {

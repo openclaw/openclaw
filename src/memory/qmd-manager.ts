@@ -1571,7 +1571,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
-    const files = await listSessionFilesForAgent(this.agentId);
+    const files = await listSessionFilesForAgent(this.agentId, {
+      includeResetArchives: this.qmd.sessions.includeResetArchives,
+    });
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs

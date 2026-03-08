@@ -38,6 +38,7 @@ import { ensureMemoryIndexSchema } from "./memory-schema.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
+  isArchivedSessionTranscriptPath,
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "./session-files.js";
@@ -50,6 +51,7 @@ type MemoryIndexMeta = {
   provider: string;
   providerKey?: string;
   sources?: MemorySource[];
+  sessionIncludeResetArchives?: boolean;
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
@@ -446,6 +448,16 @@ export abstract class MemoryManagerSyncOps {
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
+      if (
+        isArchivedSessionTranscriptPath(sessionFile, {
+          includeResetArchives: this.settings.sync.sessions.includeResetArchives,
+        })
+      ) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
         continue;
@@ -730,8 +742,19 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const files = await listSessionFilesForAgent(this.agentId);
+    const files = await listSessionFilesForAgent(this.agentId, {
+      includeResetArchives: this.settings.sync.sessions.includeResetArchives,
+    });
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
+    const knownPaths = params.needsFullReindex
+      ? new Set<string>()
+      : new Set(
+          (
+            this.db.prepare(`SELECT path FROM files WHERE source = ?`).all("sessions") as Array<{
+              path: string;
+            }>
+          ).map((row) => row.path),
+        );
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
       files: files.length,
@@ -750,7 +773,9 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+      const sessionPath = sessionPathForFile(absPath);
+      const isKnownPath = knownPaths.has(sessionPath);
+      if (!indexAll && !this.sessionsDirtyFiles.has(absPath) && isKnownPath) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -868,6 +893,7 @@ export abstract class MemoryManagerSyncOps {
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const configuredSources = this.resolveConfiguredSourcesForMeta();
+    const sessionsSourceEnabled = configuredSources.includes("sessions");
     const needsFullReindex =
       params?.force ||
       !meta ||
@@ -875,6 +901,11 @@ export abstract class MemoryManagerSyncOps {
       (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
+      (sessionsSourceEnabled &&
+        this.metaSessionIncludeResetArchivesDiffers(
+          meta,
+          this.settings.sync.sessions.includeResetArchives,
+        )) ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
@@ -1087,6 +1118,7 @@ export abstract class MemoryManagerSyncOps {
         provider: this.provider?.id ?? "none",
         providerKey: this.providerKey!,
         sources: this.resolveConfiguredSourcesForMeta(),
+        sessionIncludeResetArchives: this.settings.sync.sessions.includeResetArchives,
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
@@ -1158,6 +1190,7 @@ export abstract class MemoryManagerSyncOps {
       provider: this.provider?.id ?? "none",
       providerKey: this.providerKey!,
       sources: this.resolveConfiguredSourcesForMeta(),
+      sessionIncludeResetArchives: this.settings.sync.sessions.includeResetArchives,
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1241,5 +1274,13 @@ export abstract class MemoryManagerSyncOps {
       return true;
     }
     return metaSources.some((source, index) => source !== configuredSources[index]);
+  }
+
+  private metaSessionIncludeResetArchivesDiffers(
+    meta: MemoryIndexMeta,
+    configuredIncludeResetArchives: boolean,
+  ): boolean {
+    const metaValue = meta.sessionIncludeResetArchives === true;
+    return metaValue !== configuredIncludeResetArchives;
   }
 }
