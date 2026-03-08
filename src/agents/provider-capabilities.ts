@@ -26,6 +26,16 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
+const MISTRAL_TRANSCRIPT_TOOL_CALL_ID_MODEL_HINTS = [
+  "mistral",
+  "mixtral",
+  "codestral",
+  "pixtral",
+  "devstral",
+  "ministral",
+  "mistralai",
+] as const;
+
 const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   anthropic: {
     providerFamily: "anthropic",
@@ -40,15 +50,7 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
-    transcriptToolCallIdModelHints: [
-      "mistral",
-      "mixtral",
-      "codestral",
-      "pixtral",
-      "devstral",
-      "ministral",
-      "mistralai",
-    ],
+    transcriptToolCallIdModelHints: [...MISTRAL_TRANSCRIPT_TOOL_CALL_ID_MODEL_HINTS],
   },
   openai: {
     providerFamily: "openai",
@@ -154,8 +156,11 @@ export function resolveTranscriptToolCallIdMode(
   if (mode === "strict9") {
     return mode;
   }
-  if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
+  if (
+    modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints) ||
+    modelIncludesAnyHint(modelId, [...MISTRAL_TRANSCRIPT_TOOL_CALL_ID_MODEL_HINTS])
+  ) {
     return "strict9";
   }
-  return mode === "strict9" ? mode : undefined;
+  return undefined;
 }

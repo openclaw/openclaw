@@ -64,6 +64,9 @@ describe("resolveProviderCapabilities", () => {
       }),
     ).toBe(true);
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/mistral-large-latest")).toBe(
+      "strict9",
+    );
   });
 
   it("treats kimi aliases as anthropic tool payload compatibility providers", () => {

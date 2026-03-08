@@ -34,6 +34,16 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
+  it("keeps strict9 tool-call sanitization for proxied Mistral-family models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "mistralai/mistral-large-latest",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict9");
+  });
+
   it("disables sanitizeToolCallIds for OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
