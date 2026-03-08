@@ -39,7 +39,7 @@ export type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "resolved"; path: string }
+  | { kind: "resolved"; path: string; allowHardlinks?: boolean }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
 
@@ -256,6 +256,7 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
+  opts?: { allowHardlinks?: boolean },
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -263,6 +264,9 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // Package managers like pnpm install files as hardlinks in the global store.
+    // Keep hardlink checks enabled for untrusted/custom roots.
+    rejectHardlinks: opts?.allowHardlinks !== true,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
@@ -419,7 +423,8 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  const allowHardlinks = opts?.root?.kind === "resolved" ? opts.root.allowHardlinks === true : true;
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, { allowHardlinks });
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -448,7 +453,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, { allowHardlinks });
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {

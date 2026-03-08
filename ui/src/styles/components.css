@@ -603,6 +603,7 @@
 .cron-workspace-main {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .cron-workspace-form {
@@ -901,6 +902,17 @@
 .cron-run-entry__summary {
   white-space: pre-wrap;
   line-height: 1.45;
+}
+
+@media (max-width: 1400px) {
+  .cron-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-workspace-form {
+    position: static;
+    order: -1;
+  }
 }
 
 @media (max-width: 1100px) {
