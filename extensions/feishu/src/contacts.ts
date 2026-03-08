@@ -124,7 +124,11 @@ export function getContactCount(): number {
 
 /**
  * Sync all contacts from Feishu API into local SQLite.
- * Uses pagination (50 per page) to fetch all users.
+ *
+ * Two-tier strategy (mirrors feishu-ops/scripts/update-contacts.py):
+ * 1. Try `/contact/v3/users` list API (simplest, needs contact:user.base:readonly)
+ * 2. Fallback: collect department IDs → `/contact/v3/users/find_by_department`
+ *    per department (works with narrower scopes)
  *
  * @returns The number of contacts synced, or an error message string.
  */
@@ -142,8 +146,50 @@ export async function syncContactsFromAPI(params: {
   initDb();
   const client = createFeishuClient(account);
 
-  let pageToken: string | undefined;
+  // --- Tier 1: Try users list API ---
+  let users = await collectUsersViaListAPI(client, { appId: account.appId!, domain: account.domain }, log);
+
+  // --- Tier 2: Fallback to department traversal ---
+  if (users.length === 0) {
+    log?.("feishu: list API returned 0 users, falling back to department traversal...");
+    const deptIds = await collectDepartmentIds(client, log);
+    users = await collectUsersByDepartment(client, deptIds, log);
+  }
+
+  // Insert into SQLite
   let totalSynced = 0;
+  for (const user of users) {
+    if (!user.open_id) continue;
+    const esc = (s?: string) => (s ?? "").replace(/'/g, "''");
+    sqliteExec(
+      `INSERT OR REPLACE INTO contacts (open_id, name, en_name, email, mobile, department_name, department_id, job_title, status, updated_at) VALUES ('${esc(user.open_id)}', '${esc(user.name)}', '${esc(user.en_name)}', '${esc(user.email)}', '${esc(user.mobile)}', '${esc(user.department_id)}', '${esc(user.department_id)}', '${esc(user.job_title)}', ${user.is_activated ? 1 : 0}, datetime('now'))`,
+    );
+    totalSynced++;
+  }
+
+  log?.(`feishu: contact sync complete, total ${totalSynced} contacts`);
+  return { count: totalSynced };
+}
+
+type RawUser = {
+  open_id: string;
+  name?: string;
+  en_name?: string;
+  email?: string;
+  mobile?: string;
+  department_id?: string;
+  job_title?: string;
+  is_activated?: boolean;
+};
+
+/** Tier 1: Use /contact/v3/users (requires contact:user.base:readonly) */
+async function collectUsersViaListAPI(
+  client: ReturnType<typeof createFeishuClient>,
+  account: { appId: string; domain?: string },
+  log?: (msg: string) => void,
+): Promise<RawUser[]> {
+  const users: RawUser[] = [];
+  let pageToken: string | undefined;
 
   try {
     do {
@@ -179,37 +225,157 @@ export async function syncContactsFromAPI(params: {
           "contact:user.base:readonly",
           account.domain,
         );
-        if (permErr) return { error: permErr };
-        return { error: `Feishu API error: ${response.msg || `code ${response.code}`}` };
+        if (permErr) {
+          log?.(`feishu: list API permission error: ${permErr}`);
+        } else {
+          log?.(`feishu: list API error: ${response.msg || `code ${response.code}`}`);
+        }
+        return [];
       }
 
-      const items = response.data?.items ?? [];
-      for (const user of items) {
-        if (!user.open_id) continue;
-        const esc = (s?: string) => (s ?? "").replace(/'/g, "''");
-        sqliteExec(
-          `INSERT OR REPLACE INTO contacts (open_id, name, en_name, email, mobile, department_name, department_id, job_title, status, updated_at) VALUES ('${esc(user.open_id)}', '${esc(user.name)}', '${esc(user.en_name)}', '${esc(user.email)}', '${esc(user.mobile)}', '${esc(user.department_ids?.[0])}', '${esc(user.department_ids?.[0])}', '${esc(user.job_title)}', ${user.status?.is_activated ? 1 : 0}, datetime('now'))`,
-        );
-        totalSynced++;
+      for (const u of response.data?.items ?? []) {
+        if (!u.open_id) continue;
+        users.push({
+          open_id: u.open_id,
+          name: u.name,
+          en_name: u.en_name,
+          email: u.email,
+          mobile: u.mobile,
+          department_id: u.department_ids?.[0],
+          job_title: u.job_title,
+          is_activated: u.status?.is_activated,
+        });
       }
 
-      log?.(`feishu: synced ${totalSynced} contacts so far...`);
-
+      log?.(`feishu: list API fetched ${users.length} contacts so far...`);
       pageToken = response.data?.has_more ? response.data.page_token : undefined;
     } while (pageToken);
-
-    log?.(`feishu: contact sync complete, total ${totalSynced} contacts`);
-    return { count: totalSynced };
   } catch (err) {
-    const permErr = checkPermissionError(
-      err,
-      account.appId,
-      "contact:user.base:readonly",
-      account.domain,
-    );
-    if (permErr) return { error: permErr };
-    return { error: `Contact sync failed: ${String(err)}` };
+    log?.(`feishu: list API failed: ${String(err)}`);
   }
+
+  return users;
+}
+
+/** Collect all department IDs by traversing from root (0). */
+async function collectDepartmentIds(
+  client: ReturnType<typeof createFeishuClient>,
+  log?: (msg: string) => void,
+): Promise<string[]> {
+  const deptIds: string[] = ["0"];
+  const seen = new Set<string>(["0"]);
+  const queue = ["0"];
+
+  while (queue.length > 0 && deptIds.length < 1000) {
+    const parentId = queue.shift()!;
+    let pageToken: string | undefined;
+
+    try {
+      do {
+        const response = (await (client as any).contact.department.children({
+          path: { department_id: parentId },
+          params: {
+            department_id_type: "open_department_id",
+            user_id_type: "open_id",
+            fetch_child: true,
+            page_size: 50,
+            ...(pageToken ? { page_token: pageToken } : {}),
+          },
+        })) as {
+          code?: number;
+          data?: {
+            has_more?: boolean;
+            page_token?: string;
+            items?: Array<{ open_department_id?: string }>;
+          };
+        };
+
+        if (response.code !== 0) break;
+
+        for (const d of response.data?.items ?? []) {
+          const did = d.open_department_id;
+          if (did && !seen.has(did)) {
+            seen.add(did);
+            deptIds.push(did);
+            queue.push(did);
+          }
+        }
+
+        pageToken = response.data?.has_more ? response.data.page_token : undefined;
+      } while (pageToken);
+    } catch {
+      // Permission denied for this department, skip
+    }
+  }
+
+  log?.(`feishu: collected ${deptIds.length} departments`);
+  return deptIds;
+}
+
+/** Tier 2: Fetch users per department via /find_by_department. */
+async function collectUsersByDepartment(
+  client: ReturnType<typeof createFeishuClient>,
+  deptIds: string[],
+  log?: (msg: string) => void,
+): Promise<RawUser[]> {
+  const users = new Map<string, RawUser>();
+
+  for (const deptId of deptIds) {
+    let pageToken: string | undefined;
+    try {
+      do {
+        const response = (await (client as any).contact.user.findByDepartment({
+          params: {
+            department_id: deptId,
+            user_id_type: "open_id",
+            page_size: 50,
+            ...(deptId !== "0" ? { department_id_type: "open_department_id" } : {}),
+            ...(pageToken ? { page_token: pageToken } : {}),
+          },
+        })) as {
+          code?: number;
+          data?: {
+            has_more?: boolean;
+            page_token?: string;
+            items?: Array<{
+              open_id?: string;
+              name?: string;
+              en_name?: string;
+              email?: string;
+              mobile?: string;
+              department_ids?: string[];
+              job_title?: string;
+              status?: { is_activated?: boolean };
+            }>;
+          };
+        };
+
+        if (response.code !== 0) break;
+
+        for (const u of response.data?.items ?? []) {
+          if (!u.open_id) continue;
+          const old = users.get(u.open_id);
+          users.set(u.open_id, {
+            open_id: u.open_id,
+            name: u.name ?? old?.name,
+            en_name: u.en_name ?? old?.en_name,
+            email: u.email ?? old?.email,
+            mobile: u.mobile ?? old?.mobile,
+            department_id: u.department_ids?.[0] ?? old?.department_id,
+            job_title: u.job_title ?? old?.job_title,
+            is_activated: u.status?.is_activated ?? old?.is_activated,
+          });
+        }
+
+        pageToken = response.data?.has_more ? response.data.page_token : undefined;
+      } while (pageToken);
+    } catch {
+      // Permission denied for this department, skip
+    }
+  }
+
+  log?.(`feishu: department traversal fetched ${users.size} unique contacts`);
+  return [...users.values()];
 }
 
 /**
