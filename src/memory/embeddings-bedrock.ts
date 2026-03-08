@@ -4,7 +4,7 @@ import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type BedrockEmbeddingClient = {
-  region: string;
+  region: string | undefined;
   model: string;
 };
 
