@@ -160,4 +160,57 @@ describe("pi tool definition adapter", () => {
     });
     processSpy.mockRestore();
   });
+
+  it("preserves fail-open passthrough while surfacing sandbox-skip context note", async () => {
+    const processSpy = vi
+      .spyOn(sessionSanitizationService, "processMcpToolResult")
+      .mockResolvedValue({
+        trusted: false,
+        safe: true,
+        sandboxSkip: true,
+        structuredResult: { raw: "unchanged" },
+        flags: ["sandbox unavailable — sanitization skipped per config"],
+        contextNote: "sandbox unavailable, sanitization skipped",
+      });
+
+    const cfg = {
+      mcpServers: {
+        "community-search": {
+          tools: ["web_search"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const original = {
+      content: [{ type: "text", text: '{"ok":true}' }],
+      details: { ok: true, via: "raw-result" },
+    };
+    const toolDef = {
+      name: "web_search",
+      label: "Web Search",
+      description: "MCP search tool",
+      parameters: Type.Object({}),
+      execute: async () => original,
+    } as unknown as ReturnType<typeof toToolDefinitions>[number];
+
+    const wrapped = wrapMcpToolDefinitions([toolDef], {
+      cfg,
+      agentId: "main",
+      sessionId: "sess-1",
+    });
+    const wrappedDef = wrapped[0];
+    if (!wrappedDef) {
+      throw new Error("missing wrapped definition");
+    }
+
+    const result = await wrappedDef.execute("call-1", {}, undefined, undefined, extensionContext);
+    expect(processSpy).toHaveBeenCalledOnce();
+    expect(result.details).toEqual(original.details);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "sandbox unavailable, sanitization skipped",
+    });
+    expect(result.content[1]).toEqual(original.content[0]);
+    processSpy.mockRestore();
+  });
 });

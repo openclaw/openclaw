@@ -1420,6 +1420,11 @@ export type McpProcessResult = {
    * the active run when this is true.
    */
   terminated?: boolean;
+  /**
+   * Set when sandbox isolation is unavailable and blockOnSandboxUnavailable=false.
+   * The caller should pass through the raw tool result while surfacing contextNote.
+   */
+  sandboxSkip?: boolean;
 };
 
 const SESSION_CONTEXT_MAX_ENTRIES = 10;
@@ -1521,6 +1526,7 @@ export async function processMcpToolResult(params: {
       return {
         trusted: false,
         safe: true,
+        sandboxSkip: true,
         structuredResult:
           params.rawResult !== null && typeof params.rawResult === "object"
             ? (params.rawResult as Record<string, unknown>)

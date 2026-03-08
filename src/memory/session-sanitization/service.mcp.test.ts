@@ -264,6 +264,7 @@ describe("processMcpToolResult", () => {
         helperDeps: { runner },
       });
       expect(result.safe).toBe(true);
+      expect(result.sandboxSkip).toBe(true);
       expect(runner).not.toHaveBeenCalled();
       expect(result.flags).toContain("sandbox unavailable — sanitization skipped per config");
     });

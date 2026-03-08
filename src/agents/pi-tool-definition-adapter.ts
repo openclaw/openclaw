@@ -122,6 +122,20 @@ function normalizeToolExecutionResult(params: {
   };
 }
 
+function prependContextNoteToPassthroughResult(params: {
+  rawResult: AgentToolResult<unknown>;
+  contextNote: string;
+}): AgentToolResult<unknown> {
+  const note = params.contextNote.trim();
+  if (!note) {
+    return params.rawResult;
+  }
+  return {
+    ...params.rawResult,
+    content: [{ type: "text", text: note }, ...params.rawResult.content],
+  };
+}
+
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   toolCallId: string;
   params: unknown;
@@ -399,6 +413,13 @@ export function wrapMcpToolDefinitions(
             error: "MCP result blocked by sanitization",
             server,
             flags: mcpResult.flags,
+            contextNote: mcpResult.contextNote,
+          });
+        }
+
+        if (mcpResult.sandboxSkip) {
+          return prependContextNoteToPassthroughResult({
+            rawResult: rawResult as AgentToolResult<unknown>,
             contextNote: mcpResult.contextNote,
           });
         }
