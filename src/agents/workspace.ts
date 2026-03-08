@@ -7,6 +7,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveImports } from "./resolve-imports.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -541,10 +542,16 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const content = await resolveImports(loaded.content, entry.filePath, {
+        boundaryDirs: [
+          path.join(resolveRequiredHomeDir(process.env, os.homedir), ".openclaw"),
+          resolvedDir,
+        ],
+      });
       result.push({
         name: entry.name,
         path: entry.filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
     } else {
@@ -629,10 +636,16 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const content = await resolveImports(loaded.content, filePath, {
+        boundaryDirs: [
+          path.join(resolveRequiredHomeDir(process.env, os.homedir), ".openclaw"),
+          resolvedDir,
+        ],
+      });
       files.push({
         name: baseName as WorkspaceBootstrapFileName,
         path: filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
       continue;
