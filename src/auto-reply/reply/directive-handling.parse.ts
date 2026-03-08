@@ -58,6 +58,8 @@ export type InlineDirectives = {
   rawCap?: string;
   rawDrop?: string;
   hasQueueOptions: boolean;
+  /** Routing-provided model fallbacks (populated when routing selects multiple models). */
+  modelFallbacks?: string[];
 };
 
 export function parseInlineDirectives(

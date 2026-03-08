@@ -1,0 +1,363 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { TaskType, type RoutingConfig } from "../../gateway/routing/types.js";
+import type { TemplateContext } from "../templating.js";
+import { buildTestCtx } from "./test-ctx.js";
+import { createMockTypingController } from "./test-helpers.js";
+
+const taskResolverMock = vi.hoisted(() => ({
+  resolveTaskType: vi.fn(async () => TaskType.CODE_EDIT),
+}));
+
+const applyDirectivesMock = vi.hoisted(() => ({
+  applyInlineDirectiveOverrides: vi.fn(async (params) => ({
+    kind: "continue",
+    directives: params.directives,
+    provider: params.provider,
+    model: params.model,
+    contextTokens: params.contextTokens,
+    directiveAck: undefined,
+    perMessageQueueMode: undefined,
+    perMessageQueueOptions: undefined,
+  })),
+}));
+
+const modelSelectionMock = vi.hoisted(() => ({
+  createModelSelectionState: vi.fn(async (params) => ({
+    provider: params.provider,
+    model: params.model,
+    allowedModelKeys: new Set(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    resolveDefaultThinkingLevel: async () => "off",
+    resolveDefaultReasoningLevel: async (): Promise<"on" | "off"> => "off",
+    needsModelCatalog: false,
+  })),
+  resolveContextTokens: vi.fn(() => 2048),
+}));
+
+const sandboxMock = vi.hoisted(() => ({
+  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+}));
+
+const elevatedMock = vi.hoisted(() => ({
+  resolveElevatedPermissions: vi.fn(() => ({ enabled: false, allowed: false, failures: [] })),
+  formatElevatedUnavailableMessage: vi.fn(() => "blocked"),
+}));
+
+const sessionStoreMock = vi.hoisted(() => ({
+  updateSessionStore: vi.fn(async () => {}),
+}));
+
+vi.mock("../../gateway/routing/task-resolver.js", () => taskResolverMock);
+vi.mock("./get-reply-directives-apply.js", () => applyDirectivesMock);
+vi.mock("./model-selection.js", () => modelSelectionMock);
+vi.mock("../../agents/sandbox.js", () => sandboxMock);
+vi.mock("./reply-elevated.js", () => elevatedMock);
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
+    "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    updateSessionStore: sessionStoreMock.updateSessionStore,
+  };
+});
+
+const { resolveReplyDirectives } = await import("./get-reply-directives.js");
+
+const baseRoutingConfig: RoutingConfig = {
+  default_task_type: TaskType.FALLBACK,
+  cooldown_seconds: 30,
+  antiflap_enabled: false,
+  triggers: {},
+  deny_list: [],
+};
+
+const aliasIndex: ModelAliasIndex = { byAlias: new Map(), byKey: new Map() };
+
+function buildConfig(routing: RoutingConfig): OpenClawConfig {
+  return {
+    commands: { text: false },
+    agents: {
+      defaults: {},
+      list: [
+        {
+          id: "test-coder",
+          model: { primary: "openai/gpt-4o", fallbacks: ["anthropic/claude-3-sonnet"] },
+          tasks: ["code_edit"],
+          priority: 1,
+        },
+        {
+          id: "test-thinker",
+          model: { primary: "anthropic/claude-opus-4-5" },
+          tasks: ["fallback"],
+          priority: 1,
+        },
+      ],
+    },
+    routing,
+  } as unknown as OpenClawConfig;
+}
+
+function buildSessionCtx(body: string): TemplateContext {
+  const ctx = buildTestCtx({
+    Body: body,
+    CommandBody: body,
+    BodyForCommands: body,
+    CommandAuthorized: true,
+  });
+  return {
+    ...ctx,
+    BodyStripped: body,
+    BodyForAgent: body,
+  };
+}
+
+function buildParams(params: {
+  cfg: OpenClawConfig;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  sessionKey: string;
+  storePath?: string;
+}) {
+  const ctx = buildTestCtx({
+    Body: "Please edit the code",
+    CommandBody: "Please edit the code",
+    BodyForCommands: "Please edit the code",
+    CommandAuthorized: true,
+  });
+  const sessionCtx = buildSessionCtx("Please edit the code");
+
+  return {
+    ctx,
+    cfg: params.cfg,
+    agentId: "main",
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
+    agentCfg: {},
+    sessionCtx,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    sessionScope: "per-sender" as const,
+    groupResolution: undefined,
+    isGroup: false,
+    triggerBodyNormalized: "",
+    commandAuthorized: true,
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-5",
+    aliasIndex,
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    hasResolvedHeartbeatModelOverride: false,
+    typing: createMockTypingController(),
+    opts: undefined,
+    skillFilter: undefined,
+  };
+}
+
+beforeEach(() => {
+  taskResolverMock.resolveTaskType.mockClear();
+  applyDirectivesMock.applyInlineDirectiveOverrides.mockClear();
+  modelSelectionMock.createModelSelectionState.mockClear();
+  sessionStoreMock.updateSessionStore.mockClear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("resolveReplyDirectives antiflap routing", () => {
+  it("keeps existing routing behavior when antiflap is disabled", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const routing = { ...baseRoutingConfig, antiflap_enabled: false };
+    const cfg = buildConfig(routing);
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      lastRoutedModel: "anthropic/claude-opus-4-5",
+      lastRoutedAt: 1_700_000_000_000,
+    };
+    const sessionKey = "agent:main:subagent:s1";
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await resolveReplyDirectives(
+      buildParams({ cfg, sessionEntry, sessionStore, sessionKey }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind === "continue") {
+      expect(result.result.provider).toBe("openai");
+      expect(result.result.model).toBe("gpt-4o");
+    }
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses last routed model during antiflap cooldown", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const routing = { ...baseRoutingConfig, antiflap_enabled: true };
+    const cfg = buildConfig(routing);
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      lastRoutedModel: "anthropic/claude-opus-4-5",
+      lastRoutedAt: 1_699_999_990_000,
+    };
+    const sessionKey = "agent:main:subagent:s1";
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await resolveReplyDirectives(
+      buildParams({ cfg, sessionEntry, sessionStore, sessionKey }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind === "continue") {
+      expect(result.result.provider).toBe("anthropic");
+      expect(result.result.model).toBe("claude-opus-4-5");
+    }
+    expect(taskResolverMock.resolveTaskType).not.toHaveBeenCalled();
+    expect(sessionEntry.lastRoutedAt).toBe(1_699_999_990_000);
+  });
+
+  it("re-resolves routing after cooldown expires", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const routing = { ...baseRoutingConfig, antiflap_enabled: true };
+    const cfg = buildConfig(routing);
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      lastRoutedModel: "anthropic/claude-opus-4-5",
+      lastRoutedAt: 1_699_999_960_000,
+    };
+    const sessionKey = "agent:main:subagent:s1";
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await resolveReplyDirectives(
+      buildParams({
+        cfg,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind === "continue") {
+      expect(result.result.provider).toBe("openai");
+      expect(result.result.model).toBe("gpt-4o");
+    }
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+    expect(sessionEntry.lastRoutedModel).toBe("openai/gpt-4o");
+    expect(sessionEntry.lastRoutedAt).toBe(1_700_000_000_000);
+    expect(sessionStoreMock.updateSessionStore).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveReplyDirectives — recentContext 提取逻辑", () => {
+  /** Build params with a ctx that has InboundHistory set */
+  function buildParamsWithHistory(inboundHistory?: Array<{ sender: string; body: string }>) {
+    const ctx = buildTestCtx({
+      Body: "ok",
+      CommandBody: "ok",
+      BodyForCommands: "ok",
+      CommandAuthorized: true,
+      InboundHistory: inboundHistory,
+    });
+    const sessionCtx = buildSessionCtx("ok");
+    const routing = { ...baseRoutingConfig, antiflap_enabled: false };
+    const cfg = buildConfig(routing);
+    const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 0 };
+    const sessionKey = "agent:main:subagent:s1";
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    return {
+      ctx,
+      cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: {},
+      sessionCtx,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionScope: "per-sender" as const,
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "",
+      commandAuthorized: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: createMockTypingController(),
+      opts: undefined,
+      skillFilter: undefined,
+    };
+  }
+
+  beforeEach(() => {
+    taskResolverMock.resolveTaskType.mockImplementation(() => Promise.resolve(TaskType.CODE_EDIT));
+  });
+
+  it("InboundHistory 有 2+ 条消息 → recentContext 是最后 2 条 body 用 \\n 连接", async () => {
+    const params = buildParamsWithHistory([
+      { sender: "user", body: "message one" },
+      { sender: "user", body: "message two" },
+      { sender: "user", body: "message three" },
+    ]);
+    await resolveReplyDirectives(params);
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+    const calls = taskResolverMock.resolveTaskType.mock.calls as unknown[][];
+    const recentContext = calls[0]?.[2];
+    expect(recentContext).toBe("message two\nmessage three");
+  });
+
+  it("InboundHistory 只有 1 条 → recentContext 是那 1 条的 body", async () => {
+    const params = buildParamsWithHistory([{ sender: "user", body: "only message" }]);
+    await resolveReplyDirectives(params);
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+    const calls = taskResolverMock.resolveTaskType.mock.calls as unknown[][];
+    const recentContext = calls[0]?.[2];
+    expect(recentContext).toBe("only message");
+  });
+
+  it("InboundHistory 为空数组 → recentContext 是 undefined", async () => {
+    const params = buildParamsWithHistory([]);
+    await resolveReplyDirectives(params);
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+    const calls = taskResolverMock.resolveTaskType.mock.calls as unknown[][];
+    const recentContext = calls[0]?.[2];
+    expect(recentContext).toBeUndefined();
+  });
+
+  it("InboundHistory 不存在(undefined) → recentContext 是 undefined", async () => {
+    const params = buildParamsWithHistory(undefined);
+    await resolveReplyDirectives(params);
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+    const calls = taskResolverMock.resolveTaskType.mock.calls as unknown[][];
+    const recentContext = calls[0]?.[2];
+    expect(recentContext).toBeUndefined();
+  });
+
+  it("InboundHistory 中有空 body → 被 filter(Boolean) 过滤掉", async () => {
+    // slice(-2) 取最后 2 条: [{body: ""}, {body: "valid"}]
+    // filter(Boolean) 过滤空字符串 → ["valid"]
+    const params = buildParamsWithHistory([
+      { sender: "user", body: "" },
+      { sender: "user", body: "valid" },
+    ]);
+    await resolveReplyDirectives(params);
+    expect(taskResolverMock.resolveTaskType).toHaveBeenCalledTimes(1);
+    const calls = taskResolverMock.resolveTaskType.mock.calls as unknown[][];
+    const recentContext = calls[0]?.[2];
+    expect(recentContext).toBe("valid");
+  });
+});
