@@ -13,11 +13,18 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
 }
 
 /**
- * Strip all `type: "thinking"` content blocks from assistant messages.
+ * Strip all `type: "thinking"` and `type: "redacted_thinking"` content blocks
+ * from assistant messages.
  *
  * If an assistant message becomes empty after stripping, it is replaced with
  * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
  * (some providers require strict user/assistant alternation).
+ *
+ * Both block types must be stripped because the Anthropic API rejects requests
+ * where thinking/redacted_thinking blocks in the latest assistant message have
+ * been modified from their original response. When sessions are forked or
+ * context is pruned, these blocks can inadvertently be altered, causing
+ * `invalid_request_error` rejections.
  *
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
@@ -33,10 +40,13 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
-        touched = true;
-        changed = true;
-        continue;
+      if (block && typeof block === "object") {
+        const blockType = (block as { type?: unknown }).type;
+        if (blockType === "thinking" || blockType === "redacted_thinking") {
+          touched = true;
+          changed = true;
+          continue;
+        }
       }
       nextContent.push(block);
     }
