@@ -269,6 +269,121 @@ describe("applyExtraParamsToAgent", () => {
     return calls[0]?.headers;
   }
 
+  function runQwenPayloadCase(params: {
+    cfg: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+  }) {
+    const payload = params.payload ?? {};
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, params.cfg, "qwen-api", "qwen3.5-plus");
+
+    const model = {
+      api: "openai-completions",
+      provider: "qwen-api",
+      id: "qwen3.5-plus",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+    return payload;
+  }
+
+  it("injects qwen top_p and enable_search into payload when configured", () => {
+    const payload = runQwenPayloadCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qwen-api/qwen3.5-plus": {
+                params: {
+                  top_p: 0.82,
+                  enable_search: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload.top_p).toBe(0.82);
+    expect(payload.enable_search).toBe(true);
+  });
+
+  it("accepts camelCase topP and enableSearch aliases", () => {
+    const payload = runQwenPayloadCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qwen-api/qwen3.5-plus": {
+                params: {
+                  topP: 0.75,
+                  enableSearch: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload.top_p).toBe(0.75);
+    expect(payload.enable_search).toBe(true);
+  });
+
+  it("does not overwrite explicit qwen payload values", () => {
+    const payload = runQwenPayloadCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qwen-api/qwen3.5-plus": {
+                params: {
+                  top_p: 0.9,
+                  enable_search: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      payload: {
+        top_p: 0.4,
+        enable_search: false,
+      },
+    });
+
+    expect(payload.top_p).toBe(0.4);
+    expect(payload.enable_search).toBe(false);
+  });
+
+  it("ignores invalid qwen payload overrides", () => {
+    const payload = runQwenPayloadCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qwen-api/qwen3.5-plus": {
+                params: {
+                  top_p: 1.5,
+                  enable_search: "yes",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload).not.toHaveProperty("top_p");
+    expect(payload).not.toHaveProperty("enable_search");
+  });
+
   it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
     // Regression: "off" is a truthy string, so the old code injected
     // reasoning: { effort: "none" }, causing a 400 on models that require
