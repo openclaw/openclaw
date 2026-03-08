@@ -35,6 +35,8 @@ export type EmbeddingProvider = {
   maxInputTokens?: number;
   embedQuery: (text: string) => Promise<number[]>;
   embedBatch: (texts: string[]) => Promise<number[][]>;
+  /** Release native resources (e.g. GGML Metal contexts). Safe to call multiple times. */
+  dispose?: () => Promise<void>;
 };
 
 export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
@@ -159,6 +161,27 @@ async function createLocalEmbeddingProvider(
         }),
       );
       return embeddings;
+    },
+    // Dispose native GGML/Metal resources in reverse-creation order to prevent
+    // the Metal assertion crash (rsets->data count != 0) on process exit.
+    // Refs are nulled before awaiting so idempotency holds even if a step throws.
+    dispose: async () => {
+      const ctx = embeddingContext;
+      embeddingContext = null;
+      const model = embeddingModel;
+      embeddingModel = null;
+      const inst = llama;
+      llama = null;
+
+      if (ctx) {
+        await ctx.dispose();
+      }
+      if (model) {
+        await model.dispose();
+      }
+      if (inst) {
+        await inst.dispose();
+      }
     },
   };
 }

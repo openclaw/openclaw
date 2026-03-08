@@ -780,6 +780,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         await pendingSync;
       } catch {}
     }
+    // Dispose native provider resources (e.g. GGML Metal contexts for local
+    // embeddings) before closing the DB so the process exits cleanly.
+    if (this.provider?.dispose) {
+      try {
+        await this.provider.dispose();
+      } catch {}
+    }
     this.db.close();
     INDEX_CACHE.delete(this.cacheKey);
   }

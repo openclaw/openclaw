@@ -7,14 +7,17 @@ declare module "node-llama-cpp" {
 
   export type LlamaEmbeddingContext = {
     getEmbeddingFor: (text: string) => Promise<LlamaEmbedding>;
+    dispose: () => Promise<void>;
   };
 
   export type LlamaModel = {
     createEmbeddingContext: () => Promise<LlamaEmbeddingContext>;
+    dispose: () => Promise<void>;
   };
 
   export type Llama = {
     loadModel: (params: { modelPath: string }) => Promise<LlamaModel>;
+    dispose: () => Promise<void>;
   };
 
   export function getLlama(params: { logLevel: LlamaLogLevel }): Promise<Llama>;
