@@ -45,6 +45,12 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Podwatch** — Monitoring, cost tracking, and security alerts for OpenClaw agents (dashboard at podwatch.app).
+  npm: `podwatch`
+  repo: `https://github.com/podwatch/podwatch-plugin`
+  website: `https://podwatch.app`
+  skill: `https://github.com/jaime-perez-dev/podwatch-skill`
+  install: `openclaw plugins install podwatch`
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
