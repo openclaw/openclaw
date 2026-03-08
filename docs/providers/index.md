@@ -44,6 +44,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen (OAuth)](/providers/qwen)
 - [Together AI](/providers/together)
+- [Novita AI](/providers/novita)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [vLLM (local models)](/providers/vllm)

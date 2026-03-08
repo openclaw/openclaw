@@ -588,6 +588,8 @@ describe("exec PATH handling", () => {
 
     const text = readNormalizedTextContent(result.content);
     const entries = text.split(path.delimiter);
+    // PowerShell on Windows may prepend its own install directory to PATH at runtime.
+    // Assert configured entries keep relative order and remain ahead of the original base PATH entry.
     const prependIndexes = prepend.map((entry) => entries.indexOf(entry));
     for (const index of prependIndexes) {
       expect(index).toBeGreaterThanOrEqual(0);
@@ -600,6 +602,7 @@ describe("exec PATH handling", () => {
     for (const index of prependIndexes) {
       expect(index).toBeLessThan(baseIndex);
     }
+    expect(entries).toContain(basePath);
   });
 });
 

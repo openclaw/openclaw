@@ -10,6 +10,7 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -160,6 +161,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Hugging Face",
     hint: "Inference API (HF token)",
     choices: ["huggingface-api-key"],
+  },
+  {
+    value: "novita",
+    label: "Novita AI",
+    hint: "API key",
+    choices: ["novita-api-key"],
   },
   {
     value: "venice",

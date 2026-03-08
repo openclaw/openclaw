@@ -557,6 +557,25 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("infers Novita auth choice from --novita-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-novita-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        novitaApiKey: "novita-test-key",
+      });
+
+      expect(cfg.auth?.profiles?.["novita:default"]?.provider).toBe("novita");
+      expect(cfg.auth?.profiles?.["novita:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("novita/moonshotai/kimi-k2.5");
+      expect(cfg.models?.providers?.novita?.api).toBe("openai-completions");
+      expect(cfg.models?.providers?.novita?.baseUrl).toBe("https://api.novita.ai/openai");
+      await expectApiKeyProfile({
+        profileId: "novita:default",
+        provider: "novita",
+        key: "novita-test-key",
+      });
+    });
+  });
+
   it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-qianfan-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

@@ -160,6 +160,7 @@ export function registerOnboardCommand(program: Command) {
           veniceApiKey: opts.veniceApiKey as string | undefined,
           togetherApiKey: opts.togetherApiKey as string | undefined,
           huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
+          novitaApiKey: opts.novitaApiKey as string | undefined,
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
