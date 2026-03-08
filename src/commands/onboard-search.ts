@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "mistral" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -53,6 +53,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
     placeholder: "sk-...",
     signupUrl: "https://platform.moonshot.cn/",
+  },
+  {
+    value: "mistral",
+    label: "Mistral",
+    hint: "Mistral web search",
+    envKeys: ["MISTRAL_API_KEY"],
+    placeholder: "mistral-...",
+    signupUrl: "https://console.mistral.ai/",
   },
   {
     value: "perplexity",

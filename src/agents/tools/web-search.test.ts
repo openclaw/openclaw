@@ -22,6 +22,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveMistralApiKey,
+  resolveMistralModel,
+  resolveMistralAgentId,
   resolveBraveMode,
   mapBraveLlmContextResults,
 } = __testing;
@@ -466,5 +469,36 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+describe("web_search mistral config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveMistralApiKey({ apiKey: "mistral-test-key" })).toBe("mistral-test-key");
+  });
+
+  it("falls back to MISTRAL_API_KEY", () => {
+    withEnv({ MISTRAL_API_KEY: "mistral-env" }, () => {
+      expect(resolveMistralApiKey({})).toBe("mistral-env");
+    });
+  });
+
+  it("returns undefined when no Mistral key is configured", () => {
+    withEnv({ MISTRAL_API_KEY: undefined }, () => {
+      expect(resolveMistralApiKey({})).toBeUndefined();
+      expect(resolveMistralApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default model", () => {
+    expect(resolveMistralModel({})).toBe("mistral-medium-latest");
+  });
+
+  it("returns config agentId when provided", () => {
+    expect(resolveMistralAgentId({ agentId: "official-web-search" })).toBe("official-web-search");
+  });
+
+  it("returns undefined when no agentId is configured", () => {
+    expect(resolveMistralAgentId({})).toBeUndefined();
   });
 });
