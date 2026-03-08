@@ -312,6 +312,7 @@ Docs: https://docs.openclaw.ai
 - Agents/strict OpenAI turn ordering: apply assistant-first transcript bootstrap sanitization to strict OpenAI-compatible providers (for example vLLM/Gemma via `openai-completions`) without adding Google-specific session markers, preventing assistant-first history rejections. (#39252) Thanks @scoootscooob.
 - Discord/exec approvals gateway auth: pass resolved shared gateway credentials into the Discord exec-approvals gateway client so token-auth installs stop failing approvals with `gateway token mismatch`. Related to #38179. Thanks @0riginal-claw for the adjacent PR #35147 investigation.
 - Subagents/workspace inheritance: propagate parent workspace directory to spawned subagent runs so child sessions reliably inherit workspace-scoped instructions (`AGENTS.md`, `SOUL.md`, etc.) without exposing workspace override through tool-call arguments. (#39247) Thanks @jasonQin6.
+- Exec approvals/gateway-node policy: honor explicit `ask=off` from `exec-approvals.json` even when runtime defaults are stricter, so trusted full/off setups stop re-prompting on gateway and node exec paths. Landed from contributor PR #26789 by @pandego. Thanks @pandego.
 
 ## 2026.3.2
 
