@@ -66,7 +66,7 @@ function globStaticPrefix(pattern: string): string {
 
 function resolvePolicyRoots(
   entries: readonly (string | null | undefined)[] | undefined,
-  workspaceDir: string | null | undefined,
+  workspaceDir: string | undefined,
 ): string[] {
   if (!entries || entries.length === 0) {
     return [];
@@ -93,6 +93,10 @@ function resolvePolicyRoots(
   return uniqueNormalized(roots);
 }
 
+function overlapsPathContainment(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}${path.sep}`) || b.startsWith(`${a}${path.sep}`);
+}
+
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { fsPolicy?: ToolFsPolicy },
@@ -109,30 +113,24 @@ export function resolveMediaToolLocalRoots(
     workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots,
   );
 
-  // Enforce policy consistently for media loaders by narrowing local roots.
+  // Start from policy-allowed roots when present, otherwise from default candidates.
+  let roots = allCandidates;
   if (policy?.allowedPaths?.length) {
     const allowedRoots = resolvePolicyRoots(policy.allowedPaths, workspaceDir);
-    if (allowedRoots.length > 0) {
-      return allowedRoots;
-    }
-    return workspaceDir ? [workspaceDir] : [];
+    roots = allowedRoots.length > 0 ? allowedRoots : workspaceDir ? [workspaceDir] : [];
   }
 
+  // Deny paths must always be applied (deny overrides allow).
   if (policy?.denyPaths?.length) {
     const deniedRoots = resolvePolicyRoots(policy.denyPaths, workspaceDir);
-    if (deniedRoots.length === 0) {
-      return allCandidates;
+    if (deniedRoots.length > 0) {
+      roots = roots.filter(
+        (candidate) => !deniedRoots.some((deny) => overlapsPathContainment(candidate, deny)),
+      );
     }
-
-    return allCandidates.filter(
-      (candidate) =>
-        !deniedRoots.some(
-          (deny) => candidate === deny || candidate.startsWith(`${deny}${path.sep}`),
-        ),
-    );
   }
 
-  return allCandidates;
+  return uniqueNormalized(roots);
 }
 
 export function resolvePromptAndModelOverride(
