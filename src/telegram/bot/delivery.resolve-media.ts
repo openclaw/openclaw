@@ -114,6 +114,7 @@ async function downloadAndSaveTelegramFile(params: {
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    timeoutMs: 30_000, // Prevent polling loop hangs on stalled downloads
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
