@@ -708,6 +708,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.commands.native": "Telegram Native Commands",
   "channels.telegram.commands.nativeSkills": "Telegram Native Skill Commands",
   "channels.telegram.streaming": "Telegram Streaming Mode",
+  "channels.telegram.streamThrottleMs": "Telegram Stream Throttle (ms)",
+  "channels.telegram.minInitialChars": "Telegram Min Initial Chars",
   "channels.telegram.retry.attempts": "Telegram Retry Attempts",
   "channels.telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
   "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",

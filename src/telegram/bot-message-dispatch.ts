@@ -189,7 +189,8 @@ export const dispatchTelegramMessage = async ({
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
-  const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
+  const draftStreamThrottleMs = telegramCfg.streamThrottleMs;
+  const draftMinInitialChars = telegramCfg.minInitialChars ?? DRAFT_MIN_INITIAL_CHARS;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -204,6 +205,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
+          throttleMs: draftStreamThrottleMs,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
           onSupersededPreview:
