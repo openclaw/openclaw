@@ -10,7 +10,13 @@ import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
-import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  getHeadersWithAuth,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  withCdpSocket,
+} from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import {
@@ -544,28 +550,6 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
     cur.browser.off("disconnected", cur.onDisconnected);
   }
   await cur.browser.close().catch(() => {});
-}
-
-function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
-  try {
-    const url = new URL(cdpUrl);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
-    }
-    url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
-    url.pathname = url.pathname.replace(/\/cdp$/, "");
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    // Best-effort fallback for non-URL-ish inputs.
-    return cdpUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/devtools\/browser\/.*$/, "")
-      .replace(/\/cdp$/, "")
-      .replace(/\/$/, "");
-  }
 }
 
 function cdpSocketNeedsAttach(wsUrl: string): boolean {
