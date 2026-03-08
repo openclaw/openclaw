@@ -440,10 +440,9 @@ export async function spawnAcpDirect(
     ? `channel:${boundThreadId}`
     : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
   const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
-  // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers
-  // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
-  const useInlineDelivery =
-    hasDeliveryTarget && spawnMode === "session" && !streamToParentRequested;
+  // Non-threaded ACP runs still need an explicit return route so the final completion
+  // can deliver back to the originating chat. Parent stream relay remains separate.
+  const useInlineDelivery = hasDeliveryTarget && !streamToParentRequested;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =

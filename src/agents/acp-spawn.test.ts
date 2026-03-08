@@ -310,7 +310,7 @@ describe("spawnAcpDirect", () => {
     );
   });
 
-  it("does not inline delivery for fresh oneshot ACP runs", async () => {
+  it("keeps explicit delivery routing for fresh oneshot ACP runs", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -331,10 +331,10 @@ describe("spawnAcpDirect", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
-    expect(agentCall?.params?.deliver).toBe(false);
-    expect(agentCall?.params?.channel).toBeUndefined();
-    expect(agentCall?.params?.to).toBeUndefined();
-    expect(agentCall?.params?.threadId).toBeUndefined();
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("telegram:6098642967");
+    expect(agentCall?.params?.threadId).toBe("1");
   });
 
   it("includes cwd in ACP thread intro banner when provided at spawn time", async () => {
