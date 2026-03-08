@@ -152,31 +152,31 @@ function normalizeTaskResultCode(value?: string): string | null {
     }
   }
 
-  return raw;
+  return null;
 }
+
+const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const UNKNOWN_STATUS_DETAIL =
+  "Task status is locale-dependent and no numeric Last Run Result was available.";
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {
-  const statusRaw = parsed.status?.trim().toLowerCase();
-  if (!statusRaw) {
-    return { status: "unknown" };
-  }
-  if (statusRaw !== "running") {
-    return { status: "stopped" };
-  }
-
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
-  const runningCodes = new Set(["0x41301"]);
-  if (normalizedResult && !runningCodes.has(normalizedResult)) {
+  if (normalizedResult != null) {
+    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
+      return { status: "running" };
+    }
     return {
       status: "stopped",
-      detail: `Task reports Running but Last Run Result=${parsed.lastRunResult}; treating as stale runtime state.`,
+      detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
     };
   }
-
-  return { status: "running" };
+  if (parsed.status?.trim()) {
+    return { status: "unknown", detail: UNKNOWN_STATUS_DETAIL };
+  }
+  return { status: "unknown" };
 }
 
 function buildTaskScript({
@@ -197,6 +197,9 @@ function buildTaskScript({
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
       if (!value) {
+        continue;
+      }
+      if (key.toUpperCase() === "PATH") {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
