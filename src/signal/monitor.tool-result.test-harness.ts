@@ -104,6 +104,12 @@ vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
+vi.mock("./client-adapter.js", () => ({
+  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
+  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+}));
+
 vi.mock("./daemon.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./daemon.js")>();
   return {
