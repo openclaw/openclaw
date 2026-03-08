@@ -1439,6 +1439,33 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // Context compaction can leave the retry without any assistant payloads.
+          // Emit an explicit notice so the user knows compaction occurred instead
+          // of seeing complete silence.
+          if (autoCompactionCount > 0 && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text:
+                    "Context was compacted to free up space. " +
+                    "Some earlier conversation details may have been summarized. " +
+                    "Please resend your last message or rephrase your request.",
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
