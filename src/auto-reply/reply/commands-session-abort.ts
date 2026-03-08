@@ -2,6 +2,7 @@ import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
@@ -72,6 +73,9 @@ async function applyAbortTarget(params: {
   const { abortTarget } = params;
   if (abortTarget.sessionId) {
     abortEmbeddedPiRun(abortTarget.sessionId);
+  }
+  if (abortTarget.key) {
+    getProcessSupervisor().cancelScope(abortTarget.key, "manual-cancel");
   }
 
   const persisted = await persistAbortTargetEntry({

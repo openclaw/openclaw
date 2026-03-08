@@ -31,6 +31,16 @@ const commandQueueMocks = vi.hoisted(() => ({
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
+const supervisorMocks = vi.hoisted(() => ({
+  cancelScope: vi.fn(),
+}));
+
+vi.mock("../../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({
+    cancelScope: supervisorMocks.cancelScope,
+  }),
+}));
+
 const subagentRegistryMocks = vi.hoisted(() => ({
   listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
     () => [],
@@ -165,6 +175,7 @@ describe("abort detection", () => {
     resetAbortMemoryForTest();
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
+    supervisorMocks.cancelScope.mockReset();
   });
 
   it("triggerBodyNormalized extracts /stop from RawBody for abort detection", async () => {
@@ -402,6 +413,45 @@ describe("abort detection", () => {
     expect(result.handled).toBe(true);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
+  });
+
+  it("fast-abort cancels the process supervisor scope for the target session", async () => {
+    const sessionKey = "telegram:123";
+    const sessionId = "session-123";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:123",
+      to: "telegram:123",
+    });
+
+    expect(result.handled).toBe(true);
+    expect(supervisorMocks.cancelScope).toHaveBeenCalledWith(sessionKey, "manual-cancel");
+  });
+
+  it("native /stop cancels the targeted session scope instead of the command session scope", async () => {
+    const slashSessionKey = "telegram:slash:123";
+    const targetSessionKey = "agent:main:telegram:group:123";
+    const targetSessionId = "session-target";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [targetSessionKey]: targetSessionId },
+    });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey: slashSessionKey,
+      from: "telegram:123",
+      to: "telegram:123",
+      targetSessionKey,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(supervisorMocks.cancelScope).toHaveBeenCalledWith(targetSessionKey, "manual-cancel");
+    expect(supervisorMocks.cancelScope).not.toHaveBeenCalledWith(slashSessionKey, "manual-cancel");
   });
 
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {
