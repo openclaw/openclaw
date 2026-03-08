@@ -418,14 +418,10 @@ export async function runAgentTurnWithFallback(params: {
                     if (phase === "start") {
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (params.blockStreamingEnabled) {
-                        // Route through the shared block reply handler so
-                        // reply-to threading matches other in-run notices.
-                        await blockReplyHandler?.({ text: "🧹 Compacting context..." });
                       } else if (params.opts?.onBlockReply) {
-                        // blockReplyHandler is a no-op when streaming is disabled.
-                        // Fall back to direct delivery so non-streaming runs also
-                        // receive the compaction start notice.
+                        // Send directly via opts.onBlockReply (bypassing the
+                        // pipeline) so the notice does not cause final payloads
+                        // to be discarded on non-streaming model paths.
                         const currentMessageId =
                           params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
                         const noticePayload = params.applyReplyToMode({
@@ -434,8 +430,6 @@ export async function runAgentTurnWithFallback(params: {
                           replyToCurrent: true,
                         });
                         await params.opts.onBlockReply(noticePayload);
-                      } else {
-                        await params.opts?.onBlockReply?.({ text: "🧹 Compacting context..." });
                       }
                     }
                     const completed = evt.data?.completed === true;
