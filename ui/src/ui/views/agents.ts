@@ -88,6 +88,9 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
+  agentSessionResetLoading: boolean;
+  agentSessionResetError: string | null;
+  onSessionReset: (agentId: string) => void;
 };
 
 export type AgentContext = {
@@ -184,6 +187,9 @@ export function renderAgents(props: AgentsProps) {
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
+                        agentSessionResetLoading: props.agentSessionResetLoading,
+                        agentSessionResetError: props.agentSessionResetError,
+                        onSessionReset: props.onSessionReset,
                       })
                     : nothing
                 }
@@ -359,6 +365,9 @@ function renderAgentOverview(params: {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  agentSessionResetLoading: boolean;
+  agentSessionResetError: string | null;
+  onSessionReset: (agentId: string) => void;
 }) {
   const {
     agent,
@@ -374,6 +383,9 @@ function renderAgentOverview(params: {
     onConfigSave,
     onModelChange,
     onModelFallbacksChange,
+    agentSessionResetLoading,
+    agentSessionResetError,
+    onSessionReset,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -491,6 +503,24 @@ function renderAgentOverview(params: {
             @click=${onConfigSave}
           >
             ${configSaving ? "Saving…" : "Save"}
+          </button>
+        </div>
+        ${agentSessionResetError ? html`<div class="callout danger" style="margin-top: 8px;">${agentSessionResetError}</div>` : nothing}
+      </div>
+      <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
+        <div class="row" style="justify-content: space-between; align-items: center;">
+          <div>
+            <div class="label">Session</div>
+            <div class="card-sub" style="margin-top: 2px;">
+              Reset to pick up model changes immediately. Clears active session history.
+            </div>
+          </div>
+          <button
+            class="btn btn--sm"
+            ?disabled=${agentSessionResetLoading}
+            @click=${() => onSessionReset(agent.id)}
+          >
+            ${agentSessionResetLoading ? "Restarting…" : "Restart Session"}
           </button>
         </div>
       </div>
