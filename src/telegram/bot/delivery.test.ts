@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot } from "grammy";
 
 import { deliverReplies } from "./delivery.js";
+import { sendTelegramText } from "./delivery.send.js";
 
 const loadWebMedia = vi.fn();
 
@@ -355,6 +356,58 @@ describe("deliverReplies", () => {
         },
       }),
     );
+  });
+
+  it("falls back to plain text when Telegram rejects with 'text must be non-empty' (Mode C)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn(
+      async (_chatId: string, _text: string, opts?: Record<string, unknown>) => {
+        // HTML send attempt — Telegram rejects with newer error wording
+        if (opts && "parse_mode" in opts) {
+          throw new Error("400: Bad Request: text must be non-empty");
+        }
+        // Plain text fallback succeeds
+        return {
+          message_id: 6,
+          chat: { id: "123" },
+        };
+      },
+    );
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "some text" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    // Second call should be the plain-text fallback without parse_mode
+    expect(sendMessage.mock.calls[1]?.[1]).toBe("some text");
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("parse_mode");
+  });
+
+  it("returns undefined (no throw) when 'text must be non-empty' and no fallback (Mode D)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn(async () => {
+      throw new Error("400: Bad Request: text must be non-empty");
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    // Call sendTelegramText directly with plainText="" so hasFallbackText is false
+    // while text renders to non-empty HTML
+    const result = await sendTelegramText(bot, "123", "some text", runtime as RuntimeEnv, {
+      plainText: "",
+    });
+
+    // Should return undefined (no throw) — consistent with Mode A pre-send skip
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
   });
 
   it("does not call markDelivered when sendTelegramText returns undefined (safety net)", async () => {

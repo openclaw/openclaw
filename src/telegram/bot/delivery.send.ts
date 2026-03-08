@@ -8,7 +8,7 @@ import { buildInlineKeyboard } from "../send.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const EMPTY_TEXT_ERR_RE = /message text is empty/i;
+const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
@@ -164,7 +164,10 @@ export async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
       if (!hasFallbackText) {
-        throw err;
+        logVerbose(
+          "telegram sendMessage skipped: Telegram rejected text as empty and no plain fallback available",
+        );
+        return undefined;
       }
       runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
       return await sendPlainFallback();
