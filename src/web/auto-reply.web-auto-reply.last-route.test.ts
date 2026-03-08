@@ -8,6 +8,13 @@ import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 
+let mockCfg: OpenClawConfig;
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, loadConfig: () => mockCfg };
+});
+
 function makeCfg(storePath: string): OpenClawConfig {
   return {
     channels: { whatsapp: { allowFrom: ["*"] } },
@@ -50,6 +57,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
 function createLastRouteHarness(storePath: string) {
   const replyResolver = vi.fn().mockResolvedValue(undefined);
   const cfg = makeCfg(storePath);
+  mockCfg = cfg;
   return createHandlerForTest({ cfg, replyResolver });
 }
 
