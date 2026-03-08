@@ -256,6 +256,8 @@ detect_os_or_die() {
         OS="macos"
     elif [[ "$OSTYPE" == "linux-gnu"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
         OS="linux"
+    elif [[ "$OSTYPE" == "linux"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+        OS="linux"
     fi
 
     if [[ "$OS" == "unknown" ]]; then
@@ -614,6 +616,15 @@ install_build_tools_linux() {
         fi
         return 0
     fi
+
+    if command -v zypper &> /dev/null; then
+        if is_root; then
+            run_quiet_step "Installing build tools" zypper install -y gcc gcc-c++ make cmake python3
+        else
+            run_quiet_step "Installing build tools" sudo zypper install -y gcc gcc-c++ make cmake python3
+        fi
+        return 0
+    fi 
 
     ui_warn "Could not detect package manager for auto-installing build tools"
     return 1
@@ -1474,6 +1485,17 @@ install_node() {
                 run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
                 run_quiet_step "Installing Node.js" sudo yum install -y -q nodejs
             fi
+        elif command -v zypper &> /dev/null; then
+            local tmp
+            tmp="$(mktempfile)"
+            download_file "https://rpm.nodesource.com/setup_22.x" "$tmp"
+            if is_root; then
+                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
+                run_quiet_step "Installing Node.js" zypper install -y nodejs22
+            else
+                run_quiet_step "Configuring NodeSource repository" sudo bash "$tmp"
+                run_quiet_step "Installing Node.js" sudo zypper install -y nodejs22
+            fi
         else
             ui_error "Could not detect package manager"
             echo "Please install Node.js 22+ manually: https://nodejs.org"
@@ -1561,6 +1583,12 @@ install_git() {
                 run_quiet_step "Installing Git" yum install -y -q git
             else
                 run_quiet_step "Installing Git" sudo yum install -y -q git
+            fi
+        elif command -v zypper &> /dev/null; then
+            if is_root; then
+                run_quiet_step "Installing Git" zypper install -y git
+            else
+                run_quiet_step "Installing Git" sudo zypper install -y git
             fi
         else
             ui_error "Could not detect package manager for Git"
