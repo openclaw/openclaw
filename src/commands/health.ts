@@ -416,17 +416,33 @@ export async function getHealthSnapshot(params?: {
     const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
 
     for (const accountId of accountIdsToProbe) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
-      const enabled = plugin.config.isEnabled
-        ? plugin.config.isEnabled(account, cfg)
-        : isAccountEnabled(account);
-      const configured = plugin.config.isConfigured
-        ? await plugin.config.isConfigured(account, cfg)
-        : true;
+      let account: unknown;
+      let enabled = false;
+      let configured = false;
+      let resolutionError: string | undefined;
+      try {
+        account = plugin.config.resolveAccount(cfg, accountId);
+        enabled = plugin.config.isEnabled
+          ? plugin.config.isEnabled(account, cfg)
+          : isAccountEnabled(account);
+        configured = plugin.config.isConfigured
+          ? await plugin.config.isConfigured(account, cfg)
+          : true;
+      } catch (err) {
+        resolutionError = formatErrorMessage(err);
+        debugHealth("resolveAccount-error", {
+          channel: plugin.id,
+          accountId,
+          error: resolutionError,
+        });
+      }
 
       let probe: unknown;
       let lastProbeAt: number | null = null;
-      if (enabled && configured && doProbe && plugin.status?.probeAccount) {
+      if (resolutionError) {
+        probe = { ok: false, error: resolutionError };
+        lastProbeAt = Date.now();
+      } else if (enabled && configured && doProbe && plugin.status?.probeAccount) {
         try {
           probe = await plugin.status.probeAccount({
             account,
