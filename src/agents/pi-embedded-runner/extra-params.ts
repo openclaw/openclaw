@@ -858,6 +858,15 @@ function normalizeKimiCodingToolChoice(toolChoice: unknown): unknown {
   }
 
   const choice = toolChoice as Record<string, unknown>;
+  if (choice.type === "auto") {
+    return "auto";
+  }
+  if (choice.type === "none") {
+    return "none";
+  }
+  if (choice.type === "required") {
+    return "required";
+  }
   if (choice.type === "any") {
     return "required";
   }
