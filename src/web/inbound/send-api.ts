@@ -1,5 +1,6 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
+import { extensionForMime } from "../../media/mime.js";
 import { toWhatsappJid } from "../../utils.js";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 
@@ -15,6 +16,15 @@ function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
     ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
     : "unknown";
+}
+
+function resolveDocumentFileName(sendOptions?: ActiveWebSendOptions, mediaType?: string): string {
+  const explicit = sendOptions?.fileName?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const ext = extensionForMime(mediaType);
+  return ext ? `file${ext}` : "file";
 }
 
 export function createWebSendApi(params: {
@@ -52,7 +62,7 @@ export function createWebSendApi(params: {
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
-          const fileName = sendOptions?.fileName?.trim() || "file";
+          const fileName = resolveDocumentFileName(sendOptions, mediaType);
           payload = {
             document: mediaBuffer,
             fileName,
