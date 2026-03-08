@@ -1,11 +1,13 @@
 ---
 name: skill-creator
-description: Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.
+description: Create, edit, or refactor AgentSkills. Use when creating a new skill, editing an existing SKILL.md, restructuring a skill's layout (splitting content, adding reference files, reorganizing scripts or assets), or validating a skill against the AgentSkills spec.
 ---
 
 # Skill Creator
 
-This skill provides guidance for creating effective skills.
+> **Trigger check:** If you are about to write to any `SKILL.md` file, create or move files within a skill directory, or restructure a skill's layout — you are doing skill authoring. Follow this guide.
+
+This skill provides guidance for creating and maintaining effective skills.
 
 ## About Skills
 
