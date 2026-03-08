@@ -93,7 +93,7 @@ describe("native command auth in groups", () => {
 
     // should NOT send "not authorized" rejection
     const notAuthCalls = sendMessage.mock.calls.filter(
-      ([, text]: [unknown, string]) => typeof text === "string" && text.includes("not authorized"),
+      (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
     );
     expect(notAuthCalls).toHaveLength(0);
   });
@@ -119,7 +119,7 @@ describe("native command auth in groups", () => {
     await handlers.status?.(ctx);
 
     const notAuthCalls = sendMessage.mock.calls.filter(
-      ([, text]: [unknown, string]) => typeof text === "string" && text.includes("not authorized"),
+      (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
     );
     expect(notAuthCalls.length).toBeGreaterThan(0);
   });
