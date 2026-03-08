@@ -102,6 +102,24 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
 
+## Token usage
+
+Non-streaming responses include a `usage` object with actual token counts from the underlying model call:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 1234,
+    "completion_tokens": 56,
+    "total_tokens": 1290
+  }
+}
+```
+
+This allows downstream consumers (pipeline runners, scripts, dashboards) to track per-request token consumption without the full WebSocket session protocol.
+
+> **Note:** Streaming responses do not currently include token usage.
+
 ## Examples
 
 Non-streaming:
