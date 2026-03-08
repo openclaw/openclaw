@@ -4,6 +4,8 @@ import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   consumeRestartSentinel,
@@ -76,14 +78,35 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
+  // Step 1: deliver the restart notice deterministically — model-independent, guaranteed.
+  // Slack uses replyToId (thread_ts) for threading; deliverOutboundPayloads does not do
+  // this mapping automatically, so we convert here. See #17716.
+  const isSlack = channel === "slack";
+  const replyToId = isSlack && threadId != null && threadId !== "" ? String(threadId) : undefined;
+  const resolvedThreadId = isSlack ? undefined : threadId;
+  const outboundSession = buildOutboundSessionContext({ cfg, sessionKey });
   try {
-    // Use agentCommand() rather than deliverOutboundPayloads() so the restart
-    // message is a proper agent turn: the user is notified AND the agent sees
-    // the message in its conversation history and can resume autonomously.
-    //
-    // This is safe post-restart because scheduleRestartSentinelWake() runs in
-    // the new process, where there are zero in-flight replies. The pre-restart
-    // race condition fixed in ab4a08a82 does not apply here.
+    await deliverOutboundPayloads({
+      cfg,
+      channel,
+      to: resolved.to,
+      accountId: origin?.accountId,
+      replyToId,
+      threadId: resolvedThreadId,
+      payloads: [{ text: message }],
+      session: outboundSession,
+      bestEffort: true,
+    });
+  } catch {
+    // bestEffort: true means this should not throw, but guard anyway
+  }
+
+  // Step 2: trigger an agent resume turn so the agent can continue autonomously
+  // after restart. The model sees the restart context and can respond/take actions.
+  // This is safe post-restart: scheduleRestartSentinelWake() runs in the new process
+  // with zero in-flight replies, so the pre-restart race condition (ab4a08a82) does
+  // not apply here.
+  try {
     await agentCommand(
       {
         message,

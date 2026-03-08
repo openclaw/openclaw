@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   })),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
+  deliverOutboundPayloads: vi.fn(async () => undefined),
+  buildOutboundSessionContext: vi.fn(() => ({ agentId: "main", sessionKey: "agent:main:main" })),
   agentCommand: vi.fn(async () => undefined),
   enqueueSystemEvent: vi.fn(),
   defaultRuntime: {},
@@ -69,6 +71,14 @@ vi.mock("../infra/outbound/targets.js", () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
 }));
 
+vi.mock("../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../infra/outbound/session-context.js", () => ({
+  buildOutboundSessionContext: mocks.buildOutboundSessionContext,
+}));
+
 vi.mock("../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
 }));
@@ -88,9 +98,21 @@ describe("scheduleRestartSentinelWake", () => {
     vi.clearAllMocks();
   });
 
-  it("calls agentCommand with resolved channel, to, and sessionKey after restart", async () => {
+  it("delivers restart notice directly then resumes agent after restart", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
+    // Step 1: deterministic delivery (model-independent)
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+        payloads: [{ text: "restart message" }],
+        bestEffort: true,
+      }),
+    );
+
+    // Step 2: agent resume turn
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "restart message",
@@ -105,6 +127,12 @@ describe("scheduleRestartSentinelWake", () => {
       mocks.defaultRuntime,
       {},
     );
+
+    // Verify delivery happened before resume
+    const deliverOrder = mocks.deliverOutboundPayloads.mock.invocationCallOrder[0];
+    const agentOrder = mocks.agentCommand.mock.invocationCallOrder[0];
+    expect(deliverOrder).toBeLessThan(agentOrder);
+
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
