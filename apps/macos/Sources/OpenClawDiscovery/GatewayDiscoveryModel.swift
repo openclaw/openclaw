@@ -374,9 +374,9 @@ public final class GatewayDiscoveryModel {
         if let host = gateway.serviceHost?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),
-           !host.isEmpty,
-           let port = gateway.servicePort,
-           port > 0
+            !host.isEmpty,
+            let port = gateway.servicePort,
+            port > 0
         {
             return "endpoint|\(host):\(port)"
         }
@@ -674,7 +674,7 @@ public final class GatewayDiscoveryModel {
     }
 }
 
-struct ResolvedGatewayService: Equatable, Sendable {
+struct ResolvedGatewayService: Equatable {
     var txt: [String: String]
     var host: String?
     var port: Int?

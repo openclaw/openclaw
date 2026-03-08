@@ -12,8 +12,8 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func configPathRespectsEnvOverride() async {
-        let override = makeConfigOverridePath()
+    func `config path respects env override`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             #expect(OpenClawConfigFile.url().path == override)
@@ -22,8 +22,8 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func remoteGatewayPortParsesAndMatchesHost() async {
-        let override = makeConfigOverridePath()
+    func `remote gateway port parses and matches host`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -42,8 +42,8 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func setRemoteGatewayUrlPreservesScheme() async {
-        let override = makeConfigOverridePath()
+    func `set remote gateway url preserves scheme`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -62,8 +62,8 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func clearRemoteGatewayUrlRemovesOnlyUrlField() async {
-        let override = makeConfigOverridePath()
+    func `clear remote gateway url removes only url field`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -83,7 +83,7 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func stateDirOverrideSetsConfigPath() async {
+    func `state dir override sets config path`() async {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
             .path
@@ -99,7 +99,7 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func saveDictAppendsConfigAuditLog() async throws {
+    func `save dict appends config audit log`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")

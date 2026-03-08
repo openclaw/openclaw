@@ -2,9 +2,8 @@ import Foundation
 import Testing
 @testable import OpenClawDiscovery
 
-@Suite
 struct TailscaleServeGatewayDiscoveryTests {
-    @Test func discoversServeGatewayFromTailnetPeers() async {
+    @Test func `discovers serve gateway from tailnet peers`() async {
         let statusJson = """
         {
           "Self": {
@@ -46,7 +45,7 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(beacons.first?.port == 443)
     }
 
-    @Test func returnsEmptyWhenStatusUnavailable() async {
+    @Test func `returns empty when status unavailable`() async {
         let context = TailscaleServeGatewayDiscovery.DiscoveryContext(
             tailscaleStatus: { nil },
             probeHost: { _, _ in true })
@@ -55,7 +54,7 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(beacons.isEmpty)
     }
 
-    @Test func resolvesBareExecutableFromPATH() throws {
+    @Test func `resolves bare executable from PATH`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -70,8 +69,9 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(resolved == executable.path)
     }
 
-    @Test func rejectsMissingExecutableCandidate() {
+    @Test func `rejects missing executable candidate`() {
         #expect(TailscaleServeGatewayDiscovery.resolveExecutablePath("", env: [:]) == nil)
-        #expect(TailscaleServeGatewayDiscovery.resolveExecutablePath("definitely-not-here", env: ["PATH": "/tmp"]) == nil)
+        #expect(TailscaleServeGatewayDiscovery
+            .resolveExecutablePath("definitely-not-here", env: ["PATH": "/tmp"]) == nil)
     }
 }

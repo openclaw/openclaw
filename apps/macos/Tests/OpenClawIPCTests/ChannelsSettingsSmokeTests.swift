@@ -41,7 +41,7 @@ private func makeChannelsStore(
 @Suite(.serialized)
 @MainActor
 struct ChannelsSettingsSmokeTests {
-    @Test func channelsSettingsBuildsBodyWithSnapshot() {
+    @Test func `channels settings builds body with snapshot`() {
         let store = makeChannelsStore(
             channels: [
                 "whatsapp": SnapshotAnyCodable([
@@ -108,7 +108,7 @@ struct ChannelsSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func channelsSettingsBuildsBodyWithoutSnapshot() {
+    @Test func `channels settings builds body without snapshot`() {
         let store = makeChannelsStore(
             channels: [
                 "whatsapp": SnapshotAnyCodable([

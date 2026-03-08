@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeBrowserProxyTests {
-    @Test func requestUsesBrowserControlEndpointAndWrapsResult() async throws {
+    @Test func `request uses browser control endpoint and wraps result`() async throws {
         let proxy = MacNodeBrowserProxy(
             endpointProvider: {
                 MacNodeBrowserProxy.Endpoint(

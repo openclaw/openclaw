@@ -4,7 +4,7 @@ import Testing
 
 @Suite(.serialized)
 struct SessionMenuPreviewTests {
-    @Test func loaderReturnsCachedItems() async {
+    @Test func `loader returns cached items`() async {
         await SessionPreviewCache.shared._testReset()
         let items = [SessionPreviewItem(id: "1", role: .user, text: "Hi")]
         let snapshot = SessionMenuPreviewSnapshot(items: items, status: .ready)
@@ -16,7 +16,7 @@ struct SessionMenuPreviewTests {
         #expect(loaded.items.first?.text == "Hi")
     }
 
-    @Test func loaderReturnsEmptyWhenCachedEmpty() async {
+    @Test func `loader returns empty when cached empty`() async {
         await SessionPreviewCache.shared._testReset()
         let snapshot = SessionMenuPreviewSnapshot(items: [], status: .empty)
         await SessionPreviewCache.shared._testSet(snapshot: snapshot, for: "main")

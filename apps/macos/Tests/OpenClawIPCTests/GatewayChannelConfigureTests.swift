@@ -4,7 +4,7 @@ import os
 import Testing
 @testable import OpenClaw
 
-@Suite struct GatewayConnectionTests {
+struct GatewayConnectionTests {
     private func makeConnection(
         session: GatewayTestWebSocketSession,
         token: String? = nil) throws -> (GatewayConnection, ConfigSource)
@@ -56,7 +56,7 @@ import Testing
         }
     }
 
-    @Test func requestReusesSingleWebSocketForSameConfig() async throws {
+    @Test func `request reuses single web socket for same config`() async throws {
         let session = self.makeSession()
         let (conn, _) = try self.makeConnection(session: session)
 
@@ -68,7 +68,7 @@ import Testing
         #expect(session.snapshotCancelCount() == 0)
     }
 
-    @Test func requestReconfiguresAndCancelsOnTokenChange() async throws {
+    @Test func `request reconfigures and cancels on token change`() async throws {
         let session = self.makeSession()
         let (conn, cfg) = try self.makeConnection(session: session, token: "a")
 
@@ -81,7 +81,7 @@ import Testing
         #expect(session.snapshotCancelCount() == 1)
     }
 
-    @Test func concurrentRequestsStillUseSingleWebSocket() async throws {
+    @Test func `concurrent requests still use single web socket`() async throws {
         let session = self.makeSession(helloDelayMs: 150)
         let (conn, _) = try self.makeConnection(session: session)
 
@@ -92,7 +92,7 @@ import Testing
         #expect(session.snapshotMakeCount() == 1)
     }
 
-    @Test func subscribeReplaysLatestSnapshot() async throws {
+    @Test func `subscribe replays latest snapshot`() async throws {
         let session = self.makeSession()
         let (conn, _) = try self.makeConnection(session: session)
 
@@ -109,7 +109,7 @@ import Testing
         #expect(snap.type == "hello-ok")
     }
 
-    @Test func subscribeEmitsSeqGapBeforeEvent() async throws {
+    @Test func `subscribe emits seq gap before event`() async throws {
         let session = self.makeSession()
         let (conn, _) = try self.makeConnection(session: session)
 

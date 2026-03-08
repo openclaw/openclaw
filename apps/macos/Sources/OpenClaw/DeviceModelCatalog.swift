@@ -1,6 +1,6 @@
 import Foundation
 
-struct DevicePresentation: Sendable {
+struct DevicePresentation {
     let title: String
     let symbol: String?
 }

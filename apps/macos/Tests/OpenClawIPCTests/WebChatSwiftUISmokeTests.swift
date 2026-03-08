@@ -7,7 +7,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WebChatSwiftUISmokeTests {
-    private struct TestTransport: OpenClawChatTransport, Sendable {
+    private struct TestTransport: OpenClawChatTransport {
         func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
             let json = """
             {"sessionKey":"\(sessionKey)","sessionId":null,"messages":[],"thinkingLevel":"off"}
@@ -41,7 +41,7 @@ struct WebChatSwiftUISmokeTests {
         func setActiveSessionKey(_: String) async throws {}
     }
 
-    @Test func windowControllerShowAndClose() {
+    @Test func `window controller show and close`() {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             presentation: .window,
@@ -50,7 +50,7 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func panelControllerPresentAndClose() {
+    @Test func `panel controller present and close`() {
         let anchor = { NSRect(x: 200, y: 400, width: 40, height: 40) }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",

@@ -5,14 +5,14 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
-    @Test func handleInvokeRejectsUnknownCommand() async {
+    @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-1", command: "unknown.command"))
         #expect(response.ok == false)
     }
 
-    @Test func handleInvokeRejectsEmptySystemRun() async throws {
+    @Test func `handle invoke rejects empty system run`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemRunParams(command: [])
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
@@ -21,7 +21,7 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
-    @Test func handleInvokeRejectsEmptySystemWhich() async throws {
+    @Test func `handle invoke rejects empty system which`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemWhichParams(bins: [])
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
@@ -30,7 +30,7 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
-    @Test func handleInvokeRejectsEmptyNotification() async throws {
+    @Test func `handle invoke rejects empty notification`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemNotifyParams(title: "", body: "")
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
@@ -39,7 +39,7 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
-    @Test func handleInvokeCameraListRequiresEnabledCamera() async {
+    @Test func `handle invoke camera list requires enabled camera`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
             let runtime = MacNodeRuntime()
             let response = await runtime.handleInvoke(
@@ -49,7 +49,7 @@ struct MacNodeRuntimeTests {
         }
     }
 
-    @Test func handleInvokeScreenRecordUsesInjectedServices() async throws {
+    @Test func `handle invoke screen record uses injected services`() async throws {
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
             func recordScreen(
@@ -101,20 +101,23 @@ struct MacNodeRuntimeTests {
         #expect(!payload.base64.isEmpty)
     }
 
-    @Test func handleInvokeBrowserProxyUsesInjectedRequest() async throws {
+    @Test func `handle invoke browser proxy uses injected request`() async {
         let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
             #expect(paramsJSON?.contains("/tabs") == true)
             return #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#
         })
         let paramsJSON = #"{"method":"GET","path":"/tabs","timeoutMs":2500}"#
         let response = await runtime.handleInvoke(
-            BridgeInvokeRequest(id: "req-browser", command: OpenClawBrowserCommand.proxy.rawValue, paramsJSON: paramsJSON))
+            BridgeInvokeRequest(
+                id: "req-browser",
+                command: OpenClawBrowserCommand.proxy.rawValue,
+                paramsJSON: paramsJSON))
 
         #expect(response.ok == true)
         #expect(response.payloadJSON == #"{"result":{"ok":true,"tabs":[{"id":"tab-1"}]}}"#)
     }
 
-    @Test func handleInvokeBrowserProxyRejectsDisabledBrowserControl() async throws {
+    @Test func `handle invoke browser proxy rejects disabled browser control`() async throws {
         let override = TestIsolation.tempConfigPath()
         try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             try JSONSerialization.data(withJSONObject: ["browser": ["enabled": false]])

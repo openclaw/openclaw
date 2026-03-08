@@ -152,7 +152,7 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
     }
 }
 
-struct TalkPlaybackResult: Sendable {
+struct TalkPlaybackResult {
     let finished: Bool
     let interruptedAt: Double?
 }

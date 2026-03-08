@@ -1,6 +1,6 @@
 import Foundation
 
-struct ExecCommandResolution: Sendable {
+struct ExecCommandResolution {
     let rawExecutable: String
     let resolvedPath: String?
     let executableName: String

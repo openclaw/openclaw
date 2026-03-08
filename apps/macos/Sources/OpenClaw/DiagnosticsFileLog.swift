@@ -7,7 +7,7 @@ actor DiagnosticsFileLog {
     private let maxBytes: Int64 = 5 * 1024 * 1024
     private let maxBackups = 5
 
-    struct Record: Codable, Sendable {
+    struct Record: Codable {
         let ts: String
         let pid: Int32
         let category: String
