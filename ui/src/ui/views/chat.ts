@@ -66,6 +66,9 @@ export type ChatProps = {
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  // Drag and drop state
+  isDraggingOver?: boolean;
+  onDraggingOverChange?: (isDragging: boolean) => void;
   // Scroll control
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
@@ -204,6 +207,102 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   }
 }
 
+/**
+ * Handle dragover event - prevents default to allow dropping
+ */
+function handleDragOver(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+  
+  // Set drop effect to indicate this is a valid drop target
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = "copy";
+  }
+  
+  // Update dragging state for visual feedback
+  if (!props.isDraggingOver && props.onDraggingOverChange) {
+    props.onDraggingOverChange(true);
+  }
+}
+
+/**
+ * Handle dragleave event - removes visual feedback when leaving drop zone
+ */
+function handleDragLeave(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+  
+  // Only update if we're actually leaving the textarea (not entering a child)
+  const relatedTarget = e.relatedTarget as HTMLElement | null;
+  const currentTarget = e.currentTarget as HTMLElement;
+  
+  if (!relatedTarget || !currentTarget.contains(relatedTarget)) {
+    if (props.isDraggingOver && props.onDraggingOverChange) {
+      props.onDraggingOverChange(false);
+    }
+  }
+}
+
+/**
+ * Handle drop event - processes dropped image files
+ */
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+  
+  // Reset dragging state
+  if (props.onDraggingOverChange) {
+    props.onDraggingOverChange(false);
+  }
+  
+  if (!props.onAttachmentsChange) {
+    return;
+  }
+  
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) {
+    return;
+  }
+  
+  // Filter for image files only
+  const imageFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file.type.startsWith("image/")) {
+      imageFiles.push(file);
+    }
+  }
+  
+  if (imageFiles.length === 0) {
+    return;
+  }
+  
+  // Process all files and update state once to avoid race conditions
+  const attachments: ChatAttachment[] = [];
+  let completedCount = 0;
+  
+  for (const file of imageFiles) {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const newAttachment: ChatAttachment = {
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      };
+      attachments.push(newAttachment);
+      completedCount++;
+      
+      // Update state only when all files are processed
+      if (completedCount === imageFiles.length) {
+        const current = props.attachments ?? [];
+        props.onAttachmentsChange?.([...current, ...attachments]);
+      }
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
 function renderAttachmentPreview(props: ChatProps) {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
@@ -251,11 +350,19 @@ export function renderChat(props: ChatProps) {
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
-  const composePlaceholder = props.connected
-    ? hasAttachments
-      ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
-    : "Connect to the gateway to start chatting…";
+  const isDragging = props.isDraggingOver ?? false;
+  
+  // Update placeholder based on drag state and attachments
+  let composePlaceholder: string;
+  if (!props.connected) {
+    composePlaceholder = "Connect to the gateway to start chatting…";
+  } else if (isDragging) {
+    composePlaceholder = "Drop images here to attach...";
+  } else if (hasAttachments) {
+    composePlaceholder = "Add a message or paste more images...";
+  } else {
+    composePlaceholder = "Message (↩ to send, Shift+↩ for line breaks, paste or drop images)";
+  }
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -320,6 +427,9 @@ export function renderChat(props: ChatProps) {
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+
+      ${renderFallbackIndicator(props.fallbackStatus)}
+      ${renderCompactionIndicator(props.compactionStatus)}
 
       ${
         props.focusMode
@@ -404,9 +514,6 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      ${renderFallbackIndicator(props.fallbackStatus)}
-      ${renderCompactionIndicator(props.compactionStatus)}
-
       ${
         props.showNewMessages
           ? html`
@@ -431,6 +538,7 @@ export function renderChat(props: ChatProps) {
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
+              class="${isDragging ? "chat-compose__textarea--dragging" : ""}"
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key !== "Enter") {
                   return;
@@ -455,6 +563,9 @@ export function renderChat(props: ChatProps) {
                 props.onDraftChange(target.value);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              @dragover=${(e: DragEvent) => handleDragOver(e, props)}
+              @dragleave=${(e: DragEvent) => handleDragLeave(e, props)}
+              @drop=${(e: DragEvent) => handleDrop(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
           </label>

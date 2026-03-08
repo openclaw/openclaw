@@ -2610,3 +2610,20 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Drag and drop styles for chat textarea */
+.chat-compose__field textarea.chat-compose__textarea--dragging,
+.chat-compose__field textarea.chat-compose__textarea--dragging:focus {
+  border: 2px dashed var(--primary);
+  background-color: rgba(var(--primary-rgb, 59, 130, 246), 0.1);
+  box-shadow: 0 0 0 4px rgba(var(--primary-rgb, 59, 130, 246), 0.15);
+}
+
+@media (prefers-color-scheme: dark) {
+  .chat-compose__field textarea.chat-compose__textarea--dragging,
+  .chat-compose__field textarea.chat-compose__textarea--dragging:focus {
+    background-color: rgba(var(--primary-rgb, 96, 165, 250), 0.15);
+    box-shadow: 0 0 0 4px rgba(var(--primary-rgb, 96, 165, 250), 0.2);
+  }
+}
+
