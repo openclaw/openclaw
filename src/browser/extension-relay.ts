@@ -223,11 +223,13 @@ export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, 
 
 export async function ensureChromeExtensionRelayServer(opts: {
   cdpUrl: string;
+  bindHost?: string;
 }): Promise<ChromeExtensionRelayServer> {
   const info = parseBaseUrl(opts.cdpUrl);
   if (!isLoopbackHost(info.host)) {
     throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
+  const bindHost = opts.bindHost ?? info.host;
 
   const existing = relayRuntimeByPort.get(info.port);
   if (existing) {
@@ -962,7 +964,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        server.listen(info.port, info.host, () => resolve());
+        server.listen(info.port, bindHost, () => resolve());
         server.once("error", reject);
       });
     } catch (err) {
