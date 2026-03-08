@@ -107,7 +107,10 @@ function maxSimilarityToSelected(
  * Compute the maximum similarity between an item and all selected items using embeddings.
  * Uses cosine similarity which captures semantic meaning better than token overlap.
  */
-function maxSimilarityToSelectedWithEmbeddings(item: MMRItem, selectedItems: MMRItem[]): number {
+function maxSimilarityToSelectedWithEmbeddings(
+  item: MMRItem,
+  selectedItems: MMRItem[],
+): number {
   if (selectedItems.length === 0 || !item.embedding || item.embedding.length === 0) {
     return 0;
   }
@@ -148,10 +151,10 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  * @returns Re-ranked items in MMR order
  */
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
-  const {
-    enabled = DEFAULT_MMR_CONFIG.enabled,
+  const { 
+    enabled = DEFAULT_MMR_CONFIG.enabled, 
     lambda = DEFAULT_MMR_CONFIG.lambda,
-    useEmbeddingSimilarity = DEFAULT_MMR_CONFIG.useEmbeddingSimilarity,
+    useEmbeddingSimilarity = DEFAULT_MMR_CONFIG.useEmbeddingSimilarity
   } = config;
 
   // Early exits
@@ -201,12 +204,12 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 
     for (const candidate of remaining) {
       const normalizedRelevance = normalizeScore(candidate.score);
-
+      
       // Choose similarity computation method based on config and data availability
       const maxSim = useEmbeddings
         ? maxSimilarityToSelectedWithEmbeddings(candidate, selected)
         : maxSimilarityToSelected(candidate, selected, tokenCache);
-
+      
       const mmrScore = computeMMRScore(normalizedRelevance, maxSim, clampedLambda);
 
       // Use original score as tiebreaker (higher is better)
@@ -237,13 +240,7 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
  * If results have embeddings, they will be used for semantic similarity comparison.
  */
 export function applyMMRToHybridResults<
-  T extends {
-    score: number;
-    snippet: string;
-    path: string;
-    startLine: number;
-    embedding?: number[];
-  },
+  T extends { score: number; snippet: string; path: string; startLine: number; embedding?: number[] },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
   if (results.length === 0) {
     return results;
