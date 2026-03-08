@@ -42,6 +42,17 @@ describe("sanitizeEnvVars", () => {
     expect(result.warnings).toContain("SAFE_TEXT: Value looks like base64-encoded credential data");
   });
 
+  it("does not warn for long alphanumeric values that are not structurally base64", () => {
+    const longAlphaNum =
+      "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6a7B8c9D0e1F2g3H4i5J6k7L8m9N0o1P2q3R4s5";
+    const result = sanitizeEnvVars({
+      SAFE_TEXT: longAlphaNum,
+    });
+
+    expect(result.allowed).toEqual({ SAFE_TEXT: longAlphaNum });
+    expect(result.warnings).toEqual([]);
+  });
+
   it("supports strict mode with explicit allowlist", () => {
     const result = sanitizeEnvVars(
       {

@@ -30,6 +30,18 @@ const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^NODE_ENV$/i,
 ];
 
+const BASE64_HEURISTIC = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function looksLikeBase64CredentialData(value: string): boolean {
+  if (value.length < 80 || value.length % 4 !== 0) {
+    return false;
+  }
+  if (!BASE64_HEURISTIC.test(value)) {
+    return false;
+  }
+  return /[+/=]/.test(value);
+}
+
 export type EnvVarSanitizationResult = {
   allowed: Record<string, string>;
   blocked: string[];
@@ -49,7 +61,7 @@ export function validateEnvVarValue(value: string): string | undefined {
   if (value.length > 32768) {
     return "Value exceeds maximum length";
   }
-  if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {
+  if (looksLikeBase64CredentialData(value)) {
     return "Value looks like base64-encoded credential data";
   }
   return undefined;
