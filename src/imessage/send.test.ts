@@ -139,6 +139,12 @@ describe("sendMessageIMessage", () => {
     expect(params.text).toBe("hello world");
   });
 
+  it("throws when text is only directive tags and no media", async () => {
+    await expect(sendWithDefaults("chat_id:123", "[[reply_to:65]]")).rejects.toThrow(
+      "iMessage send requires text or media",
+    );
+  });
+
   it("normalizes string message_id values from rpc result", async () => {
     requestMock.mockResolvedValue({ ok: true, message_id: "  guid-1  " });
     const result = await sendWithDefaults("chat_id:7", "hello");

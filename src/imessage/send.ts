@@ -139,6 +139,12 @@ export async function sendMessageIMessage(
     message = stripped.text.replace(/  +/g, " ").trim();
   }
 
+  // Re-check after stripping: a directive-only message (e.g. "[[reply_to:123]]")
+  // passes the first guard but becomes empty after tag removal.
+  if (!message.trim() && !filePath) {
+    throw new Error("iMessage send requires text or media");
+  }
+
   const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const params: Record<string, unknown> = {
     text: message,
