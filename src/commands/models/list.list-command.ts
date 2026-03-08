@@ -8,7 +8,7 @@ import { formatErrorWithStack } from "./list.errors.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
-import { loadModelsConfig } from "./load-config.js";
+import { loadModelsConfigWithSource } from "./load-config.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility, isLocalBaseUrl, modelKey } from "./shared.js";
 
 export async function modelsListCommand(
@@ -23,7 +23,10 @@ export async function modelsListCommand(
 ) {
   ensureFlagCompatibility(opts);
   const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");
-  const cfg = await loadModelsConfig({ commandName: "models list", runtime });
+  const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
+    commandName: "models list",
+    runtime,
+  });
   const authStore = ensureAuthProfileStore();
   const providerFilter = (() => {
     const raw = opts.provider?.trim();
@@ -39,7 +42,7 @@ export async function modelsListCommand(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   try {
-    const loaded = await loadModelRegistry(cfg);
+    const loaded = await loadModelRegistry(cfg, { sourceConfig });
     modelRegistry = loaded.registry;
     models = loaded.models;
     availableKeys = loaded.availableKeys;

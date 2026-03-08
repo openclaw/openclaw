@@ -6,3 +6,9 @@ export const minimaxProvider: MediaUnderstandingProvider = {
   capabilities: ["image"],
   describeImage: describeImageWithModel,
 };
+
+export const minimaxPortalProvider: MediaUnderstandingProvider = {
+  id: "minimax-portal",
+  capabilities: ["image"],
+  describeImage: describeImageWithModel,
+};

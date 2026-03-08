@@ -13,6 +13,12 @@ import {
   uploadMattermostFile,
   type MattermostUser,
 } from "./client.js";
+import {
+  buildButtonProps,
+  resolveInteractionCallbackUrl,
+  setInteractionSecret,
+  type MattermostInteractiveButtonInput,
+} from "./interactions.js";
 
 export type MattermostSendOpts = {
   cfg?: OpenClawConfig;
@@ -23,12 +29,18 @@ export type MattermostSendOpts = {
   mediaLocalRoots?: readonly string[];
   replyToId?: string;
   props?: Record<string, unknown>;
+  buttons?: Array<unknown>;
+  attachmentText?: string;
 };
 
 export type MattermostSendResult = {
   messageId: string;
   channelId: string;
 };
+
+export type MattermostReplyButtons = Array<
+  MattermostInteractiveButtonInput | MattermostInteractiveButtonInput[]
+>;
 
 type MattermostTarget =
   | { kind: "channel"; id: string }
@@ -272,6 +284,23 @@ export async function sendMessageMattermost(
   );
 
   const client = createMattermostClient({ baseUrl, botToken: token });
+  let props = opts.props;
+  if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
+    setInteractionSecret(accountId, token);
+    props = buildButtonProps({
+      callbackUrl: resolveInteractionCallbackUrl(accountId, {
+        gateway: cfg.gateway,
+        interactions: resolveMattermostAccount({
+          cfg,
+          accountId,
+        }).config?.interactions,
+      }),
+      accountId,
+      channelId,
+      buttons: opts.buttons,
+      text: opts.attachmentText,
+    });
+  }
   let message = text?.trim() ?? "";
   let fileIds: string[] | undefined;
   let uploadError: Error | undefined;
@@ -320,7 +349,7 @@ export async function sendMessageMattermost(
     message,
     rootId: opts.replyToId,
     fileIds,
-    props: opts.props,
+    props,
   });
 
   core.channel.activity.record({
