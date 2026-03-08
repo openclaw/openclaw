@@ -12,7 +12,7 @@ export function resolveInboundSessionEnvelopeContext(params: {
   });
   return {
     storePath,
-    envelopeOptions: resolveEnvelopeFormatOptions(params.cfg),
+    envelopeOptions: resolveEnvelopeFormatOptions(params.cfg, { agentId: params.agentId }),
     previousTimestamp: readSessionUpdatedAt({
       storePath,
       sessionKey: params.sessionKey,

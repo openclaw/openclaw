@@ -345,7 +345,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // formatting in a separate code path — they never reach this handler.
     // See: https://github.com/moltbot/moltbot/issues/3658
     if (!skipTimestampInjection) {
-      message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+      message = injectTimestamp(message, timestampOptsFromConfig(cfg, request.agentId));
     }
 
     if (requestedSessionKey) {
