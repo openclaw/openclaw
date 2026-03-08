@@ -414,15 +414,16 @@ export async function runAgentTurnWithFallback(params: {
                   if (phase === "start") {
                     // Notify the user that compaction is beginning so the
                     // silence during the compaction pause isn't alarming.
-                    // Route through blockReplyHandler so replyToId threading
-                    // (replyToMode=all|first) is applied consistently with
-                    // normal replies and the completion notice in agent-runner.ts.
-                    if (params.blockStreamingEnabled) {
-                      await blockReplyHandler?.({ text: "🧹 Compacting context..." });
-                    } else if (params.opts?.onBlockReply) {
-                      // blockReplyHandler is a no-op when streaming is disabled.
-                      // Fall back to direct delivery so non-streaming runs also
-                      // receive the compaction start notice.
+                    // Send directly via opts.onBlockReply (bypassing the pipeline)
+                    // so the notice does not set didStream() = true on the
+                    // blockReplyPipeline.  If didStream() were set here,
+                    // buildReplyPayloads would discard all final payloads, dropping
+                    // the real assistant reply on non-streaming model paths where
+                    // assistantTexts is populated from the final message rather
+                    // than from block-reply chunks.  applyReplyToMode is still
+                    // applied so replyToId threading (replyToMode=all|first) is
+                    // honoured consistently with other compaction notices.
+                    if (params.opts?.onBlockReply) {
                       const currentMessageId =
                         params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
                       const noticePayload = params.applyReplyToMode({
