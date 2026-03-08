@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **MessageGuard** — Filters outgoing messages for API keys, credentials, PII, and secrets before they leave your agent
+  npm: `@andrewlabs/openclaw-messageguard`
+  repo: `https://github.com/AndrewAndrewsen/MessageGuard`
+  install: `openclaw plugins install @andrewlabs/openclaw-messageguard`
