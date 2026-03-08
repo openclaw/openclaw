@@ -165,7 +165,14 @@ export function createTelegramDraftStream(params: {
     // Only apply reply_to_message_id on the first message of the stream.
     // After forceNewMessage(), subsequent messages should not reply to avoid
     // "Deleted message" artifacts when archived previews are cleaned up (#39718).
-    const replyParams = hasAppliedReply ? threadParams : baseReplyParams;
+    const shouldIncludeReply = !hasAppliedReply && baseReplyParams?.reply_to_message_id != null;
+    const replyParams = shouldIncludeReply ? baseReplyParams : threadParams;
+    // Mark reply as applied BEFORE the await to prevent race with forceNewMessage (#39718).
+    // Even if forceNewMessage fires during this in-flight send, subsequent sends
+    // will see hasAppliedReply=true and skip the reply context.
+    if (shouldIncludeReply) {
+      hasAppliedReply = true;
+    }
     const sendParams = sendArgs.renderedParseMode
       ? {
           ...replyParams,
@@ -248,7 +255,6 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     streamMessageId = normalizedMessageId;
-    hasAppliedReply = true;
     return true;
   };
   const sendDraftTransportPreview = async ({
