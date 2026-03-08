@@ -60,13 +60,14 @@ import {
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   buildTypingThreadParams,
-  resolveTelegramDirectPeerId,
-  resolveTelegramMediaPlaceholder,
   expandTextLinks,
-  normalizeForwardedContext,
   describeReplyTarget,
   extractTelegramLocation,
+  getTelegramTextParts,
   hasBotMention,
+  normalizeForwardedContext,
+  resolveTelegramDirectPeerId,
+  resolveTelegramMediaPlaceholder,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
@@ -397,6 +398,7 @@ export const buildTelegramMessageContext = async ({
   });
 
   const botUsername = primaryCtx.me?.username?.toLowerCase();
+  const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({
     allow: allowForCommands,
@@ -404,7 +406,7 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const hasControlCommandInMessage = hasControlCommand(msg.text ?? msg.caption ?? "", cfg, {
+  const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
   const commandGate = resolveControlCommandGate({
@@ -434,8 +436,7 @@ export const buildTelegramMessageContext = async ({
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
-  const rawTextSource = msg.text ?? msg.caption ?? "";
-  const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
+  const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
@@ -500,13 +501,11 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
-  const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
-    (ent) => ent.type === "mention",
-  );
+  const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
 
   const computedWasMentioned = matchesMentionWithExplicit({
-    text: msg.text ?? msg.caption ?? "",
+    text: messageTextParts.text,
     mentionRegexes,
     explicit: {
       hasAnyMention,
