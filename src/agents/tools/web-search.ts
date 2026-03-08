@@ -602,30 +602,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
 
   // Auto-detect provider from available API keys (priority order)
   if (raw === "") {
-    // 1. Brave
-    if (resolveSearchApiKey(search)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "brave" from available API keys',
-      );
-      return "brave";
-    }
-    // 2. Gemini
-    const geminiConfig = resolveGeminiConfig(search);
-    if (resolveGeminiApiKey(geminiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "gemini" from available API keys',
-      );
-      return "gemini";
-    }
-    // 3. Kimi
-    const kimiConfig = resolveKimiConfig(search);
-    if (resolveKimiApiKey(kimiConfig)) {
-      logVerbose(
-        'web_search: no provider configured, auto-detected "kimi" from available API keys',
-      );
-      return "kimi";
-    }
-    // 4. Perplexity
+    // 1. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -745,8 +722,8 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
 
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
-  apiKeySource: PerplexityApiKeySource = "none",
-  apiKey?: string,
+  apiKeySource: PerplexityApiKeySource = "none", // pragma: allowlist secret
+  apiKey?: string, // pragma: allowlist secret
 ): string {
   const fromConfig =
     perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
@@ -756,9 +733,11 @@ function resolvePerplexityBaseUrl(
     return fromConfig;
   }
   if (apiKeySource === "perplexity_env") {
+    // pragma: allowlist secret
     return PERPLEXITY_DIRECT_BASE_URL;
   }
   if (apiKeySource === "openrouter_env") {
+    // pragma: allowlist secret
     return DEFAULT_PERPLEXITY_BASE_URL;
   }
   if (apiKeySource === "config") {
