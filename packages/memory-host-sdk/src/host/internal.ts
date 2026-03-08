@@ -406,8 +406,17 @@ export function chunkMarkdown(
         const coarse = line.slice(start, start + maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length; j += fineStep) {
-            segments.push(coarse.slice(j, j + fineStep));
+          for (let j = 0; j < coarse.length; ) {
+            let end = Math.min(j + fineStep, coarse.length);
+            // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+).
+            if (end < coarse.length) {
+              const code = coarse.charCodeAt(end - 1);
+              if (code >= 0xd800 && code <= 0xdbff) {
+                end += 1; // include the low surrogate
+              }
+            }
+            segments.push(coarse.slice(j, end));
+            j = end; // advance cursor to the adjusted boundary
           }
         } else {
           segments.push(coarse);
