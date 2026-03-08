@@ -27,6 +27,14 @@ const TalkProviderConfigSchema = Type.Object(
   { additionalProperties: true },
 );
 
+const ResolvedTalkConfigSchema = Type.Object(
+  {
+    provider: Type.String(),
+    config: TalkProviderConfigSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
@@ -36,12 +44,14 @@ export const TalkConfigResultSchema = Type.Object(
             {
               provider: Type.Optional(Type.String()),
               providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
+              resolved: Type.Optional(ResolvedTalkConfigSchema),
               voiceId: Type.Optional(Type.String()),
               voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
               modelId: Type.Optional(Type.String()),
               outputFormat: Type.Optional(Type.String()),
               apiKey: Type.Optional(Type.String()),
               interruptOnSpeech: Type.Optional(Type.Boolean()),
+              silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
             },
             { additionalProperties: false },
           ),
