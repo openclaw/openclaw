@@ -90,6 +90,8 @@ export type OpenClawConfig = {
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
     };
+    /** Custom waiting/spinner phrases for the TUI (replaces defaults like "bamboozling", "kerfuffling", etc.). */
+    waitingPhrases?: string[];
   };
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
