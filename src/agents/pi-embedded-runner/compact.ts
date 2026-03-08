@@ -41,7 +41,7 @@ import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { streamOllamaApi } from "../ollama-stream.js";
+import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
   ensureSessionHeader,
@@ -620,7 +620,17 @@ export async function compactEmbeddedPiSessionDirect(
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
       if (model.api === "ollama") {
-        ensureCustomApiRegistered(model.api, streamOllamaApi);
+        const providerBaseUrl =
+          typeof params.config?.models?.providers?.[model.provider]?.baseUrl === "string"
+            ? params.config.models.providers[model.provider]?.baseUrl
+            : undefined;
+        ensureCustomApiRegistered(
+          model.api,
+          createConfiguredOllamaStreamFn({
+            model,
+            providerBaseUrl,
+          }),
+        );
       }
 
       try {

@@ -9,7 +9,7 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { streamOllamaApi } from "../agents/ollama-stream.js";
+import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -458,7 +458,17 @@ export async function summarizeText(params: {
 
     try {
       if (resolved.model.api === "ollama") {
-        ensureCustomApiRegistered(resolved.model.api, streamOllamaApi);
+        const providerBaseUrl =
+          typeof cfg.models?.providers?.[resolved.model.provider]?.baseUrl === "string"
+            ? cfg.models.providers[resolved.model.provider]?.baseUrl
+            : undefined;
+        ensureCustomApiRegistered(
+          resolved.model.api,
+          createConfiguredOllamaStreamFn({
+            model: resolved.model,
+            providerBaseUrl,
+          }),
+        );
       }
       const res = await completeSimple(
         resolved.model,
