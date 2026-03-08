@@ -906,6 +906,7 @@
                   "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/napcat",
                   "channels/mattermost",
                   "channels/msteams",
                   "channels/nextcloud-talk",
