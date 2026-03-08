@@ -1,4 +1,3 @@
-import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -257,15 +256,14 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
-  const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
-    [
-      `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
-    ].join(" "),
-  );
+  const envCandidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
+  const envHint = envCandidates?.[0];
+  const parts = [
+    `No API key found for provider "${provider}".`,
+    envHint ? `Set ${envHint} or run` : "Run",
+    `${formatCliCommand("openclaw models auth add")} to configure it.`,
+  ];
+  throw new Error(parts.join(" "));
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
