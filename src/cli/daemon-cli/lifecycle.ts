@@ -13,8 +13,10 @@ import {
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
+  renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
+  waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
@@ -112,6 +114,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
+  let restartedWithoutServiceManager = false;
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPort(loadConfig(), process.env),
   );
@@ -124,8 +127,42 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    onNotLoaded: async () => restartGatewayWithoutServiceManager(restartPort),
+    onNotLoaded: async () => {
+      const handled = await restartGatewayWithoutServiceManager(restartPort);
+      if (handled) {
+        restartedWithoutServiceManager = true;
+      }
+      return handled;
+    },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
+      if (restartedWithoutServiceManager) {
+        const health = await waitForGatewayHealthyListener({
+          port: restartPort,
+          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        });
+        if (health.healthy) {
+          return;
+        }
+
+        const diagnostics = renderGatewayPortHealthDiagnostics(health);
+        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+        if (!json) {
+          defaultRuntime.log(theme.warn(timeoutLine));
+          for (const line of diagnostics) {
+            defaultRuntime.log(theme.muted(line));
+          }
+        } else {
+          warnings.push(timeoutLine);
+          warnings.push(...diagnostics);
+        }
+
+        fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+          formatCliCommand("openclaw gateway status --deep"),
+          formatCliCommand("openclaw doctor"),
+        ]);
+      }
+
       let health = await waitForGatewayHealthyRestart({
         service,
         port: restartPort,

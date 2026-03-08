@@ -26,8 +26,10 @@ const service = {
 
 const runServiceRestart = vi.fn();
 const runServiceStop = vi.fn();
+const waitForGatewayHealthyListener = vi.fn();
 const waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
+const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const findGatewayPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
@@ -50,7 +52,9 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
+  waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
+  renderGatewayPortHealthDiagnostics,
   terminateStaleGatewayPids,
   renderRestartDiagnostics,
 }));
@@ -75,8 +79,10 @@ describe("runDaemonRestart health checks", () => {
     service.restart.mockClear();
     runServiceRestart.mockClear();
     runServiceStop.mockClear();
+    waitForGatewayHealthyListener.mockClear();
     waitForGatewayHealthyRestart.mockClear();
     terminateStaleGatewayPids.mockClear();
+    renderGatewayPortHealthDiagnostics.mockClear();
     renderRestartDiagnostics.mockClear();
     resolveGatewayPort.mockClear();
     findGatewayPidsOnPortSync.mockClear();
@@ -102,6 +108,10 @@ describe("runDaemonRestart health checks", () => {
       return true;
     });
     runServiceStop.mockResolvedValue(undefined);
+    waitForGatewayHealthyListener.mockResolvedValue({
+      healthy: true,
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
   });
 
   it("kills stale gateway pids and retries restart", async () => {
@@ -165,6 +175,14 @@ describe("runDaemonRestart health checks", () => {
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
         await params.onNotLoaded?.();
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
         return true;
       },
     );
@@ -173,6 +191,10 @@ describe("runDaemonRestart health checks", () => {
 
     expect(findGatewayPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(killSpy).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
