@@ -198,6 +198,19 @@ describe("Registry tests", () => {
     expect(getContextEngineFactory("reg-overwrite")).toBe(factory2);
     expect(getContextEngineFactory("reg-overwrite")).not.toBe(factory1);
   });
+
+  it("shares registered engines across duplicate module copies", async () => {
+    const registryUrl = new URL("./registry.ts", import.meta.url).href;
+    const suffix = Date.now().toString(36);
+    const first = await import(/* @vite-ignore */ `${registryUrl}?copy=${suffix}-a`);
+    const second = await import(/* @vite-ignore */ `${registryUrl}?copy=${suffix}-b`);
+
+    const engineId = `dup-copy-${suffix}`;
+    const factory = () => new MockContextEngine();
+    first.registerContextEngine(engineId, factory);
+
+    expect(second.getContextEngineFactory(engineId)).toBe(factory);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
