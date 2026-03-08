@@ -35,6 +35,7 @@ const loadConfig = vi.fn(() => ({}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
+  readBestEffortConfig: async () => loadConfig(),
   resolveGatewayPort,
 }));
 

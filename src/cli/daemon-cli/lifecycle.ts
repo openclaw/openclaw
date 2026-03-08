@@ -1,4 +1,4 @@
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -32,7 +32,7 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   } as NodeJS.ProcessEnv;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
+  return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
 function resolveGatewayListenerPids(port: number): number[] {
