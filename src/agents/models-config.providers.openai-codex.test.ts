@@ -135,6 +135,7 @@ describe("openai-codex implicit provider", () => {
             mode: "merge",
             providers: {
               "openai-codex": {
+                baseUrl: "",
                 api: "openai-codex-responses",
                 models: [],
               },
