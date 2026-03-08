@@ -5,6 +5,10 @@ export type SkillConfig = {
   apiKey?: SecretInput;
   env?: Record<string, string>;
   config?: Record<string, unknown>;
+  security?: {
+    securityInfo?: string;
+    securityBlocked?: boolean;
+  };
 };
 
 export type SkillsLoadConfig = {

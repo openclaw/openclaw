@@ -160,6 +160,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       enabled?: boolean;
       apiKey?: string;
       env?: Record<string, string>;
+      securityInfo?: string;
+      securityBlocked?: boolean;
     };
     const cfg = loadConfig();
     const skills = cfg.skills ? { ...cfg.skills } : {};
@@ -191,6 +193,21 @@ export const skillsHandlers: GatewayRequestHandlers = {
         }
       }
       current.env = nextEnv;
+    }
+    if (typeof p.securityInfo === "string") {
+      const trimmed = p.securityInfo.trim();
+      const nextSec = current.security ? { ...current.security } : {};
+      if (trimmed) {
+        nextSec["securityInfo"] = trimmed;
+      } else {
+        delete (nextSec as Record<string, unknown>)["securityInfo"];
+      }
+      current.security = nextSec;
+    }
+    if (typeof p.securityBlocked === "boolean") {
+      const nextSec = current.security ? { ...current.security } : {};
+      nextSec["securityBlocked"] = p.securityBlocked;
+      current.security = nextSec;
     }
     entries[p.skillKey] = current;
     skills.entries = entries;

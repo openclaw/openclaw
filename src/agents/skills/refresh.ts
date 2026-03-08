@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 
-type SkillsChangeEvent = {
+export type SkillsChangeEvent = {
   workspaceDir?: string;
   reason: "watch" | "manual" | "remote-node";
   changedPath?: string;

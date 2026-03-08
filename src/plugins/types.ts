@@ -342,7 +342,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_skills_load";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -783,6 +784,28 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// before_skills_load context
+export type PluginHookBeforeSkillsLoadContext = {
+  workspaceDir: string;
+  agentId?: string;
+  sessionKey?: string;
+};
+
+// before_skills_load hook
+export type PluginHookBeforeSkillsLoadEvent = {
+  loadSkill?: {
+    skillsName: string;
+    skillsFileDir: string;
+  };
+};
+
+export type PluginHookBeforeSkillsLoadResult = {
+  blocked?: boolean;
+  securityInfo?: string;
+  riskScore?: number;
+  severity?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -881,6 +904,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_skills_load: (
+    event: PluginHookBeforeSkillsLoadEvent,
+    ctx: PluginHookBeforeSkillsLoadContext,
+  ) => Promise<PluginHookBeforeSkillsLoadResult | void> | PluginHookBeforeSkillsLoadResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
