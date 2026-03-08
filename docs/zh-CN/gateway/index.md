@@ -40,9 +40,9 @@ pnpm gateway:watch
   - 使用 `gateway.reload.mode="off"` 禁用。
 - 将 WebSocket 控制平面绑定到 `127.0.0.1:<port>`（默认 18789）。
 - 同一端口也提供 HTTP 服务（控制界面、hooks、A2UI）。单端口多路复用。
-  - OpenAI Chat Completions（HTTP）：[`/v1/chat/completions`](/gateway/openai-http-api)。
-  - OpenResponses（HTTP）：[`/v1/responses`](/gateway/openresponses-http-api)。
-  - Tools Invoke（HTTP）：[`/tools/invoke`](/gateway/tools-invoke-http-api)。
+  - OpenAI Chat Completions（HTTP）：[`/v1/chat/completions`](/zh-CN/gateway/openai-http-api)。
+  - OpenResponses（HTTP）：[`/v1/responses`](/zh-CN/gateway/openresponses-http-api)。
+  - Tools Invoke（HTTP）：[`/tools/invoke`](/zh-CN/gateway/tools-invoke-http-api)。
 - 默认在 `canvasHost.port`（默认 `18793`）上启动 Canvas 文件服务器，从 `~/.openclaw/workspace/canvas` 提供 `http://<gateway-host>:18793/__openclaw__/canvas/`。使用 `canvasHost.enabled=false` 或 `OPENCLAW_SKIP_CANVAS_HOST=1` 禁用。
 - 输出日志到 stdout；使用 launchd/systemd 保持运行并轮转日志。
 - 故障排除时传递 `--verbose` 以将调试日志（握手、请求/响应、事件）从日志文件镜像到 stdio。
@@ -66,7 +66,7 @@ pnpm gateway:watch
 
 通常不需要：一个 Gateway 网关可以服务多个消息渠道和智能体。仅在需要冗余或严格隔离（例如：救援机器人）时使用多个 Gateway 网关。
 
-如果你隔离状态 + 配置并使用唯一端口，则支持。完整指南：[多个 Gateway 网关](/gateway/multiple-gateways)。
+如果你隔离状态 + 配置并使用唯一端口，则支持。完整指南：[多个 Gateway 网关](/zh-CN/gateway/multiple-gateways)。
 
 服务名称是配置文件感知的：
 
@@ -80,7 +80,7 @@ pnpm gateway:watch
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-救援机器人模式：保持第二个 Gateway 网关隔离，使用自己的配置文件、状态目录、工作区和基础端口间隔。完整指南：[救援机器人指南](/gateway/multiple-gateways#rescue-bot-guide)。
+救援机器人模式：保持第二个 Gateway 网关隔离，使用自己的配置文件、状态目录、工作区和基础端口间隔。完整指南：[救援机器人指南](/zh-CN/gateway/multiple-gateways#rescue-bot-guide)。
 
 ### Dev 配置文件（`--dev`）
 
@@ -134,7 +134,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 
 ## 协议（运维视角）
 
-- 完整文档：[Gateway 网关协议](/gateway/protocol) 和 [Bridge 协议（旧版）](/gateway/bridge-protocol)。
+- 完整文档：[Gateway 网关协议](/zh-CN/gateway/protocol) 和 [Bridge 协议（旧版）](/zh-CN/gateway/bridge-protocol)。
 - 客户端必须发送的第一帧：`req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`。
 - Gateway 网关回复 `res {type:"res", id, ok:true, payload:hello-ok }`（或 `ok:false` 带错误，然后关闭）。
 - 握手后：
@@ -156,7 +156,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - `node.invoke` — 在节点上调用命令（例如 `canvas.*`、`camera.*`）。
 - `node.pair.*` — 配对生命周期（`request`、`list`、`approve`、`reject`、`verify`）。
 
-另见：[Presence](/concepts/presence) 了解 presence 如何产生/去重以及为什么稳定的 `client.instanceId` 很重要。
+另见：[Presence](/zh-CN/concepts/presence) 了解 presence 如何产生/去重以及为什么稳定的 `client.instanceId` 很重要。
 
 ## 事件
 
@@ -238,7 +238,7 @@ openclaw logs --follow
 - `gateway status` 在服务看起来正在运行但端口已关闭时包含最后一行 Gateway 网关错误。
 - `logs` 通过 RPC 尾随 Gateway 网关文件日志（无需手动 `tail`/`grep`）。
 - 如果检测到其他类似 Gateway 网关的服务，CLI 会发出警告，除非它们是 OpenClaw 配置文件服务。
-  我们仍然建议大多数设置**每台机器一个 Gateway 网关**；使用隔离的配置文件/端口进行冗余或救援机器人。参见[多个 Gateway 网关](/gateway/multiple-gateways)。
+  我们仍然建议大多数设置**每台机器一个 Gateway 网关**；使用隔离的配置文件/端口进行冗余或救援机器人。参见[多个 Gateway 网关](/zh-CN/gateway/multiple-gateways)。
   - 清理：`openclaw gateway uninstall`（当前服务）和 `openclaw doctor`（旧版迁移）。
 - `gateway install` 在已安装时是无操作的；使用 `openclaw gateway install --force` 重新安装（配置文件/env/路径更改）。
 
