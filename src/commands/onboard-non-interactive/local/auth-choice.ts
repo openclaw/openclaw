@@ -5,12 +5,18 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import {
+  applyAzureOpenAIConfig,
+  normalizeAzureOpenAIBaseUrl,
+  normalizeAzureOpenAIModelId,
+} from "../../azure-openai-config.js";
+import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
   applyZaiConfig,
   setCloudflareAiGatewayConfig,
+  setAzureOpenaiApiKey,
   setMinimaxApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
@@ -254,6 +260,61 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
   }
 
+  if (authChoice === "azure-openai-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "azure-openai-responses",
+      cfg: baseConfig,
+      flagValue: opts.azureOpenaiApiKey,
+      flagName: "--azure-openai-api-key",
+      envVar: "AZURE_OPENAI_API_KEY",
+      envVarName: "AZURE_OPENAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+
+    const rawBaseUrl = opts.azureOpenaiBaseUrl?.trim();
+    const rawModelId = opts.azureOpenaiModelId?.trim();
+    if (!rawBaseUrl || !rawModelId) {
+      runtime.error(
+        [
+          'Auth choice "azure-openai-api-key" requires Azure base URL and model/deployment ID.',
+          "Use --azure-openai-base-url and --azure-openai-model-id.",
+        ].join("\n"),
+      );
+      runtime.exit(1);
+      return null;
+    }
+
+    let baseUrl: string;
+    let modelId: string;
+    let apiVersion: string | undefined;
+    try {
+      baseUrl = normalizeAzureOpenAIBaseUrl(rawBaseUrl);
+      modelId = normalizeAzureOpenAIModelId(rawModelId);
+      apiVersion = opts.azureOpenaiApiVersion?.trim() || undefined;
+    } catch (error) {
+      runtime.error(error instanceof Error ? error.message : String(error));
+      runtime.exit(1);
+      return null;
+    }
+
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAzureOpenaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "azure-openai-responses:default",
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
+
+    return applyAzureOpenAIConfig(nextConfig, { baseUrl, modelId, apiVersion });
+  }
   if (authChoice === "cloudflare-ai-gateway-api-key") {
     const accountId = opts.cloudflareAiGatewayAccountId?.trim() ?? "";
     const gatewayId = opts.cloudflareAiGatewayGatewayId?.trim() ?? "";

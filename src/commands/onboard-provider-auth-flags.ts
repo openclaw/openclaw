@@ -4,6 +4,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   OnboardOptions,
   | "anthropicApiKey"
   | "openaiApiKey"
+  | "azureOpenaiApiKey"
   | "mistralApiKey"
   | "openrouterApiKey"
   | "kilocodeApiKey"
@@ -53,6 +54,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--openai-api-key",
     cliOption: "--openai-api-key <key>",
     description: "OpenAI API key",
+  },
+  {
+    optionKey: "azureOpenaiApiKey",
+    authChoice: "azure-openai-api-key",
+    cliFlag: "--azure-openai-api-key",
+    cliOption: "--azure-openai-api-key <key>",
+    description: "Azure OpenAI API key",
   },
   {
     optionKey: "mistralApiKey",

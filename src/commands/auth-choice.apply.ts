@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
+import { applyAuthChoiceAzureOpenAI } from "./auth-choice.apply.azure-openai.js";
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
@@ -39,6 +40,7 @@ export async function applyAuthChoice(
     applyAuthChoiceLoadedPluginProvider,
     applyAuthChoiceAnthropic,
     applyAuthChoiceOpenAI,
+    applyAuthChoiceAzureOpenAI,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
     applyAuthChoiceMiniMax,

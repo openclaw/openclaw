@@ -239,9 +239,15 @@ describe("resolveExtraParams", () => {
 
 describe("applyExtraParamsToAgent", () => {
   function createOptionsCaptureAgent() {
-    const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
+    const calls: Array<
+      (SimpleStreamOptions & { openaiWsWarmup?: boolean; azureApiVersion?: string }) | undefined
+    > = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
+      calls.push(
+        options as
+          | (SimpleStreamOptions & { openaiWsWarmup?: boolean; azureApiVersion?: string })
+          | undefined,
+      );
       return {} as ReturnType<StreamFn>;
     };
     return {
@@ -249,6 +255,37 @@ describe("applyExtraParamsToAgent", () => {
       agent: { streamFn: baseStreamFn },
     };
   }
+
+  it("passes azureApiVersion stream option for azure-openai-responses model params", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "azure-openai-responses/gpt-5.4": {
+              params: {
+                azureApiVersion: "2025-04-01-preview",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "azure-openai-responses", "gpt-5.4");
+
+    const model = {
+      api: "openai-responses",
+      provider: "azure-openai-responses",
+      id: "gpt-5.4",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.azureApiVersion).toBe("2025-04-01-preview");
+  });
 
   function buildAnthropicModelConfig(modelKey: string, params: Record<string, unknown>) {
     return {

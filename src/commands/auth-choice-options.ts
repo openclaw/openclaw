@@ -9,7 +9,6 @@ import {
   formatStaticAuthChoiceChoicesForCli,
 } from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
-
 function resolveDynamicProviderCliChoices(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

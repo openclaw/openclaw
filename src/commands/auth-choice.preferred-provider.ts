@@ -8,6 +8,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   apiKey: "anthropic",
   "openai-codex": "openai-codex",
   "openai-api-key": "openai",
+  "azure-openai-api-key": "azure-openai-responses",
   "openrouter-api-key": "openrouter",
   "kilocode-api-key": "kilocode",
   "ai-gateway-api-key": "vercel-ai-gateway",
