@@ -239,7 +239,12 @@ function buildAvatarMetaUrl(basePath: string, agentId: string): string {
   return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
 }
 
+let avatarAbortController: AbortController | null = null;
+
 export async function refreshChatAvatar(host: ChatHost) {
+  avatarAbortController?.abort();
+  avatarAbortController = null;
+
   if (!host.connected) {
     host.chatAvatarUrl = null;
     return;
@@ -249,18 +254,27 @@ export async function refreshChatAvatar(host: ChatHost) {
     host.chatAvatarUrl = null;
     return;
   }
-  host.chatAvatarUrl = null;
+  const controller = new AbortController();
+  avatarAbortController = controller;
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
-    const res = await fetch(url, { method: "GET" });
+    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    if (controller.signal.aborted) {
+      return;
+    }
     if (!res.ok) {
       host.chatAvatarUrl = null;
       return;
     }
     const data = (await res.json()) as { avatarUrl?: unknown };
+    if (controller.signal.aborted) {
+      return;
+    }
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     host.chatAvatarUrl = avatarUrl || null;
   } catch {
-    host.chatAvatarUrl = null;
+    if (!controller.signal.aborted) {
+      host.chatAvatarUrl = null;
+    }
   }
 }
