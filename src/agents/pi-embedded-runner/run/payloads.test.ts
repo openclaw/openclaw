@@ -64,6 +64,51 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("suppresses recoverable mutating tool error when agent has a reply (#39916)", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done! I fixed the file."],
+      lastToolError: {
+        toolName: "edit",
+        error: "Could not find the exact text to replace",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBeUndefined();
+    expect(payloads[0]?.text).toBe("Done! I fixed the file.");
+  });
+
+  it("still shows mutating tool error when error is not recoverable (#39916)", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I tried to write the file."],
+      lastToolError: {
+        toolName: "write",
+        error: "permission denied",
+        mutatingAction: true,
+      },
+    });
+
+    // Both the assistant reply and the error warning should be present
+    const errorPayload = payloads.find((p) => p.isError);
+    expect(errorPayload).toBeDefined();
+    expect(errorPayload?.text).toContain("Write");
+  });
+
+  it("still shows mutating tool error when there is no user-facing reply (#39916)", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error: "Could not find the exact text to replace",
+        mutatingAction: true,
+      },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+    });
+  });
+
   it.each([
     {
       name: "default relay failure",

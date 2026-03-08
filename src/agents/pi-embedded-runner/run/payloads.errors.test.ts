@@ -314,18 +314,30 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("suppresses self-correctable mutating tool errors when assistant replied (#39916)", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
     });
 
+    // Self-correctable error + user-facing reply → warning suppressed (#39916)
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done.");
+    expect(payloads[0]?.isError).toBeUndefined();
+  });
+
+  it("shows non-correctable mutating tool errors even when assistant replied", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "write", error: "permission denied" },
+    });
+
     expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("Done.");
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
-    expect(payloads[1]?.text).not.toContain("missing");
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
