@@ -56,28 +56,39 @@ describe("getShellConfig", () => {
   it("prefers bash when fish is default and bash is on PATH", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("falls back to sh when fish is default and bash is missing", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
   });
 
   it("falls back to env shell when fish is default and no sh is available", () => {
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("/usr/bin/fish");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("uses zsh no-rc mode to avoid startup-file env overrides", () => {
+    process.env.SHELL = "/bin/zsh";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/zsh");
+    expect(args).toEqual(["-f", "-c"]);
   });
 
   it("uses sh when SHELL is unset", () => {
     delete process.env.SHELL;
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("sh");
+    expect(args).toEqual(["-c"]);
   });
 
   it("falls back to sh on PATH when SHELL is /usr/bin/false", () => {
