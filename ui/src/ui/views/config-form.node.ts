@@ -572,7 +572,7 @@ function renderTextInput(params: {
           autocapitalize="off"
           autocorrect="off"
           spellcheck="false"
-          data-form-type=${isSensitive ? "other" : ""}
+          data-form-type=${isSensitive ? "other" : nothing}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
             if (inputType === "number") {

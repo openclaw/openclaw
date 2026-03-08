@@ -350,6 +350,26 @@ describe("config form renderer", () => {
     expect(textInput?.getAttribute("autocomplete")).toBe("off");
   });
 
+  it("omits password-manager data attribute for non-sensitive text inputs", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const textInput: HTMLInputElement | null = container.querySelector("input[type='text']");
+    expect(textInput).not.toBeNull();
+    expect(textInput?.hasAttribute("data-form-type")).toBe(false);
+  });
+
   it("supports SecretInput unions in additionalProperties maps", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
