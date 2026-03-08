@@ -121,9 +121,9 @@ export async function resolveNodeHostGatewayCredentials(params: {
     env: params.env,
     includeLegacyEnv: false,
     localTokenPrecedence: "env-first",
-    localPasswordPrecedence: "env-first",
+    localPasswordPrecedence: "env-first", // pragma: allowlist secret
     remoteTokenPrecedence: "env-first",
-    remotePasswordPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
 }
 
