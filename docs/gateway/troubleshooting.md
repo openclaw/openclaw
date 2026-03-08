@@ -364,3 +364,202 @@ Related:
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/background-process](/gateway/background-process)
+
+## LaunchAgent plist Environment Variables
+
+### Gateway fails to start or missing API keys
+
+**Symptom**: Gateway shows `MissingEnvVarError`, unresponsive, or channel bots not working.
+
+**Root Cause**: LaunchAgent plist's `EnvironmentVariables` does not include variables referenced in your config (e.g., `MINIMAX_API_KEY`, `DEEPSEEK_API_KEY`). Running `openclaw gateway install` does not automatically sync `.env` variables to the plist.
+
+**Solution**:
+After modifying `.env` or config, manually sync environment variables to the plist:
+```bash
+# Edit the plist file directly
+openclaw gateway install --force
+# Then manually edit ~/Library/LaunchAgents/ai.openclaw.gateway.plist to add missing variables
+
+# Reload the service
+launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+openclaw gateway restart
+```
+
+**Related Version**: OpenClaw v2026.2+
+
+### Timezone off by one day
+
+**Symptom**: Agent replies with wrong day ("Today is Sunday" when it's Monday).
+
+**Root Cause**: LaunchAgent process does not have `TZ` environment variable set, causing Node to interpret time as UTC.
+
+**Solution**:
+Add `TZ=Asia/Shanghai` (or your timezone) to the plist's `EnvironmentVariables`:
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>TZ</key>
+  <string>Asia/Shanghai</string>
+</dict>
+```
+
+Then reload:
+```bash
+launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+openclaw gateway restart
+```
+
+### plist using /usr/bin/env node causes "No such file or directory"
+
+**Symptom**: Script exits with code 127, `env: node: No such file or directory`.
+
+**Root Cause**: plist uses `/usr/bin/env node`, but launchd environment has limited PATH that doesn't include node.
+
+**Solution**:
+Use absolute path to node in the plist (e.g., `/opt/homebrew/bin/node`) and set `PATH` in `EnvironmentVariables`:
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/opt/homebrew/bin/node</string>
+  ...
+</array>
+<key>EnvironmentVariables</key>
+<dict>
+  <key>PATH</key>
+  <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+</dict>
+```
+
+## Model Configuration
+
+### "All models failed: No API key" despite having a key
+
+**Symptom**: Runtime errors show "All models failed: … anthropic/claude: No API key".
+
+**Root Cause**: If `primary` model is not explicitly set, OpenClaw defaults to using the built-in `anthropic` provider, which requires an Anthropic API key—even if you configured other providers.
+
+**Solution**:
+Explicitly set `agents.defaults.model.primary` in your config:
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "minimax/MiniMax-M2.5",
+        "fallbacks": ["hongsong/claude-sonnet-4-6"]
+      }
+    }
+  }
+}
+```
+
+### Provider named "anthropic" ignores baseUrl override
+
+**Symptom**: You set `models.providers.anthropic.baseUrl` to a company proxy, but requests still go to `api.anthropic.com` and return HTTP 401.
+
+**Root Cause**: OpenClaw has special hardcoded handling for providers named "anthropic"—it always uses the official Anthropic SDK and ignores your `baseUrl` config.
+
+**Solution**:
+Use a different name for your proxy provider:
+```json
+{
+  "models": {
+    "providers": {
+      "hongsong": {
+        "api": "anthropic-messages",
+        "baseUrl": "https://your-company-proxy.com"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "hongsong/claude-sonnet-4-6"
+      }
+    }
+  }
+}
+```
+
+## Automation
+
+### Cron jobs not running at new scheduled time
+
+**Symptom**: You changed time in `jobs.json` but tasks still trigger at the old time.
+
+**Root Cause**: Gateway loads cron schedules only at startup—it doesn't watch for file changes. The in-memory schedule remains old after editing.
+
+**Solution**:
+Restart Gateway after modifying cron schedules:
+```bash
+openclaw gateway restart
+```
+
+### Heartbeat sends multiple messages to group
+
+**Symptom**: Group receives multiple messages or the entire assistant reasoning trace.
+
+**Root Cause**: Setting `target: "feishu"` (or other channel) delivers the entire assistant response to the group.
+
+**Solution**:
+Set the agent's heartbeat to `target: "none"` and use the message tool explicitly:
+```json
+{
+  "heartbeat": {
+    "target": "none"
+  }
+}
+```
+
+Then in HEARTBEAT.md, use the message tool to send to the group:
+```markdown
+Use the message tool to send to channel oc_xxx: "Your notification here"
+```
+
+### HEARTBEAT.md treated as empty and skipped
+
+**Symptom**: Heartbeat doesn't run, logs show "file is empty".
+
+**Root Cause**: Files with only comments are treated as empty by the framework.
+
+**Solution**:
+Add a non-comment line at the top of HEARTBEAT.md:
+```markdown
+# Heartbeat tasks - runs every 30 minutes
+[actual task content below]
+```
+
+## Tools and Sessions
+
+### sessions_send fails with "Either sessionKey or label is required"
+
+**Symptom**: Calling `sessions_send` returns error about missing sessionKey or label.
+
+**Root Cause**: `sessions_send` requires an existing session—you cannot just pass an `agentId`.
+
+**Solution**:
+- To ask another agent without an existing session: use `sessions_spawn(agentId, task)`
+- To send a message to an existing session: use `sessions_send(sessionKey, message)` or `sessions_send(label, message)`
+
+### Agent file operations fail with "Path escapes workspace root"
+
+**Symptom**: Agent cannot read/write files outside workspace, shows "Path escapes workspace root".
+
+**Root Cause**: OpenClaw file tools have sandbox restrictions—they only allow operations within the agent's workspace directory.
+
+**Solution**:
+- Move required directories into the workspace (e.g., `.openclaw/workspace-yourname/content/`)
+- Or mount additional directories via `sandbox.docker.binds` in config
+
+## Channel Permissions
+
+### Feishu bot not replying to group
+
+**Symptom**: Agent completes processing but group receives no reply, logs show `Create card failed: cardkit:card:write`.
+
+**Root Cause**: OpenClaw uses Feishu card message format for replies, which requires `cardkit:card:write` permission.
+
+**Solution**:
+In the Feishu open platform, grant `cardkit:card:write` permission to your App.
