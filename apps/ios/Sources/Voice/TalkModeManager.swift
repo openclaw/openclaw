@@ -98,7 +98,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
-    private var silenceWindow: TimeInterval = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
+    private var silenceWindow: TimeInterval = TimeInterval(TalkModeManager.defaultSilenceTimeoutMs) / 1000
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
@@ -2010,6 +2010,9 @@ extension TalkModeManager {
             where timeout > 0 && timeout.rounded(.towardZero) == timeout && timeout <= Double(Int.max):
             return Int(timeout)
         case let timeout as NSNumber:
+            if CFGetTypeID(timeout) == CFBooleanGetTypeID() {
+                return Self.defaultSilenceTimeoutMs
+            }
             let value = timeout.doubleValue
             if value > 0 && value.rounded(.towardZero) == value && value <= Double(Int.max) {
                 return Int(value)
