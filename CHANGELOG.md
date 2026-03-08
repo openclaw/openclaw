@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - macOS app/chat UI: route browser proxy through the local node browser service, preserve plain-text paste semantics, strip completed assistant trace/debug wrapper noise from transcripts, refresh permission state after returning from System Settings, and tolerate malformed cron rows in the macOS tab. (#39516) Thanks @Imhermes1.
+- Mattermost replies: keep `root_id` pinned to the existing thread root when an agent replies inside a thread, while still using reply-target threading for top-level posts. (#27744) thanks @hnykda.
 
 ## 2026.3.7
 
