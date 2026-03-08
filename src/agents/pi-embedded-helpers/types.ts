@@ -9,5 +9,6 @@ export type FailoverReason =
   | "billing"
   | "timeout"
   | "model_not_found"
+  | "sandbox_denied"
   | "session_expired"
   | "unknown";
