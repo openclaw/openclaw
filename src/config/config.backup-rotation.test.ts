@@ -38,7 +38,7 @@ describe("config backup rotation", () => {
       expect(stamped).toHaveLength(1);
 
       // Content should match the old backup
-      const content = await fs.readFile(path.join(dir, stamped[0]!), "utf-8");
+      const content = await fs.readFile(path.join(dir, stamped[0]), "utf-8");
       expect(content).toBe("old-backup");
     });
   });
@@ -201,7 +201,7 @@ describe("config backup rotation", () => {
         (e) => e.startsWith(`${base}.bak.`) && isDatetimeSuffix(e.slice(`${base}.bak.`.length)),
       );
       expect(stamped).toHaveLength(1);
-      const rotatedContent = await fs.readFile(path.join(dir, stamped[0]!), "utf-8");
+      const rotatedContent = await fs.readFile(path.join(dir, stamped[0]), "utf-8");
       expect(rotatedContent).toBe("previous");
 
       // Windows cannot validate POSIX chmod bits, but all other compose assertions
