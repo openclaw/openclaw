@@ -283,9 +283,21 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "exa"]);
+  });
+
+  it("sets provider and key for exa", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "exa",
+      textValue: "exa-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("exa");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.exa?.apiKey).toBe("exa-test-key");
   });
 });
