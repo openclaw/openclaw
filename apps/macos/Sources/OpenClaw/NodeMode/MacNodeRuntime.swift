@@ -591,6 +591,7 @@ actor MacNodeRuntime {
         // For shell wrappers like /bin/sh -lc "echo hello", resolution resolves
         // the inner command (echo), not the shell binary itself.
         let argv: [String]
+        let argvChanged: Bool
         if let resolvedPath = resolution?.resolvedPath,
            let firstResolved = ExecCommandResolution.resolve(
                command: [command.first!],
@@ -599,14 +600,22 @@ actor MacNodeRuntime {
            resolvedPath == firstResolved
         {
             argv = [resolvedPath] + command.dropFirst()
+            argvChanged = true
         } else {
             argv = command
+            argvChanged = false
         }
 
-        // Build rawCommand string for plan: prefer the original rawCommand to preserve
-        // shell wrapper payloads. This ensures ExecShellWrapperParser.extract correctly
-        // identifies the wrapper and resolves the inner command for allowlist matching.
-        let rawCommandString = ExecCommandFormatter.displayString(for: argv, rawCommand: params.rawCommand)
+        // Build rawCommand string for plan.
+        // When argv was modified (executable pinned), reformat from argv to ensure
+        // plan.rawCommand matches plan.argv. Otherwise prefer the original rawCommand
+        // to preserve shell wrapper payload semantics for allowlist matching.
+        let rawCommandString: String
+        if argvChanged {
+            rawCommandString = ExecCommandFormatter.displayString(for: argv)
+        } else {
+            rawCommandString = ExecCommandFormatter.displayString(for: argv, rawCommand: params.rawCommand)
+        }
 
         let plan = OpenClawSystemRunApprovalPlan(
             argv: argv,
