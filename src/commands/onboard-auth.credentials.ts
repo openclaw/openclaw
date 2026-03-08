@@ -101,6 +101,7 @@ function buildApiKeyCredential(
 
 export type WriteOAuthCredentialsOptions = {
   syncSiblingAgents?: boolean;
+  profileId?: string;
 };
 
 /** Resolve real path, returning null if the target doesn't exist. */
@@ -157,9 +158,17 @@ export async function writeOAuthCredentials(
   agentDir?: string,
   options?: WriteOAuthCredentialsOptions,
 ): Promise<string> {
+  const requestedProfileIdRaw =
+    typeof options?.profileId === "string" ? options.profileId.trim() : "";
+  const requestedProfileId = requestedProfileIdRaw
+    ? requestedProfileIdRaw.includes(":")
+      ? requestedProfileIdRaw
+      : `${provider}:${requestedProfileIdRaw}`
+    : "";
   const email =
     typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
-  const profileId = `${provider}:${email}`;
+  const defaultProfileId = `${provider}:${email}`;
+  const profileId = requestedProfileId || defaultProfileId;
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
   const targetAgentDirs = options?.syncSiblingAgents
     ? resolveSiblingAgentDirs(resolvedAgentDir)

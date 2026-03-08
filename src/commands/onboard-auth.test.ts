@@ -157,6 +157,55 @@ describe("writeOAuthCredentials", () => {
     ).rejects.toThrow();
   });
 
+  it("uses explicit profileId override when provided", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-profile-id-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      refresh: "refresh-override",
+      access: "access-override",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, env.agentDir, {
+      profileId: "openai-codex:alt1",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:alt1"]).toMatchObject({
+      refresh: "refresh-override",
+      access: "access-override",
+      type: "oauth",
+    });
+    expect(parsed.profiles?.["openai-codex:default"]).toBeUndefined();
+  });
+
+  it("normalizes short profileId suffix to provider-prefixed id", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-profile-short-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      refresh: "refresh-short",
+      access: "access-short",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, env.agentDir, {
+      profileId: "alt2",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:alt2"]).toMatchObject({
+      refresh: "refresh-short",
+      access: "access-short",
+      type: "oauth",
+    });
+  });
+
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
