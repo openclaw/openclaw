@@ -159,7 +159,7 @@ describe("config io paths", () => {
         logger,
       });
 
-      expect(() => io.loadConfig()).toThrow("Invalid config");
+      expect(() => io.loadConfig()).toThrow(/Invalid config/);
       expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining(`Invalid config at ${configPath}:\\n`),
       );

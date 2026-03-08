@@ -132,6 +132,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
+        config,
         method: "secrets.resolve",
         requiredMethods: ["secrets.resolve"],
         params: {

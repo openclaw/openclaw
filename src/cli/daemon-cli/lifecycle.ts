@@ -1,4 +1,4 @@
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -32,7 +32,7 @@ async function resolveGatewayRestartPort() {
   } as NodeJS.ProcessEnv;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
+  return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
@@ -70,8 +70,8 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
-  const restartPort = await resolveGatewayRestartPort().catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
+  const restartPort = await resolveGatewayRestartPort().catch(async () =>
+    resolveGatewayPort(await readBestEffortConfig(), process.env),
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);

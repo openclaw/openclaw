@@ -7,10 +7,10 @@ export function resolveGatewayTokenForDriftCheck(params: {
 }) {
   return resolveGatewayCredentialsFromConfig({
     cfg: params.cfg,
-    env: params.env,
+    env: {} as NodeJS.ProcessEnv,
     modeOverride: "local",
-    // Drift checks should compare the persisted gateway token against the
-    // service token, not let an exported shell env mask config drift.
+    // Drift checks should compare the configured local token source against the
+    // persisted service token, not let exported shell env hide stale service state.
     localTokenPrecedence: "config-first",
   }).token;
 }

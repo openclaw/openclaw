@@ -126,8 +126,12 @@ export async function runCli(argv: string[] = process.argv) {
   if (!shouldSkipPluginRegistration) {
     // Register plugin CLI commands before parsing
     const { registerPluginCliCommands } = await import("../plugins/cli.js");
-    const { loadConfig } = await import("../config/config.js");
-    registerPluginCliCommands(program, loadConfig());
+    const { loadValidatedConfigForPluginRegistration } =
+      await import("./program/register.subclis.js");
+    const config = await loadValidatedConfigForPluginRegistration();
+    if (config) {
+      registerPluginCliCommands(program, config);
+    }
   }
 
   await program.parseAsync(parseArgv);

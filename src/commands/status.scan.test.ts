@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  readBestEffortConfig: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   buildChannelsTable: vi.fn(),
   getUpdateCheckResult: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("../cli/progress.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  readBestEffortConfig: mocks.readBestEffortConfig,
 }));
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
@@ -74,7 +74,7 @@ import { scanStatus } from "./status.scan.js";
 
 describe("scanStatus", () => {
   it("passes sourceConfig into buildChannelsTable for summary-mode status output", async () => {
-    mocks.loadConfig.mockReturnValue({
+    mocks.readBestEffortConfig.mockResolvedValue({
       marker: "source",
       session: {},
       plugins: { enabled: false },
