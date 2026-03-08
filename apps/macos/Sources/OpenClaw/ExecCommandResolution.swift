@@ -91,29 +91,10 @@ struct ExecCommandResolution: Sendable {
     }
 
     private static func canonicalizePath(_ path: String) -> String? {
-        var currentPath = path
-        while true {
-            do {
-                let destination = try FileManager.default.destinationOfSymbolicLink(atPath: currentPath)
-                let resolved: String
-                if destination.hasPrefix("/") {
-                    resolved = destination
-                } else {
-                    resolved = URL(fileURLWithPath: currentPath)
-                        .deletingLastPathComponent()
-                        .appendingPathComponent(destination)
-                        .path
-                }
-                currentPath = resolved
-            } catch {
-                // Not a symlink - verify the file exists
-                if FileManager.default.fileExists(atPath: currentPath) {
-                    return currentPath.hasPrefix("/") ? currentPath : nil
-                }
-                // File doesn't exist (broken symlink or invalid path) - fail closed
-                return nil
-            }
-        }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard !resolved.isEmpty else { return nil }
+        // Verify the file exists (resolvingSymlinksInPath doesn't fail on non-existent targets)
+        return FileManager.default.fileExists(atPath: resolved) ? resolved : nil
     }
 
     private static func parseFirstToken(_ command: String) -> String? {
