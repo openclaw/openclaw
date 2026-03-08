@@ -133,4 +133,25 @@ describe("agent delivery helpers", () => {
     expect(plan.resolvedChannel).toBe("whatsapp");
     expect(plan.resolvedTo).toBeUndefined();
   });
+
+  it("does not use 'heartbeat' placeholder as delivery target", () => {
+    // This tests the fix for #35300 and #39756:
+    // When lastTo is set to "heartbeat" (a placeholder), it should not be
+    // used as the delivery target, preventing cross-channel delivery bugs.
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s4",
+        updatedAt: 4,
+        deliveryContext: { channel: "feishu", to: "heartbeat" },
+      },
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("feishu");
+    // lastTo should NOT be "heartbeat" - it should be undefined
+    expect(plan.resolvedTo).toBeUndefined();
+  });
 });
