@@ -850,6 +850,40 @@ describe("chat input history navigation", () => {
     });
     expect(host.chatMessage).toBe("newest");
   });
+
+  it("blocks history recall while session history is loading", () => {
+    const host = createChatHistoryState({
+      chatLoading: true,
+      chatMessage: "",
+      chatMessages: [textMessage("user", "old-session-entry")],
+      sessionKey: "next",
+    });
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 0,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:history-loading",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+    });
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatInputHistoryIndex).toBe(-1);
+    expect(host.chatMessage).toBe("");
+  });
 });
 
 describe("loadChatHistory", () => {
