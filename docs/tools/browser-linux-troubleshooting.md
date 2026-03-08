@@ -137,3 +137,13 @@ Notes:
 
 - The `chrome` profile uses your **system default Chromium browser** when possible.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; only set those for remote CDP.
+
+### Problem: Stale browser profile lock files
+
+Sometimes OpenClaw cannot start the `openclaw` browser profile after a desktop
+environment change (e.g. switch from local DISPLAY to XRDP), even when Chrome
+is installed correctly.
+
+This happens because stale Chrome profile lock files are in
+`~/.openclaw/browser/openclaw/user-data/`. The problem can be fixed by deleting
+the files there.
