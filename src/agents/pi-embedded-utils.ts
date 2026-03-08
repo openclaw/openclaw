@@ -20,15 +20,35 @@ export function stripMinimaxToolCallXml(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/minimax:tool_call/i.test(text)) {
-    return text;
+
+  let cleaned = text;
+
+  // Strip MiniMax XML tool calls if present
+  if (/minimax:tool_call/i.test(text)) {
+    // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
+    cleaned = cleaned.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
+
+    // Remove stray minimax tool tags.
+    cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
   }
 
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
+  // Filter out known error patterns that leak to user from failed tool calls
+  const errorPatterns = [
+    /HTTP \d+: .*tool result.*not found/i,
+    /unknown error, \d+ \(\d+\)/i,
+    /tool result's tool id\(.*\) not found/i,
+  ];
 
-  // Remove stray minimax tool tags.
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+  for (const pattern of errorPatterns) {
+    cleaned = cleaned.replace(pattern, "");
+  }
+
+  // Clean up any leftover empty brackets or whitespace from removed errors
+  cleaned = cleaned
+    .replace(/\[\s*\]/g, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
   return cleaned;
 }
