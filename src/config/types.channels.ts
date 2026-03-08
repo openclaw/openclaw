@@ -22,6 +22,12 @@ export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Default channel to use when the message tool is called without an explicit
+   * `channel` parameter and multiple channels are configured.
+   * Example: "discord" or "telegram"
+   */
+  defaultChannel?: string;
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
