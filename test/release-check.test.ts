@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectAppcastSparkleVersionErrors,
+  collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
 } from "../scripts/release-check.ts";
 
@@ -107,6 +108,45 @@ describe("collectBundledExtensionRootDependencyGapErrors", () => {
       }),
     ).toEqual([
       "bundled extension 'googlechat' root dependency mirror drift | missing in root package: (none) | remove stale allowlist entries: google-auth-library",
+    ]);
+  });
+});
+
+describe("collectBundledExtensionManifestErrors", () => {
+  it("flags invalid bundled extension install metadata", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "broken",
+          packageJson: {
+            openclaw: {
+              install: { npmSpec: "   " },
+            },
+          },
+        },
+      ]),
+    ).toEqual([
+      "bundled extension 'broken' manifest invalid | openclaw.install.npmSpec must be a non-empty string",
+    ]);
+  });
+
+  it("flags invalid release-check allowlist metadata", () => {
+    expect(
+      collectBundledExtensionManifestErrors([
+        {
+          id: "broken",
+          packageJson: {
+            openclaw: {
+              install: { npmSpec: "@openclaw/broken" },
+              releaseChecks: {
+                rootDependencyMirrorAllowlist: ["ok", ""],
+              },
+            },
+          },
+        },
+      ]),
+    ).toEqual([
+      "bundled extension 'broken' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must contain only non-empty strings",
     ]);
   });
 });
