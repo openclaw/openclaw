@@ -293,10 +293,11 @@ async function runPackageInstallUpdate(params: {
 
   const steps = [updateStep];
   let afterVersion = beforeVersion;
+  let entryPath: string | null = null;
 
   if (pkgRoot) {
     afterVersion = await readPackageVersion(pkgRoot);
-    const entryPath = path.join(pkgRoot, "dist", "entry.js");
+    entryPath = path.join(pkgRoot, "dist", "entry.js");
     if (await pathExists(entryPath)) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
@@ -305,6 +306,34 @@ async function runPackageInstallUpdate(params: {
         progress: params.progress,
       });
       steps.push(doctorStep);
+
+      // If the post-update doctor fails, try to rollback to the previous installed
+      // version to avoid leaving a broken global install behind.
+      if (doctorStep.exitCode !== 0 && beforeVersion) {
+        const rollbackSpec = `${packageName}@${beforeVersion}`;
+        const rollbackStep = await runUpdateStep({
+          name: `rollback ${rollbackSpec}`,
+          argv: globalInstallArgs(manager, rollbackSpec),
+          timeoutMs: params.timeoutMs,
+          progress: params.progress,
+        });
+        steps.push(rollbackStep);
+        try {
+          afterVersion = await readPackageVersion(pkgRoot);
+        } catch {
+          // ignore
+        }
+
+        if (rollbackStep.exitCode === 0 && entryPath && (await pathExists(entryPath))) {
+          const rollbackDoctorStep = await runUpdateStep({
+            name: `${CLI_NAME} doctor (rollback)`,
+            argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
+            timeoutMs: params.timeoutMs,
+            progress: params.progress,
+          });
+          steps.push(rollbackDoctorStep);
+        }
+      }
     }
   }
 
