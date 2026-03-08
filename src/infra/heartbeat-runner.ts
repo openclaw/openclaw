@@ -509,6 +509,7 @@ async function resolveHeartbeatPreflight(params: {
     params.forcedSessionKey,
   );
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const hasPendingSystemEvents = pendingEventEntries.length > 0;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -518,7 +519,7 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents;
+    hasPendingSystemEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
