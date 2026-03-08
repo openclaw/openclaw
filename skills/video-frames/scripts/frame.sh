@@ -59,6 +59,10 @@ fi
 mkdir -p "$(dirname "$out")"
 
 if [[ "$index" != "" ]]; then
+  if ! [[ "$index" =~ ^[0-9]+$ ]]; then
+    echo "index must be a non-negative integer" >&2
+    exit 1
+  fi
   ffmpeg -hide_banner -loglevel error -y \
     -i "$in" \
     -vf "select=eq(n\\,${index})" \
