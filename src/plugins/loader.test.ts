@@ -3,11 +3,31 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
-import { createHookRunner } from "./hooks.js";
+async function importFreshPluginTestModules() {
+  vi.resetModules();
+  vi.unmock("./hook-runner-global.js");
+  vi.unmock("./hooks.js");
+  vi.unmock("./loader.js");
+  vi.unmock("jiti");
+  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+    import("./loader.js"),
+    import("./hook-runner-global.js"),
+    import("./hooks.js"),
+  ]);
+  return {
+    ...loader,
+    ...hookRunnerGlobal,
+    ...hooks,
+  };
+}
 
-vi.unmock("jiti");
-const { __testing, loadOpenClawPlugins } = await import("./loader.js");
+const {
+  __testing,
+  createHookRunner,
+  getGlobalHookRunner,
+  loadOpenClawPlugins,
+  resetGlobalHookRunner,
+} = await importFreshPluginTestModules();
 
 type TempPlugin = { dir: string; file: string; id: string };
 
