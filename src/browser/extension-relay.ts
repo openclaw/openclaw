@@ -234,12 +234,20 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
   const existing = relayRuntimeByPort.get(info.port);
   if (existing) {
-    return existing.server;
+    if (existing.server.bindHost !== bindHost) {
+      await existing.server.stop();
+    } else {
+      return existing.server;
+    }
   }
 
   const inFlight = relayInitByPort.get(info.port);
   if (inFlight) {
-    return await inFlight;
+    const server = await inFlight;
+    if (server.bindHost === bindHost) {
+      return server;
+    }
+    await server.stop();
   }
 
   const extensionReconnectGraceMs = envMsOrDefault(
@@ -998,12 +1006,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     const addr = server.address() as AddressInfo | null;
     const port = addr?.port ?? info.port;
+    const actualBindHost = addr?.address || bindHost;
     const host = info.host;
     const baseUrl = `${new URL(info.baseUrl).protocol}//${host}:${port}`;
 
     const relay: ChromeExtensionRelayServer = {
       host,
-      bindHost,
+      bindHost: actualBindHost,
       port,
       baseUrl,
       cdpWsUrl: `ws://${host}:${port}/cdp`,
