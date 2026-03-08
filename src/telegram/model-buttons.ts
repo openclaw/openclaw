@@ -195,10 +195,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const pageModels = models.slice(startIndex, endIndex);
 
   // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
-
+  // currentModel is `provider/modelId`; compare full key so that models with
+  // the same id from different providers don't all appear selected (#35476).
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
     // Skip models that still exceed Telegram's callback_data limit.
@@ -206,7 +204,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const isCurrentModel = `${provider}/${model}` === currentModel;
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

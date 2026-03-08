@@ -223,6 +223,33 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("only marks the model from the matching provider as selected (#35476)", () => {
+    // Two providers both expose a model with the same id "claude-opus-4-6".
+    // When the user has "nexus-d/claude-opus-4-6" selected, only that provider's
+    // entry should show the ✓ checkmark; the entry under "nexus-a" must not.
+    const nexusDResult = buildModelsKeyboard({
+      provider: "nexus-d",
+      models: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      currentModel: "nexus-d/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    // nexus-d/claude-opus-4-6 is selected → first row has ✓
+    expect(nexusDResult[0]?.[0]?.text).toBe("claude-opus-4-6 ✓");
+    expect(nexusDResult[1]?.[0]?.text).toBe("claude-sonnet-4-6");
+
+    const nexusAResult = buildModelsKeyboard({
+      provider: "nexus-a",
+      models: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      currentModel: "nexus-d/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    // nexus-a/claude-opus-4-6 is NOT selected (different provider) → no ✓
+    expect(nexusAResult[0]?.[0]?.text).toBe("claude-opus-4-6");
+    expect(nexusAResult[1]?.[0]?.text).toBe("claude-sonnet-4-6");
+  });
+
   it("renders pagination controls for first, middle, and last pages", () => {
     const cases = [
       {
