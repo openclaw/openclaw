@@ -7,8 +7,8 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(
     async (): Promise<DeviceIdentity> => ({
       deviceId: "device-1",
-      privateKey: "private-key",
-      publicKey: "public-key",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
     }),
   ),
 );
@@ -114,8 +114,8 @@ describe("GatewayBrowserClient", () => {
     signDevicePayloadMock.mockClear();
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
-      privateKey: "private-key",
-      publicKey: "public-key",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
     });
 
     const localStorage = createStorageMock();
