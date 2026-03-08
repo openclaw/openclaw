@@ -251,6 +251,20 @@ export async function applyBeforeResponseEmitHook(
     return undefined;
   }
 
+  // Treat content: "" as a block — an empty string leaves a corrupted
+  // { role: "assistant", content: "" } in session history that causes
+  // Anthropic API 400 errors on subsequent turns.  Plugins that want to
+  // suppress a response should use block: true, but we handle this
+  // gracefully to avoid a silent runtime failure.
+  if (emitResult.content === "") {
+    log.warn(
+      "plugin returned content: '' — treating as block (empty assistant messages corrupt " +
+        "session history). Use block: true to suppress a response explicitly.",
+    );
+    clearAllAssistantContent(activeSession.messages, runMessages);
+    return { blocked: true };
+  }
+
   log.debug(`applying modified content (len=${emitResult.content.length})`);
 
   // Update session messages for consistency with the delivery pipeline.
@@ -412,7 +426,10 @@ export function rewriteAllAssistantContent(
   if (newContents.length !== assistantMsgs.length) {
     log.warn(
       `rewriteAllAssistantContent: allContent length (${newContents.length}) differs from ` +
-        `assistant message count (${assistantMsgs.length}); extras will be removed`,
+        `assistant message count (${assistantMsgs.length}); ` +
+        (newContents.length < assistantMsgs.length
+          ? `${assistantMsgs.length - newContents.length} surplus session message(s) will be removed`
+          : `${newContents.length - assistantMsgs.length} extra allContent entries will be ignored`),
     );
   }
   // Set of kept (rewritten) assistant messages — used by backward scan to avoid

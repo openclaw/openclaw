@@ -518,6 +518,29 @@ describe("applyBeforeResponseEmitHook", () => {
     expect(result?.consolidatedTexts).toHaveLength(1);
     expect(result?.consolidatedTexts?.[0]).toBe("[REDACTED]");
   });
+
+  it("treats content: '' as block to prevent corrupted empty assistant in session history", async () => {
+    // A plugin returning content: "" used to leave { role: "assistant", content: "" }
+    // in session history, causing Anthropic API 400 on next turn.
+    // Now it should be treated as a block — clearing assistant messages entirely.
+    const hookRunner = makeMockHookRunner({ content: "" });
+    const activeSession = {
+      messages: [makeMsg("user", "prompt"), makeMsg("assistant", "response to suppress")],
+    };
+
+    const result = await applyBeforeResponseEmitHook({
+      hookRunner,
+      agentCtx: dummyCtx,
+      assistantTexts: ["response to suppress"],
+      messagesSnapshot: activeSession.messages.slice(),
+      activeSession,
+    });
+
+    expect(result?.blocked).toBe(true);
+    // No empty assistant message should remain in session history
+    const assistants = activeSession.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
