@@ -129,8 +129,7 @@ final class NodeAppModel {
     private var backgroundReconnectSuppressed = false
     private var backgroundReconnectLeaseUntil: Date?
     private var lastSignificantLocationWakeAt: Date?
-    private var queuedWatchReplies: [WatchQuickReplyEvent] = []
-    private var seenWatchReplyIds = Set<String>()
+    @ObservationIgnored private let watchReplyCoordinator = WatchReplyCoordinator()
 
     private var gatewayConnected = false
     private var operatorConnected = false
@@ -2199,37 +2198,22 @@ extension NodeAppModel {
     }
 
     private func handleWatchQuickReply(_ event: WatchQuickReplyEvent) async {
-        let replyId = event.replyId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let actionId = event.actionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if replyId.isEmpty || actionId.isEmpty {
+        switch self.watchReplyCoordinator.ingest(event, isGatewayConnected: await self.isGatewayConnected()) {
+        case .dropMissingFields:
             self.watchReplyLogger.info("watch reply dropped: missing replyId/actionId")
-            return
-        }
-
-        if self.seenWatchReplyIds.contains(replyId) {
+        case .deduped(let replyId):
             self.watchReplyLogger.debug(
                 "watch reply deduped replyId=\(replyId, privacy: .public)")
-            return
-        }
-        self.seenWatchReplyIds.insert(replyId)
-
-        if await !self.isGatewayConnected() {
-            self.queuedWatchReplies.append(event)
+        case .queue(let replyId, let actionId):
             self.watchReplyLogger.info(
                 "watch reply queued replyId=\(replyId, privacy: .public) action=\(actionId, privacy: .public)")
-            return
+        case .forward:
+            await self.forwardWatchReplyToAgent(event)
         }
-
-        await self.forwardWatchReplyToAgent(event)
     }
 
     private func flushQueuedWatchRepliesIfConnected() async {
-        guard await self.isGatewayConnected() else { return }
-        guard !self.queuedWatchReplies.isEmpty else { return }
-
-        let pending = self.queuedWatchReplies
-        self.queuedWatchReplies.removeAll()
-        for event in pending {
+        for event in self.watchReplyCoordinator.drainIfConnected(await self.isGatewayConnected()) {
             await self.forwardWatchReplyToAgent(event)
         }
     }
@@ -2259,7 +2243,7 @@ extension NodeAppModel {
                 "watch reply forwarding failed replyId=\(event.replyId) "
                 + "error=\(error.localizedDescription)"
             self.watchReplyLogger.error("\(failedMessage, privacy: .public)")
-            self.queuedWatchReplies.insert(event, at: 0)
+            self.watchReplyCoordinator.requeueFront(event)
         }
     }
 
@@ -2852,7 +2836,7 @@ extension NodeAppModel {
     }
 
     func _test_queuedWatchReplyCount() -> Int {
-        self.queuedWatchReplies.count
+        self.watchReplyCoordinator.queuedCount
     }
 
     func _test_setGatewayConnected(_ connected: Bool) {
