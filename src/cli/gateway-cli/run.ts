@@ -282,6 +282,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
     }
   }
+  if (opts.password) {
+    const password = toOptionString(opts.password);
+    if (password) {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = password;
+    }
+  }
   const authModeRaw = toOptionString(opts.auth);
   const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
