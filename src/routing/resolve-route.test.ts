@@ -2,7 +2,11 @@ import { describe, expect, test, vi } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
-import { resolveAgentRoute } from "./resolve-route.js";
+import {
+  deriveLastRoutePolicy,
+  resolveAgentRoute,
+  resolveInboundLastRouteSessionKey,
+} from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
   const resolveDiscordGuildRoute = (cfg: OpenClawConfig) =>
@@ -25,6 +29,7 @@ describe("resolveAgentRoute", () => {
     expect(route.agentId).toBe("main");
     expect(route.accountId).toBe("default");
     expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.lastRoutePolicy).toBe("main");
     expect(route.matchedBy).toBe("default");
   });
 
@@ -47,7 +52,45 @@ describe("resolveAgentRoute", () => {
         peer: { kind: "direct", id: "+15551234567" },
       });
       expect(route.sessionKey).toBe(testCase.expected);
+      expect(route.lastRoutePolicy).toBe("session");
     }
+  });
+
+  test("resolveInboundLastRouteSessionKey follows route policy", () => {
+    expect(
+      resolveInboundLastRouteSessionKey({
+        route: {
+          mainSessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        sessionKey: "agent:main:discord:direct:user-1",
+      }),
+    ).toBe("agent:main:main");
+
+    expect(
+      resolveInboundLastRouteSessionKey({
+        route: {
+          mainSessionKey: "agent:main:main",
+          lastRoutePolicy: "session",
+        },
+        sessionKey: "agent:main:telegram:atlas:direct:123",
+      }),
+    ).toBe("agent:main:telegram:atlas:direct:123");
+  });
+
+  test("deriveLastRoutePolicy collapses only main-session routes", () => {
+    expect(
+      deriveLastRoutePolicy({
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+      }),
+    ).toBe("main");
+    expect(
+      deriveLastRoutePolicy({
+        sessionKey: "agent:main:telegram:direct:123",
+        mainSessionKey: "agent:main:main",
+      }),
+    ).toBe("session");
   });
 
   test("identityLinks applies to direct-message scopes", () => {

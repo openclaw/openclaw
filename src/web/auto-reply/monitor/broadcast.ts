@@ -1,6 +1,6 @@
 import type { loadConfig } from "../../../config/config.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { buildAgentSessionKey } from "../../../routing/resolve-route.js";
+import { buildAgentSessionKey, deriveLastRoutePolicy } from "../../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_MAIN_KEY,
@@ -69,6 +69,23 @@ export async function maybeBroadcastMessage(params: {
       mainSessionKey: buildAgentMainSessionKey({
         agentId: normalizedAgentId,
         mainKey: DEFAULT_MAIN_KEY,
+      }),
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: buildAgentSessionKey({
+          agentId: normalizedAgentId,
+          channel: "whatsapp",
+          accountId: params.route.accountId,
+          peer: {
+            kind: params.msg.chatType === "group" ? "group" : "direct",
+            id: params.peerId,
+          },
+          dmScope: params.cfg.session?.dmScope,
+          identityLinks: params.cfg.session?.identityLinks,
+        }),
+        mainSessionKey: buildAgentMainSessionKey({
+          agentId: normalizedAgentId,
+          mainKey: DEFAULT_MAIN_KEY,
+        }),
       }),
     };
 

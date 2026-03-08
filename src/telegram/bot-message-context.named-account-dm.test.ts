@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+
+const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
+vi.mock("../channels/session.js", () => ({
+  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+}));
 
 describe("buildTelegramMessageContext named-account DM fallback", () => {
   const baseCfg = {
@@ -11,7 +16,15 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    recordInboundSessionMock.mockClear();
   });
+
+  function getLastUpdateLastRoute(): { sessionKey?: string } | undefined {
+    const callArgs = recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
+      updateLastRoute?: { sessionKey?: string };
+    };
+    return callArgs?.updateLastRoute;
+  }
 
   it("allows DM through for a named account with no explicit binding", async () => {
     setRuntimeConfigSnapshot(baseCfg);
@@ -49,6 +62,25 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     });
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
+  });
+
+  it("keeps named-account fallback lastRoute on the isolated DM session", async () => {
+    setRuntimeConfigSnapshot(baseCfg);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: baseCfg,
+      accountId: "atlas",
+      message: {
+        message_id: 1,
+        chat: { id: 814912386, type: "private" },
+        date: 1700000000,
+        text: "hello",
+        from: { id: 814912386, first_name: "Alice" },
+      },
+    });
+
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
+    expect(getLastUpdateLastRoute()?.sessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
   });
 
   it("isolates sessions between named accounts that share the default agent", async () => {
