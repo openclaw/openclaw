@@ -4,6 +4,8 @@ import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createRunContextLogger } from "../../logging/run-context-logger.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
@@ -34,6 +36,9 @@ const builtinSlashCommands = (() => {
   ]);
 })();
 
+const skillRouteLog = createSubsystemLogger("auto-reply/skills");
+const runLogger = createRunContextLogger();
+
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const trimmed = commandBodyNormalized.trim();
   if (!trimmed.startsWith("/")) {
@@ -43,6 +48,89 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const name = match?.[1]?.trim().toLowerCase() ?? "";
   return name ? name : null;
 }
+
+function extractEvalIds(args?: string): {
+  traceId?: string;
+  runId?: string;
+  scenarioId?: string;
+  codeRevision?: string;
+  pluginRevision?: string;
+} {
+  const text = args?.trim() ?? "";
+  if (!text) {
+    return {};
+  }
+
+  const readKey = (key: string): string | undefined => {
+    const patterns = [
+      new RegExp(`\\b${key}\\s*[:=]\\s*([A-Za-z0-9._:-]+)`, "i"),
+      new RegExp(`["']${key}["']\\s*:\\s*["']([^"']+)["']`, "i"),
+      new RegExp(`\\[${key}\\s*:\\s*([^\\]\\s]+)\\]`, "i"),
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      const value = match?.[1]?.trim();
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+
+  return {
+    traceId: readKey("trace_id"),
+    runId: readKey("run_id"),
+    scenarioId: readKey("scenario_id"),
+    codeRevision: readKey("code_revision"),
+    pluginRevision: readKey("plugin_revision"),
+  };
+}
+
+function buildSkillRouteMeta(params: {
+  agentId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  surface?: string;
+  commandName: string;
+  skillName: string;
+  dispatchKind: string;
+  toolName?: string;
+  authorized: boolean;
+  args?: string;
+  traceId?: string;
+  runId?: string;
+  scenarioId?: string;
+  codeRevision?: string;
+  pluginRevision?: string;
+}): Record<string, unknown> {
+  const argsChars = (params.args ?? "").trim().length;
+  return {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    surface: params.surface ?? "unknown",
+    commandName: params.commandName,
+    skillName: params.skillName,
+    dispatchKind: params.dispatchKind,
+    toolName: params.toolName,
+    authorized: params.authorized,
+    argsChars,
+    traceId: params.traceId,
+    runId: params.runId,
+    scenarioId: params.scenarioId,
+    codeRevision: params.codeRevision,
+    pluginRevision: params.pluginRevision,
+    consoleMessage:
+      `skill route -> ${params.skillName}` +
+      (params.toolName ? ` via ${params.toolName}` : ` (${params.dispatchKind})`) +
+      (params.traceId ? ` trace=${params.traceId}` : ""),
+  };
+}
+
+export const __testing = {
+  extractEvalIds,
+  buildSkillRouteMeta,
+};
 
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -187,13 +275,79 @@ export async function handleInlineActions(params: {
         })
       : null;
   if (skillInvocation) {
+    const evalIds = extractEvalIds(skillInvocation.args);
+    const dispatchKind = skillInvocation.command.dispatch?.kind ?? "prompt";
+    if (opts) {
+      const nextRunId = evalIds.runId ?? opts.runId;
+      const nextTraceId =
+        evalIds.traceId ?? opts.runCorrelation?.traceId ?? nextRunId ?? undefined;
+      const nextMode =
+        evalIds.traceId ||
+        evalIds.runId ||
+        evalIds.scenarioId ||
+        evalIds.codeRevision ||
+        evalIds.pluginRevision
+          ? "eval"
+          : (opts.runCorrelation?.mode ?? "prod");
+      opts.runCorrelation = {
+        ...opts.runCorrelation,
+        traceId: nextTraceId,
+        scenarioId: evalIds.scenarioId ?? opts.runCorrelation?.scenarioId,
+        codeRevision: evalIds.codeRevision ?? opts.runCorrelation?.codeRevision,
+        pluginRevision: evalIds.pluginRevision ?? opts.runCorrelation?.pluginRevision,
+        mode: nextMode,
+        skillName: skillInvocation.command.skillName,
+        dispatchKind,
+      };
+      if (!opts.runId && evalIds.runId) {
+        opts.runId = evalIds.runId;
+      }
+    }
+    const routeMeta = buildSkillRouteMeta({
+      agentId,
+      sessionKey,
+      workspaceDir,
+      surface: command.surface,
+      commandName: skillInvocation.command.name,
+      skillName: skillInvocation.command.skillName,
+      dispatchKind,
+      toolName:
+        skillInvocation.command.dispatch?.kind === "tool"
+          ? skillInvocation.command.dispatch.toolName
+          : undefined,
+      authorized: command.isAuthorizedSender,
+      args: skillInvocation.args,
+      traceId: evalIds.traceId,
+      runId: evalIds.runId,
+      scenarioId: evalIds.scenarioId,
+      codeRevision: evalIds.codeRevision,
+      pluginRevision: evalIds.pluginRevision,
+    });
     if (!command.isAuthorizedSender) {
+      skillRouteLog.warn("Blocked unauthorized skill invocation", routeMeta);
       logVerbose(
         `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }
+
+    skillRouteLog.info("Resolved skill invocation", routeMeta);
+    runLogger.info("router.skill_resolved", {
+      runId: evalIds.runId ?? opts?.runId,
+      traceId: evalIds.traceId ?? opts?.runCorrelation?.traceId,
+      scenarioId: evalIds.scenarioId ?? opts?.runCorrelation?.scenarioId,
+      codeRevision: evalIds.codeRevision ?? opts?.runCorrelation?.codeRevision,
+      pluginRevision: evalIds.pluginRevision ?? opts?.runCorrelation?.pluginRevision,
+      skillName: skillInvocation.command.skillName,
+      dispatchKind,
+      summary: "resolved eligible skill",
+      meta: {
+        commandName: skillInvocation.command.name,
+        hasArgs: Boolean(skillInvocation.args?.trim()),
+        authorized: command.isAuthorizedSender,
+      },
+    });
 
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool") {
@@ -216,6 +370,10 @@ export async function handleInlineActions(params: {
 
       const tool = tools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
+        skillRouteLog.warn("Skill tool dispatch target missing", {
+          ...routeMeta,
+          toolName: dispatch.toolName,
+        });
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
       }
@@ -243,6 +401,7 @@ export async function handleInlineActions(params: {
       skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
     ].filter((entry): entry is string => Boolean(entry));
     const rewrittenBody = promptParts.join("\n\n");
+    skillRouteLog.debug("Rewrote prompt for skill orchestration", routeMeta);
     ctx.Body = rewrittenBody;
     ctx.BodyForAgent = rewrittenBody;
     sessionCtx.Body = rewrittenBody;
