@@ -1094,6 +1094,30 @@ describe("resolveOutboundSessionRoute", () => {
           chatType: "direct",
         },
       },
+      {
+        name: "Feishu direct: prefix is stripped (OpenClaw internal peer format)",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "direct:ou_abc123",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:ou_abc123",
+          from: "feishu:ou_abc123",
+          to: "ou_abc123",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Feishu direct:oc_ chat is stripped and stays direct",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "direct:oc_dm_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_dm_chat",
+          from: "feishu:oc_dm_chat",
+          to: "oc_dm_chat",
+          chatType: "direct",
+        },
+      },
     ];
 
     for (const testCase of cases) {

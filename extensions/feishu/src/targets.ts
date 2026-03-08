@@ -48,6 +48,10 @@ export function normalizeFeishuTarget(raw: string): string | null {
   if (lowered.startsWith("open_id:")) {
     return withoutProvider.slice("open_id:".length).trim() || null;
   }
+  if (lowered.startsWith("direct:")) {
+    // Strip OpenClaw internal peer prefix (e.g. session keys use direct:<peerId>)
+    return withoutProvider.slice("direct:".length).trim() || null;
+  }
 
   return withoutProvider;
 }
@@ -80,6 +84,12 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
     const normalized = trimmed.replace(/^(user|dm):/i, "").trim();
     return normalized.startsWith(OPEN_ID_PREFIX) ? "open_id" : "user_id";
   }
+  if (lowered.startsWith("direct:")) {
+    // Strip OpenClaw internal peer prefix (e.g. session keys use direct:<peerId>)
+    const normalized = trimmed.replace(/^direct:/i, "").trim();
+    return normalized.startsWith(CHAT_ID_PREFIX) ? "chat_id" :
+           normalized.startsWith(OPEN_ID_PREFIX) ? "open_id" : "user_id";
+  }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
     return "chat_id";
   }
@@ -94,7 +104,7 @@ export function looksLikeFeishuId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (/^(chat|group|channel|user|dm|open_id):/i.test(trimmed)) {
+  if (/^(chat|group|channel|user|dm|open_id|direct):/i.test(trimmed)) {
     return true;
   }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {

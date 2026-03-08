@@ -844,6 +844,11 @@ function resolveFeishuSession(
     trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
     isGroup = false;
     typeExplicit = true;
+  } else if (lower.startsWith("direct:")) {
+    // Strip OpenClaw internal peer prefix (e.g. session keys use direct:<peerId>)
+    trimmed = trimmed.replace(/^direct:/i, "").trim();
+    isGroup = false;
+    typeExplicit = true;
   }
 
   const idLower = trimmed.toLowerCase();
