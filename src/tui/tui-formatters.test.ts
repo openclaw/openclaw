@@ -256,6 +256,20 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
+  it("preserves dotted entity IDs wrapped in markdown asterisks", () => {
+    const input = "***binary_sensor.sense_energy_monitor_power_is_really_long***";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long tracking identifiers bound tightly by underscores", () => {
+    const input = "__averyveryveryveryveryveryveryverylongidentifier__";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
   it("does not split bare dotted entity IDs", () => {
     const input = "binary_sensor.sense_energy_monitor_power_is_really_long";
     const sanitized = sanitizeRenderableText(input);
