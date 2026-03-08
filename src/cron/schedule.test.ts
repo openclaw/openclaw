@@ -144,6 +144,32 @@ describe("cron schedule", () => {
     expect(getCronScheduleCacheSizeForTest()).toBe(2);
   });
 
+  it("promotes accessed entries to avoid premature LRU eviction", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+
+    // Fill cache to capacity with unique expressions
+    for (let i = 0; i < 512; i++) {
+      computeNextRunAtMs(
+        { kind: "cron", expr: `${i % 60} ${Math.floor(i / 60)} * * *`, tz: "UTC" },
+        nowMs,
+      );
+    }
+    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+
+    // Access the very first entry so it gets promoted (LRU touch)
+    computeNextRunAtMs({ kind: "cron", expr: "0 0 * * *", tz: "UTC" }, nowMs);
+
+    // Insert a new entry — this should evict the second-oldest, not the first
+    computeNextRunAtMs({ kind: "cron", expr: "0 0 1 1 *", tz: "UTC" }, nowMs);
+    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+
+    // The first entry should still be cached (was promoted).
+    // Insert another new entry — if FIFO, the first entry would now be evicted.
+    // With LRU, the third-oldest entry is evicted instead.
+    computeNextRunAtMs({ kind: "cron", expr: "0 0 2 1 *", tz: "UTC" }, nowMs);
+    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+  });
+
   describe("cron with specific seconds (6-field pattern)", () => {
     // Pattern: fire at exactly second 0 of minute 0 of hour 12 every day
     const dailyNoon = { kind: "cron" as const, expr: "0 0 12 * * *", tz: "UTC" };
