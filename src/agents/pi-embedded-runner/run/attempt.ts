@@ -1380,6 +1380,32 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Hook context shared across hook invocations for this run.
+      const hookCtx: import("../../../plugins/hooks.js").PluginHookAgentContext = {
+        agentId: sessionAgentId,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+      };
+
+      // Mutable ref so the wrapper always reads the current iteration count.
+      const hookIterationRef = { current: 0 };
+
+      // Wrap streamFn for before_llm_call and after_llm_call hooks — must be
+      // the outermost wrapper so it sees the final context after all other
+      // transforms (before_llm_call) and the complete response (after_llm_call).
+      if (hookRunner?.hasHooks("before_llm_call") || hookRunner?.hasHooks("after_llm_call")) {
+        const { wrapStreamFnWithHooks } = await import("./hook-stream-wrapper.js");
+        activeSession.agent.streamFn = wrapStreamFnWithHooks(activeSession.agent.streamFn, {
+          hookRunner,
+          agentCtx: hookCtx,
+          iterationRef: hookIterationRef,
+          modelId: params.modelId,
+          sessionId: params.sessionId,
+        });
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -1502,6 +1528,23 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      // Track LLM call iteration and clear after_llm_call gate at turn boundaries.
+      // Subscribes to turn_start to:
+      // 1. Increment the iteration ref for before_llm_call/after_llm_call event.iteration
+      // 2. Clear the after_llm_call gate to prevent stale decisions leaking between turns
+      const hookIterationUnsub =
+        hookRunner?.hasHooks("before_llm_call") || hookRunner?.hasHooks("after_llm_call")
+          ? activeSession.subscribe(async (event) => {
+              if (event.type === "turn_start") {
+                hookIterationRef.current++;
+                if (params.sessionId && hookRunner?.hasHooks("after_llm_call")) {
+                  const { clearAfterLlmCallGate } = await import("./after-llm-call-gate.js");
+                  clearAfterLlmCallGate(params.sessionId);
+                }
+              }
+            })
+          : undefined;
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1619,6 +1662,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      let llmCallBlocked = false;
       const prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
@@ -1777,8 +1821,18 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt));
           }
         } catch (err) {
-          promptError = err;
-          promptErrorSource = "prompt";
+          // BeforeLlmCallBlockError is a graceful hook-initiated block, not a failure.
+          // Suppress it — the run ends cleanly with no assistant response.
+          const { BeforeLlmCallBlockError } = await import("./hook-stream-wrapper.js");
+          if (err instanceof BeforeLlmCallBlockError) {
+            log.info(`LLM call blocked by before_llm_call hook: ${err.message}`);
+            // Mark as blocked so payload builder doesn't fall back to lastAssistant
+            // from session history (which would replay a stale response).
+            llmCallBlocked = true;
+          } else {
+            promptError = err;
+            promptErrorSource = "prompt";
+          }
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
@@ -1972,23 +2026,38 @@ export async function runEmbeddedAttempt(
           );
         }
         try {
+          hookIterationUnsub?.();
+        } catch (err) {
+          log.error(
+            `CRITICAL: hookIterationUnsub failed, possible resource leak: runId=${params.runId} ${String(err)}`,
+          );
+        }
+        try {
           unsubscribe();
         } catch (err) {
-          // unsubscribe() should never throw; if it does, it indicates a serious bug.
-          // Log at error level to ensure visibility, but don't rethrow in finally block
-          // as it would mask any exception from the try block above.
           log.error(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
+        }
+        // Clean up after_llm_call gate to prevent module-level Map from growing
+        // unbounded across sessions. Turn-level clearing happens at turn_start,
+        // but session-level clearing must happen here on run end.
+        {
+          const { clearAfterLlmCallGate } = await import("./after-llm-call-gate.js");
+          clearAfterLlmCallGate(params.sessionId);
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
-      const lastAssistant = messagesSnapshot
-        .slice()
-        .toReversed()
-        .find((m) => m.role === "assistant");
+      // When the LLM call was blocked by before_llm_call hook, suppress
+      // lastAssistant to prevent payloads.ts from replaying a stale response.
+      const lastAssistant = llmCallBlocked
+        ? undefined
+        : messagesSnapshot
+            .slice()
+            .toReversed()
+            .find((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(
