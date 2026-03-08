@@ -592,6 +592,25 @@ describe("/acp command", () => {
     );
   });
 
+  it("forbids /acp spawn from sandboxed requester sessions", async () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        defaults: {
+          sandbox: { mode: "all" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
+
+    expect(result?.reply?.text).toContain("Sandboxed sessions cannot spawn ACP sessions");
+    expect(hoisted.requireAcpRuntimeBackendMock).not.toHaveBeenCalled();
+    expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("cancels the ACP session bound to the current thread", async () => {
     mockBoundThreadSession({ state: "running" });
     const result = await runThreadAcpCommand("/acp cancel", baseCfg);
