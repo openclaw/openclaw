@@ -176,15 +176,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       streamText = `${streamText}${nextText}`;
     } else {
       // Snapshot mode: detect new generation block boundaries.
-      // When an agent makes a tool call, the cumulative partial resets.
-      // A significantly shorter snapshot that isn't a substring of the
-      // current text signals the start of a new block.
+      //
+      // LLM streaming sends cumulative text within each "generation block".
+      // When an agent makes a tool call, the cumulative counter resets and
+      // the next partial starts from a short string again.  Without this
+      // detection, `mergeStreamingText` would append the new block's short
+      // partial to the full previous text, duplicating content.
+      //
+      // Heuristic: a new block is signalled when ALL of the following hold:
+      //   1. We have seen at least one prior partial (lastCumulativeLen > 0)
+      //   2. The prior block was non-trivial (lastCumulativeLen >= 20 chars)
+      //      — avoids false positives for naturally short first blocks
+      //   3. The incoming text is <50% the length of the last cumulative
+      //      — a genuine continuation would be ≥ the previous length
+      //   4. The incoming text is not a substring of the current block
+      //      — rules out legitimate short snapshots (e.g. partial overlap)
+      //
+      // The 50% threshold was chosen empirically: real cross-block resets
+      // typically drop from hundreds of chars to <10.  A continuation that
+      // happens to be shorter (e.g. model produces a short line) will still
+      // pass the substring check in condition 4.
       const currentBlock = blockBaseText ? streamText.slice(blockBaseText.length) : streamText;
-      if (
-        lastCumulativeLen > 0 &&
+      const isNewBlock =
+        lastCumulativeLen >= 20 &&
         nextText.length < lastCumulativeLen * 0.5 &&
-        !currentBlock.includes(nextText)
-      ) {
+        !currentBlock.includes(nextText);
+      if (isNewBlock) {
         // New block detected — preserve previous content as base.
         blockBaseText = streamText;
         streamText = blockBaseText + nextText;
