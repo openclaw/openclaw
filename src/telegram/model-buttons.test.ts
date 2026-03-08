@@ -17,6 +17,7 @@ describe("parseModelCallbackData", () => {
       ["mdl_prov", { type: "providers" }],
       ["mdl_back", { type: "back" }],
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
+      ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
@@ -139,6 +140,11 @@ describe("buildProviderKeyboard", () => {
         name: "single provider",
         input: [{ id: "anthropic", count: 5 }],
         expected: [[{ text: "anthropic (5)", callback_data: "mdl_list_anthropic_1" }]],
+      },
+      {
+        name: "provider ids can contain dots",
+        input: [{ id: "hf.co", count: 2 }],
+        expected: [[{ text: "hf.co (2)", callback_data: "mdl_list_hf.co_1" }]],
       },
       {
         name: "exactly one full row",
