@@ -682,7 +682,6 @@ function broadcastChatFinal(params: {
     message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
   };
   params.context.broadcast("chat", payload);
-  params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
 
@@ -701,7 +700,6 @@ function broadcastChatError(params: {
     errorMessage: params.errorMessage,
   };
   params.context.broadcast("chat", payload);
-  params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
 
@@ -1240,7 +1238,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       ),
     };
     context.broadcast("chat", chatPayload);
-    context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
   },

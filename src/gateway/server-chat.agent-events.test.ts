@@ -170,7 +170,7 @@ describe("agent event handler", () => {
     };
     expect(payload.state).toBe("delta");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -185,7 +185,7 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -216,7 +216,7 @@ describe("agent event handler", () => {
 
     const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(payload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -239,7 +239,7 @@ describe("agent event handler", () => {
 
     const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(payload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -262,7 +262,7 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.message?.content?.[0]?.text).toBe("No");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy?.mockRestore();
   });
 
@@ -306,7 +306,7 @@ describe("agent event handler", () => {
     expect(secondPayload.state).toBe("delta");
     expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
     expect(thirdPayload.state).toBe("final");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -352,7 +352,7 @@ describe("agent event handler", () => {
     expect(secondPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
     expect(finalPayload.state).toBe("final");
     expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -398,7 +398,7 @@ describe("agent event handler", () => {
     expect(flushPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
     expect(finalPayload.state).toBe("final");
     expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -437,7 +437,7 @@ describe("agent event handler", () => {
       "delta",
       "final",
     ]);
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
     nowSpy.mockRestore();
   });
 
@@ -587,7 +587,7 @@ describe("agent event handler", () => {
     expect(payload.data?.activeProvider).toBe("deepinfra");
 
     const nodeCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-    expect(nodeCalls).toHaveLength(1);
+    expect(nodeCalls).toHaveLength(0);
   });
 
   it("remaps chat-linked lifecycle runId to client runId", () => {
@@ -607,9 +607,7 @@ describe("agent event handler", () => {
     expect(payload.data?.phase).toBe("fallback");
 
     const nodeCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-    expect(nodeCalls).toHaveLength(1);
-    const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
-    expect(nodePayload.runId).toBe("run-fallback-client");
+    expect(nodeCalls).toHaveLength(0);
   });
 
   it("suppresses chat and node session events for non-control-UI-visible runs", () => {
@@ -715,7 +713,7 @@ describe("agent event handler", () => {
 
     const finalPayload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(finalPayload.message).toBeUndefined();
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
   });
 
   it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {

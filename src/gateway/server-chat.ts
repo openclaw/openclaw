@@ -387,7 +387,6 @@ export function createAgentEventHandler({
       },
     };
     broadcast("chat", payload, { dropIfSlow: true });
-    nodeSendToSession(sessionKey, "chat", payload);
   };
 
   const emitChatFinal = (
@@ -439,7 +438,6 @@ export function createAgentEventHandler({
           },
         };
         broadcast("chat", flushPayload, { dropIfSlow: true });
-        nodeSendToSession(sessionKey, "chat", flushPayload);
       }
     }
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
@@ -462,7 +460,6 @@ export function createAgentEventHandler({
             : undefined,
       };
       broadcast("chat", payload);
-      nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
     const payload = {
@@ -473,7 +470,6 @@ export function createAgentEventHandler({
       errorMessage: error ? formatForLog(error) : undefined,
     };
     broadcast("chat", payload);
-    nodeSendToSession(sessionKey, "chat", payload);
   };
 
   const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
@@ -560,8 +556,9 @@ export function createAgentEventHandler({
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
-      if (!isToolEvent || toolVerbose !== "off") {
-        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+      // Other agent events (e.g. assistant/lifecycle) were already sent via broadcast above.
+      if (isToolEvent && toolVerbose !== "off") {
+        nodeSendToSession(sessionKey, "agent", toolPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);

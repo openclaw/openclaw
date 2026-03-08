@@ -52,14 +52,12 @@ export function startGatewayMaintenanceTimers(params: {
         health: params.getHealthVersion(),
       },
     });
-    params.nodeSendToAllSubscribed("health", snap);
   });
 
   // periodic keepalive
   const tickInterval = setInterval(() => {
     const payload = { ts: Date.now() };
     params.broadcast("tick", payload, { dropIfSlow: true });
-    params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
 
   // periodic health refresh to keep cached snapshot warm

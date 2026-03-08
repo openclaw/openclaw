@@ -67,7 +67,6 @@ function broadcastChatAborted(
       : undefined,
   };
   ops.broadcast("chat", payload);
-  ops.nodeSendToSession(sessionKey, "chat", payload);
 }
 
 export function abortChatRunById(
