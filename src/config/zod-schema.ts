@@ -595,6 +595,7 @@ export const OpenClawSchema = z
         outputFormat: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
         interruptOnSpeech: z.boolean().optional(),
+        silenceTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
