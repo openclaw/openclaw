@@ -360,6 +360,7 @@ export function createOpenClawCodingTools(options?: {
           workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
                 containerWorkdir: sandbox.containerWorkdir,
+                agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
               })
             : sandboxed,
         ];
@@ -422,6 +423,7 @@ export function createOpenClawCodingTools(options?: {
           containerName: sandbox.containerName,
           workspaceDir: sandbox.workspaceDir,
           containerWorkdir: sandbox.containerWorkdir,
+                agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
           env: sandbox.docker.env,
         }
       : undefined,
@@ -452,6 +454,7 @@ export function createOpenClawCodingTools(options?: {
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
+                agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
                   },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
@@ -461,6 +464,7 @@ export function createOpenClawCodingTools(options?: {
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
+                agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
                   },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),

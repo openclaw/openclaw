@@ -358,16 +358,11 @@ function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
+  agentWorkspaceMount?: string; // For workspaceAccess: "ro" mode (default: "/agent")
 }): string {
   const containerWorkdir = params.containerWorkdir?.trim();
-  if (!containerWorkdir) {
-    return params.filePath;
-  }
-  const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!normalizedWorkdir.startsWith("/")) {
-    return params.filePath;
-  }
-  if (!normalizedWorkdir) {
+  const agentWorkspaceMount = params.agentWorkspaceMount?.trim() ?? "/agent";
+  if (!containerWorkdir && !agentWorkspaceMount) {
     return params.filePath;
   }
 
@@ -392,18 +387,44 @@ function mapContainerPathToWorkspaceRoot(params: {
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
-  if (normalizedCandidate === normalizedWorkdir) {
-    return path.resolve(params.root);
+
+  // Try containerWorkdir first (for workspaceAccess: "rw" or "none" with docker.workdir)
+  if (containerWorkdir) {
+    const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (normalizedWorkdir.startsWith("/")) {
+      if (normalizedCandidate === normalizedWorkdir) {
+        return path.resolve(params.root);
+      }
+      const prefix = `${normalizedWorkdir}/`;
+      if (normalizedCandidate.startsWith(prefix)) {
+        const relative = normalizedCandidate.slice(prefix.length);
+        if (!relative) {
+          return path.resolve(params.root);
+        }
+        return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+      }
+    }
   }
-  const prefix = `${normalizedWorkdir}/`;
-  if (!normalizedCandidate.startsWith(prefix)) {
-    return candidate;
+
+  // Try agent workspace mount (for workspaceAccess: "ro" mode)
+  if (agentWorkspaceMount) {
+    const normalizedAgentMount = agentWorkspaceMount.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (normalizedAgentMount.startsWith("/")) {
+      if (normalizedCandidate === normalizedAgentMount) {
+        return path.resolve(params.root);
+      }
+      const prefix = `${normalizedAgentMount}/`;
+      if (normalizedCandidate.startsWith(prefix)) {
+        const relative = normalizedCandidate.slice(prefix.length);
+        if (!relative) {
+          return path.resolve(params.root);
+        }
+        return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+      }
+    }
   }
-  const relative = normalizedCandidate.slice(prefix.length);
-  if (!relative) {
-    return path.resolve(params.root);
-  }
-  return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+
+  return candidate;
 }
 
 export function wrapToolWorkspaceRootGuardWithOptions(
