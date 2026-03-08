@@ -581,4 +581,52 @@ describe("Feishu inbound debounce regressions", () => {
     expect(recordSpy).toHaveBeenCalledWith("default:om_old");
     expect(recordSpy).not.toHaveBeenCalledWith("default:om_new");
   });
+
+  it("does not debounce group @Bot /help command message", async () => {
+    vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockResolvedValue(false);
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage(
+      createTextEvent({
+        messageId: "om_cmd",
+        text: "@_user_1 /help",
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "Bot" }],
+      }),
+    );
+    // Drain the fire-and-forget microtask chain (enqueue → onFlush → dispatchFeishuMessage
+    // → chat queue → handleFeishuMessage).  Multiple turns are needed because each async
+    // hop re-schedules as a microtask.
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    // Command should be dispatched immediately without waiting for the debounce window.
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still debounces group @Bot conversational message", async () => {
+    vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockResolvedValue(false);
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage(
+      createTextEvent({
+        messageId: "om_chat",
+        text: "@_user_1 hello",
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "Bot" }],
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Conversational message should be buffered; not dispatched yet.
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    // After debounce window, dispatch should have occurred.
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+  });
 });

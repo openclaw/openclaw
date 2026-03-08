@@ -320,7 +320,10 @@ function registerEventHandlers(
       if (!text) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(text, cfg);
+      // Strip <at> mention tags before command detection so group messages like
+      // "@Bot /help" are not incorrectly buffered by the debouncer.
+      const stripped = text.replace(/<at user_id="[^"]*">[^<]*<\/at>/g, "").trim();
+      return !core.channel.text.hasControlCommand(stripped, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
