@@ -8,10 +8,10 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { createCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from "./calendar.js";
 import { searchContactsOrSync } from "./contacts.js";
 import { listGroupsOrSync, searchGroupsOrSync } from "./groups.js";
 import { sendTextMessage, sendFileMessage, sendMentionAll } from "./proactive-send.js";
-import { createCalendarEvent } from "./calendar.js";
 
 function json(data: unknown) {
   return {
@@ -25,43 +25,71 @@ function json(data: unknown) {
 // ---------------------------------------------------------------------------
 
 const ContactsSchema = Type.Object({
-  action: Type.Unsafe<"search">(
-    { type: "string", enum: ["search"], description: "Action: search" },
-  ),
+  action: Type.Unsafe<"search">({
+    type: "string",
+    enum: ["search"],
+    description: "Action: search",
+  }),
   keyword: Type.String({ description: "Name, English name, or email to search for" }),
 });
 type ContactsParams = Static<typeof ContactsSchema>;
 
 const GroupsSchema = Type.Object({
-  action: Type.Unsafe<"list" | "search">(
-    { type: "string", enum: ["list", "search"], description: "Action: list | search" },
+  action: Type.Unsafe<"list" | "search">({
+    type: "string",
+    enum: ["list", "search"],
+    description: "Action: list | search",
+  }),
+  keyword: Type.Optional(
+    Type.String({ description: "Group name keyword to search (required for search action)" }),
   ),
-  keyword: Type.Optional(Type.String({ description: "Group name keyword to search (required for search action)" })),
 });
 type GroupsParams = Static<typeof GroupsSchema>;
 
 const SendSchema = Type.Object({
-  action: Type.Unsafe<"text" | "file" | "mention_all">(
-    { type: "string", enum: ["text", "file", "mention_all"], description: "Send action: text | file | mention_all" },
-  ),
+  action: Type.Unsafe<"text" | "file" | "mention_all">({
+    type: "string",
+    enum: ["text", "file", "mention_all"],
+    description: "Send action: text | file | mention_all",
+  }),
   receive_id: Type.String({ description: "Recipient ID (open_id for user, chat_id for group)" }),
-  receive_id_type: Type.Unsafe<"open_id" | "chat_id">(
-    { type: "string", enum: ["open_id", "chat_id"], description: "ID type: open_id (user) | chat_id (group)" },
+  receive_id_type: Type.Unsafe<"open_id" | "chat_id">({
+    type: "string",
+    enum: ["open_id", "chat_id"],
+    description: "ID type: open_id (user) | chat_id (group)",
+  }),
+  text: Type.Optional(
+    Type.String({ description: "Message text (required for text and mention_all actions)" }),
   ),
-  text: Type.Optional(Type.String({ description: "Message text (required for text and mention_all actions)" })),
-  file_path: Type.Optional(Type.String({ description: "Local file path to send (required for file action)" })),
+  file_path: Type.Optional(
+    Type.String({ description: "Local file path to send (required for file action)" }),
+  ),
 });
 type SendParams = Static<typeof SendSchema>;
 
 const CalendarSchema = Type.Object({
-  action: Type.Unsafe<"create">(
-    { type: "string", enum: ["create"], description: "Action: create" },
+  action: Type.Unsafe<"create" | "update" | "delete">({
+    type: "string",
+    enum: ["create", "update", "delete"],
+    description: "Action: create | update | delete",
+  }),
+  event_id: Type.Optional(
+    Type.String({ description: "Target event ID (required for update and delete actions)" }),
   ),
-  summary: Type.String({ description: "Event title" }),
-  start_timestamp: Type.String({ description: "Start time as Unix timestamp in seconds (e.g. '1741402800')" }),
-  end_timestamp: Type.String({ description: "End time as Unix timestamp in seconds" }),
+  summary: Type.Optional(
+    Type.String({ description: "Event title (required for create, optional for update)" }),
+  ),
+  start_timestamp: Type.Optional(
+    Type.String({ description: "Start time as Unix timestamp in seconds (required for create)" }),
+  ),
+  end_timestamp: Type.Optional(
+    Type.String({ description: "End time as Unix timestamp in seconds (required for create)" }),
+  ),
   description: Type.Optional(Type.String({ description: "Event description" })),
-  attendee_open_ids: Type.Optional(Type.Array(Type.String(), { description: "List of attendee open_ids to invite" })),
+  location: Type.Optional(Type.String({ description: "Event location name" })),
+  attendee_open_ids: Type.Optional(
+    Type.Array(Type.String(), { description: "List of attendee open_ids to invite" }),
+  ),
 });
 type CalendarParams = Static<typeof CalendarSchema>;
 
@@ -219,26 +247,67 @@ export function registerFeishuOpsTools(api: OpenClawPluginApi) {
       name: "feishu_calendar",
       label: "Feishu Calendar",
       description:
-        "Create Feishu calendar events and invite attendees. " +
+        "Create, update, or delete Feishu calendar events. " +
         "Use feishu_contacts first to resolve attendee names to open_ids. " +
-        "Timestamps are Unix seconds as strings.",
+        "For create: requires summary, start_timestamp, and end_timestamp. Timestamps are Unix seconds as strings. " +
+        "For update or delete: requires event_id.",
       parameters: CalendarSchema,
       async execute(_toolCallId, params) {
         const p = params as CalendarParams;
         try {
-          return json(
-            await createCalendarEvent({
-              cfg: api.config!,
-              event: {
-                summary: p.summary,
-                startTimestamp: p.start_timestamp,
-                endTimestamp: p.end_timestamp,
-                description: p.description,
-                attendeeOpenIds: p.attendee_open_ids,
-              },
-              log: (msg) => api.logger.info?.(msg),
-            }),
-          );
+          if (p.action === "create") {
+            if (!p.summary || !p.start_timestamp || !p.end_timestamp) {
+              return json({
+                error: "summary, start_timestamp, and end_timestamp are required for create action",
+              });
+            }
+            return json(
+              await createCalendarEvent({
+                cfg: api.config!,
+                event: {
+                  summary: p.summary,
+                  startTimestamp: p.start_timestamp,
+                  endTimestamp: p.end_timestamp,
+                  description: p.description,
+                  location: p.location,
+                  attendeeOpenIds: p.attendee_open_ids,
+                },
+                log: (msg) => api.logger.info?.(msg),
+              }),
+            );
+          } else if (p.action === "update") {
+            if (!p.event_id) {
+              return json({ error: "event_id is required for update action" });
+            }
+            return json(
+              await updateCalendarEvent({
+                cfg: api.config!,
+                eventId: p.event_id,
+                event: {
+                  summary: p.summary,
+                  startTimestamp: p.start_timestamp,
+                  endTimestamp: p.end_timestamp,
+                  description: p.description,
+                  location: p.location,
+                  attendeeOpenIds: p.attendee_open_ids,
+                },
+                log: (msg) => api.logger.info?.(msg),
+              }),
+            );
+          } else if (p.action === "delete") {
+            if (!p.event_id) {
+              return json({ error: "event_id is required for delete action" });
+            }
+            return json(
+              await deleteCalendarEvent({
+                cfg: api.config!,
+                eventId: p.event_id,
+                log: (msg) => api.logger.info?.(msg),
+              }),
+            );
+          } else {
+            return json({ error: `Unknown calendar action: ${String(p.action)}` });
+          }
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) });
         }
