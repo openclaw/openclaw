@@ -11,6 +11,7 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
@@ -186,6 +187,14 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+  });
+
+  // Apply media understanding (audio transcription, image description, etc.)
+  // before resolving the prompt text. Without this, ACP agents receive raw
+  // <media:document> tags instead of transcribed/described content.
+  await applyMediaUnderstanding({
+    ctx: params.ctx,
+    cfg: params.cfg,
   });
 
   const promptText = resolveAcpPromptText(params.ctx);
