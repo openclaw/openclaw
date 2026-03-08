@@ -280,7 +280,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   }
 
   companion object {
-    private const val recentPackagesPref = "notifications.recentPackages"
+    private const val recentPackagesPref = "notifications.forwarding.recentPackages"
+    private const val legacyRecentPackagesPref = "notifications.recentPackages"
     private const val recentPackagesLimit = 64
     @Volatile private var activeService: DeviceNotificationListenerService? = null
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
@@ -293,8 +294,23 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       nodeEventSink = sink
     }
 
+    private fun recentPackagesPrefs(context: Context) =
+      context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+
+    private fun migrateLegacyRecentPackagesIfNeeded(context: Context) {
+      val prefs = recentPackagesPrefs(context)
+      val hasNew = prefs.contains(recentPackagesPref)
+      val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
+      if (!hasNew && legacy.isNotEmpty()) {
+        prefs.edit().putString(recentPackagesPref, legacy).remove(legacyRecentPackagesPref).apply()
+      } else if (hasNew && prefs.contains(legacyRecentPackagesPref)) {
+        prefs.edit().remove(legacyRecentPackagesPref).apply()
+      }
+    }
+
     fun recentPackages(context: Context): List<String> {
-      val prefs = context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+      migrateLegacyRecentPackagesIfNeeded(context)
+      val prefs = recentPackagesPrefs(context)
       val stored = prefs.getString(recentPackagesPref, null).orEmpty()
       return stored
         .split(',')
@@ -345,7 +361,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       val service = activeService ?: return
       val normalized = packageName?.trim().orEmpty()
       if (normalized.isEmpty() || normalized == service.packageName) return
-      val prefs = service.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+      migrateLegacyRecentPackagesIfNeeded(service.applicationContext)
+      val prefs = recentPackagesPrefs(service.applicationContext)
       val existing = prefs.getString(recentPackagesPref, null).orEmpty()
         .split(',')
         .map { it.trim() }

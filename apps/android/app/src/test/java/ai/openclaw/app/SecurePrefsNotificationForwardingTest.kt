@@ -4,6 +4,7 @@ import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -64,4 +65,42 @@ class SecurePrefsNotificationForwardingTest {
     assertEquals("22:30", prefs.notificationForwardingQuietStart.value)
     assertEquals("06:45", prefs.notificationForwardingQuietEnd.value)
   }
+
+
+  @Test
+  fun getNotificationForwardingPolicy_readsLatestQuietHoursImmediately() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+
+    val prefs = SecurePrefs(context)
+    assertTrue(
+      prefs.setNotificationForwardingQuietHours(
+        enabled = true,
+        start = "21:15",
+        end = "06:10",
+      ),
+    )
+
+    val policy = prefs.getNotificationForwardingPolicy(appPackageName = "ai.openclaw.app")
+
+    assertTrue(policy.quietHoursEnabled)
+    assertEquals("21:15", policy.quietStart)
+    assertEquals("06:10", policy.quietEnd)
+  }
+
+  @Test
+  fun notificationForwarding_defaultsDisabledForSaferPosture() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+
+    val prefs = SecurePrefs(context)
+    val policy = prefs.getNotificationForwardingPolicy(appPackageName = "ai.openclaw.app")
+
+    assertFalse(prefs.notificationForwardingEnabled.value)
+    assertFalse(policy.enabled)
+    assertEquals(NotificationPackageFilterMode.Blocklist, policy.mode)
+  }
+
 }

@@ -27,6 +27,7 @@ class SecurePrefs(
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
     private const val notificationsForwardingEnabledKey = "notifications.forwarding.enabled"
+    private const val defaultNotificationForwardingEnabled = false
     private const val notificationsForwardingModeKey = "notifications.forwarding.mode"
     private const val notificationsForwardingPackagesKey = "notifications.forwarding.packages"
     private const val notificationsForwardingQuietHoursEnabledKey =
@@ -107,7 +108,7 @@ class SecurePrefs(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
 
   private val _notificationForwardingEnabled =
-    MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, true))
+    MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
   val notificationForwardingEnabled: StateFlow<Boolean> = _notificationForwardingEnabled
 
   private val _notificationForwardingMode =
@@ -260,21 +261,25 @@ class SecurePrefs(
       }
 
     val maxEvents = plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20)
+    val quietStart =
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty())
+        ?: "22:00"
+    val quietEnd =
+      normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty())
+        ?: "07:00"
     val sessionKey =
       plainPrefs
         .getString(notificationsForwardingSessionKeyKey, "")
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
 
-    val quietStart = storedQuietStart
-    val quietEnd = storedQuietEnd
     val quietHoursEnabled =
       plainPrefs.getBoolean(notificationsForwardingQuietHoursEnabledKey, false) &&
         normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietStartKey, "22:00").orEmpty()) != null &&
         normalizeLocalHourMinute(plainPrefs.getString(notificationsForwardingQuietEndKey, "07:00").orEmpty()) != null
 
     return NotificationForwardingPolicy(
-      enabled = plainPrefs.getBoolean(notificationsForwardingEnabledKey, true),
+      enabled = plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled),
       mode = mode,
       packages = packages,
       quietHoursEnabled = quietHoursEnabled,
