@@ -17,9 +17,30 @@ vi.mock("../../plugins/install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpec(...args),
 }));
 
-const findBundledPluginSource = vi.fn();
+const resolveBundledPluginSources = vi.fn();
 vi.mock("../../plugins/bundled-sources.js", () => ({
-  findBundledPluginSource: (...args: unknown[]) => findBundledPluginSource(...args),
+  findBundledPluginSourceInMap: ({
+    bundled,
+    lookup,
+  }: {
+    bundled: ReadonlyMap<string, { pluginId: string; localPath: string; npmSpec?: string }>;
+    lookup: { kind: "pluginId" | "npmSpec"; value: string };
+  }) => {
+    const targetValue = lookup.value.trim();
+    if (!targetValue) {
+      return undefined;
+    }
+    if (lookup.kind === "pluginId") {
+      return bundled.get(targetValue);
+    }
+    for (const source of bundled.values()) {
+      if (source.npmSpec === targetValue) {
+        return source;
+      }
+    }
+    return undefined;
+  },
+  resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSources(...args),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -51,7 +72,7 @@ const baseEntry: ChannelPluginCatalogEntry = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  findBundledPluginSource.mockReturnValue(undefined);
+  resolveBundledPluginSources.mockReturnValue(new Map());
 });
 
 function mockRepoLocalPathExists() {
@@ -153,11 +174,18 @@ describe("ensureOnboardingPluginInstalled", () => {
     const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
     const cfg: OpenClawConfig = { update: { channel: "beta" } };
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    findBundledPluginSource.mockReturnValue({
-      pluginId: "zalo",
-      localPath: "/opt/openclaw/extensions/zalo",
-      npmSpec: "@openclaw/zalo",
-    });
+    resolveBundledPluginSources.mockReturnValue(
+      new Map([
+        [
+          "zalo",
+          {
+            pluginId: "zalo",
+            localPath: "/opt/openclaw/extensions/zalo",
+            npmSpec: "@openclaw/zalo",
+          },
+        ],
+      ]),
+    );
 
     await ensureOnboardingPluginInstalled({
       cfg,

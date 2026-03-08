@@ -462,6 +462,23 @@ export async function syncPluginsForUpdateChannel(params: {
       // Keep explicit bundled installs on release channels. Replacing them with
       // npm installs can reintroduce duplicate-id shadowing and packaging drift.
       loadHelpers.addPath(bundledInfo.localPath);
+      const alreadyBundled =
+        record.source === "path" &&
+        pathsEqual(record.sourcePath, bundledInfo.localPath) &&
+        pathsEqual(record.installPath, bundledInfo.localPath);
+      if (alreadyBundled) {
+        continue;
+      }
+
+      next = recordPluginInstall(next, {
+        pluginId,
+        source: "path",
+        sourcePath: bundledInfo.localPath,
+        installPath: bundledInfo.localPath,
+        spec: record.spec ?? bundledInfo.npmSpec,
+        version: record.version,
+      });
+      changed = true;
     }
   }
 

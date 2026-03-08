@@ -5,7 +5,10 @@ import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.j
 import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { findBundledPluginSource } from "../../plugins/bundled-sources.js";
+import {
+  findBundledPluginSourceInMap,
+  resolveBundledPluginSources,
+} from "../../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
@@ -142,11 +145,13 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
   const allowLocal = hasGitWorkspace(workspaceDir);
+  const bundledSources = resolveBundledPluginSources({ workspaceDir });
   const bundledLocalPath =
     resolveBundledInstallPlanForCatalogEntry({
       pluginId: entry.id,
       npmSpec: entry.install.npmSpec,
-      findBundledSource: (lookup) => findBundledPluginSource({ lookup, workspaceDir }),
+      findBundledSource: (lookup) =>
+        findBundledPluginSourceInMap({ bundled: bundledSources, lookup }),
     })?.bundledSource.localPath ?? null;
   const localPath = bundledLocalPath ?? resolveLocalPath(entry, workspaceDir, allowLocal);
   const defaultChoice = resolveInstallDefaultChoice({
