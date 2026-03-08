@@ -449,6 +449,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`).
     `agentId` is topic-only and does not inherit from group defaults.
 
+    You can also set `channels.telegram.groups.<chatId>.topics."*"` as the default config for every topic/thread in that Telegram group. Exact topic IDs still win over `"*"`.
+
     **Per-topic agent routing**: Each topic can route to a different agent by setting `agentId` in the topic config. This gives each topic its own isolated workspace, memory, and session. Example:
 
     ```json5
@@ -857,6 +859,7 @@ Primary reference:
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
   - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
   - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
+  - `channels.telegram.groups.<id>.topics."*"`: default per-topic/thread settings for that group; exact topic IDs override it.
   - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
   - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
   - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (group fields + topic-only `agentId`).

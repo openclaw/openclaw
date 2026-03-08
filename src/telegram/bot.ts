@@ -22,6 +22,7 @@ import {
   resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
@@ -311,12 +312,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const direct = telegramCfg.direct;
     const chatIdStr = String(chatId);
     const isDm = !chatIdStr.startsWith("-");
+    const resolveTopicConfig = (
+      scopedConfig: { topics?: Record<string, TelegramTopicConfig> } | undefined,
+      threadId?: number,
+    ) =>
+      threadId != null
+        ? (scopedConfig?.topics?.[String(threadId)] ?? scopedConfig?.topics?.["*"])
+        : undefined;
 
     if (isDm) {
       const directConfig = direct?.[chatIdStr] ?? direct?.["*"];
       if (directConfig) {
-        const topicConfig =
-          messageThreadId != null ? directConfig.topics?.[String(messageThreadId)] : undefined;
+        const topicConfig = resolveTopicConfig(directConfig, messageThreadId);
         return { groupConfig: directConfig, topicConfig };
       }
       // DMs without direct config: don't fall through to groups lookup
@@ -327,8 +334,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       return { groupConfig: undefined, topicConfig: undefined };
     }
     const groupConfig = groups[chatIdStr] ?? groups["*"];
-    const topicConfig =
-      messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
+    const topicConfig = resolveTopicConfig(groupConfig, messageThreadId);
     return { groupConfig, topicConfig };
   };
 

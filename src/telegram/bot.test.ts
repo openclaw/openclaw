@@ -1049,6 +1049,142 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(0);
   });
 
+  it("uses topics.* as the default config for forum topics in a group", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+              allowFrom: ["999999999"],
+              topics: {
+                "*": { allowFrom: ["123456789"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_thread_id: 77,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers exact topic config over topics.* fallback", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-1001234567890": {
+              allowFrom: ["999999999"],
+              topics: {
+                "*": { allowFrom: ["123456789"] },
+                "77": { allowFrom: ["555555555"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_thread_id: 77,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(0);
+  });
+
+  it("uses topics.* agentId as the default route for unmatched forum topics", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "zu" }],
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+              topics: {
+                "*": { agentId: "zu" },
+              },
+            },
+          },
+        },
+      },
+      messages: { groupChat: { mentionPatterns: [] } },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_thread_id: 77,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toContain("agent:zu:");
+    expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toContain(
+      "telegram:group:-1001234567890:topic:77",
+    );
+  });
+
   it("allows group messages for per-group groupPolicy open override (global groupPolicy allowlist)", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -1243,6 +1379,7 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledWith(
       12345,
       "You are not authorized to use this command.",
+      {},
     );
   });
 
