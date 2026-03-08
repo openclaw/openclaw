@@ -109,14 +109,25 @@ async function rehydrateState() {
       setBadge(entry.tabId, 'on')
     }
     // Phase 2: validate asynchronously, remove dead tabs.
+    // Retry once — transient failures (tab busy, navigating) are common
+    // after MV3 service worker restarts and shouldn't permanently drop a tab.
     for (const entry of entries) {
-      try {
-        await chrome.tabs.get(entry.tabId)
-        await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
-          expression: '1',
-          returnByValue: true,
-        })
-      } catch {
+      let valid = false
+      for (let attempt = 0; attempt < 2 && !valid; attempt++) {
+        try {
+          await chrome.tabs.get(entry.tabId)
+          await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
+            expression: '1',
+            returnByValue: true,
+          })
+          valid = true
+        } catch {
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 1000))
+          }
+        }
+      }
+      if (!valid) {
         tabs.delete(entry.tabId)
         tabBySession.delete(entry.sessionId)
         setBadge(entry.tabId, 'off')
@@ -672,6 +683,11 @@ async function handleForwardCdpCommand(msg) {
     const toClose = target ? getTabByTargetId(target) : tabId
     if (!toClose) return { success: false }
     try {
+      const allTabs = await chrome.tabs.query({})
+      if (allTabs.length <= 1) {
+        console.warn('Refusing to close the last tab — this would kill the browser process')
+        return { success: false, error: 'Cannot close the last tab' }
+      }
       await chrome.tabs.remove(toClose)
     } catch {
       return { success: false }
