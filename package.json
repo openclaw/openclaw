@@ -378,7 +378,6 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
-    "strip-ansi": "^7.2.0",
     "tar": "7.5.10",
     "tslog": "^4.10.2",
     "undici": "^7.22.0",
@@ -436,6 +435,7 @@
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
+      "@tloncorp/api",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
@@ -443,6 +443,13 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "packageExtensions": {
+      "@mariozechner/pi-coding-agent": {
+        "dependencies": {
+          "strip-ansi": "^7.2.0"
+        }
+      }
+    }
   }
 }

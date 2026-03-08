@@ -668,7 +668,9 @@ export async function runEmbeddedPiAgent(
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
-          (unavailableReason === "rate_limit" || unavailableReason === "overloaded");
+          (unavailableReason === "rate_limit" ||
+            unavailableReason === "overloaded" ||
+            unavailableReason === "billing");
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
