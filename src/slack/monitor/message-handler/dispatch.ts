@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { resolveInboundLastRouteSessionKey } from "../../../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
@@ -105,16 +106,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         `slack: skip main-session last route for ${senderRecipient} (pinned owner ${pinnedMainDmOwner})`,
       );
     } else {
+      const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+        route,
+        sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey,
+      });
       await updateLastRoute({
         storePath,
-        sessionKey: route.mainSessionKey,
+        sessionKey: updateLastRouteSessionKey,
         deliveryContext: {
           channel: "slack",
           to: `user:${message.user}`,
           accountId: route.accountId,
           threadId: prepared.ctxPayload.MessageThreadId,
         },
-        ctx: prepared.ctxPayload,
+        ctx: updateLastRouteSessionKey === route.mainSessionKey ? prepared.ctxPayload : undefined,
       });
     }
   }

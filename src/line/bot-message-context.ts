@@ -8,7 +8,7 @@ import { recordInboundSession } from "../channels/session.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
@@ -321,18 +321,24 @@ async function finalizeLineInboundContext(params: {
         normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
       })
     : null;
+  const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route: params.route,
+    sessionKey: ctxPayload.SessionKey ?? params.route.sessionKey,
+  });
   await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? params.route.sessionKey,
     ctx: ctxPayload,
     updateLastRoute: !params.source.isGroup
       ? {
-          sessionKey: params.route.mainSessionKey,
+          sessionKey: updateLastRouteSessionKey,
           channel: "line",
           to: params.source.userId ?? params.source.peerId,
           accountId: params.route.accountId,
           mainDmOwnerPin:
-            pinnedMainDmOwner && params.source.userId
+            updateLastRouteSessionKey === params.route.mainSessionKey &&
+            pinnedMainDmOwner &&
+            params.source.userId
               ? {
                   ownerRecipient: pinnedMainDmOwner,
                   senderRecipient: params.source.userId,
