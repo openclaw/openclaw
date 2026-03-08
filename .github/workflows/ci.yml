@@ -297,6 +297,8 @@ jobs:
           python -m pip install pre-commit
 
       - name: Detect secrets
+        env:
+          PR_BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
 
@@ -315,9 +317,9 @@ jobs:
           if git rev-parse --verify "HEAD^2^{commit}" >/dev/null 2>&1; then
             DIFF_RANGE="HEAD^1..HEAD"
           else
-            BASE_REF="origin/${{ github.base_ref }}"
+            BASE_REF="origin/${PR_BASE_REF}"
             if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
-              git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+              git fetch --no-tags --depth=1 origin "${PR_BASE_REF}" || true
             fi
             if git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
               DIFF_RANGE="$BASE_REF..HEAD"
