@@ -487,6 +487,8 @@ describe("onboard (non-interactive): provider auth", () => {
       ).rejects.toThrow(
         'Auth choice "azure-openai-api-key" requires Azure base URL and model/deployment ID.',
       );
+      const store = ensureAuthProfileStore();
+      expect(store.profiles["azure-openai-responses:default"]).toBeUndefined();
     });
   });
 
