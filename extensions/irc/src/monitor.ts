@@ -31,7 +31,7 @@ export function resolveIrcInboundTarget(params: { target: string; senderNick: st
   return { isGroup: false, target: senderNick || rawTarget, rawTarget };
 }
 
-export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ stop: () => void }> {
+export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<void> {
   const core = getIrcRuntime();
   const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
   const account = resolveIrcAccount({
@@ -137,10 +137,5 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
 
-  return {
-    stop: () => {
-      client?.quit("shutdown");
-      client = null;
-    },
-  };
+  await client.closed;
 }
