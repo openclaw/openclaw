@@ -21,12 +21,12 @@
  *   ws://host:port/ws                  - Real-time task change notifications
  */
 
-import chokidar from "chokidar";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import chokidar from "chokidar";
 import { WebSocket, WebSocketServer } from "ws";
 
 // ============================================================================
@@ -1428,12 +1428,11 @@ function parseCsvQueryParam(url: URL, key: string): string[] {
 function parseCoordinationEventsFromRaw(raw: string): {
   lines: string[];
   events: EnrichedCoordinationEvent[];
+  pendingLineFragment: string;
 } {
-  const lines = raw
-    .trim()
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const rawLines = raw.split("\n");
+  const trailingLine = raw.endsWith("\n") || rawLines.length === 0 ? "" : (rawLines.pop() ?? "");
+  const lines = rawLines.map((line) => line.trim()).filter(Boolean);
 
   const events = lines
     .map((line) => {
@@ -1445,7 +1444,21 @@ function parseCoordinationEventsFromRaw(raw: string): {
     })
     .filter((event): event is EnrichedCoordinationEvent => !!event);
 
-  return { lines, events };
+  return { lines, events, pendingLineFragment: trailingLine };
+}
+
+function nextWorkSessionCacheExpiryMs(sessions: WorkSessionSummary[]): number {
+  let nextExpiryMs = Number.POSITIVE_INFINITY;
+
+  for (const session of sessions) {
+    if (session.status === "ARCHIVED") {
+      continue;
+    }
+
+    nextExpiryMs = Math.min(nextExpiryMs, session.lastTime + WORK_SESSION_ARCHIVE_WINDOW_MS + 1);
+  }
+
+  return nextExpiryMs;
 }
 
 function workSessionThreadKey(event: EnrichedCoordinationEvent, eventTs: number): string {
@@ -2031,8 +2044,12 @@ async function handleMongoWorkSessionSearch(
 
 class EventCache {
   private events: EnrichedCoordinationEvent[] = [];
-  private workSessionsCache: WorkSessionSummary[] | null = null;
+  private workSessionsCache: {
+    sessions: WorkSessionSummary[];
+    expiresAtMs: number;
+  } | null = null;
   private lastFileOffset = 0;
+  private pendingLineFragment = "";
   private eventLogPath: string;
   private overridesCache: WorkSessionCategoryOverrideMap = {};
   private overridesMtimeMs = 0;
@@ -2046,8 +2063,9 @@ class EventCache {
   async initialize(): Promise<void> {
     try {
       const raw = await fs.readFile(this.eventLogPath, "utf-8");
-      const { events } = parseCoordinationEventsFromRaw(raw);
+      const { events, pendingLineFragment } = parseCoordinationEventsFromRaw(raw);
       this.events = events;
+      this.pendingLineFragment = pendingLineFragment;
       const stat = await fs.stat(this.eventLogPath);
       this.lastFileOffset = stat.size;
       this.workSessionsCache = null;
@@ -2061,6 +2079,8 @@ class EventCache {
       console.error("[EventCache] Init failed, starting empty:", (err as Error).message);
       this.events = [];
       this.lastFileOffset = 0;
+      this.pendingLineFragment = "";
+      this.workSessionsCache = null;
     }
   }
 
@@ -2086,23 +2106,11 @@ class EventCache {
         const buffer = Buffer.alloc(newSize);
         await fd.read(buffer, 0, newSize, this.lastFileOffset);
         const newData = buffer.toString("utf-8");
-
-        const newLines = newData
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean);
-        const newEvents: EnrichedCoordinationEvent[] = [];
-
-        for (const line of newLines) {
-          try {
-            const enriched = enrichCoordinationEvent(JSON.parse(line));
-            if (enriched) {
-              newEvents.push(enriched);
-            }
-          } catch {
-            // skip malformed lines
-          }
-        }
+        const parsed = parseCoordinationEventsFromRaw(this.pendingLineFragment + newData);
+        const newEvents = parsed.events;
+        // Keep the trailing partial NDJSON fragment so a split append can be completed
+        // on the next chokidar event without advancing the parser into the middle of a line.
+        this.pendingLineFragment = parsed.pendingLineFragment;
 
         if (newEvents.length > 0) {
           this.events.push(...newEvents);
@@ -2128,7 +2136,10 @@ class EventCache {
   }
 
   async getWorkSessions(options: BuildWorkSessionsOptions = {}): Promise<WorkSessionSummary[]> {
-    await this.refreshOverrides();
+    const overridesChanged = await this.refreshOverrides();
+    if (overridesChanged) {
+      this.workSessionsCache = null;
+    }
 
     const hasFilters = options.roleFilters || options.eventTypeFilters;
     if (hasFilters) {
@@ -2138,31 +2149,40 @@ class EventCache {
       });
     }
 
-    if (!this.workSessionsCache) {
-      this.workSessionsCache = buildWorkSessionsFromEvents(this.events, {
+    const nowMs = options.nowMs ?? Date.now();
+    if (!this.workSessionsCache || nowMs >= this.workSessionsCache.expiresAtMs) {
+      const sessions = buildWorkSessionsFromEvents(this.events, {
+        ...options,
         categoryOverrides: this.overridesCache,
       });
+      this.workSessionsCache = {
+        sessions,
+        expiresAtMs: nextWorkSessionCacheExpiryMs(sessions),
+      };
     }
-    return this.workSessionsCache;
+    return this.workSessionsCache.sessions;
   }
 
   invalidateWorkSessions(): void {
     this.workSessionsCache = null;
   }
 
-  private async refreshOverrides(): Promise<void> {
+  private async refreshOverrides(): Promise<boolean> {
     try {
       const stat = await fs.stat(WORK_SESSION_CATEGORY_OVERRIDES_PATH);
       if (stat.mtimeMs !== this.overridesMtimeMs) {
         this.overridesCache = await readWorkSessionCategoryOverrides();
         this.overridesMtimeMs = stat.mtimeMs;
+        return true;
       }
     } catch {
       if (Object.keys(this.overridesCache).length > 0) {
         this.overridesCache = {};
         this.overridesMtimeMs = 0;
+        return true;
       }
     }
+    return false;
   }
 }
 
@@ -2421,6 +2441,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const typeFilters = parseCsvQueryParam(url, "type");
     const requestedTypes = normalizeEventTypeFilters(typeFilters);
     try {
+      // REST reads opportunistically catch up from disk so a missed chokidar event does not
+      // leave task-hub/task-monitor stuck on stale coordination data.
+      await eventCache.onFileChange();
       const allEvents = eventCache.getEvents();
       let events = [...allEvents];
 
@@ -2536,6 +2559,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const role = roleFilter ? eventRoleFromValue(roleFilter) : null;
     const typeFilters = parseCsvQueryParam(url, "type");
     try {
+      await eventCache.onFileChange();
       const sessions = await eventCache.getWorkSessions({
         roleFilters: role ? [role] : undefined,
         eventTypeFilters: typeFilters.length > 0 ? typeFilters : undefined,
@@ -2577,6 +2601,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const requestedStatuses = new Set(statusFilters);
 
     try {
+      await eventCache.onFileChange();
       const sessions = await eventCache.getWorkSessions({
         roleFilters: roleFilters.length > 0 ? roleFilters : undefined,
         eventTypeFilters: typeFilters,
@@ -2733,7 +2758,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 // WebSocket & File Watching
 // ============================================================================
 
-function setupWebSocket(server: http.Server): WebSocketServer {
+function setupWebSocket(server: http.Server): {
+  wss: WebSocketServer;
+  watcherReady: Promise<void>;
+} {
   const wss = new WebSocketServer({ server, path: "/ws" });
   const clients = new Set<WebSocket>();
 
@@ -2810,6 +2838,14 @@ function setupWebSocket(server: http.Server): WebSocketServer {
       /(^|[/\\])\../, // dotfiles
       /node_modules/,
     ],
+  });
+  const watcherReady = new Promise<void>((resolve) => {
+    watcher.once("ready", () => {
+      // Delay serving until chokidar finishes its initial scan; otherwise appends that happen
+      // immediately after startup can be missed before the watcher enters steady state.
+      console.log("[watch] Watching for task changes...");
+      resolve();
+    });
   });
 
   watcher.on("all", (event, filePath) => {
@@ -2962,11 +2998,9 @@ function setupWebSocket(server: http.Server): WebSocketServer {
     console.error("[watch] Error:", err.message);
   });
 
-  console.log("[watch] Watching for task changes...");
-
   startMilestonePolling(broadcast);
 
-  return wss;
+  return { wss, watcherReady };
 }
 
 function startMilestonePolling(broadcast: (msg: WsMessage) => void): NodeJS.Timeout {
@@ -3029,7 +3063,8 @@ async function main(): Promise<void> {
   }
 
   // Setup WebSocket
-  setupWebSocket(server);
+  const { watcherReady } = setupWebSocket(server);
+  await watcherReady;
 
   // Start server
   await new Promise<void>((resolve, reject) => {
