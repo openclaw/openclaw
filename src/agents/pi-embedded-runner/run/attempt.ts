@@ -11,6 +11,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { logModelApiRequest, logModelApiResponse } from "../../../infra/model-api-log.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -1699,6 +1700,11 @@ export async function runEmbeddedAttempt(
           );
         }
 
+        // Declared here (outer try scope) so it remains accessible in the inner
+        // try/finally block below — const declarations inside a try block are
+        // block-scoped and not visible in the sibling finally block.
+        let modelCallStartedAt = 0;
+
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
           // Called each run; only mutates already-answered user turns that still carry image blocks.
@@ -1776,6 +1782,59 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          logModelApiRequest({
+            runId: params.runId,
+            provider: params.provider,
+            model: params.modelId,
+            promptChars: effectivePrompt.length,
+            systemPromptChars: systemPromptText?.length ?? 0,
+            historyMessages: activeSession.messages.length,
+            historyChars: activeSession.messages.reduce((sum, m) => {
+              const msg = m as unknown as Record<string, unknown>;
+              const content = msg.content;
+              if (typeof content === "string") {
+                return sum + content.length;
+              }
+              if (Array.isArray(content)) {
+                return (
+                  sum +
+                  (content as unknown[]).reduce((s: number, block) => {
+                    if (typeof block === "string") {
+                      return s + block.length;
+                    }
+                    const b = block as Record<string, unknown>;
+                    // Count text content
+                    if (typeof b?.text === "string") {
+                      return s + b.text.length;
+                    }
+                    // Count tool-call arguments (may be string or object; serialized in model input)
+                    if (b?.arguments != null) {
+                      return (
+                        s +
+                        (typeof b.arguments === "string"
+                          ? b.arguments.length
+                          : JSON.stringify(b.arguments).length)
+                      );
+                    }
+                    if (b?.input != null) {
+                      return (
+                        s +
+                        (typeof b.input === "string"
+                          ? b.input.length
+                          : JSON.stringify(b.input).length)
+                      );
+                    }
+                    return s;
+                  }, 0)
+                );
+              }
+              return sum;
+            }, 0),
+            imagesCount: imageResult.images.length,
+          });
+          // Set modelCallStartedAt AFTER logModelApiRequest so that if logging throws,
+          // the response log in the finally block is skipped (no orphaned response line).
+          modelCallStartedAt = Date.now();
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
@@ -1785,6 +1844,26 @@ export async function runEmbeddedAttempt(
           promptError = err;
           promptErrorSource = "prompt";
         } finally {
+          // Only emit the response log if we actually reached the model API call.
+          // modelCallStartedAt remains 0 when an earlier step (e.g. image loading)
+          // throws before the call site — in that case there is no API response to log.
+          if (modelCallStartedAt > 0) {
+            const modelCallDurationMs = Date.now() - modelCallStartedAt;
+            const responseChars =
+              assistantTexts.reduce((sum, t) => sum + t.length, 0) +
+              toolMetas.reduce(
+                (sum, t) => sum + (t.toolName?.length ?? 0) + (t.meta?.length ?? 0),
+                0,
+              );
+            logModelApiResponse({
+              runId: params.runId,
+              provider: params.provider,
+              model: params.modelId,
+              durationMs: modelCallDurationMs,
+              responseChars,
+              error: promptError != null,
+            });
+          }
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
