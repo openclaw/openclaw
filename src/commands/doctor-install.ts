@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { SharpUnavailableError } from "../media/image-ops.js";
+import { ensureSharpLoaded, SharpUnavailableError } from "../media/image-ops.js";
 import { note } from "../terminal/note.js";
 
 export function noteSourceInstallIssues(root: string | null) {
@@ -51,12 +51,12 @@ export async function noteSharpAvailability(): Promise<void> {
     return;
   }
 
-  try {
-    await import("sharp");
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+  // Reuse the module-level cache from image-ops rather than doing a separate import('sharp').
+  const { available, error } = await ensureSharpLoaded();
+  if (!available) {
+    const detail = error instanceof Error ? error.message : String(error);
     // Use SharpUnavailableError just for its formatted message; don't throw.
-    const friendly = new SharpUnavailableError(err);
+    const friendly = new SharpUnavailableError(error);
     note(
       [
         `- ${friendly.message}`,
@@ -67,8 +67,8 @@ export async function noteSharpAvailability(): Promise<void> {
         "    • Rebuild: npm rebuild sharp",
         "    • Or install system vips: apt-get install libvips-dev",
         "",
-        "  Images already within size/dimension limits will still pass through.",
-        "  Resize/re-encode operations will fail with an actionable error.",
+        "  Images already within byte size limits will still pass through.",
+        "  Dimension verification and resize/re-encode operations will fail with an actionable error.",
       ].join("\n"),
       "Image backend",
     );

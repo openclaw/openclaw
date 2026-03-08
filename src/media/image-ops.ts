@@ -17,6 +17,8 @@ export class SharpUnavailableError extends Error {
       detail
         ? `Image processing backend (sharp) is unavailable: ${detail}. Reinstall with a compatible CPU or install libvips.`
         : "Image processing backend (sharp) is unavailable. Reinstall with a compatible CPU or install libvips.",
+      // Preserve the original error's stack trace so debugging is easier.
+      { cause },
     );
     this.name = "SharpUnavailableError";
   }
@@ -29,6 +31,15 @@ let sharpLoadError: unknown;
 /** Returns true only if sharp has been successfully loaded. */
 export function isSharpAvailable(): boolean {
   return sharpFactory != null;
+}
+
+/**
+ * Triggers the sharp load attempt (if not already done) and returns the result.
+ * Prefer this over a raw `import('sharp')` to share the module-level cache.
+ */
+export async function ensureSharpLoaded(): Promise<{ available: boolean; error: unknown }> {
+  const factory = await loadSharp();
+  return { available: factory != null, error: sharpLoadError };
 }
 
 export type ImageMetadata = {

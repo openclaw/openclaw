@@ -45,6 +45,29 @@ function isTextBlock(block: unknown): block is TextContentBlock {
   return rec.type === "text" && typeof rec.text === "string";
 }
 
+/**
+ * Reads PNG image dimensions from the IHDR chunk without any image library.
+ * PNG stores width+height at fixed offsets in the first 24 bytes.
+ * Returns null if the buffer is not a valid PNG or is too short.
+ */
+function readPngDimensionsFromHeader(buf: Buffer): { width: number; height: number } | null {
+  // PNG signature (8) + IHDR length (4) + "IHDR" (4) + width (4) + height (4) = 24 bytes minimum.
+  if (buf.length < 24) {
+    return null;
+  }
+  // Validate PNG magic bytes.
+  if (buf.toString("binary", 0, 8) !== "\x89PNG\r\n\x1a\n") {
+    return null;
+  }
+  // IHDR must be the first chunk type.
+  if (buf.toString("ascii", 12, 16) !== "IHDR") {
+    return null;
+  }
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
 function inferMimeTypeFromBase64(base64: string): string | undefined {
   const trimmed = base64.trim();
   if (!trimmed) {
@@ -183,15 +206,42 @@ async function resizeImageBase64IfNeeded(params: {
     };
   }
 
-  // When sharp is unavailable (getImageMetadata already attempted the load), pass through
-  // images that are already within the byte cap. We cannot verify dimensions, but the byte
-  // limit is safe. Images that actually need resizing will surface an actionable error below.
+  // When sharp is unavailable (getImageMetadata already attempted the load), attempt to
+  // pass through images that are within limits. For PNGs we can read dimensions directly
+  // from the IHDR header without any library. For other formats, only the byte cap is
+  // verifiable; an oversized dimension will cause a downstream API error.
   if (!overBytes && !hasDimensions && !isSharpAvailable()) {
-    log.info("Image passed through without optimization: sharp backend unavailable", {
-      label: params.label,
-      fileName: params.fileName,
-      sourceBytes: buf.byteLength,
-    });
+    // Try to read PNG dimensions without sharp via raw IHDR parsing.
+    const pngDims = params.mimeType === "image/png" ? readPngDimensionsFromHeader(buf) : null;
+    if (pngDims) {
+      if (pngDims.width > params.maxDimensionPx || pngDims.height > params.maxDimensionPx) {
+        // We know this image is over-dimension but sharp cannot resize it.
+        throw new Error(
+          `Image exceeds the ${params.maxDimensionPx}px dimension limit (${pngDims.width}x${pngDims.height}px) and cannot be resized: image processing backend (sharp) is unavailable. Reinstall with a compatible CPU or install libvips.`,
+        );
+      }
+      log.info(
+        "Image passed through without optimization: sharp backend unavailable, dimensions verified from PNG header",
+        {
+          label: params.label,
+          fileName: params.fileName,
+          sourceBytes: buf.byteLength,
+          pngWidth: pngDims.width,
+          pngHeight: pngDims.height,
+        },
+      );
+    } else {
+      // Non-PNG or truncated header — byte cap is the only verifiable constraint.
+      log.warn(
+        "Image passed through without optimization: sharp backend unavailable, dimensions unverified",
+        {
+          label: params.label,
+          fileName: params.fileName,
+          sourceBytes: buf.byteLength,
+          mimeType: params.mimeType,
+        },
+      );
+    }
     return { base64: params.base64, mimeType: params.mimeType, resized: false };
   }
 
