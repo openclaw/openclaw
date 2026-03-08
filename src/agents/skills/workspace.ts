@@ -867,7 +867,18 @@ export function buildWorkspaceSkillCommandSpecs(
         );
       }
 
-      return { kind: "tool", toolName, argMode: "raw" } as const;
+      const commandExec = (
+        entry.frontmatter?.["command-exec"] ??
+        entry.frontmatter?.["command_exec"] ??
+        ""
+      ).trim();
+
+      return {
+        kind: "tool",
+        toolName,
+        argMode: "raw",
+        ...(commandExec ? { commandExec } : {}),
+      } as const;
     })();
 
     specs.push({
