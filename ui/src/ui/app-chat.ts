@@ -192,6 +192,10 @@ export async function handleSendChat(
     return;
   }
 
+  // Set sending flag synchronously to prevent race conditions on rapid clicks/enters.
+  // The controller's finally block will reset this to false after the request completes.
+  host.chatSending = true;
+
   await sendChatMessageNow(host, message, {
     previousDraft: messageOverride == null ? previousDraft : undefined,
     restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
