@@ -94,6 +94,36 @@ describe("git commit resolution", () => {
     expect(resolveCommitHash({ cwd: repoA, env: {} })).toBe("0123456");
   });
 
+  it("caches deterministic null results per resolved search directory", async () => {
+    const temp = await makeTempDir("git-commit-null-cache");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "not-a-commit\n",
+    });
+
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const readFileSyncSpy = vi.fn(actualFs.readFileSync);
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      default: {
+        ...actualFs,
+        readFileSync: readFileSyncSpy,
+      },
+      readFileSync: readFileSyncSpy,
+    }));
+    vi.resetModules();
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
+    const firstCallReads = readFileSyncSpy.mock.calls.length;
+    expect(firstCallReads).toBeGreaterThan(0);
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
+    expect(readFileSyncSpy.mock.calls.length).toBe(firstCallReads);
+
+    vi.doUnmock("node:fs");
+  });
+
   it("formats env-provided commit strings consistently", async () => {
     const temp = await makeTempDir("git-commit-env");
     const { resolveCommitHash } = await import("./git-commit.js");
@@ -152,5 +182,21 @@ describe("git commit resolution", () => {
     const { resolveCommitHash } = await import("./git-commit.js");
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("7654321");
+  });
+
+  it("reads full HEAD refs before parsing long branch names", async () => {
+    const temp = await makeTempDir("git-commit-long-head");
+    const repoRoot = path.join(temp, "repo");
+    const longRefName = `refs/heads/${"segment/".repeat(40)}main`;
+    await makeFakeGitRepo(repoRoot, {
+      head: `ref: ${longRefName}\n`,
+      refs: {
+        [longRefName]: "0123456789abcdef0123456789abcdef01234567",
+      },
+    });
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("0123456");
   });
 });

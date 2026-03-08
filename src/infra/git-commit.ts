@@ -19,7 +19,7 @@ const formatCommit = (value?: string | null) => {
   return match[0].slice(0, 7).toLowerCase();
 };
 
-const cachedGitCommitBySearchDir = new Map<string, string>();
+const cachedGitCommitBySearchDir = new Map<string, string | null>();
 
 function isMissingPathError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -53,6 +53,11 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
   } finally {
     fs.closeSync(fd);
   }
+};
+
+const cacheGitCommit = (searchDir: string, commit: string | null) => {
+  cachedGitCommitBySearchDir.set(searchDir, commit);
+  return commit;
 };
 
 const resolveGitRefsBase = (headPath: string) => {
@@ -150,37 +155,28 @@ export const resolveCommitHash = (
   }
 
   const searchDir = resolveCommitSearchDir(options);
-  const cachedCommit = cachedGitCommitBySearchDir.get(searchDir);
-  if (cachedCommit) {
-    return cachedCommit;
+  if (cachedGitCommitBySearchDir.has(searchDir)) {
+    return cachedGitCommitBySearchDir.get(searchDir) ?? null;
   }
   try {
     const headPath = resolveGitHeadPath(searchDir);
     if (!headPath) {
-      return null;
+      return cacheGitCommit(searchDir, null);
     }
-    const head = safeReadFilePrefix(headPath).trim();
+    const head = fs.readFileSync(headPath, "utf-8").trim();
     if (!head) {
-      return null;
+      return cacheGitCommit(searchDir, null);
     }
     if (head.startsWith("ref:")) {
       const ref = head.replace(/^ref:\s*/i, "").trim();
       const refPath = resolveRefPath(headPath, ref);
       if (!refPath) {
-        return null;
+        return cacheGitCommit(searchDir, null);
       }
       const refHash = safeReadFilePrefix(refPath).trim();
-      const commit = formatCommit(refHash);
-      if (commit) {
-        cachedGitCommitBySearchDir.set(searchDir, commit);
-      }
-      return commit;
+      return cacheGitCommit(searchDir, formatCommit(refHash));
     }
-    const commit = formatCommit(head);
-    if (commit) {
-      cachedGitCommitBySearchDir.set(searchDir, commit);
-    }
-    return commit;
+    return cacheGitCommit(searchDir, formatCommit(head));
   } catch {
     return null;
   }
