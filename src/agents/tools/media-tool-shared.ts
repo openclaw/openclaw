@@ -51,52 +51,6 @@ function uniqueNormalized(paths: readonly string[]): string[] {
   return out;
 }
 
-function globStaticPrefix(pattern: string): string {
-  const normalized = pattern.replace(/\\/g, "/");
-  const segments = normalized.split("/");
-  const out: string[] = [];
-  for (const segment of segments) {
-    if (!segment || segment.includes("*") || segment.includes("?") || segment.includes("[")) {
-      break;
-    }
-    out.push(segment);
-  }
-  return out.join("/");
-}
-
-function resolvePolicyRoots(
-  entries: readonly (string | null | undefined)[] | undefined,
-  workspaceDir: string | undefined,
-): string[] {
-  if (!entries || entries.length === 0) {
-    return [];
-  }
-
-  const roots: string[] = [];
-  for (const entry of entries) {
-    if (!entry || !entry.trim()) {
-      continue;
-    }
-
-    const trimmed = entry.trim();
-    const base = globStaticPrefix(trimmed);
-    if (path.isAbsolute(trimmed)) {
-      roots.push(base ? base : trimmed);
-      continue;
-    }
-
-    if (workspaceDir) {
-      roots.push(path.join(workspaceDir, base || "."));
-    }
-  }
-
-  return uniqueNormalized(roots);
-}
-
-function overlapsPathContainment(a: string, b: string): boolean {
-  return a === b || a.startsWith(`${b}${path.sep}`) || b.startsWith(`${a}${path.sep}`);
-}
-
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { fsPolicy?: ToolFsPolicy },
@@ -104,33 +58,15 @@ export function resolveMediaToolLocalRoots(
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw) ?? undefined;
   const policy = options?.fsPolicy;
 
+  // For workspace-only mode we must hard-limit roots to workspace.
   if (policy?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
 
+  // For allow/deny policies with glob semantics, root filtering alone is insufficient.
+  // Exact policy enforcement is applied per resolved file path in image/pdf tools via PathGuard.
   const defaultRoots = getDefaultLocalRoots();
-  const allCandidates = uniqueNormalized(
-    workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots,
-  );
-
-  // Start from policy-allowed roots when present, otherwise from default candidates.
-  let roots = allCandidates;
-  if (policy?.allowedPaths?.length) {
-    const allowedRoots = resolvePolicyRoots(policy.allowedPaths, workspaceDir);
-    roots = allowedRoots.length > 0 ? allowedRoots : workspaceDir ? [workspaceDir] : [];
-  }
-
-  // Deny paths must always be applied (deny overrides allow).
-  if (policy?.denyPaths?.length) {
-    const deniedRoots = resolvePolicyRoots(policy.denyPaths, workspaceDir);
-    if (deniedRoots.length > 0) {
-      roots = roots.filter(
-        (candidate) => !deniedRoots.some((deny) => overlapsPathContainment(candidate, deny)),
-      );
-    }
-  }
-
-  return uniqueNormalized(roots);
+  return uniqueNormalized(workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots);
 }
 
 export function resolvePromptAndModelOverride(

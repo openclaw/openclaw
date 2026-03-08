@@ -2,6 +2,7 @@ import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
+import { checkPathGuardStrict } from "../../security/path-guard.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMediaRaw } from "../../web/media.js";
 import {
@@ -471,6 +472,20 @@ export function createPdfTool(options?: {
                 ? resolvedPdf.slice("file://".length)
                 : resolvedPdf,
             };
+
+        if (
+          !sandboxConfig &&
+          !isHttpUrl &&
+          !isDataUrl &&
+          options?.fsPolicy &&
+          options.workspaceDir
+        ) {
+          await checkPathGuardStrict(
+            resolvedPathInfo.resolved,
+            options.fsPolicy,
+            options.workspaceDir,
+          );
+        }
 
         const media = sandboxConfig
           ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
