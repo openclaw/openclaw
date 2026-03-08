@@ -39,6 +39,7 @@ import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
+import { resolveMatrixReplyOptions } from "./reply-options.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
@@ -417,11 +418,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const { replyToMode: effectiveReplyToMode, threadReplies: effectiveThreadReplies } =
+        resolveMatrixReplyOptions({
+          isRoom,
+          roomConfig,
+          globalReplyToMode: replyToMode,
+          globalThreadReplies: threadReplies,
+        });
+
       const messageId = event.event_id ?? "";
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
       const threadRootId = resolveMatrixThreadRootId({ event, content });
       const threadTarget = resolveMatrixThreadTarget({
-        threadReplies,
+        threadReplies: effectiveThreadReplies,
         messageId,
         threadRootId,
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
@@ -644,7 +653,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               client,
               runtime,
               textLimit,
-              replyToMode,
+              replyToMode: effectiveReplyToMode,
               threadId: threadTarget,
               accountId: route.accountId,
               tableMode,

@@ -29,6 +29,10 @@ export type MatrixRoomConfig = {
   skills?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+  /** Optional room override for reply relation quoting (off|first|all). */
+  replyToMode?: ReplyToMode;
+  /** Optional room override for thread reply behavior (off|inbound|always). */
+  threadReplies?: "off" | "inbound" | "always";
 };
 
 export type MatrixActionConfig = {

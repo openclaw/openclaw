@@ -32,6 +32,8 @@ const matrixRoomSchema = z
     users: z.array(allowFromEntry).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    replyToMode: z.enum(["off", "first", "all"]).optional(),
+    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   })
   .optional();
 
