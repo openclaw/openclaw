@@ -17,9 +17,9 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   sendMediaWithLeadingCaption,
   resolveWebhookPath,
+  waitForAbortSignal,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/zalo";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
