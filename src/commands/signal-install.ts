@@ -49,10 +49,8 @@ export function looksLikeArchive(name: string): boolean {
 /**
  * Pick a native release asset from the official GitHub releases.
  *
- * The official signal-cli releases only publish native (GraalVM) binaries for
- * x86-64 Linux.  On architectures where no native asset is available this
- * returns `undefined` so the caller can fall back to a different install
- * strategy (e.g. Homebrew).
+ * Prefer platform-native assets when available and otherwise fall back to the
+ * portable JVM archive (`signal-cli-<version>.tar.gz`) when present.
  */
 /** @internal Exported for testing. */
 export function pickAsset(
@@ -69,27 +67,30 @@ export function pickAsset(
 
   const byName = (pattern: RegExp) =>
     archives.find((asset) => pattern.test(asset.name.toLowerCase()));
+  const portableArchive = archives.find(
+    (asset) => !/(linux|macos|osx|darwin|windows|win)-native/.test(asset.name.toLowerCase()),
+  );
 
   if (platform === "linux") {
     // The official "Linux-native" asset is an x86-64 GraalVM binary.
     // On non-x64 architectures it will fail with "Exec format error",
     // so only select it when the host architecture matches.
     if (arch === "x64") {
-      return byName(/linux-native/) || byName(/linux/) || archives[0];
+      return byName(/linux-native/) || byName(/linux/) || portableArchive;
     }
     // No native release for this arch — caller should fall back.
     return undefined;
   }
 
   if (platform === "darwin") {
-    return byName(/macos|osx|darwin/) || archives[0];
+    return byName(/macos|osx|darwin/) || portableArchive;
   }
 
   if (platform === "win32") {
-    return byName(/windows|win/) || archives[0];
+    return byName(/windows|win/) || portableArchive;
   }
 
-  return archives[0];
+  return portableArchive || archives[0];
 }
 
 async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
