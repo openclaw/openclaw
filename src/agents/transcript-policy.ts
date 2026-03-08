@@ -98,8 +98,10 @@ export function resolveTranscriptPolicy(params: {
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
-  // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = isCopilotClaude;
+  // Anthropic APIs also have issues with thinking blocks when thinking configuration
+  // changes in persistent sessions (e.g., cron sessions). Drop these blocks at
+  // send-time to keep sessions usable.
+  const dropThinkingBlocks = isCopilotClaude || isAnthropic;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
