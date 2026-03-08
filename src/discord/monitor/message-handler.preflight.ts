@@ -95,6 +95,29 @@ function isBoundThreadBotSystemMessage(params: {
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
+function isSyntheticThreadStarterMessage(params: {
+  isGuildMessage: boolean;
+  messageId: string;
+  messageChannelId: string;
+  threadParentType?: ChannelType;
+}): boolean {
+  if (!params.isGuildMessage) {
+    return false;
+  }
+
+  // In text/announcement channels, Discord emits a synthetic starter message when a
+  // thread is created, with message.id === thread channel id. Treat this as system
+  // metadata instead of user input.
+  if (
+    params.threadParentType === ChannelType.GuildForum ||
+    params.threadParentType === ChannelType.GuildMedia
+  ) {
+    return false;
+  }
+
+  return params.messageId === params.messageChannelId;
+}
+
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   isBoundThreadSession: boolean;
@@ -330,6 +353,19 @@ export async function preflightDiscordMessage(
     earlyThreadParentId = parentInfo.id;
     earlyThreadParentName = parentInfo.name;
     earlyThreadParentType = parentInfo.type;
+  }
+
+  if (
+    earlyThreadChannel &&
+    isSyntheticThreadStarterMessage({
+      isGuildMessage,
+      messageId: String(message.id),
+      messageChannelId,
+      threadParentType: earlyThreadParentType,
+    })
+  ) {
+    logVerbose(`discord: drop synthetic thread starter message ${message.id}`);
+    return null;
   }
 
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
