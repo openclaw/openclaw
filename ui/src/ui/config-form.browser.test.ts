@@ -304,6 +304,52 @@ describe("config form renderer", () => {
     expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
   });
 
+  it("renders sensitive inputs with password-manager-resistant attributes", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "gateway.auth.token": { label: "Gateway Token", sensitive: true },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const tokenInput: HTMLInputElement | null = container.querySelector("input[type='password']");
+    expect(tokenInput).not.toBeNull();
+    expect(tokenInput?.getAttribute("autocomplete")).toBe("new-password");
+    expect(tokenInput?.getAttribute("autocapitalize")).toBe("off");
+    expect(tokenInput?.getAttribute("autocorrect")).toBe("off");
+    expect(tokenInput?.getAttribute("spellcheck")).toBe("false");
+    expect(tokenInput?.getAttribute("data-form-type")).toBe("other");
+  });
+
+  it("renders non-sensitive text inputs with autocomplete off", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const textInput: HTMLInputElement | null = container.querySelector("input[type='text']");
+    expect(textInput).not.toBeNull();
+    expect(textInput?.getAttribute("autocomplete")).toBe("off");
+  });
+
   it("supports SecretInput unions in additionalProperties maps", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
