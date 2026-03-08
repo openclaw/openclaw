@@ -150,7 +150,7 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
         enabled: true,
         provider: "perplexity",
         perplexity: {
-          apiKey: "sk-or-v1-...", // optional if OPENROUTER_API_KEY is set
+          apiKey: "<openrouter-api-key>", // optional if OPENROUTER_API_KEY is set
           baseUrl: "https://openrouter.ai/api/v1",
           model: "perplexity/sonar-pro",
         },
