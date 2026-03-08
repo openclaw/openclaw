@@ -41,12 +41,14 @@ async function makeFakeGitRepo(
 describe("git commit resolution", () => {
   const originalCwd = process.cwd();
 
-  afterEach(() => {
+  afterEach(async () => {
     process.chdir(originalCwd);
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
     vi.resetModules();
+    const { __testing } = await import("./git-commit.js");
+    __testing.clearCachedGitCommits();
   });
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
@@ -85,85 +87,64 @@ describe("git commit resolution", () => {
       encoding: "utf-8",
     }).trim();
 
-    vi.doMock("node:module", () => ({
-      createRequire: () => {
-        return (specifier: string) => {
-          if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-            return { commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" };
-          }
-          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-            code: "MODULE_NOT_FOUND",
-          });
-        };
-      },
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
     const entryModuleUrl = pathToFileURL(path.join(originalCwd, "src", "entry.ts")).href;
 
-    expect(resolveCommitHash({ moduleUrl: entryModuleUrl, env: {} })).toBe(repoHead);
-
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        moduleUrl: entryModuleUrl,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => "deadbee",
+        },
+      }),
+    ).toBe(repoHead);
   });
 
   it("caches build-info fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-build-info-cache");
-    const moduleRequire = vi.fn((specifier: string) => {
-      if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-        return { commit: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" };
-      }
-      throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-        code: "MODULE_NOT_FOUND",
-      });
-    });
-
-    vi.doMock("node:module", () => ({
-      createRequire: () => moduleRequire,
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readBuildInfoCommit = vi.fn(() => "deadbee");
 
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("deadbee");
-    const firstCallRequires = moduleRequire.mock.calls.length;
+    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
+      "deadbee",
+    );
+    const firstCallRequires = readBuildInfoCommit.mock.calls.length;
     expect(firstCallRequires).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("deadbee");
-    expect(moduleRequire.mock.calls.length).toBe(firstCallRequires);
-
-    vi.doUnmock("node:module");
+    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
+      "deadbee",
+    );
+    expect(readBuildInfoCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
   it("caches package.json fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-package-json-cache");
-    const moduleRequire = vi.fn((specifier: string) => {
-      if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-        throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-          code: "MODULE_NOT_FOUND",
-        });
-      }
-      if (specifier === "../../package.json") {
-        return { gitHead: "badc0ffee0ddf00d" };
-      }
-      throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-        code: "MODULE_NOT_FOUND",
-      });
-    });
-
-    vi.doMock("node:module", () => ({
-      createRequire: () => moduleRequire,
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readPackageJsonCommit = vi.fn(() => "badc0ff");
 
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("badc0ff");
-    const firstCallRequires = moduleRequire.mock.calls.length;
+    expect(
+      resolveCommitHash({
+        cwd: temp,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit,
+        },
+      }),
+    ).toBe("badc0ff");
+    const firstCallRequires = readPackageJsonCommit.mock.calls.length;
     expect(firstCallRequires).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: temp, env: {} })).toBe("badc0ff");
-    expect(moduleRequire.mock.calls.length).toBe(firstCallRequires);
-
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        cwd: temp,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit,
+        },
+      }),
+    ).toBe("badc0ff");
+    expect(readPackageJsonCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
   it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", async () => {
@@ -204,28 +185,19 @@ describe("git commit resolution", () => {
     );
     const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "entry.js")).href;
 
-    vi.doMock("node:module", () => ({
-      createRequire: () => {
-        return (specifier: string) => {
-          if (specifier === "../build-info.json" || specifier === "./build-info.json") {
-            return { commit: "feedfacefeedfacefeedfacefeedfacefeedface" };
-          }
-          if (specifier === "../../package.json") {
-            return { name: "openclaw", version: "2026.3.8", gitHead: "badc0ffee0ddf00d" };
-          }
-          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-            code: "MODULE_NOT_FOUND",
-          });
-        };
-      },
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
 
-    expect(resolveCommitHash({ moduleUrl, cwd: packageRoot, env: {} })).toBe("feedfac");
-
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        moduleUrl,
+        cwd: packageRoot,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => "feedfac",
+          readPackageJsonCommit: () => "badc0ff",
+        },
+      }),
+    ).toBe("feedfac");
   });
 
   it("caches git lookups per resolved search directory", async () => {
@@ -253,27 +225,14 @@ describe("git commit resolution", () => {
       head: "not-a-commit\n",
     });
 
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const readFileSyncSpy = vi.fn(actualFs.readFileSync);
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
-      default: {
-        ...actualFs,
-        readFileSync: readFileSyncSpy,
-      },
-      readFileSync: readFileSyncSpy,
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readGitCommit = vi.fn(() => null);
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    const firstCallReads = readFileSyncSpy.mock.calls.length;
+    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    const firstCallReads = readGitCommit.mock.calls.length;
     expect(firstCallReads).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(readFileSyncSpy.mock.calls.length).toBe(firstCallReads);
-
-    vi.doUnmock("node:fs");
+    expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
+    expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("caches caught null fallback results per resolved search directory", async () => {
@@ -282,49 +241,39 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(repoRoot, {
       head: "0123456789abcdef0123456789abcdef01234567\n",
     });
-    const headPath = path.join(repoRoot, ".git", "HEAD");
-
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const readFileSyncSpy = vi.fn((filePath: string, ...args: unknown[]) => {
-      if (path.resolve(filePath) === path.resolve(headPath)) {
-        const error = Object.assign(new Error(`EACCES: permission denied, open '${filePath}'`), {
-          code: "EACCES",
-        });
-        throw error;
-      }
-      return Reflect.apply(actualFs.readFileSync, actualFs, [filePath, ...args]);
-    });
-    vi.doMock("node:fs", () => ({
-      ...actualFs,
-      default: {
-        ...actualFs,
-        readFileSync: readFileSyncSpy,
-      },
-      readFileSync: readFileSyncSpy,
-    }));
-    vi.doMock("node:module", () => ({
-      createRequire: () => {
-        return (specifier: string) => {
-          throw Object.assign(new Error(`Cannot find module ${specifier}`), {
-            code: "MODULE_NOT_FOUND",
-          });
-        };
-      },
-    }));
-    vi.resetModules();
-
     const { resolveCommitHash } = await import("./git-commit.js");
+    const readGitCommit = vi.fn(() => {
+      const error = Object.assign(new Error(`EACCES: permission denied`), {
+        code: "EACCES",
+      });
+      throw error;
+    });
 
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    const headReadCount = () =>
-      readFileSyncSpy.mock.calls.filter(([filePath]) => path.resolve(filePath) === headPath).length;
-    const firstCallReads = headReadCount();
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: {
+          readGitCommit,
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      }),
+    ).toBeNull();
+    const firstCallReads = readGitCommit.mock.calls.length;
     expect(firstCallReads).toBe(2);
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(headReadCount()).toBe(firstCallReads);
-
-    vi.doUnmock("node:fs");
-    vi.doUnmock("node:module");
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: {
+          readGitCommit,
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      }),
+    ).toBeNull();
+    expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("formats env-provided commit strings consistently", async () => {
