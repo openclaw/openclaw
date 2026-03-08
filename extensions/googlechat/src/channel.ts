@@ -1,3 +1,4 @@
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk";
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
@@ -11,7 +12,6 @@ import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   getChatChannelMeta,
   listDirectoryGroupEntriesFromMapKeys,
   listDirectoryUserEntriesFromAllowFrom,
@@ -21,7 +21,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
-  setAccountEnabledInConfigSection,
   type ChannelDock,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -66,6 +65,23 @@ const googleChatConfigAccessors = createScopedAccountConfigAccessors({
       normalizeEntry: formatAllowFromEntry,
     }),
   resolveDefaultTo: (account: ResolvedGoogleChatAccount) => account.config.defaultTo,
+});
+
+const googleChatConfigBase = createScopedChannelConfigBase<ResolvedGoogleChatAccount>({
+  sectionKey: "googlechat",
+  listAccountIds: listGoogleChatAccountIds,
+  resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultGoogleChatAccountId,
+  clearBaseFields: [
+    "serviceAccount",
+    "serviceAccountFile",
+    "audienceType",
+    "audience",
+    "webhookPath",
+    "webhookUrl",
+    "botUser",
+    "name",
+  ],
 });
 
 export const googlechatDock: ChannelDock = {
@@ -142,33 +158,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   reload: { configPrefixes: ["channels.googlechat"] },
   configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
   config: {
-    listAccountIds: (cfg) => listGoogleChatAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg: cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultGoogleChatAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg: cfg,
-        sectionKey: "googlechat",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg: cfg,
-        sectionKey: "googlechat",
-        accountId,
-        clearBaseFields: [
-          "serviceAccount",
-          "serviceAccountFile",
-          "audienceType",
-          "audience",
-          "webhookPath",
-          "webhookUrl",
-          "botUser",
-          "name",
-        ],
-      }),
+    ...googleChatConfigBase,
     isConfigured: (account) => account.credentialSource !== "none",
     describeAccount: (account) => ({
       accountId: account.accountId,
