@@ -99,6 +99,25 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
+
+  it("omits channel field for TUI/webchat messages even when OriginatingChannel is set", () => {
+    // TUI messages have Surface=webchat and Provider=webchat, but may inherit
+    // OriginatingChannel from session delivery context (e.g., "telegram").
+    // The channel field should be omitted to prevent cross-delivery.
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "tui-123",
+      OriginatingTo: "telegram:5494292670",
+      OriginatingChannel: "telegram", // Stale from session delivery context
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBeUndefined();
+    expect(payload["provider"]).toBe("webchat");
+    expect(payload["surface"]).toBe("webchat");
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {

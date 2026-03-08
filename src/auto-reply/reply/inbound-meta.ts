@@ -32,10 +32,19 @@ function formatConversationTimestamp(value: unknown): string | undefined {
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
-  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  // For webchat/Hub Chat sessions (when Surface is 'webchat'), prioritize Surface
+  // over OriginatingChannel to prevent TUI/webchat messages from being incorrectly
+  // tagged with a different channel (e.g., 'telegram') from session delivery context.
+  const surface = safeTrim(ctx.Surface);
+  if (surface === "webchat") {
+    // For webchat sessions, omit the channel field entirely rather than falling
+    // back to an unrelated provider or stale OriginatingChannel.
+    return undefined;
+  }
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? surface;
   if (!channelValue) {
     const provider = safeTrim(ctx.Provider);
-    if (provider !== "webchat" && ctx.Surface !== "webchat") {
+    if (provider !== "webchat") {
       channelValue = provider;
     }
   }
