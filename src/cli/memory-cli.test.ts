@@ -60,7 +60,7 @@ describe("memory cli", () => {
     return JSON.parse(String(log.mock.calls[0]?.[0] ?? "null")) as Record<string, unknown>;
   }
 
-  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive";
+  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
     expect(sync).toHaveBeenCalledWith(
@@ -111,6 +111,29 @@ describe("memory cli", () => {
     program.name("test");
     registerMemoryCli(program);
     await program.parseAsync(["memory", ...args], { from: "user" });
+  }
+
+  function captureHelpOutput(command: Command | undefined) {
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      output += String(chunk);
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      command?.outputHelp();
+      return output;
+    } finally {
+      writeSpy.mockRestore();
+    }
+  }
+
+  function getMemoryHelpText() {
+    const program = new Command();
+    registerMemoryCli(program);
+    const memoryCommand = program.commands.find((command) => command.name() === "memory");
+    return captureHelpOutput(memoryCommand);
   }
 
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
@@ -218,6 +241,17 @@ describe("memory cli", () => {
     await runMemoryCli(["status"]);
 
     expect(hasLoggedInactiveSecretDiagnostic(log)).toBe(true);
+  });
+
+  it("documents memory help examples", () => {
+    const helpText = getMemoryHelpText();
+
+    expect(helpText).toContain("openclaw memory status --deep");
+    expect(helpText).toContain("Probe embedding provider readiness.");
+    expect(helpText).toContain('openclaw memory search "meeting notes"');
+    expect(helpText).toContain("Quick search using positional query.");
+    expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
+    expect(helpText).toContain("Limit results for focused troubleshooting.");
   });
 
   it("prints vector error when unavailable", async () => {

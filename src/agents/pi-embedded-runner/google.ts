@@ -594,10 +594,19 @@ export async function sanitizeSessionHistory(params: {
     return sanitizedOpenAI;
   }
 
-  return applyGoogleTurnOrderingFix({
-    messages: sanitizedOpenAI,
-    modelApi: params.modelApi,
-    sessionManager: params.sessionManager,
-    sessionId: params.sessionId,
-  }).messages;
+  // Google models use the full wrapper with logging and session markers.
+  if (isGoogleModelApi(params.modelApi)) {
+    return applyGoogleTurnOrderingFix({
+      messages: sanitizedOpenAI,
+      modelApi: params.modelApi,
+      sessionManager: params.sessionManager,
+      sessionId: params.sessionId,
+    }).messages;
+  }
+
+  // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
+  // conversations that start with an assistant turn (e.g. delivery-mirror
+  // messages after /new).  Apply the same ordering fix without the
+  // Google-specific session markers.  See #38962.
+  return sanitizeGoogleTurnOrdering(sanitizedOpenAI);
 }

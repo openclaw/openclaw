@@ -277,13 +277,13 @@ This is the “common models” run we expect to keep working:
 - OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
 - OpenAI Codex: `openai-codex/gpt-5.4`
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
-- Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
+- Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.5`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
@@ -291,7 +291,7 @@ Pick at least one per provider family:
 
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
-- Google: `google/gemini-3-flash-preview` (or `google/gemini-3-pro-preview`)
+- Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.5`
 
@@ -352,6 +352,10 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (custom extension load + registry smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+
+The live-model Docker runners also bind-mount the current checkout read-only and
+stage it into a temporary workdir inside the container. This keeps the runtime
+image slim while still running Vitest against your exact local source/config.
 
 Manual ACP plain-language thread smoke (not CI):
 
