@@ -371,20 +371,22 @@ export function resolveContextTokensForModel(params: {
   fallbackContextTokens?: number;
   allowAsyncLoad?: boolean;
 }): number | undefined {
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
-    return params.contextTokensOverride;
-  }
-
   const ref = resolveProviderModelRef({
     provider: params.provider,
     model: params.model,
   });
+  const override =
+    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+      ? params.contextTokensOverride
+      : undefined;
+  const capOverride = (contextTokens: number) =>
+    override !== undefined ? Math.min(override, contextTokens) : contextTokens;
   const explicitProvider = params.provider?.trim();
   if (ref) {
     if (explicitProvider) {
       const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
       if (fixedContextWindow !== undefined) {
-        return fixedContextWindow;
+        return capOverride(fixedContextWindow);
       }
     }
     // Only do the config direct scan when the caller explicitly passed a
@@ -401,7 +403,7 @@ export function resolveContextTokensForModel(params: {
         ref.model,
       );
       if (configuredWindow !== undefined) {
-        return configuredWindow;
+        return capOverride(configuredWindow);
       }
     }
   }
@@ -427,7 +429,7 @@ export function resolveContextTokensForModel(params: {
       },
     );
     if (qualifiedResult !== undefined) {
-      return qualifiedResult;
+      return capOverride(qualifiedResult);
     }
   }
 
@@ -438,7 +440,7 @@ export function resolveContextTokensForModel(params: {
     skipRuntimeConfigLoad: Boolean(params.cfg),
   });
   if (bareResult !== undefined) {
-    return bareResult;
+    return capOverride(bareResult);
   }
 
   // When provider is implicit, try qualified as a last resort so inferred
@@ -453,9 +455,12 @@ export function resolveContextTokensForModel(params: {
       },
     );
     if (qualifiedResult !== undefined) {
-      return qualifiedResult;
+      return capOverride(qualifiedResult);
     }
   }
 
+  if (override !== undefined) {
+    return override;
+  }
   return params.fallbackContextTokens;
 }
