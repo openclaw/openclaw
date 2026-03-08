@@ -52,7 +52,7 @@ Returns: members with member_type, member_id, perm, name.
   "type": "docx",
   "member_type": "openid",
   "member_id": "ou_xxx",
-  "remove_old_owner": true,
+  "remove_old_owner": false,
   "old_owner_perm": "view"
 }
 ```
@@ -63,6 +63,8 @@ Optional transfer fields:
 - `remove_old_owner`
 - `stay_put`
 - `old_owner_perm`
+
+Do not combine `remove_old_owner: true` with `old_owner_perm`, since the old owner cannot both be removed and retain a permission.
 
 ## Token Types
 

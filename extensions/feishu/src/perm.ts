@@ -135,6 +135,8 @@ async function transferOwner(
     old_owner_perm?: string;
   },
 ) {
+  validateTransferOptions(options);
+
   const res = await client.drive.permissionMember.transferOwner({
     path: { token },
     params: {
@@ -158,6 +160,12 @@ async function transferOwner(
   return {
     success: true,
   };
+}
+
+function validateTransferOptions(options: { remove_old_owner?: boolean; old_owner_perm?: string }) {
+  if (options.remove_old_owner === true && options.old_owner_perm) {
+    throw new Error("remove_old_owner cannot be combined with old_owner_perm");
+  }
 }
 
 // ============ Tool Registration ============

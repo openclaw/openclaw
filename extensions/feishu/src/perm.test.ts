@@ -80,7 +80,7 @@ describe("feishu perm tool", () => {
       type: "docx",
       member_type: "openid",
       member_id: "ou_new_owner",
-      remove_old_owner: true,
+      remove_old_owner: false,
       stay_put: false,
       old_owner_perm: "view",
     });
@@ -90,7 +90,7 @@ describe("feishu perm tool", () => {
       params: {
         type: "docx",
         need_notification: false,
-        remove_old_owner: true,
+        remove_old_owner: false,
         stay_put: false,
         old_owner_perm: "view",
       },
@@ -102,6 +102,33 @@ describe("feishu perm tool", () => {
     expect(result).toEqual({
       content: [{ type: "text", text: '{\n  "success": true\n}' }],
       details: { success: true },
+    });
+  });
+
+  it("rejects contradictory old-owner transfer options before calling the SDK", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuPermTools(api);
+
+    const tool = resolveTool("feishu_perm");
+    const result = await tool.execute("call", {
+      action: "transfer",
+      token: "doxcn123",
+      type: "docx",
+      member_type: "openid",
+      member_id: "ou_new_owner",
+      remove_old_owner: true,
+      old_owner_perm: "view",
+    });
+
+    expect(transferOwnerMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: '{\n  "error": "remove_old_owner cannot be combined with old_owner_perm"\n}',
+        },
+      ],
+      details: { error: "remove_old_owner cannot be combined with old_owner_perm" },
     });
   });
 
