@@ -265,12 +265,30 @@ type DisallowedElevationCase = LabeledCase & {
   expectedOutputIncludes?: string;
 };
 type NotifyNoopCase = LabeledCase & {
-  notifyOnExitEmptySuccess: boolean;
+  notifyOnExitEmptySuccess?: boolean;
+  overrides?: Partial<ExecToolConfig>;
+  shouldEmitEvent: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
-  withLabel("default behavior skips no-op completion events", { notifyOnExitEmptySuccess: false }),
+  withLabel("default behavior skips no-op completion events", {
+    shouldEmitEvent: false,
+  }),
   withLabel("explicitly enabling no-op completion emits completion events", {
     notifyOnExitEmptySuccess: true,
+    shouldEmitEvent: true,
+  }),
+  withLabel("chat contexts emit no-op completion events by default", {
+    overrides: { messageProvider: "discord" },
+    shouldEmitEvent: true,
+  }),
+  withLabel("generic provider labels do not opt into no-op completion events", {
+    overrides: { messageProvider: "openai" },
+    shouldEmitEvent: false,
+  }),
+  withLabel("chat contexts respect explicit no-op completion opt-out", {
+    notifyOnExitEmptySuccess: false,
+    overrides: { messageProvider: "discord" },
+    shouldEmitEvent: false,
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
@@ -318,12 +336,8 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
     mustNotContain: ["showing last 200"],
   }),
 ];
-const expectNotifyNoopEvents = (
-  events: string[],
-  notifyOnExitEmptySuccess: boolean,
-  label: string,
-) => {
-  if (!notifyOnExitEmptySuccess) {
+const expectNotifyNoopEvents = (events: string[], shouldEmitEvent: boolean, label: string) => {
+  if (!shouldEmitEvent) {
     expect(events, label).toEqual([]);
     return;
   }
@@ -396,15 +410,21 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustContain, true);
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
-const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
-  );
+const runNotifyNoopCase = async ({
+  label,
+  notifyOnExitEmptySuccess,
+  overrides,
+  shouldEmitEvent,
+}: NotifyNoopCase) => {
+  const tool = createNotifyOnExitExecTool({
+    ...overrides,
+    ...(notifyOnExitEmptySuccess === undefined ? {} : { notifyOnExitEmptySuccess }),
+  });
 
   const { status } = await runBackgroundCommandToCompletion(tool, shortDelayCmd);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
+  expectNotifyNoopEvents(events, shouldEmitEvent, label);
 };
 
 beforeEach(() => {

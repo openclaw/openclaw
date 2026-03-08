@@ -9,6 +9,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -191,7 +192,11 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const hasReplyMessageChannel =
+    resolveGatewayMessageChannel(defaults?.messageProvider) !== undefined;
+  // Only real reply-capable channels should default to empty-success notifications.
+  // Generic provider labels like "openai" or "heartbeat" are not chat contexts here.
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess ?? hasReplyMessageChannel;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
