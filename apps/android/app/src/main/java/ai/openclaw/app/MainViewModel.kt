@@ -160,8 +160,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     enabled: Boolean,
     start: String,
     end: String,
-  ) {
-    runtime.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  ): Boolean {
+    return runtime.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
   }
 
   fun setNotificationForwardingMaxEventsPerMinute(value: Int) {

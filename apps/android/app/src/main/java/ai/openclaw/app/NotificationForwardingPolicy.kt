@@ -61,20 +61,19 @@ internal fun NotificationForwardingPolicy.isWithinQuietHours(
   }
 }
 
-internal fun parseLocalHourMinute(raw: String): Int? {
+private val localHourMinuteRegex = Regex("""^([01]\d|2[0-3]):([0-5]\d)$""")
+
+internal fun normalizeLocalHourMinute(raw: String): String? {
   val trimmed = raw.trim()
-  if (!trimmed.contains(':')) {
-    return null
-  }
-  val parts = trimmed.split(':')
-  if (parts.size != 2) {
-    return null
-  }
-  val hour = parts[0].toIntOrNull() ?: return null
-  val minute = parts[1].toIntOrNull() ?: return null
-  if (hour !in 0..23 || minute !in 0..59) {
-    return null
-  }
+  val match = localHourMinuteRegex.matchEntire(trimmed) ?: return null
+  return "${match.groupValues[1]}:${match.groupValues[2]}"
+}
+
+internal fun parseLocalHourMinute(raw: String): Int? {
+  val normalized = normalizeLocalHourMinute(raw) ?: return null
+  val parts = normalized.split(':')
+  val hour = parts[0].toInt()
+  val minute = parts[1].toInt()
   return hour * 60 + minute
 }
 

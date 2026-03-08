@@ -16,11 +16,29 @@ class NotificationForwardingPolicyTest {
   }
 
   @Test
+  fun normalizeLocalHourMinute_acceptsStrict24HourDrafts() {
+    assertEquals("00:00", normalizeLocalHourMinute("00:00"))
+    assertEquals("23:59", normalizeLocalHourMinute("23:59"))
+    assertEquals("07:05", normalizeLocalHourMinute("07:05"))
+  }
+
+  @Test
   fun parseLocalHourMinute_rejectsInvalidValues() {
     assertEquals(null, parseLocalHourMinute(""))
     assertEquals(null, parseLocalHourMinute("24:00"))
     assertEquals(null, parseLocalHourMinute("12:60"))
     assertEquals(null, parseLocalHourMinute("abc"))
+    assertEquals(null, parseLocalHourMinute("7:05"))
+    assertEquals(null, parseLocalHourMinute("07:5"))
+  }
+
+  @Test
+  fun normalizeLocalHourMinute_rejectsNonCanonicalDrafts() {
+    assertEquals(null, normalizeLocalHourMinute(""))
+    assertEquals(null, normalizeLocalHourMinute("7:05"))
+    assertEquals(null, normalizeLocalHourMinute("07:5"))
+    assertEquals(null, normalizeLocalHourMinute("24:00"))
+    assertEquals(null, normalizeLocalHourMinute("12:60"))
   }
 
   @Test
