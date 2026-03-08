@@ -100,7 +100,14 @@ export function transformGmailApiMessage(
     body = findTextBody(payload);
     const maxBytes = opts?.maxBytes;
     if (maxBytes && maxBytes > 0 && Buffer.byteLength(body, "utf8") > maxBytes) {
-      body = Buffer.from(body, "utf8").subarray(0, maxBytes).toString("utf8");
+      const buf = Buffer.from(body, "utf8");
+      let end = maxBytes;
+      // Walk back to avoid splitting a multi-byte UTF-8 character.
+      // Continuation bytes have the form 10xxxxxx (0x80..0xBF).
+      while (end > 0 && buf[end] >= 0x80 && buf[end] < 0xc0) {
+        end--;
+      }
+      body = buf.subarray(0, end).toString("utf8");
     }
   }
 
