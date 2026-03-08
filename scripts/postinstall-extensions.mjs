@@ -71,7 +71,7 @@ for (const entry of extensions) {
     const env = { ...process.env };
     delete env.npm_config_global;
     delete env.npm_config_prefix;
-    execFileSync(npmBin, ["install", "--omit=dev", "--omit=peer", "--silent", "--ignore-scripts"], {
+    execFileSync(npmBin, ["install", "--omit=dev", "--omit=peer", "--silent"], {
       cwd: extDir,
       stdio: "pipe",
       timeout: 120_000,
