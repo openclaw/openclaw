@@ -9,6 +9,7 @@ const GENERIC_WEB_SEARCH_KEYS = new Set([
   "maxResults",
   "timeoutSeconds",
   "cacheTtlMinutes",
+  "searxng",
 ]);
 
 const LEGACY_PROVIDER_MAP = {

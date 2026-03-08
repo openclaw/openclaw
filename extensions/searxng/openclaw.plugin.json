@@ -1,0 +1,28 @@
+{
+  "id": "searxng",
+  "providerAuthEnvVars": {},
+  "uiHints": {
+    "webSearch.baseUrl": {
+      "label": "SearXNG Base URL",
+      "help": "Base URL of your SearXNG instance (fallback: SEARXNG_BASE_URL env var or http://localhost:8888)."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["searxng"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

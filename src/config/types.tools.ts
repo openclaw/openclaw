@@ -494,6 +494,11 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
+      /** SearXNG-specific configuration (used when provider="searxng"). */
+      searxng?: {
+        /** Base URL for SearXNG instance (defaults to SEARXNG_BASE_URL env var or http://localhost:8888). */
+        baseUrl?: string;
+      };
     } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */

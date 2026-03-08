@@ -293,6 +293,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: searxng":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/searxng/**"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:

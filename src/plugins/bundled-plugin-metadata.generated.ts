@@ -14368,6 +14368,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "searxng",
+    idHint: "searxng",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
+    packageName: "@openclaw/searxng-plugin",
+    packageVersion: "2026.3.20",
+    packageDescription: "OpenClaw SearXNG plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "searxng",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              baseUrl: {
+                type: "string",
+              },
+            },
+          },
+        },
+      },
+      providerAuthEnvVars: {},
+      uiHints: {
+        "webSearch.baseUrl": {
+          label: "SearXNG Base URL",
+          help: "Base URL of your SearXNG instance (fallback: SEARXNG_BASE_URL env var or http://localhost:8888).",
+        },
+      },
+      contracts: {
+        webSearchProviders: ["searxng"],
+      },
+    },
+  },
+  {
     dirName: "tavily",
     idHint: "tavily",
     source: {
