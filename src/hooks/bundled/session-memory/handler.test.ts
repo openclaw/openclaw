@@ -270,9 +270,7 @@ describe("session-memory hook", () => {
       cfg: {
         agents: {
           defaults: { workspace: mainWorkspace },
-          list: {
-            navi: { workspace: naviWorkspace },
-          },
+          list: [{ id: "navi", workspace: naviWorkspace }],
         },
       } satisfies OpenClawConfig,
       sessionKey: "agent:main:main",
@@ -286,6 +284,7 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Remember this under Navi");
     expect(memoryContent).toContain("assistant: Stored in the bound workspace");
+    expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
     await expect(fs.access(path.join(mainWorkspace, "memory"))).rejects.toThrow();
   });
 
