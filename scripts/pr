@@ -1193,61 +1193,6 @@ validate_changelog_merge_hygiene() {
   echo "changelog merge hygiene validated: no dropped PR references"
 }
 
-changed_changelog_fragment_files() {
-  git diff --name-only origin/main...HEAD -- changelog/fragments | rg '^changelog/fragments/.*\.md$' || true
-}
-
-validate_changelog_fragments_for_pr() {
-  local pr="$1"
-  local contrib="$2"
-  shift 2
-
-  if [ "$#" -lt 1 ]; then
-    echo "No changelog fragments provided for validation."
-    exit 1
-  fi
-
-  local pr_pattern
-  pr_pattern="(#$pr|openclaw#$pr)"
-
-  local added_lines
-  local file
-  local all_added_lines=""
-  for file in "$@"; do
-    added_lines=$(git diff --unified=0 origin/main...HEAD -- "$file" | awk '
-      /^\+\+\+/ { next }
-      /^\+/ { print substr($0, 2) }
-    ')
-
-    if [ -z "$added_lines" ]; then
-      echo "$file is in diff but no added lines were detected."
-      exit 1
-    fi
-
-    all_added_lines=$(printf '%s\n%s\n' "$all_added_lines" "$added_lines")
-  done
-
-  local with_pr
-  with_pr=$(printf '%s\n' "$all_added_lines" | rg -in "$pr_pattern" || true)
-  if [ -z "$with_pr" ]; then
-    echo "Changelog fragment update must reference PR #$pr (for example, (#$pr))."
-    exit 1
-  fi
-
-  if [ -n "$contrib" ] && [ "$contrib" != "null" ]; then
-    local with_pr_and_thanks
-    with_pr_and_thanks=$(printf '%s\n' "$all_added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
-    if [ -z "$with_pr_and_thanks" ]; then
-      echo "Changelog fragment update must include both PR #$pr and thanks @$contrib on the entry line."
-      exit 1
-    fi
-    echo "changelog fragments validated: found PR #$pr + thanks @$contrib"
-    return 0
-  fi
-
-  echo "changelog fragments validated: found PR #$pr (contributor handle unavailable, skipping thanks check)"
-}
-
 prepare_gates() {
   local pr="$1"
   enter_worktree "$pr" false
