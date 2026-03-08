@@ -500,6 +500,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.includeContent":
+    "Include message content (input prompts and output responses) in OTEL trace spans. Required for Langfuse evaluators (LLM-as-a-Judge). Sends actual text content to your OTEL backend — ensure your backend's data policies allow this. Default: false.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

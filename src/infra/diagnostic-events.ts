@@ -35,6 +35,10 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   };
   costUsd?: number;
   durationMs?: number;
+  /** Optional: input text for observability (e.g. Langfuse evaluators). Only populated when diagnostics.includeContent is enabled. */
+  inputText?: string;
+  /** Optional: output text for observability (e.g. Langfuse evaluators). Only populated when diagnostics.includeContent is enabled. */
+  outputText?: string;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
