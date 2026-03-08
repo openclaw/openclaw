@@ -14,19 +14,15 @@ import {
 } from "../../shared/net/ip.js";
 import { DnsBlocklistError, isDomainBlocked } from "./domain-filter.js";
 import { normalizeHostname } from "./hostname.js";
+import { SsrFBlockedError } from "./ssrf-error.js";
+
+export { SsrFBlockedError } from "./ssrf-error.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
   address: string | LookupAddress[],
   family?: number,
 ) => void;
-
-export class SsrFBlockedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SsrFBlockedError";
-  }
-}
 
 export type LookupFn = typeof dnsLookup;
 

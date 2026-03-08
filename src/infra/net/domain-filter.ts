@@ -1,5 +1,5 @@
 import { normalizeHostname } from "./hostname.js";
-import { SsrFBlockedError } from "./ssrf.js";
+import { SsrFBlockedError } from "./ssrf-error.js";
 
 /**
  * Error thrown when a domain is blocked by the DNS blocklist.
