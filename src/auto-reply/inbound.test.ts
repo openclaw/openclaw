@@ -12,7 +12,7 @@ import {
   resetInboundDedupe,
   shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
-import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
+import { normalizeInboundTextNewlines, stripKnownLeakedPreambles } from "./reply/inbound-text.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -66,6 +66,36 @@ describe("normalizeInboundTextNewlines", () => {
   });
 });
 
+describe("stripKnownLeakedPreambles", () => {
+  const leakedPreamble = [
+    "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
+    "The `diffs` tool accepts either `before` + `after` text, or a unified `patch` string.",
+    "Use `mode=view` when you want an interactive gateway-hosted viewer. After the tool returns, use `details.viewerUrl` with the canvas tool via `canvas present` or `canvas navigate`.",
+    "Use `mode=file` when you need a rendered file artifact. Set `fileFormat=png` (default) or `fileFormat=pdf`. The tool result includes `details.filePath`.",
+    "For large or high-fidelity files, use `fileQuality` (`standard`|`hq`|`print`) and optionally override `fileScale`/`fileMaxWidth`.",
+    "When you need to deliver the rendered file to a user or channel, do not rely on the raw tool-result renderer. Instead, call the `message` tool and pass `details.filePath` through `path` or `filePath`.",
+    "Use `mode=both` when you want both the gateway viewer URL and the rendered artifact.",
+    "If the user has configured diffs plugin defaults, prefer omitting `mode`, `theme`, `layout`, and related presentation options unless you need to override them for this specific diff.",
+    "Include `path` for before/after text when you know the file name.",
+  ].join("\n");
+
+  it("strips the leaked diffs preamble from cron and startup prompts", () => {
+    expect(stripKnownLeakedPreambles(`${leakedPreamble}\n\n[cron:abc job] do it`)).toBe(
+      "[cron:abc job] do it",
+    );
+    expect(
+      stripKnownLeakedPreambles(
+        `${leakedPreamble}\n\nA new session was started via /new or /reset.`,
+      ),
+    ).toBe("A new session was started via /new or /reset.");
+  });
+
+  it("preserves normal user text that merely mentions diffs", () => {
+    const normal = "Please use the `diffs` tool for this patch.";
+    expect(stripKnownLeakedPreambles(normal)).toBe(normal);
+  });
+});
+
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
     const ctx: MsgContext = {
@@ -85,6 +115,30 @@ describe("finalizeInboundContext", () => {
     expect(out.CommandAuthorized).toBe(false);
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("strips the leaked diffs preamble before deriving prompt bodies", () => {
+    const leakedPreamble = [
+      "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
+      "The `diffs` tool accepts either `before` + `after` text, or a unified `patch` string.",
+      "Use `mode=view` when you want an interactive gateway-hosted viewer. After the tool returns, use `details.viewerUrl` with the canvas tool via `canvas present` or `canvas navigate`.",
+      "Use `mode=file` when you need a rendered file artifact. Set `fileFormat=png` (default) or `fileFormat=pdf`. The tool result includes `details.filePath`.",
+      "For large or high-fidelity files, use `fileQuality` (`standard`|`hq`|`print`) and optionally override `fileScale`/`fileMaxWidth`.",
+      "When you need to deliver the rendered file to a user or channel, do not rely on the raw tool-result renderer. Instead, call the `message` tool and pass `details.filePath` through `path` or `filePath`.",
+      "Use `mode=both` when you want both the gateway viewer URL and the rendered artifact.",
+      "If the user has configured diffs plugin defaults, prefer omitting `mode`, `theme`, `layout`, and related presentation options unless you need to override them for this specific diff.",
+      "Include `path` for before/after text when you know the file name.",
+    ].join("\n");
+
+    const ctx: MsgContext = {
+      Body: `${leakedPreamble}\n\nConversation info (untrusted metadata):\n\`\`\`json\n{}\n\`\`\`\n\nwhat's your name`,
+      ChatType: "direct",
+    };
+
+    const out = finalizeInboundContext(ctx);
+    expect(out.Body.startsWith("When you need to show edits")).toBe(false);
+    expect(out.Body).toContain("Conversation info (untrusted metadata):");
+    expect(out.BodyForAgent).toContain("Conversation info (untrusted metadata):");
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
