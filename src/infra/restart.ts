@@ -16,7 +16,22 @@ export type RestartAttempt = {
   tried?: string[];
 };
 
-const SPAWN_TIMEOUT_MS = 2000;
+const DEFAULT_SPAWN_TIMEOUT_MS = 15_000;
+
+function parseSpawnTimeoutMsFromEnv(): number {
+  const raw = process.env.OPENCLAW_RESTART_SPAWN_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_SPAWN_TIMEOUT_MS;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    return DEFAULT_SPAWN_TIMEOUT_MS;
+  }
+  // Clamp: avoid too-small timeouts (flaky) and too-large timeouts (hangy).
+  return Math.min(60_000, Math.max(1_000, Math.floor(n)));
+}
+
+const SPAWN_TIMEOUT_MS = parseSpawnTimeoutMsFromEnv();
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
 const DEFAULT_DEFERRAL_MAX_WAIT_MS = 30_000;
@@ -355,8 +370,18 @@ export function triggerOpenClawRestart(): RestartAttempt {
     return { ok: true, method: "launchctl", tried };
   }
 
-  // kickstart fails when the service was previously booted out (deregistered from launchd).
-  // Fall back to bootstrap (re-register from plist) + kickstart.
+  const kickstartCode = (res.error as NodeJS.ErrnoException | undefined)?.code;
+  if (kickstartCode === "ETIMEDOUT") {
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: `launchctl kickstart timed out after ${SPAWN_TIMEOUT_MS}ms`,
+      tried,
+    };
+  }
+
+  // kickstart can fail when the service was previously booted out (deregistered from launchd)
+  // or otherwise not registered. Fall back to bootstrap (re-register from plist) + kickstart.
   // Use env HOME to match how launchd.ts resolves the plist install path.
   const home = process.env.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
@@ -367,13 +392,19 @@ export function triggerOpenClawRestart(): RestartAttempt {
     timeout: SPAWN_TIMEOUT_MS,
   });
   if (boot.error || (boot.status !== 0 && boot.status !== null)) {
+    const bootCode = (boot.error as NodeJS.ErrnoException | undefined)?.code;
+    const detail =
+      bootCode === "ETIMEDOUT"
+        ? `launchctl bootstrap timed out after ${SPAWN_TIMEOUT_MS}ms`
+        : formatSpawnDetail(boot);
     return {
       ok: false,
       method: "launchctl",
-      detail: formatSpawnDetail(boot),
+      detail,
       tried,
     };
   }
+
   const retryArgs = ["kickstart", "-k", target];
   tried.push(`launchctl ${retryArgs.join(" ")}`);
   const retry = spawnSync("launchctl", retryArgs, {
@@ -383,10 +414,17 @@ export function triggerOpenClawRestart(): RestartAttempt {
   if (!retry.error && retry.status === 0) {
     return { ok: true, method: "launchctl", tried };
   }
+
+  const retryCode = (retry.error as NodeJS.ErrnoException | undefined)?.code;
+  const detail =
+    retryCode === "ETIMEDOUT"
+      ? `launchctl kickstart timed out after ${SPAWN_TIMEOUT_MS}ms`
+      : formatSpawnDetail(retry);
+
   return {
     ok: false,
     method: "launchctl",
-    detail: formatSpawnDetail(retry),
+    detail: detail,
     tried,
   };
 }
