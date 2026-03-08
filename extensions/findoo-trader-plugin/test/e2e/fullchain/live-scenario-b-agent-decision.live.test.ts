@@ -1,9 +1,8 @@
 /**
  * Scenario B: Real LLM agent decision-making
  *
- * Tests: LLM (claude-haiku) → real tool calls → real data
- * Gate: LIVE=1 + ANTHROPIC_API_KEY
- * Cost: ~$0.01 per run (haiku + 3 rounds)
+ * Tests: LLM (kimi-k2.5 via OpenAI-compatible API) → real tool calls → real data
+ * Gate: LIVE=1 + OPENAI_API_KEY (litellm proxy with kimi-k2.5)
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -16,46 +15,102 @@ import {
   type ToolMap,
 } from "./live-harness.js";
 
-const HAS_API_KEY = !!process.env.ANTHROPIC_API_KEY;
+const HAS_API_KEY = !!process.env.OPENAI_API_KEY;
 const SKIP = !LIVE || !HAS_API_KEY;
 
-// Tool schema definitions for LLM (type-safe without static import)
-const TOOL_SCHEMAS = [
+const BASE_URL = process.env.OPENAI_BASE_URL ?? "http://150.109.16.195:8600/v1";
+const MODEL = process.env.OPENAI_MODEL ?? "moonshotai/kimi-k2.5";
+
+// OpenAI-compatible tool definitions
+const TOOL_DEFS = [
   {
-    name: "fin_fund_risk",
-    description: "Get current fund risk assessment",
-    input_schema: { type: "object" as const, properties: {}, required: [] },
-  },
-  {
-    name: "fin_strategy_tick",
-    description: "Drive strategy execution: fetch candles, run onBar(), place orders",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        strategyId: { type: "string", description: "Strategy ID to tick" },
-        dryRun: { type: "boolean", description: "If true, compute signals only" },
-      },
-      required: [],
+    type: "function",
+    function: {
+      name: "fin_fund_risk",
+      description: "Get current fund risk assessment",
+      parameters: { type: "object", properties: {}, required: [] },
     },
   },
   {
-    name: "fin_lifecycle_scan",
-    description: "Scan all strategies for lifecycle actions",
-    input_schema: { type: "object" as const, properties: {}, required: [] },
+    type: "function",
+    function: {
+      name: "fin_strategy_tick",
+      description: "Drive strategy execution: fetch candles, run onBar(), place orders",
+      parameters: {
+        type: "object",
+        properties: {
+          strategyId: { type: "string", description: "Strategy ID to tick" },
+          dryRun: { type: "boolean", description: "If true, compute signals only" },
+        },
+        required: [],
+      },
+    },
   },
-] as const;
+  {
+    type: "function",
+    function: {
+      name: "fin_lifecycle_scan",
+      description: "Scan all strategies for lifecycle actions",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+];
+
+/** Minimal OpenAI chat completion via fetch (no SDK dependency) */
+async function chatComplete(
+  messages: Array<Record<string, unknown>>,
+  tools?: typeof TOOL_DEFS,
+): Promise<{
+  content: string | null;
+  toolCalls: Array<{ id: string; function: { name: string; arguments: string } }> | null;
+  finishReason: string;
+}> {
+  const body: Record<string, unknown> = {
+    model: MODEL,
+    max_tokens: 1024,
+    messages,
+  };
+  if (tools && tools.length > 0) body.tools = tools;
+
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`LLM API ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  const data = (await res.json()) as {
+    choices: Array<{
+      message: {
+        content: string | null;
+        tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+      };
+      finish_reason: string;
+    }>;
+  };
+
+  const choice = data.choices[0]!;
+  return {
+    content: choice.message.content,
+    toolCalls: choice.message.tool_calls ?? null,
+    finishReason: choice.finish_reason,
+  };
+}
 
 describe.skipIf(SKIP)("Scenario B: Real LLM Agent Decision", { timeout: 180_000 }, () => {
   let ctx: LiveChainContext;
   let tools: ToolMap;
-  // biome-ignore lint: dynamic import for optional dep
-  let client: any;
 
   beforeAll(async () => {
     ctx = await createLiveChainServer();
     tools = ctx.tools;
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    client = new Anthropic();
 
     // Seed strategy for LLM to work with
     ctx.services.strategyRegistry.create({
@@ -81,87 +136,78 @@ describe.skipIf(SKIP)("Scenario B: Real LLM Agent Decision", { timeout: 180_000 
 
   async function runLlmWithTools(
     userMessage: string,
-    availableTools: (typeof TOOL_SCHEMAS)[number][],
+    availableTools: typeof TOOL_DEFS,
     maxRounds = 3,
   ): Promise<{ finalText: string; toolCalls: string[] }> {
-    // biome-ignore lint: dynamic types from optional dep
-    const messages: any[] = [{ role: "user", content: userMessage }];
-    const toolCalls: string[] = [];
+    const messages: Array<Record<string, unknown>> = [
+      {
+        role: "system",
+        content:
+          "You are a financial trading assistant. Use the available tools to answer questions with real data. Always call the provided tools before answering.",
+      },
+      { role: "user", content: userMessage },
+    ];
+    const collectedToolCalls: string[] = [];
 
     for (let round = 0; round < maxRounds; round++) {
-      const response = await client.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system:
-          "You are a financial trading assistant. Use the available tools to answer questions with real data.",
-        tools: availableTools,
-        messages,
-      });
+      const response = await chatComplete(messages, availableTools);
 
-      // Collect tool_use blocks
-      const toolUseBlocks = (
-        response.content as Array<{
-          type: string;
-          id?: string;
-          name?: string;
-          input?: unknown;
-          text?: string;
-        }>
-      ).filter((b) => b.type === "tool_use");
-
-      if (toolUseBlocks.length === 0 || response.stop_reason === "end_turn") {
-        const textBlocks = (response.content as Array<{ type: string; text?: string }>)
-          .filter((b) => b.type === "text")
-          .map((b) => b.text ?? "");
-        return { finalText: textBlocks.join("\n"), toolCalls };
+      if (
+        !response.toolCalls ||
+        response.toolCalls.length === 0 ||
+        response.finishReason === "stop"
+      ) {
+        return { finalText: response.content ?? "", toolCalls: collectedToolCalls };
       }
 
-      // Execute tools and feed results back
-      messages.push({ role: "assistant", content: response.content });
+      // Add assistant message with tool calls
+      messages.push({
+        role: "assistant",
+        content: response.content,
+        tool_calls: response.toolCalls,
+      });
 
-      const toolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string }> = [];
-      for (const block of toolUseBlocks) {
-        toolCalls.push(block.name!);
-        const tool = tools.get(block.name!);
+      // Execute each tool call and feed results back
+      for (const tc of response.toolCalls) {
+        const fnName = tc.function.name;
+        collectedToolCalls.push(fnName);
+
+        const tool = tools.get(fnName);
         if (!tool) {
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id!,
-            content: JSON.stringify({ error: `Tool ${block.name} not found` }),
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify({ error: `Tool ${fnName} not found` }),
           });
           continue;
         }
 
         try {
-          const result = await tool.execute(
-            block.id!,
-            (block.input ?? {}) as Record<string, unknown>,
-          );
+          const args = JSON.parse(tc.function.arguments || "{}");
+          const result = await tool.execute(tc.id, args);
           const parsed = parseResult(result);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id!,
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
             content: JSON.stringify(parsed),
           });
         } catch (err) {
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id!,
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
             content: JSON.stringify({ error: (err as Error).message }),
           });
         }
       }
-
-      messages.push({ role: "user", content: toolResults });
     }
 
-    return { finalText: "", toolCalls };
+    return { finalText: "", toolCalls: collectedToolCalls };
   }
 
   it("B.1 — LLM calls fin_fund_risk and returns real riskLevel", async () => {
     const { toolCalls, finalText } = await runLlmWithTools(
       "What is the current fund risk level? Use the risk assessment tool.",
-      [TOOL_SCHEMAS[0]!],
+      [TOOL_DEFS[0]!],
     );
 
     expect(toolCalls).toContain("fin_fund_risk");
@@ -171,7 +217,7 @@ describe.skipIf(SKIP)("Scenario B: Real LLM Agent Decision", { timeout: 180_000 
   it("B.2 — LLM calls fin_strategy_tick and returns real signal info", async () => {
     const { toolCalls, finalText } = await runLlmWithTools(
       "Run a strategy tick for strategy 'llm-test-sma' in dry run mode and tell me what happened.",
-      [TOOL_SCHEMAS[1]!],
+      [TOOL_DEFS[1]!],
     );
 
     expect(toolCalls).toContain("fin_strategy_tick");
@@ -181,7 +227,7 @@ describe.skipIf(SKIP)("Scenario B: Real LLM Agent Decision", { timeout: 180_000 
   it("B.3 — LLM calls fin_lifecycle_scan and returns real actions", async () => {
     const { toolCalls, finalText } = await runLlmWithTools(
       "Scan all strategies for lifecycle actions. What actions are needed?",
-      [TOOL_SCHEMAS[2]!],
+      [TOOL_DEFS[2]!],
     );
 
     expect(toolCalls).toContain("fin_lifecycle_scan");
@@ -191,14 +237,13 @@ describe.skipIf(SKIP)("Scenario B: Real LLM Agent Decision", { timeout: 180_000 
   it("B.4 — LLM chains 3 different fin_* tools in sequence", async () => {
     const { toolCalls, finalText } = await runLlmWithTools(
       "Please do a full portfolio health check: 1) check fund risk, 2) run a lifecycle scan, 3) tick the strategy 'llm-test-sma' in dry-run mode. Summarize all findings.",
-      [...TOOL_SCHEMAS],
+      [...TOOL_DEFS],
     );
 
     // Should have called at least 2 different tools
     const uniqueTools = new Set(toolCalls);
     expect(uniqueTools.size).toBeGreaterThanOrEqual(2);
     expect(finalText.length).toBeGreaterThan(0);
-    // Final text should reference real data
     expect(finalText).toBeTruthy();
   }, 90_000);
 });
