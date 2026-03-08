@@ -603,7 +603,10 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "litellm",
       mode: "api_key",
     });
-    return applyLitellmConfig(nextConfig);
+    return applyLitellmConfig(nextConfig, {
+      baseUrl: opts.litellmBaseUrl?.trim() || undefined,
+      modelId: opts.litellmModel?.trim() || undefined,
+    });
   }
 
   if (authChoice === "ai-gateway-api-key") {

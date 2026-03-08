@@ -42,6 +42,11 @@ import {
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
 import {
+  buildLitellmModelDefinition,
+  LITELLM_DEFAULT_BASE_URL,
+  LITELLM_DEFAULT_MODEL_ID,
+} from "./litellm-models.js";
+import {
   MINIMAX_OAUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
@@ -1297,6 +1302,60 @@ export async function resolveImplicitProviders(params: {
   const kilocodeKey = resolveProviderApiKey("kilocode").apiKey;
   if (kilocodeKey) {
     providers.kilocode = { ...(await buildKilocodeProviderWithDiscovery()), apiKey: kilocodeKey };
+  }
+
+  // LiteLLM provider - uses metadata to store the user-configured base URL
+  // (follows the same pattern as Cloudflare AI Gateway)
+  const litellmProfiles = listProfilesForProvider(authStore, "litellm");
+  for (const profileId of litellmProfiles) {
+    const cred = authStore.profiles[profileId];
+    if (cred?.type !== "api_key") {
+      continue;
+    }
+    const baseUrl =
+      cred.metadata?.baseUrl?.trim() ||
+      process.env.LITELLM_BASE_URL?.trim() ||
+      LITELLM_DEFAULT_BASE_URL;
+    if (!baseUrl) {
+      continue;
+    }
+    const keyRef = coerceSecretRef(cred.keyRef);
+    const apiKey =
+      resolveEnvApiKeyVarName("litellm") ??
+      cred.key?.trim() ??
+      (keyRef?.source === "env" && keyRef.id.trim() ? keyRef.id.trim() : "") ??
+      "";
+    if (!apiKey) {
+      continue;
+    }
+    providers.litellm = {
+      baseUrl,
+      api: "openai-completions",
+      apiKey,
+      models: [
+        buildLitellmModelDefinition({
+          id: LITELLM_DEFAULT_MODEL_ID,
+          name: LITELLM_DEFAULT_MODEL_ID,
+        }),
+      ],
+    };
+    break;
+  }
+
+  // LiteLLM fallback - env var only (no auth profile), use default base URL
+  if (!providers.litellm && resolveEnvApiKeyVarName("litellm")) {
+    const baseUrl = process.env.LITELLM_BASE_URL?.trim() || LITELLM_DEFAULT_BASE_URL;
+    providers.litellm = {
+      baseUrl,
+      api: "openai-completions",
+      apiKey: resolveEnvApiKeyVarName("litellm")!,
+      models: [
+        buildLitellmModelDefinition({
+          id: LITELLM_DEFAULT_MODEL_ID,
+          name: LITELLM_DEFAULT_MODEL_ID,
+        }),
+      ],
+    };
   }
 
   return providers;

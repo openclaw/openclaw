@@ -1,3 +1,4 @@
+import { LITELLM_DEFAULT_MODEL_ID } from "../agents/litellm-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyAgentDefaultModelPrimary,
@@ -6,7 +7,7 @@ import {
 import { LITELLM_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
 
 export const LITELLM_BASE_URL = "http://localhost:4000";
-export const LITELLM_DEFAULT_MODEL_ID = "claude-opus-4-6";
+export { LITELLM_DEFAULT_MODEL_ID };
 const LITELLM_DEFAULT_CONTEXT_WINDOW = 128_000;
 const LITELLM_DEFAULT_MAX_TOKENS = 8_192;
 const LITELLM_DEFAULT_COST = {
@@ -36,30 +37,50 @@ function buildLitellmModelDefinition(): {
   };
 }
 
-export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyLitellmProviderConfig(
+  cfg: OpenClawConfig,
+  overrides?: { baseUrl?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = overrides?.modelId || LITELLM_DEFAULT_MODEL_ID;
+  const modelRef = `litellm/${modelId}`;
+
   const models = { ...cfg.agents?.defaults?.models };
-  models[LITELLM_DEFAULT_MODEL_REF] = {
-    ...models[LITELLM_DEFAULT_MODEL_REF],
-    alias: models[LITELLM_DEFAULT_MODEL_REF]?.alias ?? "LiteLLM",
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? "LiteLLM",
   };
 
   const defaultModel = buildLitellmModelDefinition();
+  if (modelId !== LITELLM_DEFAULT_MODEL_ID) {
+    defaultModel.id = modelId;
+    defaultModel.name = modelId;
+    // Non-default models: use conservative capabilities since we don't
+    // know the actual backend model's features
+    defaultModel.reasoning = false;
+    defaultModel.input = ["text"];
+  }
 
   const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
   const resolvedBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+    overrides?.baseUrl ||
+    (typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "") ||
+    LITELLM_BASE_URL;
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "litellm",
     api: "openai-completions",
-    baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
+    baseUrl: resolvedBaseUrl,
     defaultModel,
-    defaultModelId: LITELLM_DEFAULT_MODEL_ID,
+    defaultModelId: modelId,
   });
 }
 
-export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyLitellmProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, LITELLM_DEFAULT_MODEL_REF);
+export function applyLitellmConfig(
+  cfg: OpenClawConfig,
+  overrides?: { baseUrl?: string; modelId?: string },
+): OpenClawConfig {
+  const modelId = overrides?.modelId || LITELLM_DEFAULT_MODEL_ID;
+  const next = applyLitellmProviderConfig(cfg, overrides);
+  return applyAgentDefaultModelPrimary(next, `litellm/${modelId}`);
 }

@@ -138,6 +138,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["opencode-zen"],
   },
   {
+    value: "litellm",
+    label: "LiteLLM",
+    hint: "OpenAI-compatible proxy (self-hosted)",
+    choices: ["litellm-api-key"],
+  },
+  {
     value: "xiaomi",
     label: "Xiaomi",
     hint: "API key",
@@ -166,12 +172,6 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
-  },
-  {
-    value: "litellm",
-    label: "LiteLLM",
-    hint: "Unified LLM gateway (100+ providers)",
-    choices: ["litellm-api-key"],
   },
   {
     value: "cloudflare-ai-gateway",

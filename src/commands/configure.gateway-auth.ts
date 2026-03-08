@@ -2,7 +2,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
@@ -14,6 +14,7 @@ import {
 } from "./model-picker.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 import { randomToken } from "./onboard-helpers.js";
+import type { AuthChoice } from "./onboard-types.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 
@@ -80,40 +81,57 @@ export async function promptAuthConfig(
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
-  const authChoice = await promptAuthChoiceGrouped({
-    prompter,
-    store: ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: false,
-    }),
-    includeSkip: true,
-  });
-
   let next = cfg;
-  if (authChoice === "custom-api-key") {
-    const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
-    next = customResult.config;
-  } else if (authChoice !== "skip") {
-    const applied = await applyAuthChoice({
-      authChoice,
-      config: next,
+  let authChoice: AuthChoice;
+
+  // Loop to allow retrying auth choice if user cancels during configuration
+  while (true) {
+    authChoice = await promptAuthChoiceGrouped({
       prompter,
-      runtime,
-      setDefaultModel: true,
+      store: ensureAuthProfileStore(undefined, {
+        allowKeychainPrompt: false,
+      }),
+      includeSkip: true,
     });
-    next = applied.config;
-  } else {
-    const modelSelection = await promptDefaultModel({
-      config: next,
-      prompter,
-      allowKeep: true,
-      ignoreAllowlist: true,
-      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
-    });
-    if (modelSelection.config) {
-      next = modelSelection.config;
-    }
-    if (modelSelection.model) {
-      next = applyPrimaryModel(next, modelSelection.model);
+
+    if (authChoice === "custom-api-key") {
+      const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
+      next = customResult.config;
+      break;
+    } else if (authChoice !== "skip") {
+      try {
+        const applied = await applyAuthChoice({
+          authChoice,
+          config: next,
+          prompter,
+          runtime,
+          setDefaultModel: true,
+        });
+        next = applied.config;
+        break; // Success - exit the loop
+      } catch (error) {
+        // If user cancelled to go back to auth selection, loop again
+        if (error instanceof WizardCancelledError) {
+          continue;
+        }
+        // Re-throw other errors
+        throw error;
+      }
+    } else {
+      const modelSelection = await promptDefaultModel({
+        config: next,
+        prompter,
+        allowKeep: true,
+        ignoreAllowlist: true,
+        preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      });
+      if (modelSelection.config) {
+        next = modelSelection.config;
+      }
+      if (modelSelection.model) {
+        next = applyPrimaryModel(next, modelSelection.model);
+      }
+      break; // Skip selected - exit the loop
     }
   }
 
