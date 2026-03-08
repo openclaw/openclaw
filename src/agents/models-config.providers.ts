@@ -52,6 +52,7 @@ import {
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import { SARVAM_BASE_URL, SARVAM_MODEL_CATALOG } from "./sarvam-models.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -1094,6 +1095,14 @@ async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConfig> {
   };
 }
 
+function buildSarvamProvider(): ProviderConfig {
+  return {
+    baseUrl: SARVAM_BASE_URL,
+    api: "openai-completions",
+    models: SARVAM_MODEL_CATALOG,
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -1293,6 +1302,11 @@ export async function resolveImplicitProviders(params: {
   const kilocodeKey = resolveProviderApiKey("kilocode").apiKey;
   if (kilocodeKey) {
     providers.kilocode = { ...(await buildKilocodeProviderWithDiscovery()), apiKey: kilocodeKey };
+  }
+
+  const sarvamKey = resolveProviderApiKey("sarvam").apiKey;
+  if (sarvamKey) {
+    providers.sarvam = { ...buildSarvamProvider(), apiKey: sarvamKey };
   }
 
   return providers;

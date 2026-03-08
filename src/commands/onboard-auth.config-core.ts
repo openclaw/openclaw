@@ -12,6 +12,11 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
+  SARVAM_BASE_URL,
+  SARVAM_DEFAULT_MODEL_REF,
+  SARVAM_MODEL_CATALOG,
+} from "../agents/sarvam-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -325,6 +330,35 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, VENICE_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Sarvam provider configuration without changing the default model.
+ * Registers Sarvam models and sets up the provider, but preserves existing model selection.
+ */
+export function applySarvamProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[SARVAM_DEFAULT_MODEL_REF] = {
+    ...models[SARVAM_DEFAULT_MODEL_REF],
+    alias: models[SARVAM_DEFAULT_MODEL_REF]?.alias ?? "Sarvam 30B",
+  };
+
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "sarvam",
+    api: "openai-completions",
+    baseUrl: SARVAM_BASE_URL,
+    catalogModels: SARVAM_MODEL_CATALOG,
+  });
+}
+
+/**
+ * Apply Sarvam provider configuration AND set Sarvam as the default model.
+ * Use this when Sarvam is the primary provider choice during onboarding.
+ */
+export function applySarvamConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applySarvamProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, SARVAM_DEFAULT_MODEL_REF);
 }
 
 /**
