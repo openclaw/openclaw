@@ -275,6 +275,31 @@ export function buildEmbeddedRunPayloads(params: {
     hasUserFacingAssistantReply = true;
   }
 
+  const onlySilentFromAssistant =
+    hasUserFacingAssistantReply &&
+    replyItems.every(
+      (item) =>
+        item.isError ||
+        item.isReasoning ||
+        !item.text ||
+        isSilentReplyText(item.text, SILENT_REPLY_TOKEN),
+    );
+
+  // When the model replies with only TTS tool call(s) (no separate text block),
+  // or when the only assistant text is silent (e.g. NO_REPLY), use all TTS tools'
+  // meta (the text that was spoken) as reply text so Discord voice and other
+  // consumers get the full reply to play.
+  if ((!hasUserFacingAssistantReply || onlySilentFromAssistant) && params.toolMetas.length > 0) {
+    const ttsChunks = params.toolMetas
+      .filter((e) => e.toolName?.trim().toLowerCase() === "tts" && e.meta?.trim())
+      .map((e) => e.meta!.trim())
+      .filter((text) => !isSilentReplyText(text, SILENT_REPLY_TOKEN));
+    if (ttsChunks.length > 0) {
+      replyItems.push({ text: ttsChunks.join(" ") });
+      hasUserFacingAssistantReply = true;
+    }
+  }
+
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
