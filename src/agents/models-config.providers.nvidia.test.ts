@@ -71,10 +71,9 @@ describe("MiniMax implicit provider (#15275)", () => {
             "minimax-portal:default": {
               type: "oauth",
               provider: "minimax-portal",
-              oauth: {
-                access: "token",
-                expires: Date.now() + 60_000,
-              },
+              access: "token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
             },
           },
         },
@@ -86,6 +85,18 @@ describe("MiniMax implicit provider (#15275)", () => {
 
     const providers = await resolveImplicitProviders({ agentDir });
     expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+  });
+
+  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await withEnvAsync({ MINIMAX_OAUTH_TOKEN: "portal-token" }, async () => {
+      const providers = await resolveImplicitProviders({ agentDir });
+      expect(providers?.["minimax-portal"]).toBeDefined();
+      expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+      expect(providers?.["minimax-portal"]?.models?.some((m) => m.id === "MiniMax-VL-01")).toBe(
+        true,
+      );
+    });
   });
 });
 

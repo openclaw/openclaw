@@ -95,6 +95,27 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
     expect(killSpy).toHaveBeenCalledWith(6002, "SIGKILL");
   });
 
+  it("uses explicit port override when provided", () => {
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: ["p7001", "copenclaw"].join("\n"),
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const killed = cleanStaleGatewayProcessesSync(19999);
+
+    expect(killed).toEqual([7001]);
+    expect(resolveGatewayPortMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "/usr/sbin/lsof",
+      ["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"],
+      expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
+    );
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGKILL");
+  });
+
   it("returns empty when no stale listeners are found", () => {
     spawnSyncMock.mockReturnValue({
       error: undefined,

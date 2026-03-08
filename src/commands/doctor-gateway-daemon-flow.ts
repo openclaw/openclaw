@@ -194,7 +194,6 @@ export async function maybeRepairGatewayDaemon(params: {
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port,
-          token: tokenResolution.token,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
           config: params.cfg,
