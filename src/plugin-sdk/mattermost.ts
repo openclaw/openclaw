@@ -78,6 +78,7 @@ export {
 } from "../config/zod-schema.core.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { rawDataToString } from "../infra/ws.js";
+export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { isLoopbackHost, isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
