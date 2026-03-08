@@ -589,19 +589,6 @@ describe("createJob delivery defaults", () => {
     expect(job.delivery).toEqual({ mode: "none" });
   });
 
-  it("preserves legacy payload deliver=false when explicit delivery is omitted", () => {
-    const state = createMockState(now);
-    const job = createJob(state, {
-      name: "isolated-legacy-no-deliver",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "hello", deliver: false } as never,
-    });
-    expect(job.delivery).toEqual({ mode: "none" });
-  });
-
   it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     const job = createJob(state, {

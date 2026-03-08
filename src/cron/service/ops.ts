@@ -1,3 +1,4 @@
+import { normalizeCronJobCreate } from "../normalize.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -234,7 +235,11 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const job = createJob(state, input);
+    const normalizedInput = normalizeCronJobCreate(input);
+    if (!normalizedInput) {
+      throw new Error("invalid cron job input");
+    }
+    const job = createJob(state, normalizedInput);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
