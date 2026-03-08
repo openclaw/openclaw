@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import { sessionsClearCommand, sessionsRemoveCommand } from "../../commands/sessions-delete.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -154,6 +155,98 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
     });
   sessionsCmd.enablePositionalOptions();
+
+  sessionsCmd
+    .command("rm <key>")
+    .description("Remove one session by key")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to mutate (default: configured default agent)")
+    .option("--all-agents", "Apply to all configured agents", false)
+    .option("--dry-run", "Preview matching sessions without writing", false)
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions rm agent:main:main", "Delete one session by exact key."],
+          [
+            "openclaw sessions --all-agents rm agent:main:main --dry-run",
+            "Preview cross-agent key matches.",
+          ],
+          ["openclaw sessions rm agent:main:main --json", "Machine-readable output."],
+        ])}`,
+    )
+    .action(async (key, opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsRemoveCommand(
+          {
+            key,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("clear")
+    .description("Remove sessions in bulk")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to mutate (default: configured default agent)")
+    .option("--all-agents", "Apply to all configured agents", false)
+    .option("--older-than <minutes>", "Only remove sessions older than this many minutes")
+    .option("--dry-run", "Preview matching sessions without writing", false)
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw sessions clear --dry-run",
+            "Preview deleting all sessions in the active store.",
+          ],
+          ["openclaw sessions clear --older-than 1440", "Delete sessions older than one day."],
+          [
+            "openclaw sessions --all-agents clear --older-than 120",
+            "Apply age filter to all agents.",
+          ],
+        ])}`,
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsClearCommand(
+          {
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            olderThan: opts.olderThan as string | undefined,
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 
   sessionsCmd
     .command("cleanup")
