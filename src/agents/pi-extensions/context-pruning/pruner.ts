@@ -46,7 +46,7 @@ function estimateJoinedTextLength(parts: string[]): number {
   }
   let len = 0;
   for (const p of parts) {
-    len += p.length;
+    len += estimateStringChars(p);
   }
   // Joined with "\n" separators between blocks.
   len += Math.max(0, parts.length - 1);
