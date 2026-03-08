@@ -1179,8 +1179,9 @@ describe("chrome extension relay server", () => {
         bindHost: "0.0.0.0",
       });
       expect(relay.port).toBe(port);
+      // Verify the server actually bound to 0.0.0.0, not the cdpUrl host.
+      expect(relay.bindHost).toBe("0.0.0.0");
 
-      // Relay should be reachable on loopback (0.0.0.0 accepts all interfaces).
       const res = await fetch(`http://127.0.0.1:${port}/`);
       expect(res.status).toBe(200);
     },
@@ -1194,6 +1195,7 @@ describe("chrome extension relay server", () => {
       cdpUrl = `http://127.0.0.1:${port}`;
       const relay = await ensureChromeExtensionRelayServer({ cdpUrl });
       expect(relay.host).toBe("127.0.0.1");
+      expect(relay.bindHost).toBe("127.0.0.1");
 
       const res = await fetch(`http://127.0.0.1:${port}/`);
       expect(res.status).toBe(200);
