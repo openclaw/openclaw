@@ -180,6 +180,51 @@ function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+// Keep writes compatible with legacy configs by mapping top-level
+// channels.whatsapp.enabled into channels.whatsapp.accounts.default.enabled.
+function normalizeLegacyWhatsAppEnabledForWrite(value: unknown): unknown {
+  if (!isWritePlainObject(value)) {
+    return value;
+  }
+  const channels = value.channels;
+  if (!isWritePlainObject(channels)) {
+    return value;
+  }
+  const whatsapp = channels.whatsapp;
+  if (!isWritePlainObject(whatsapp)) {
+    return value;
+  }
+  if (!hasOwnObjectKey(whatsapp, "enabled")) {
+    return value;
+  }
+
+  const nextWhatsApp: Record<string, unknown> = { ...whatsapp };
+  const legacyEnabled = nextWhatsApp.enabled;
+  delete nextWhatsApp.enabled;
+
+  if (typeof legacyEnabled === "boolean") {
+    const accounts = isWritePlainObject(nextWhatsApp.accounts)
+      ? ({ ...nextWhatsApp.accounts } as Record<string, unknown>)
+      : {};
+    const defaultAccount = isWritePlainObject(accounts.default)
+      ? ({ ...accounts.default } as Record<string, unknown>)
+      : {};
+    if (!hasOwnObjectKey(defaultAccount, "enabled")) {
+      defaultAccount.enabled = legacyEnabled;
+    }
+    accounts.default = defaultAccount;
+    nextWhatsApp.accounts = accounts;
+  }
+
+  return {
+    ...value,
+    channels: {
+      ...channels,
+      whatsapp: nextWhatsApp,
+    },
+  };
+}
+
 const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
 
 type UnsetPathWriteResult = {
@@ -275,7 +320,6 @@ function unsetPathForWrite(
   }
   return { changed: false, next: root };
 }
-
 export function resolveConfigSnapshotHash(snapshot: {
   hash?: string;
   raw?: string | null;
@@ -1072,6 +1116,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         envRefMap = null;
       }
     }
+
+    persistCandidate = normalizeLegacyWhatsAppEnabledForWrite(persistCandidate);
 
     const validated = validateConfigObjectRawWithPlugins(persistCandidate);
     if (!validated.ok) {

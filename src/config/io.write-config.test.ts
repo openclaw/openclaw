@@ -363,6 +363,71 @@ describe("config io write", () => {
     });
   });
 
+  it("normalizes legacy channels.whatsapp.enabled during writes", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            channels: {
+              whatsapp: {
+                dmPolicy: "pairing",
+                allowFrom: ["+15555550123"],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      const next = structuredClone(snapshot.config) as Record<string, unknown>;
+      const channels =
+        next.channels && typeof next.channels === "object"
+          ? (next.channels as Record<string, unknown>)
+          : {};
+      const whatsapp =
+        channels.whatsapp && typeof channels.whatsapp === "object"
+          ? (channels.whatsapp as Record<string, unknown>)
+          : {};
+      channels.whatsapp = {
+        ...whatsapp,
+        enabled: false,
+      };
+      next.channels = channels;
+
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        channels?: {
+          whatsapp?: {
+            enabled?: boolean;
+            accounts?: {
+              default?: {
+                enabled?: boolean;
+              };
+            };
+          };
+        };
+      };
+
+      expect(persisted.channels?.whatsapp?.enabled).toBeUndefined();
+      expect(persisted.channels?.whatsapp?.accounts?.default?.enabled).toBe(false);
+    });
+  });
+
   it("keeps env refs in arrays when appending entries", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
