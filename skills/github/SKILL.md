@@ -158,6 +158,7 @@ gh issue list --repo owner/repo --state open --json number,title,labels,createdA
 
 ## Notes
 
+- **Multi-line Body Text:** When creating or commenting on issues/PRs with multi-line text (markdown, lists, etc.), NEVER use `--body "..."` with escaped newlines (`\n`). Bash escaping will break the markdown. ALWAYS use a heredoc: `gh issue create --title "..." --body-file - <<'EOF'`
 - Always specify `--repo owner/repo` when not in a git directory
 - Use URLs directly: `gh pr view https://github.com/owner/repo/pull/55`
 - Rate limits apply; use `gh api --cache 1h` for repeated queries
