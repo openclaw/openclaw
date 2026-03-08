@@ -21,7 +21,7 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { warn } from "../../globals.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
-import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
+import { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -57,6 +57,72 @@ const { App, HTTPReceiver } = slackBolt;
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+
+type SlackUrlVerificationPayload = {
+  type: "url_verification";
+  challenge: string;
+};
+
+function hasAnySlackSignatureHeader(req: IncomingMessage): boolean {
+  const signature = req.headers["x-slack-signature"];
+  const timestamp = req.headers["x-slack-request-timestamp"];
+  const signatureValue = (Array.isArray(signature) ? signature[0] : signature)?.trim();
+  const timestampValue = (Array.isArray(timestamp) ? timestamp[0] : timestamp)?.trim();
+  return Boolean(signatureValue || timestampValue);
+}
+
+function isSlackUrlVerificationPayload(value: unknown): value is SlackUrlVerificationPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return record.type === "url_verification" && typeof record.challenge === "string";
+}
+
+async function maybeHandleUnsignedSlackUrlVerification(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  if (hasAnySlackSignatureHeader(req)) {
+    return false;
+  }
+
+  const parsed = await readJsonBodyWithLimit(req, {
+    maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
+    timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
+    emptyObjectOnEmpty: false,
+  });
+  if (!parsed.ok) {
+    const statusCode =
+      parsed.code === "PAYLOAD_TOO_LARGE"
+        ? 413
+        : parsed.code === "REQUEST_BODY_TIMEOUT"
+          ? 408
+          : 400;
+    if (!res.headersSent) {
+      res.statusCode = statusCode;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(parsed.error);
+    }
+    return true;
+  }
+
+  if (!isSlackUrlVerificationPayload(parsed.value)) {
+    if (!res.headersSent) {
+      res.statusCode = 401;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Missing Slack signature");
+    }
+    return true;
+  }
+
+  if (!res.headersSent) {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ challenge: parsed.value.challenge }));
+  }
+  return true;
+}
 
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
@@ -210,6 +276,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
+          if (await maybeHandleUnsignedSlackUrlVerification(req, res)) {
+            return;
+          }
           const guard = installRequestBodyLimitGuard(req, res, {
             maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
             timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
@@ -517,4 +586,5 @@ export const __testing = {
   resolveDefaultGroupPolicy,
   getSocketEmitter,
   waitForSlackSocketDisconnect,
+  maybeHandleUnsignedSlackUrlVerification,
 };
