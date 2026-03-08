@@ -68,6 +68,28 @@ function trimOutput(text: string, maxChars?: number): string {
   return trimmed.slice(0, maxChars).trim();
 }
 
+const KNOWN_AUDIO_HALLUCINATION_PATTERNS = [
+  /^\s*субтитры\s+сделал[аи]?\s+[\p{L}\d_. -]{2,}\s*$/iu,
+  /^\s*subtitles?\s+by\s+[\p{L}\d_. -]{2,}\s*$/iu,
+  /^\s*translated\s+by\s+[\p{L}\d_. -]{2,}\s*$/iu,
+];
+
+export function sanitizeAudioTranscript(text: string): string {
+  const trimmed = trimOutput(text);
+  if (!trimmed) {
+    return trimmed;
+  }
+  for (const pattern of KNOWN_AUDIO_HALLUCINATION_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      if (shouldLogVerbose()) {
+        logVerbose(`audio-transcription: dropped known hallucination transcript: ${trimmed}`);
+      }
+      return "";
+    }
+  }
+  return trimmed;
+}
+
 function extractSherpaOnnxText(raw: string): string | null {
   const tryParse = (value: string): string | null => {
     const trimmed = value.trim();
@@ -530,7 +552,7 @@ export async function runProviderEntry(params: {
     return {
       kind: "audio.transcription",
       attachmentIndex: params.attachmentIndex,
-      text: trimOutput(result.text, maxChars),
+      text: trimOutput(sanitizeAudioTranscript(result.text), maxChars),
       provider: providerId,
       model: result.model ?? model,
     };
