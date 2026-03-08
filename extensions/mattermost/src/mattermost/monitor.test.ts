@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostReplyRootId,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -105,5 +106,28 @@ describe("mattermost mention gating", () => {
     expect(account.requireMention).toBe(true);
     expect(decision.shouldRequireMention).toBe(true);
     expect(decision.dropReason).toBe("missing-mention");
+  });
+});
+
+describe("resolveMattermostReplyRootId", () => {
+  it("uses replyToId for top-level replies", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        replyToId: "inbound-post-123",
+      }),
+    ).toBe("inbound-post-123");
+  });
+
+  it("keeps the thread root when replying inside an existing thread", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        threadRootId: "thread-root-456",
+        replyToId: "child-post-789",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("falls back to undefined when neither reply target is available", () => {
+    expect(resolveMattermostReplyRootId({})).toBeUndefined();
   });
 });
