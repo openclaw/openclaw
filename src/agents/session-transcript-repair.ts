@@ -143,10 +143,14 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: "[openclaw] missing tool result in session history; inserted synthetic result for transcript repair.",
       },
     ],
-    isError: true,
+    // Mark synthetic tool results as non-error so they don't surface as
+    // fatal tool failures in user-facing payloads or compaction summaries.
+    // These entries exist only to satisfy strict provider requirements for
+    // tool_use/tool_result pairing when repairing legacy session history.
+    isError: false,
     timestamp: Date.now(),
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
