@@ -128,7 +128,7 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   const pidValue = entries.pid;
   if (pidValue) {
     const pid = Number.parseInt(pidValue, 10);
-    if (Number.isFinite(pid)) {
+    if (Number.isFinite(pid) && pid > 0) {
       info.pid = pid;
     }
   }
