@@ -267,13 +267,6 @@ jobs:
         with:
           submodules: false
 
-      - name: Ensure secrets base commit (PR fast path)
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
-
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
