@@ -250,4 +250,83 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("persists payload.model as modelOverride/providerOverride for subagent callback turns (#17451)", async () => {
+    // When payload.model is set, modelOverride and providerOverride must also be
+    // persisted on the session entry. The inbound auto-reply path (getReplyFromConfig)
+    // uses these fields — not modelProvider/model — when resolving the model for
+    // subsequent agent turns (e.g. subagent completion callbacks). Without this,
+    // callbacks fall back to the agent's default model instead of the cron payload model.
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    // Runtime tracking fields
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    // Session-level override fields — required for subsequent turns including callbacks
+    expect(cronSession.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.providerOverride).toBe("anthropic");
+  });
+
+  it("does NOT set modelOverride/providerOverride when payload.model is absent (#17451)", async () => {
+    // Without payload.model, the session should not get a model override.
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(cronSession.sessionEntry.modelOverride).toBeUndefined();
+    expect(cronSession.sessionEntry.providerOverride).toBeUndefined();
+  });
+
+  it("clears stale modelOverride/providerOverride when payload.model is absent (#17451)", async () => {
+    // When a prior run had payload.model set, resolveCronSession preserves
+    // the old modelOverride/providerOverride via ...entry spread. If the current
+    // run omits payload.model, those stale overrides must be explicitly cleared so
+    // future turns (including subagent callbacks) use the agent's defaults instead
+    // of the previous job's model.
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    // Simulate a session entry that previously had a cron-set model override.
+    cronSession.sessionEntry = makeFreshSessionEntry({
+      modelOverride: "anthropic/claude-haiku-4-5",
+      providerOverride: "anthropic",
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    // Stale overrides must be cleared, not left carrying the old model.
+    expect(cronSession.sessionEntry.modelOverride).toBeUndefined();
+    expect(cronSession.sessionEntry.providerOverride).toBeUndefined();
+  });
+
+  it("does NOT set modelOverride/providerOverride when payload.model is soft-rejected (#17451)", async () => {
+    // When resolveAllowedModelRef rejects the model with "model not allowed:" (soft
+    // warning), the code logs a warning and falls back to agent defaults without
+    // updating provider/model. The payloadModelApplied flag must stay false so we
+    // don't write the fallback values as a session-level override — doing so would
+    // suppress any user-set /model override on subsequent turns.
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: anthropic/claude-sonnet-4-6",
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    // No model override must be persisted — fallback (default) model was used.
+    expect(cronSession.sessionEntry.modelOverride).toBeUndefined();
+    expect(cronSession.sessionEntry.providerOverride).toBeUndefined();
+    // Runtime fields reflect the agent default, not the rejected payload model.
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("not allowed"));
+  });
 });

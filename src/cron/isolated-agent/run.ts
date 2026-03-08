@@ -304,6 +304,9 @@ export async function runCronIsolatedAgentTurn(params: {
   const modelOverrideRaw =
     params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
   const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
+  // Track whether payload.model was successfully resolved. Used below to decide
+  // whether to persist session-level overrides (modelOverride/providerOverride).
+  let payloadModelApplied = false;
   if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: cfgWithAgentDefaults,
@@ -323,6 +326,7 @@ export async function runCronIsolatedAgentTurn(params: {
     } else {
       provider = resolvedOverride.ref.provider;
       model = resolvedOverride.ref.model;
+      payloadModelApplied = true;
     }
   }
   const now = Date.now();
@@ -492,6 +496,28 @@ export async function runCronIsolatedAgentTurn(params: {
   cronSession.sessionEntry.modelProvider = provider;
   cronSession.sessionEntry.model = model;
   cronSession.sessionEntry.systemSent = true;
+  // Persist (or clear) the session-level model override (modelOverride/providerOverride).
+  // The inbound auto-reply path (getReplyFromConfig) uses these fields — NOT
+  // modelProvider/model — when resolving the model for new turns such as subagent
+  // completion callbacks (#17451).
+  //
+  // Only write the override when payload.model was *successfully* resolved. If the
+  // model was rejected (soft-warning path, lines above), payloadModelApplied is
+  // false and provider/model hold fallback values — writing them here would
+  // suppress any user-set /model override on subsequent turns (Greptile review).
+  //
+  // When payload.model is absent or rejected, explicitly clear any stale
+  // cron-set override that may have been preserved from a prior run via the
+  // resolveCronSession spread (...entry). Without this, removing payload.model
+  // from a job config would leave the old model forced on all future runs (Codex
+  // review).
+  if (payloadModelApplied) {
+    cronSession.sessionEntry.modelOverride = model;
+    cronSession.sessionEntry.providerOverride = provider;
+  } else {
+    delete cronSession.sessionEntry.modelOverride;
+    delete cronSession.sessionEntry.providerOverride;
+  }
   try {
     await persistSessionEntry();
   } catch (err) {
