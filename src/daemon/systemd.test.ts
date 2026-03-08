@@ -12,6 +12,7 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
@@ -220,6 +221,45 @@ describe("resolveSystemdUserUnitPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
+  });
+});
+
+describe("readSystemdServiceExecStart", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("loads OPENCLAW_GATEWAY_TOKEN from EnvironmentFile entries", async () => {
+    const unitPath = "/home/test/.config/systemd/user/openclaw-gateway.service";
+    const envFilePath = "/home/test/.openclaw/secrets/gateway.env";
+    const envFileDirective = "%h/.openclaw/secrets/gateway.env";
+    vi.spyOn(fs, "readFile").mockImplementation(async (target, encoding) => {
+      expect(encoding).toBe("utf8");
+      if (target === unitPath) {
+        return [
+          "[Service]",
+          "ExecStart=/usr/bin/node /usr/local/bin/openclaw gateway --port 18789",
+          `EnvironmentFile=${envFileDirective}`,
+          "",
+        ].join("\n");
+      }
+      if (target === envFilePath) {
+        return [
+          "# comment",
+          "OPENCLAW_GATEWAY_TOKEN=from-env-file",
+          "PATH=/usr/local/bin:/usr/bin:/bin",
+          "",
+        ].join("\n");
+      }
+      throw Object.assign(new Error(`unexpected path: ${String(target)}`), { code: "ENOENT" });
+    });
+
+    const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
+
+    expect(command?.environment).toMatchObject({
+      OPENCLAW_GATEWAY_TOKEN: "from-env-file",
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+    });
   });
 });
 

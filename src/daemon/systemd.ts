@@ -56,6 +56,84 @@ export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
+function unquoteSystemdValue(raw: string): string {
+  const trimmed = raw.trim();
+  if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed;
+  }
+  let out = "";
+  let escapeNext = false;
+  for (const ch of trimmed.slice(1, -1)) {
+    if (escapeNext) {
+      out += ch;
+      escapeNext = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function resolveSystemdEnvironmentFilePath(
+  raw: string,
+  env: GatewayServiceEnv,
+): {
+  path: string;
+  optional: boolean;
+} | null {
+  let value = unquoteSystemdValue(raw);
+  let optional = false;
+  if (value.startsWith("-")) {
+    optional = true;
+    value = value.slice(1).trim();
+  }
+  if (!value) {
+    return null;
+  }
+  const home = toPosixPath(resolveHomeDir(env));
+  const resolvedPath = value.replaceAll("%h", home);
+  return { path: resolvedPath, optional };
+}
+
+async function mergeSystemdEnvironmentFile(
+  environment: Record<string, string>,
+  raw: string,
+  env: GatewayServiceEnv,
+): Promise<void> {
+  const resolved = resolveSystemdEnvironmentFilePath(raw, env);
+  if (!resolved) {
+    return;
+  }
+  try {
+    const content = await fs.readFile(resolved.path, "utf8");
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#") || line.startsWith(";")) {
+        continue;
+      }
+      const parsed = parseSystemdEnvAssignment(line);
+      if (parsed) {
+        environment[parsed.key] = parsed.value;
+      }
+    }
+  } catch (error) {
+    if (
+      resolved.optional &&
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -74,6 +152,12 @@ export async function readSystemdServiceExecStart(
         execStart = line.slice("ExecStart=".length).trim();
       } else if (line.startsWith("WorkingDirectory=")) {
         workingDirectory = line.slice("WorkingDirectory=".length).trim();
+      } else if (line.startsWith("EnvironmentFile=")) {
+        await mergeSystemdEnvironmentFile(
+          environment,
+          line.slice("EnvironmentFile=".length).trim(),
+          env,
+        );
       } else if (line.startsWith("Environment=")) {
         const raw = line.slice("Environment=".length).trim();
         const parsed = parseSystemdEnvAssignment(raw);
