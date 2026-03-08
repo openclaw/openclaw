@@ -100,4 +100,17 @@ struct MacNodeRuntimeTests {
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
     }
+
+    @Test func handleInvokeBrowserProxyUsesInjectedRequest() async throws {
+        let runtime = MacNodeRuntime(browserProxyRequest: { paramsJSON in
+            #expect(paramsJSON?.contains("/tabs") == true)
+            return #"{"ok":true,"tabs":[{"id":"tab-1"}]}"#
+        })
+        let paramsJSON = #"{"method":"GET","path":"/tabs","timeoutMs":2500}"#
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-browser", command: OpenClawBrowserCommand.proxy.rawValue, paramsJSON: paramsJSON))
+
+        #expect(response.ok == true)
+        #expect(response.payloadJSON == #"{"ok":true,"tabs":[{"id":"tab-1"}]}"#)
+    }
 }
