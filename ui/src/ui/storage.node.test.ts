@@ -138,6 +138,25 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
+  it("loads session token even when localStorage settings are missing", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    sessionStorage.setItem(
+      "openclaw.control.token.v1:wss://gateway.example:8443/openclaw",
+      "session-token",
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "wss://gateway.example:8443/openclaw",
+      token: "session-token",
+      sessionKey: "main",
+    });
+  });
+
   it("loads the current-tab token from sessionStorage", async () => {
     setTestLocation({
       protocol: "https:",
