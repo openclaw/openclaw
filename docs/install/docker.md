@@ -68,10 +68,10 @@ Use this section as a pre-flight + troubleshooting layer layered on top of the s
 
 ### Status decoder (keep nearby)
 
-| Signal / Log                | What it really means                                                                                                  | What to do                                                                                                                               | Avg. duration                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `health: starting`          | Gateway booting, waiting for services (db, browser bridge, sandbox). Common right after onboarding or Docker restart. | Wait up to 120 s (Apple Silicon) / 60 s (Intel & Linux). If it exceeds that, run `openclaw logs --limit 50` and check for config errors. | 30–120 s                                                                                                                            |
-| `gateway restarting` (loop) | Config validation failed or a fatal crash occurred; supervisor keeps trying.                                          | Run `openclaw logs --limit 200                                                                                                           | less`to find the first error. Most often caused by malformed`openclaw.json`. Revert the last change or run `openclaw doctor --fix`. | Until config is fixed |
+| Signal / Log                | What it really means                                                                                                  | What to do                                                                                                                                                              | Avg. duration         |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `health: starting`          | Gateway booting, waiting for services (db, browser bridge, sandbox). Common right after onboarding or Docker restart. | Wait up to 120 s (Apple Silicon) / 60 s (Intel & Linux). If it exceeds that window, run `openclaw logs --limit 50` and check for config errors.                         | 30–120 s              |
+| `gateway restarting` (loop) | Config validation failed or a fatal crash occurred; supervisor keeps trying.                                          | Run `openclaw logs --limit 200 \| less` to find the first error. Most often caused by malformed `openclaw.json`. Revert the last change or run `openclaw doctor --fix`. | Until config is fixed |
 
 ### Status decoder deep dives
 
@@ -374,6 +374,31 @@ Notes:
 - If you change `OPENCLAW_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
   the image.
 
+### Pre-install extension dependencies (optional)
+
+Extensions with their own `package.json` (e.g. `diagnostics-otel`, `matrix`,
+`msteams`) install their npm dependencies on first load. To bake those
+dependencies into the image instead, set `OPENCLAW_EXTENSIONS` before
+running `docker-setup.sh`:
+
+```bash
+export OPENCLAW_EXTENSIONS="diagnostics-otel matrix"
+./docker-setup.sh
+```
+
+Or when building directly:
+
+```bash
+docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
+```
+
+Notes:
+
+- This accepts a space-separated list of extension directory names (under `extensions/`).
+- Only extensions with a `package.json` are affected; lightweight plugins without one are ignored.
+- If you change `OPENCLAW_EXTENSIONS`, rerun `docker-setup.sh` to rebuild
+  the image.
+
 ### Power-user / full-featured container (opt-in)
 
 The default Docker image is **security-first** and runs as the non-root `node`
@@ -504,6 +529,8 @@ curl -fsS http://127.0.0.1:18789/readyz
 
 Aliases: `/health` and `/ready`.
 
+`/healthz` is a liveness check (process up), while `/readyz` blocks until downstream services (channels, sandbox bridges, browser) are ready. Use `/readyz` for load balancers and `/healthz` for restart probes.
+
 The Docker image includes a built-in `HEALTHCHECK` that pings `/healthz` in the
 background. In plain terms: Docker keeps checking if OpenClaw is still
 responsive. If checks keep failing, Docker marks the container as `unhealthy`,
@@ -557,7 +584,14 @@ docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
 
 - Gateway bind defaults to `lan` for container use (`OPENCLAW_GATEWAY_BIND`).
 - Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
+
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
+
+### Storage model
+
+- **Persistent host data:** Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths survive container replacement.
+- **Ephemeral sandbox tmpfs:** when `agents.defaults.sandbox` is enabled, the sandbox containers use `tmpfs` for `/tmp`, `/var/tmp`, and `/run`. Those mounts are separate from the top-level Compose stack and disappear with the sandbox container.
+- **Disk growth hotspots:** watch `media/`, `agents/<agentId>/sessions/sessions.json`, transcript JSONL files, `cron/runs/*.jsonl`, and rolling file logs under `/tmp/openclaw/` (or your configured `logging.file`). If you also run the macOS app outside Docker, its service logs are separate again: `~/.openclaw/logs/gateway.log`, `~/.openclaw/logs/gateway.err.log`, and `/tmp/openclaw/openclaw-gateway.log`.
 
 ## Agent Sandbox (host gateway + Docker tools)
 
