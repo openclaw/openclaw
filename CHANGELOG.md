@@ -9,7 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 ### Fixes
-- Docker/runtime image: prune dev dependencies, strip build-only dist metadata, and make bundled `pnpm` opt-in so default runtime images build and ship smaller while the Docker live-test runners auto-enable `pnpm` when needed.
+- Docker/runtime image: prune dev dependencies, strip build-only dist metadata for smaller Docker images. (#40307) Thanks @vincentkoc.
 
 ## 2026.3.8
 
