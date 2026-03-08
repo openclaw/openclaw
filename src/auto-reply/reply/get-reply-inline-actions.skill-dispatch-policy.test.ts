@@ -123,6 +123,12 @@ describe("handleInlineActions skill tool dispatch policy", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "❌ Tool not available: exec" } });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderIsOwner: false,
+        config: { tools: { profile: "messaging" } },
+      }),
+    );
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
@@ -149,6 +155,8 @@ describe("handleInlineActions skill tool dispatch policy", () => {
     expect(result).toEqual({ kind: "reply", reply: { text: "Hello World" } });
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        senderIsOwner: false,
+        config: { tools: { profile: "messaging" } },
         messageTo: "whatsapp:+18880001111",
         messageThreadId: "thread-42",
       }),
