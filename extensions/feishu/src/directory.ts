@@ -19,6 +19,14 @@ export type FeishuDirectoryGroup = {
   name?: string;
 };
 
+function toFeishuDirectoryPeers(ids: string[]): FeishuDirectoryPeer[] {
+  return ids.map((id) => ({ kind: "user", id }));
+}
+
+function toFeishuDirectoryGroups(ids: string[]): FeishuDirectoryGroup[] {
+  return ids.map((id) => ({ kind: "group", id }));
+}
+
 export async function listFeishuDirectoryPeers(params: {
   cfg: ClawdbotConfig;
   query?: string;
@@ -26,7 +34,7 @@ export async function listFeishuDirectoryPeers(params: {
   accountId?: string;
 }): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  return listDirectoryUserEntriesFromAllowFromAndMapKeys({
+  const entries = listDirectoryUserEntriesFromAllowFromAndMapKeys({
     allowFrom: account.config.allowFrom,
     map: account.config.dms,
     query: params.query,
@@ -34,6 +42,7 @@ export async function listFeishuDirectoryPeers(params: {
     normalizeAllowFromId: (entry) => normalizeFeishuTarget(entry) ?? entry,
     normalizeMapKeyId: (entry) => normalizeFeishuTarget(entry) ?? entry,
   });
+  return toFeishuDirectoryPeers(entries.map((entry) => entry.id));
 }
 
 export async function listFeishuDirectoryGroups(params: {
@@ -43,12 +52,13 @@ export async function listFeishuDirectoryGroups(params: {
   accountId?: string;
 }): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  return listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
+  const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
     groups: account.config.groups,
     allowFrom: account.config.groupAllowFrom,
     query: params.query,
     limit: params.limit,
   });
+  return toFeishuDirectoryGroups(entries.map((entry) => entry.id));
 }
 
 export async function listFeishuDirectoryPeersLive(params: {
