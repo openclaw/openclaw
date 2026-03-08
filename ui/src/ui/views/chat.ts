@@ -5,8 +5,10 @@ import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
+  renderToolCollapseWrapper,
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { extractToolCards } from "../chat/tool-cards.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -14,6 +16,15 @@ import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
+
+/** A collapsible block wrapping consecutive tool-related message groups. */
+type ToolCollapseGroup = {
+  kind: "tool-collapse";
+  key: string;
+  groups: MessageGroup[];
+};
+
+type RenderItem = ChatItem | MessageGroup | ToolCollapseGroup;
 
 export type CompactionIndicatorStatus = {
   active: boolean;
@@ -300,6 +311,18 @@ export function renderChat(props: ChatProps) {
             );
           }
 
+          if (item.kind === "tool-collapse") {
+            const toolGroupsHtml = item.groups.map((g) =>
+              renderMessageGroup(g, {
+                onOpenSidebar: props.onOpenSidebar,
+                showReasoning,
+                assistantName: props.assistantName,
+                assistantAvatar: assistantIdentity.avatar,
+              }),
+            );
+            return renderToolCollapseWrapper(item.groups.length, toolGroupsHtml);
+          }
+
           if (item.kind === "group") {
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
@@ -529,7 +552,101 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
-function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
+/**
+ * Check if a MessageGroup contains only tool calls (no user-visible text).
+ */
+function isToolOnlyAssistantGroup(group: MessageGroup): boolean {
+  if (group.role !== "assistant") {
+    return false;
+  }
+  for (const { message } of group.messages) {
+    const cards = extractToolCards(message);
+    if (cards.length === 0) {
+      return false;
+    }
+    // Check if there's any meaningful text beyond tool cards
+    const m = message as Record<string, unknown>;
+    const content = m.content;
+    if (typeof content === "string" && content.trim()) {
+      return false;
+    }
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        const b = block as Record<string, unknown>;
+        const t = (typeof b.type === "string" ? b.type : "").toLowerCase();
+        if (t === "text" && typeof b.text === "string" && b.text.trim()) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Check if a MessageGroup is a tool result group (role = "tool").
+ */
+function isToolResultGroup(group: MessageGroup): boolean {
+  return group.role === "tool";
+}
+
+/**
+ * Wrap consecutive tool-related groups into collapsible ToolCollapseGroup blocks.
+ * A tool block is a sequence of:
+ *   - assistant groups that contain only tool calls (no text)
+ *   - tool result groups (role = "tool")
+ * Blocks with fewer than 2 groups are left unwrapped.
+ */
+function wrapToolBlocks(items: Array<ChatItem | MessageGroup>): RenderItem[] {
+  const result: RenderItem[] = [];
+  let i = 0;
+
+  while (i < items.length) {
+    const item = items[i];
+    if (item.kind !== "group") {
+      result.push(item);
+      i++;
+      continue;
+    }
+
+    const group = item;
+    if (!isToolResultGroup(group) && !isToolOnlyAssistantGroup(group)) {
+      result.push(item);
+      i++;
+      continue;
+    }
+
+    // Start collecting consecutive tool groups
+    const toolGroups: MessageGroup[] = [group];
+    let j = i + 1;
+    while (j < items.length) {
+      const next = items[j];
+      if (next.kind !== "group") {
+        break;
+      }
+      if (!isToolResultGroup(next) && !isToolOnlyAssistantGroup(next)) {
+        break;
+      }
+      toolGroups.push(next);
+      j++;
+    }
+
+    if (toolGroups.length >= 2) {
+      result.push({
+        kind: "tool-collapse",
+        key: `tool-collapse:${toolGroups[0].key}`,
+        groups: toolGroups,
+      });
+    } else {
+      result.push(item);
+    }
+    i = j;
+  }
+
+  return result;
+}
+
+function buildChatItems(props: ChatProps): RenderItem[] {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
@@ -610,7 +727,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
   }
 
-  return groupMessages(items);
+  return wrapToolBlocks(groupMessages(items));
 }
 
 function messageKey(message: unknown, index: number): string {
