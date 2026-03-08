@@ -404,7 +404,7 @@ describe("resolveGatewayConnectionAuth", () => {
         config,
         env,
         includeLegacyEnv: false,
-        localPasswordPrecedence: "config-first",
+        localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).rejects.toThrow("gateway.auth.password");
     expect(() =>
@@ -412,7 +412,7 @@ describe("resolveGatewayConnectionAuth", () => {
         cfg: config,
         env,
         includeLegacyEnv: false,
-        localPasswordPrecedence: "config-first",
+        localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).toThrow("gateway.auth.password");
   });
