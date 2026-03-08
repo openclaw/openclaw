@@ -206,6 +206,8 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+
 const log = createSubsystemLogger("agents/model-providers");
 
 interface OllamaModel {
@@ -985,6 +987,14 @@ function buildOpenrouterProvider(): ProviderConfig {
   };
 }
 
+function buildOpenAICodexProvider(): ProviderConfig {
+  return {
+    baseUrl: OPENAI_CODEX_BASE_URL,
+    api: "openai-codex-responses",
+    models: [],
+  };
+}
+
 async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
@@ -1283,6 +1293,11 @@ export async function resolveImplicitProviders(params: {
   const openrouterKey = resolveProviderApiKey("openrouter").apiKey;
   if (openrouterKey) {
     providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+  }
+
+  const openaiCodexProfiles = listProfilesForProvider(authStore, "openai-codex");
+  if (openaiCodexProfiles.length > 0) {
+    providers["openai-codex"] = buildOpenAICodexProvider();
   }
 
   const nvidiaKey = resolveProviderApiKey("nvidia").apiKey;
