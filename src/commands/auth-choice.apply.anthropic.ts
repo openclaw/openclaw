@@ -1,4 +1,5 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { loginAnthropicOAuth } from "./anthropic-oauth.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -8,8 +9,14 @@ import {
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
-import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  setAnthropicApiKey,
+  writeOAuthCredentials,
+} from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
 
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 
@@ -17,6 +24,35 @@ export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+
+  if (params.authChoice === "anthropic-oauth") {
+    let nextConfig = params.config;
+    const creds = await loginAnthropicOAuth({
+      prompter: params.prompter,
+      runtime: params.runtime,
+      isRemote: isRemoteEnvironment(),
+      openUrl: async (url) => {
+        await openUrl(url);
+      },
+    });
+    if (!creds) {
+      return { config: nextConfig };
+    }
+
+    const profileId = await writeOAuthCredentials("anthropic", creds, params.agentDir, {
+      syncSiblingAgents: true,
+    });
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider: "anthropic",
+      mode: "oauth",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyAgentDefaultModelPrimary(nextConfig, DEFAULT_ANTHROPIC_MODEL);
+    }
+    return { config: nextConfig };
+  }
+
   if (
     params.authChoice === "setup-token" ||
     params.authChoice === "oauth" ||
