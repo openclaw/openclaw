@@ -184,11 +184,14 @@ export function inspectSlackAccount(params: {
         : envUser
           ? "available"
           : "missing",
-    configured: isHttpMode
-      ? (configBot.status !== "missing" || Boolean(envBot)) &&
-        configSigningSecret.status !== "missing"
-      : (configBot.status !== "missing" || Boolean(envBot)) &&
-        (configApp.status !== "missing" || Boolean(envApp)),
+    configured:
+      mode === "mux"
+        ? Boolean(merged.mux?.url)
+        : isHttpMode
+          ? (configBot.status !== "missing" || Boolean(envBot)) &&
+            configSigningSecret.status !== "missing"
+          : (configBot.status !== "missing" || Boolean(envBot)) &&
+            (configApp.status !== "missing" || Boolean(envApp)),
     config: merged,
     groupPolicy: merged.groupPolicy,
     textChunkLimit: merged.textChunkLimit,
