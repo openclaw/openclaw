@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { listAgentsForGateway } from "../gateway/session-utils.js";
@@ -16,6 +17,13 @@ export type AgentLocalStatus = {
   lastActiveAgeMs: number | null;
 };
 
+type AgentLocalStatusesResult = {
+  defaultId: string;
+  agents: AgentLocalStatus[];
+  totalSessions: number;
+  bootstrapPendingCount: number;
+};
+
 async function fileExists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
@@ -25,13 +33,9 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-export async function getAgentLocalStatuses(): Promise<{
-  defaultId: string;
-  agents: AgentLocalStatus[];
-  totalSessions: number;
-  bootstrapPendingCount: number;
-}> {
-  const cfg = loadConfig();
+export async function getAgentLocalStatuses(
+  cfg: OpenClawConfig = loadConfig(),
+): Promise<AgentLocalStatusesResult> {
   const agentList = listAgentsForGateway(cfg);
   const now = Date.now();
 

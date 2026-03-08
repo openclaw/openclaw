@@ -36,7 +36,7 @@ describe("FeishuConfigSchema webhook validation", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       appId: "cli_top",
-      appSecret: "secret_top",
+      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expect(result.success).toBe(false);
@@ -52,7 +52,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       connectionMode: "webhook",
       verificationToken: "token_top",
       appId: "cli_top",
-      appSecret: "secret_top",
+      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expect(result.success).toBe(true);
@@ -64,7 +64,7 @@ describe("FeishuConfigSchema webhook validation", () => {
         main: {
           connectionMode: "webhook",
           appId: "cli_main",
-          appSecret: "secret_main",
+          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
@@ -86,7 +86,7 @@ describe("FeishuConfigSchema webhook validation", () => {
         main: {
           connectionMode: "webhook",
           appId: "cli_main",
-          appSecret: "secret_main",
+          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
@@ -171,7 +171,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
     const result = FeishuConfigSchema.safeParse({
       defaultAccount: "router-d",
       accounts: {
-        "router-d": { appId: "cli_router", appSecret: "secret_router" },
+        "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
       },
     });
 
@@ -182,7 +182,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
     const result = FeishuConfigSchema.safeParse({
       defaultAccount: "router-d",
       accounts: {
-        backup: { appId: "cli_backup", appSecret: "secret_backup" },
+        backup: { appId: "cli_backup", appSecret: "secret_backup" }, // pragma: allowlist secret
       },
     });
 

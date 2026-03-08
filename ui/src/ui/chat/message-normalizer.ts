@@ -50,6 +50,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
+  const senderLabel =
+    typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
   // Strip AI-injected metadata prefix blocks from user messages before display.
   if (role === "user" || role === "User") {
@@ -61,7 +63,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   }
 
-  return { role, content, timestamp, id };
+  return { role, content, timestamp, id, senderLabel };
 }
 
 /**

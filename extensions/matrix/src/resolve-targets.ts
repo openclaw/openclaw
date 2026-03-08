@@ -1,3 +1,4 @@
+import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/compat";
 import type {
   ChannelDirectoryEntry,
   ChannelResolveKind,
@@ -71,56 +72,54 @@ export async function resolveMatrixTargets(params: {
   kind: ChannelResolveKind;
   runtime?: RuntimeEnv;
 }): Promise<ChannelResolveResult[]> {
-  const results: ChannelResolveResult[] = [];
-  for (const input of params.inputs) {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      results.push({ input, resolved: false, note: "empty input" });
-      continue;
-    }
-    if (params.kind === "user") {
-      if (trimmed.startsWith("@") && trimmed.includes(":")) {
-        results.push({ input, resolved: true, id: trimmed });
-        continue;
+  return await mapAllowlistResolutionInputs({
+    inputs: params.inputs,
+    mapInput: async (input): Promise<ChannelResolveResult> => {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        return { input, resolved: false, note: "empty input" };
+      }
+      if (params.kind === "user") {
+        if (trimmed.startsWith("@") && trimmed.includes(":")) {
+          return { input, resolved: true, id: trimmed };
+        }
+        try {
+          const matches = await listMatrixDirectoryPeersLive({
+            cfg: params.cfg,
+            query: trimmed,
+            limit: 5,
+          });
+          const best = pickBestUserMatch(matches, trimmed);
+          return {
+            input,
+            resolved: Boolean(best?.id),
+            id: best?.id,
+            name: best?.name,
+            note: best ? undefined : describeUserMatchFailure(matches, trimmed),
+          };
+        } catch (err) {
+          params.runtime?.error?.(`matrix resolve failed: ${String(err)}`);
+          return { input, resolved: false, note: "lookup failed" };
+        }
       }
       try {
-        const matches = await listMatrixDirectoryPeersLive({
+        const matches = await listMatrixDirectoryGroupsLive({
           cfg: params.cfg,
           query: trimmed,
           limit: 5,
         });
-        const best = pickBestUserMatch(matches, trimmed);
-        results.push({
+        const best = pickBestGroupMatch(matches, trimmed);
+        return {
           input,
           resolved: Boolean(best?.id),
           id: best?.id,
           name: best?.name,
-          note: best ? undefined : describeUserMatchFailure(matches, trimmed),
-        });
+          note: matches.length > 1 ? "multiple matches; chose first" : undefined,
+        };
       } catch (err) {
         params.runtime?.error?.(`matrix resolve failed: ${String(err)}`);
-        results.push({ input, resolved: false, note: "lookup failed" });
+        return { input, resolved: false, note: "lookup failed" };
       }
-      continue;
-    }
-    try {
-      const matches = await listMatrixDirectoryGroupsLive({
-        cfg: params.cfg,
-        query: trimmed,
-        limit: 5,
-      });
-      const best = pickBestGroupMatch(matches, trimmed);
-      results.push({
-        input,
-        resolved: Boolean(best?.id),
-        id: best?.id,
-        name: best?.name,
-        note: matches.length > 1 ? "multiple matches; chose first" : undefined,
-      });
-    } catch (err) {
-      params.runtime?.error?.(`matrix resolve failed: ${String(err)}`);
-      results.push({ input, resolved: false, note: "lookup failed" });
-    }
-  }
-  return results;
+    },
+  });
 }

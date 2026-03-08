@@ -108,11 +108,11 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   return next;
 }
 
-function normalizeStoreSessionKey(sessionKey: string): string {
+export function normalizeStoreSessionKey(sessionKey: string): string {
   return sessionKey.trim().toLowerCase();
 }
 
-function resolveStoreSessionEntry(params: {
+export function resolveSessionStoreEntry(params: {
   store: Record<string, SessionEntry>;
   sessionKey: string;
 }): {
@@ -275,7 +275,7 @@ export function readSessionUpdatedAt(params: {
 }): number | undefined {
   try {
     const store = loadSessionStore(params.storePath);
-    const resolved = resolveStoreSessionEntry({ store, sessionKey: params.sessionKey });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
     return resolved.existing?.updatedAt;
   } catch {
     return undefined;
@@ -611,7 +611,7 @@ async function writeSessionStoreAtomic(params: {
 async function persistResolvedSessionEntry(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
-  resolved: ReturnType<typeof resolveStoreSessionEntry>;
+  resolved: ReturnType<typeof resolveSessionStoreEntry>;
   next: SessionEntry;
 }): Promise<SessionEntry> {
   params.store[params.resolved.normalizedKey] = params.next;
@@ -734,7 +734,7 @@ export async function updateSessionStoreEntry(params: {
   const { storePath, sessionKey, update } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath, { skipCache: true });
-    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     if (!existing) {
       return null;
@@ -765,7 +765,7 @@ export async function recordSessionMetaFromInbound(params: {
   return await updateSessionStore(
     storePath,
     (store) => {
-      const resolved = resolveStoreSessionEntry({ store, sessionKey });
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
       const existing = resolved.existing;
       const patch = deriveSessionMetaPatch({
         ctx,
@@ -814,7 +814,7 @@ export async function updateLastRoute(params: {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
-    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
