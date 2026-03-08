@@ -24,7 +24,7 @@ struct TalkConfigParsingTests {
         #expect(selection?.config["voiceId"]?.stringValue == "voice-resolved")
     }
 
-    @Test func prefersNormalizedTalkProviderPayload() {
+    @Test func rejectsNormalizedTalkProviderPayloadWithoutResolved() {
         let talk: [String: AnyCodable] = [
             "provider": AnyCodable("elevenlabs"),
             "providers": AnyCodable([
@@ -36,9 +36,7 @@ struct TalkConfigParsingTests {
         ]
 
         let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
-        #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.normalizedPayload == true)
-        #expect(selection?.config["voiceId"]?.stringValue == "voice-normalized")
+        #expect(selection == nil)
     }
 
     @Test func fallsBackToLegacyTalkFieldsWhenNormalizedPayloadMissing() {

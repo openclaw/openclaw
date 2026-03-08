@@ -93,29 +93,7 @@ class TalkModeManager(
       val rawProviders = talk["providers"].asObjectOrNull()
       val hasNormalizedPayload = rawProvider != null || rawProviders != null
       if (hasNormalizedPayload) {
-        val providers =
-          rawProviders?.entries?.mapNotNull { (key, value) ->
-            val providerId = normalizeTalkProviderId(key) ?: return@mapNotNull null
-            val providerConfig = value.asObjectOrNull() ?: return@mapNotNull null
-            providerId to providerConfig
-          }?.toMap().orEmpty()
-        val explicitProviderId = normalizeTalkProviderId(rawProvider)
-        if (explicitProviderId != null) {
-          if (providers.isNotEmpty() && providers[explicitProviderId] == null) {
-            return null
-          }
-          return TalkProviderConfigSelection(
-            provider = explicitProviderId,
-            config = providers[explicitProviderId] ?: buildJsonObject {},
-            normalizedPayload = true,
-          )
-        }
-        val providerId = providers.keys.singleOrNull() ?: return null
-        return TalkProviderConfigSelection(
-          provider = providerId,
-          config = providers[providerId] ?: buildJsonObject {},
-          normalizedPayload = true,
-        )
+        return null
       }
       return TalkProviderConfigSelection(
         provider = defaultTalkProvider,
@@ -1425,6 +1403,9 @@ class TalkModeManager(
       val config = root?.get("config").asObjectOrNull()
       val talk = config?.get("talk").asObjectOrNull()
       val selection = selectTalkProviderConfig(talk)
+      if (talk != null && selection == null) {
+        Log.w(tag, "talk config ignored: normalized payload missing talk.resolved")
+      }
       val activeProvider = selection?.provider ?: defaultTalkProvider
       val activeConfig = selection?.config
       val sessionCfg = config?.get("session").asObjectOrNull()
