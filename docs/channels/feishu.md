@@ -325,6 +325,11 @@ After approval, you can chat normally.
 - `true` = require @mention (default)
 - `false` = respond without mentions
 
+**3. First message in topic trigger** (`firstMessageInTopicTrigger`):
+
+- `false` = keep normal mention rule (default)
+- `true` = when a group message has no `root_id` and no `parent_id`, treat it as the first message of a topic and allow a reply even if the bot was not mentioned
+
 ---
 
 ## Group configuration examples
@@ -350,6 +355,27 @@ After approval, you can chat normally.
     feishu: {
       groups: {
         oc_xxx: { requireMention: false },
+      },
+    },
+  },
+}
+```
+
+### Customer-service topic groups: only auto-reply to the first message in each topic
+
+When `requireMention: true`, enabling `firstMessageInTopicTrigger` lets OpenClaw auto-reply to the first message of each topic (where `root_id` and `parent_id` are both empty), while still ignoring most non-mention follow-up messages.
+
+> Note: This is intended for topic/thread-style groups. In regular non-topic groups, most messages may not carry `root_id`/`parent_id`, so enabling this flag can effectively relax mention-gating more broadly than expected.
+
+```json5
+{
+  channels: {
+    feishu: {
+      groups: {
+        oc_support_group: {
+          requireMention: true,
+          firstMessageInTopicTrigger: true,
+        },
       },
     },
   },
@@ -595,29 +621,31 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                           | Description                             | Default          |
-| ------------------------------------------------- | --------------------------------------- | ---------------- |
-| `channels.feishu.enabled`                         | Enable/disable channel                  | `true`           |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`)         | `feishu`         |
-| `channels.feishu.connectionMode`                  | Event transport mode                    | `websocket`      |
-| `channels.feishu.defaultAccount`                  | Default account ID for outbound routing | `default`        |
-| `channels.feishu.verificationToken`               | Required for webhook mode               | -                |
-| `channels.feishu.webhookPath`                     | Webhook route path                      | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook bind host                       | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook bind port                       | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                  | -                |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                              | -                |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override         | `feishu`         |
-| `channels.feishu.dmPolicy`                        | DM policy                               | `pairing`        |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)             | -                |
-| `channels.feishu.groupPolicy`                     | Group policy                            | `open`           |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                         | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                        | `true`           |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                            | `true`           |
-| `channels.feishu.textChunkLimit`                  | Message chunk size                      | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                        | `30`             |
-| `channels.feishu.streaming`                       | Enable streaming card output            | `true`           |
-| `channels.feishu.blockStreaming`                  | Enable block streaming                  | `true`           |
+| Setting                                                       | Description                             | Default          |
+| ------------------------------------------------------------- | --------------------------------------- | ---------------- |
+| `channels.feishu.enabled`                                     | Enable/disable channel                  | `true`           |
+| `channels.feishu.domain`                                      | API domain (`feishu` or `lark`)         | `feishu`         |
+| `channels.feishu.connectionMode`                              | Event transport mode                    | `websocket`      |
+| `channels.feishu.defaultAccount`                              | Default account ID for outbound routing | `default`        |
+| `channels.feishu.verificationToken`                           | Required for webhook mode               | -                |
+| `channels.feishu.webhookPath`                                 | Webhook route path                      | `/feishu/events` |
+| `channels.feishu.webhookHost`                                 | Webhook bind host                       | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                                 | Webhook bind port                       | `3000`           |
+| `channels.feishu.accounts.<id>.appId`                         | App ID                                  | -                |
+| `channels.feishu.accounts.<id>.appSecret`                     | App Secret                              | -                |
+| `channels.feishu.accounts.<id>.domain`                        | Per-account API domain override         | `feishu`         |
+| `channels.feishu.dmPolicy`                                    | DM policy                               | `pairing`        |
+| `channels.feishu.allowFrom`                                   | DM allowlist (open_id list)             | -                |
+| `channels.feishu.groupPolicy`                                 | Group policy                            | `open`           |
+| `channels.feishu.groupAllowFrom`                              | Group allowlist                         | -                |
+| `channels.feishu.firstMessageInTopicTrigger`                  | Global first-topic-message trigger      | `false`          |
+| `channels.feishu.groups.<chat_id>.requireMention`             | Require @mention                        | `true`           |
+| `channels.feishu.groups.<chat_id>.firstMessageInTopicTrigger` | Per-group first-topic-message trigger   | inherits global  |
+| `channels.feishu.groups.<chat_id>.enabled`                    | Enable group                            | `true`           |
+| `channels.feishu.textChunkLimit`                              | Message chunk size                      | `2000`           |
+| `channels.feishu.mediaMaxMb`                                  | Media size limit                        | `30`             |
+| `channels.feishu.streaming`                                   | Enable streaming card output            | `true`           |
+| `channels.feishu.blockStreaming`                              | Enable block streaming                  | `true`           |
 
 ---
 

@@ -145,6 +145,34 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 });
 
+describe("FeishuConfigSchema firstMessageInTopicTrigger", () => {
+  it("accepts firstMessageInTopicTrigger at top level", () => {
+    const result = FeishuConfigSchema.parse({ firstMessageInTopicTrigger: true });
+    expect(result.firstMessageInTopicTrigger).toBe(true);
+  });
+
+  it("accepts firstMessageInTopicTrigger in group config", () => {
+    const result = FeishuGroupSchema.parse({ firstMessageInTopicTrigger: true });
+    expect(result.firstMessageInTopicTrigger).toBe(true);
+  });
+
+  it("accepts firstMessageInTopicTrigger in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { firstMessageInTopicTrigger: true },
+      },
+    });
+    expect(result.accounts?.main?.firstMessageInTopicTrigger).toBe(true);
+  });
+
+  it("rejects invalid firstMessageInTopicTrigger value", () => {
+    const result = FeishuConfigSchema.safeParse({
+      firstMessageInTopicTrigger: "enabled",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema optimization flags", () => {
   it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
     const result = FeishuConfigSchema.parse({});

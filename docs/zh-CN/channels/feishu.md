@@ -329,6 +329,11 @@ openclaw pairing approve feishu <配对码>
 - `true` = 需要 @机器人才响应（默认）
 - `false` = 无需 @也响应
 
+**3. 话题首条消息触发**（`firstMessageInTopicTrigger`）：
+
+- `false` = 维持正常 @ 规则（默认）
+- `true` = 当群消息同时没有 `root_id` 和 `parent_id` 时，视为该 topic 的首条消息，即使未 @ 机器人也允许触发回复
+
 ---
 
 ## 群组配置示例
@@ -356,6 +361,27 @@ openclaw pairing approve feishu <配对码>
     feishu: {
       groups: {
         oc_xxx: { requireMention: false },
+      },
+    },
+  },
+}
+```
+
+### 客服话题群：仅自动回复每个 topic 的首条消息
+
+当 `requireMention: true` 时，开启 `firstMessageInTopicTrigger` 后，OpenClaw 会在每个 topic 的首条消息（`root_id` 与 `parent_id` 都为空）自动触发回复；其余大多数未 @ 的后续消息仍会被忽略，避免打扰。
+
+> 注意：该开关主要用于 topic/thread 话题群。在普通非话题群中，多数消息可能都不带 `root_id`/`parent_id`，开启后可能会比预期更广泛地放宽 @ 提及门槛。
+
+```json5
+{
+  channels: {
+    feishu: {
+      groups: {
+        oc_support_group: {
+          requireMention: true,
+          firstMessageInTopicTrigger: true,
+        },
       },
     },
   },
@@ -642,29 +668,31 @@ openclaw pairing list feishu
 
 主要选项：
 
-| 配置项                                            | 说明                              | 默认值           |
-| ------------------------------------------------- | --------------------------------- | ---------------- |
-| `channels.feishu.enabled`                         | 启用/禁用渠道                     | `true`           |
-| `channels.feishu.domain`                          | API 域名（`feishu` 或 `lark`）    | `feishu`         |
-| `channels.feishu.connectionMode`                  | 事件传输模式（websocket/webhook） | `websocket`      |
-| `channels.feishu.defaultAccount`                  | 出站路由默认账号 ID               | `default`        |
-| `channels.feishu.verificationToken`               | Webhook 模式必填                  | -                |
-| `channels.feishu.webhookPath`                     | Webhook 路由路径                  | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook 监听地址                  | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook 监听端口                  | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | 应用 App ID                       | -                |
-| `channels.feishu.accounts.<id>.appSecret`         | 应用 App Secret                   | -                |
-| `channels.feishu.accounts.<id>.domain`            | 单账号 API 域名覆盖               | `feishu`         |
-| `channels.feishu.dmPolicy`                        | 私聊策略                          | `pairing`        |
-| `channels.feishu.allowFrom`                       | 私聊白名单（open_id 列表）        | -                |
-| `channels.feishu.groupPolicy`                     | 群组策略                          | `open`           |
-| `channels.feishu.groupAllowFrom`                  | 群组白名单                        | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | 是否需要 @提及                    | `true`           |
-| `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                    | `true`           |
-| `channels.feishu.textChunkLimit`                  | 消息分块大小                      | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | 媒体大小限制                      | `30`             |
-| `channels.feishu.streaming`                       | 启用流式卡片输出                  | `true`           |
-| `channels.feishu.blockStreaming`                  | 启用块级流式                      | `true`           |
+| 配置项                                                        | 说明                              | 默认值           |
+| ------------------------------------------------------------- | --------------------------------- | ---------------- |
+| `channels.feishu.enabled`                                     | 启用/禁用渠道                     | `true`           |
+| `channels.feishu.domain`                                      | API 域名（`feishu` 或 `lark`）    | `feishu`         |
+| `channels.feishu.connectionMode`                              | 事件传输模式（websocket/webhook） | `websocket`      |
+| `channels.feishu.defaultAccount`                              | 出站路由默认账号 ID               | `default`        |
+| `channels.feishu.verificationToken`                           | Webhook 模式必填                  | -                |
+| `channels.feishu.webhookPath`                                 | Webhook 路由路径                  | `/feishu/events` |
+| `channels.feishu.webhookHost`                                 | Webhook 监听地址                  | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                                 | Webhook 监听端口                  | `3000`           |
+| `channels.feishu.accounts.<id>.appId`                         | 应用 App ID                       | -                |
+| `channels.feishu.accounts.<id>.appSecret`                     | 应用 App Secret                   | -                |
+| `channels.feishu.accounts.<id>.domain`                        | 单账号 API 域名覆盖               | `feishu`         |
+| `channels.feishu.dmPolicy`                                    | 私聊策略                          | `pairing`        |
+| `channels.feishu.allowFrom`                                   | 私聊白名单（open_id 列表）        | -                |
+| `channels.feishu.groupPolicy`                                 | 群组策略                          | `open`           |
+| `channels.feishu.groupAllowFrom`                              | 群组白名单                        | -                |
+| `channels.feishu.firstMessageInTopicTrigger`                  | 全局话题首条消息触发              | `false`          |
+| `channels.feishu.groups.<chat_id>.requireMention`             | 是否需要 @提及                    | `true`           |
+| `channels.feishu.groups.<chat_id>.firstMessageInTopicTrigger` | 群级话题首条消息触发              | 继承全局         |
+| `channels.feishu.groups.<chat_id>.enabled`                    | 是否启用该群组                    | `true`           |
+| `channels.feishu.textChunkLimit`                              | 消息分块大小                      | `2000`           |
+| `channels.feishu.mediaMaxMb`                                  | 媒体大小限制                      | `30`             |
+| `channels.feishu.streaming`                                   | 启用流式卡片输出                  | `true`           |
+| `channels.feishu.blockStreaming`                              | 启用块级流式                      | `true`           |
 
 ---
 

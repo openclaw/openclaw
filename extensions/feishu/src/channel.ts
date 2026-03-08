@@ -149,6 +149,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           items: { oneOf: [{ type: "string" }, { type: "number" }] },
         },
         requireMention: { type: "boolean" },
+        firstMessageInTopicTrigger: { type: "boolean" },
         groupSessionScope: {
           type: "string",
           enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
@@ -177,6 +178,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               webhookHost: { type: "string" },
               webhookPath: { type: "string" },
               webhookPort: { type: "integer", minimum: 1 },
+              firstMessageInTopicTrigger: { type: "boolean" },
             },
           },
         },
