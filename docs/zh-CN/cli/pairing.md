@@ -18,7 +18,7 @@ x-i18n:
 
 相关内容：
 
-- 配对流程：[配对](/channels/pairing)
+- 配对流程：[配对](/zh-CN/channels/pairing)
 
 ## 命令
 

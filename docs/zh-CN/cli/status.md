@@ -30,4 +30,4 @@ openclaw status --usage
 - 当配置了多个智能体时，输出包含每个智能体的会话存储。
 - 概览包含 Gateway 网关 + 节点主机服务安装/运行时状态（如果可用）。
 - 概览包含更新渠道 + git SHA（用于源代码检出）。
-- 更新信息显示在概览中；如果有可用更新，status 会打印提示运行 `openclaw update`（参见[更新](/install/updating)）。
+- 更新信息显示在概览中；如果有可用更新，status 会打印提示运行 `openclaw update`（参见[更新](/zh-CN/install/updating)）。

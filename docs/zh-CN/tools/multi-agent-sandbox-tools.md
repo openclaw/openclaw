@@ -38,8 +38,8 @@ x-i18n:
 凭证**不会**在智能体之间共享。切勿在智能体之间重用 `agentDir`。
 如果你想共享凭证，请将 `auth-profiles.json` 复制到其他智能体的 `agentDir` 中。
 
-有关沙箱隔离在运行时的行为，请参见[沙箱隔离](/gateway/sandboxing)。
-有关调试"为什么这被阻止了？"，请参见[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated) 和 `openclaw sandbox explain`。
+有关沙箱隔离在运行时的行为，请参见[沙箱隔离](/zh-CN/gateway/sandboxing)。
+有关调试"为什么这被阻止了？"，请参见[沙箱 vs 工具策略 vs 提权](/zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated) 和 `openclaw sandbox explain`。
 
 ---
 
@@ -396,6 +396,6 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## 另请参阅
 
-- [多智能体路由](/concepts/multi-agent)
-- [沙箱配置](/gateway/configuration#agentsdefaults-sandbox)
-- [会话管理](/concepts/session)
+- [多智能体路由](/zh-CN/concepts/multi-agent)
+- [沙箱配置](/zh-CN/gateway/configuration#agentsdefaults-sandbox)
+- [会话管理](/zh-CN/concepts/session)

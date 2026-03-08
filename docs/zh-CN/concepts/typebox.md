@@ -18,7 +18,7 @@ x-i18n:
 
 TypeBox 是一个 TypeScript 优先的模式库。我们用它来定义 **Gateway 网关 WebSocket 协议**（握手、请求/响应、服务器事件）。这些模式驱动**运行时验证**、**JSON Schema 导出**和 macOS 应用的 **Swift 代码生成**。一个事实来源；其他一切都是生成的。
 
-如果你想了解更高层次的协议上下文，请从 [Gateway 网关架构](/concepts/architecture)开始。
+如果你想了解更高层次的协议上下文，请从 [Gateway 网关架构](/zh-CN/concepts/architecture)开始。
 
 ## 心智模型（30 秒）
 

@@ -27,7 +27,7 @@ x-i18n:
 ## 认证监控脚本
 
 认证监控脚本的文档请参阅：
-[/automation/auth-monitoring](/automation/auth-monitoring)
+[/automation/auth-monitoring](/zh-CN/automation/auth-monitoring)
 
 ## 添加脚本时
 

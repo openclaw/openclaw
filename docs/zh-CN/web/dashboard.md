@@ -23,12 +23,12 @@ Gateway 网关仪表板是默认在 `/` 提供的浏览器控制 UI
 
 关键参考：
 
-- [控制 UI](/web/control-ui) 了解使用方法和 UI 功能。
-- [Tailscale](/gateway/tailscale) 了解 Serve/Funnel 自动化。
-- [Web 界面](/web) 了解绑定模式和安全注意事项。
+- [控制 UI](/zh-CN/web/control-ui) 了解使用方法和 UI 功能。
+- [Tailscale](/zh-CN/gateway/tailscale) 了解 Serve/Funnel 自动化。
+- [Web 界面](/zh-CN/web) 了解绑定模式和安全注意事项。
 
 认证通过 `connect.params.auth`（token 或密码）在 WebSocket 握手时强制执行。
-参见 [Gateway 网关配置](/gateway/configuration) 中的 `gateway.auth`。
+参见 [Gateway 网关配置](/zh-CN/gateway/configuration) 中的 `gateway.auth`。
 
 安全注意事项：控制 UI 是一个**管理界面**（聊天、配置、执行审批）。
 不要公开暴露它。UI 在首次加载后将 token 存储在 `localStorage` 中。
@@ -44,7 +44,7 @@ Gateway 网关仪表板是默认在 `/` 提供的浏览器控制 UI
 
 - **Localhost**：打开 `http://127.0.0.1:18789/`。如果你看到"unauthorized"，运行 `openclaw dashboard` 并使用带 token 的链接（`?token=...`）。
 - **Token 来源**：`gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）；UI 在首次加载后存储它。
-- **非 localhost**：使用 Tailscale Serve（如果 `gateway.auth.allowTailscale: true` 则无需 token）、带 token 的 tailnet 绑定，或 SSH 隧道。参见 [Web 界面](/web)。
+- **非 localhost**：使用 Tailscale Serve（如果 `gateway.auth.allowTailscale: true` 则无需 token）、带 token 的 tailnet 绑定，或 SSH 隧道。参见 [Web 界面](/zh-CN/web)。
 
 ## 如果你看到"unauthorized" / 1008
 

@@ -34,7 +34,7 @@ x-i18n:
 
 - `openclaw status --usage` 和 `openclaw channels list` 显示提供商**用量窗口**（配额快照，非每条消息的费用）。
 
-详情和示例请参阅 [Token 用量与费用](/reference/token-use)。
+详情和示例请参阅 [Token 用量与费用](/zh-CN/reference/token-use)。
 
 ## 密钥的发现方式
 
@@ -51,7 +51,7 @@ OpenClaw 可以从以下来源获取凭据：
 
 每次回复或工具调用都使用**当前模型提供商**（OpenAI、Anthropic 等）。这是用量和费用的主要来源。
 
-定价配置请参阅[模型](/providers/models)，显示方式请参阅 [Token 用量与费用](/reference/token-use)。
+定价配置请参阅[模型](/zh-CN/providers/models)，显示方式请参阅 [Token 用量与费用](/zh-CN/reference/token-use)。
 
 ### 2）媒体理解（音频/图像/视频）
 
@@ -61,7 +61,7 @@ OpenClaw 可以从以下来源获取凭据：
 - 图像：OpenAI / Anthropic / Google。
 - 视频：Google。
 
-请参阅[媒体理解](/nodes/media-understanding)。
+请参阅[媒体理解](/zh-CN/nodes/media-understanding)。
 
 ### 3）记忆嵌入 + 语义搜索
 
@@ -73,7 +73,7 @@ OpenClaw 可以从以下来源获取凭据：
 
 你可以使用 `memorySearch.provider = "local"` 保持本地运行（无 API 用量）。
 
-请参阅[记忆](/concepts/memory)。
+请参阅[记忆](/zh-CN/concepts/memory)。
 
 ### 4）网页搜索工具（Brave / 通过 OpenRouter 使用 Perplexity）
 
@@ -88,7 +88,7 @@ OpenClaw 可以从以下来源获取凭据：
 - **每秒 1 次请求**
 - **需要信用卡**进行验证（除非升级否则不会收费）
 
-请参阅[网页工具](/tools/web)。
+请参阅[网页工具](/zh-CN/tools/web)。
 
 ### 5）网页抓取工具（Firecrawl）
 
@@ -98,7 +98,7 @@ OpenClaw 可以从以下来源获取凭据：
 
 如果未配置 Firecrawl，该工具会回退到直接抓取 + 可读性提取（无付费 API）。
 
-请参阅[网页工具](/tools/web)。
+请参阅[网页工具](/zh-CN/tools/web)。
 
 ### 6）提供商用量快照（状态/健康检查）
 
@@ -107,19 +107,19 @@ OpenClaw 可以从以下来源获取凭据：
 - `openclaw status --usage`
 - `openclaw models status --json`
 
-请参阅[模型 CLI](/cli/models)。
+请参阅[模型 CLI](/zh-CN/cli/models)。
 
 ### 7）压缩保护摘要
 
 压缩保护功能可以使用**当前模型**对会话历史进行摘要，运行时会调用提供商 API。
 
-请参阅[会话管理 + 压缩](/reference/session-management-compaction)。
+请参阅[会话管理 + 压缩](/zh-CN/reference/session-management-compaction)。
 
 ### 8）模型扫描/探测
 
 `openclaw models scan` 可以探测 OpenRouter 模型，启用探测时会使用 `OPENROUTER_API_KEY`。
 
-请参阅[模型 CLI](/cli/models)。
+请参阅[模型 CLI](/zh-CN/cli/models)。
 
 ### 9）语音对话（Talk）
 
@@ -127,10 +127,10 @@ OpenClaw 可以从以下来源获取凭据：
 
 - `ELEVENLABS_API_KEY` 或 `talk.apiKey`
 
-请参阅[语音对话模式](/nodes/talk)。
+请参阅[语音对话模式](/zh-CN/nodes/talk)。
 
 ### 10）Skills（第三方 API）
 
 Skills 可以在 `skills.entries.<name>.apiKey` 中存储 `apiKey`。如果 Skills 使用该密钥调用外部 API，则会根据 Skills 的提供商产生费用。
 
-请参阅[Skills](/tools/skills)。
+请参阅[Skills](/zh-CN/tools/skills)。

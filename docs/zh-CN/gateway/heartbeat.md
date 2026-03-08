@@ -15,7 +15,7 @@ x-i18n:
 
 # 心跳（Gateway 网关）
 
-> **心跳 vs Cron？** 参见 [Cron vs 心跳](/automation/cron-vs-heartbeat) 了解何时使用哪种方案。
+> **心跳 vs Cron？** 参见 [Cron vs 心跳](/zh-CN/automation/cron-vs-heartbeat) 了解何时使用哪种方案。
 
 心跳在主会话中运行**周期性智能体轮次**，使模型能够在不打扰你的情况下提醒需要关注的事项。
 
@@ -57,7 +57,7 @@ x-i18n:
 默认提示故意设计得比较宽泛：
 
 - **后台任务**："Consider outstanding tasks"促使智能体审查待办事项（收件箱、日历、提醒、排队工作）并提醒任何紧急事项。
-- **人类签到**："Checkup sometimes on your human during day time"促使偶尔发送轻量级的"有什么需要帮助的吗？"消息，但通过使用你配置的本地时区避免夜间打扰（参见 [/concepts/timezone](/concepts/timezone)）。
+- **人类签到**："Checkup sometimes on your human during day time"促使偶尔发送轻量级的"有什么需要帮助的吗？"消息，但通过使用你配置的本地时区避免夜间打扰（参见 [/concepts/timezone](/zh-CN/concepts/timezone)）。
 
 如果你希望心跳执行非常具体的任务（例如"检查 Gmail PubSub 统计"或"验证 Gateway 网关健康状态"），将 `agents.defaults.heartbeat.prompt`（或 `agents.list[].heartbeat.prompt`）设置为自定义内容（原样发送）。
 
@@ -136,8 +136,8 @@ x-i18n:
 - `includeReasoning`：启用时，也会发送单独的 `Reasoning:` 消息（如果可用）（与 `/reasoning on` 格式相同）。
 - `session`：心跳运行的可选会话键。
   - `main`（默认）：智能体主会话。
-  - 显式会话键（从 `openclaw sessions --json` 或 [sessions CLI](/cli/sessions) 复制）。
-  - 会话键格式：参见[会话](/concepts/session)和[群组](/channels/groups)。
+  - 显式会话键（从 `openclaw sessions --json` 或 [sessions CLI](/zh-CN/cli/sessions) 复制）。
+  - 会话键格式：参见[会话](/zh-CN/concepts/session)和[群组](/zh-CN/channels/groups)。
 - `target`：
   - `last`（默认）：发送到最后使用的外部渠道。
   - 显式渠道：`whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`。

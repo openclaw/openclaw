@@ -16,9 +16,9 @@ x-i18n:
 
 # 节点
 
-**节点**是一个配套设备（macOS/iOS/Android/无头），它以 `role: "node"` 连接到 Gateway 网关 **WebSocket**（与操作员相同的端口），并通过 `node.invoke` 暴露命令接口（例如 `canvas.*`、`camera.*`、`system.*`）。协议详情：[Gateway 网关协议](/gateway/protocol)。
+**节点**是一个配套设备（macOS/iOS/Android/无头），它以 `role: "node"` 连接到 Gateway 网关 **WebSocket**（与操作员相同的端口），并通过 `node.invoke` 暴露命令接口（例如 `canvas.*`、`camera.*`、`system.*`）。协议详情：[Gateway 网关协议](/zh-CN/gateway/protocol)。
 
-旧版传输：[Bridge 协议](/gateway/bridge-protocol)（TCP JSONL；当前节点已弃用/移除）。
+旧版传输：[Bridge 协议](/zh-CN/gateway/bridge-protocol)（TCP JSONL；当前节点已弃用/移除）。
 
 macOS 也可以在**节点模式**下运行：菜单栏应用连接到 Gateway 网关的 WS 服务器，并将其本地 canvas/camera 命令作为节点暴露（因此 `openclaw nodes …` 可以针对这台 Mac 工作）。
 
@@ -144,9 +144,9 @@ openclaw config set tools.exec.node "<id-or-name>"
 
 相关：
 
-- [节点主机 CLI](/cli/node)
-- [Exec 工具](/tools/exec)
-- [Exec 批准](/tools/exec-approvals)
+- [节点主机 CLI](/zh-CN/cli/node)
+- [Exec 工具](/zh-CN/tools/exec)
+- [Exec 批准](/zh-CN/tools/exec-approvals)
 
 ## 调用命令
 
@@ -336,7 +336,7 @@ openclaw node run --host <gateway-host> --port 18789
 - 仍然需要配对（Gateway 网关会显示节点批准提示）。
 - 节点主机将其节点 id、令牌、显示名称和 Gateway 网关连接信息存储在 `~/.openclaw/node.json` 中。
 - Exec 批准通过 `~/.openclaw/exec-approvals.json` 在本地执行
-  （参见 [Exec 批准](/tools/exec-approvals)）。
+  （参见 [Exec 批准](/zh-CN/tools/exec-approvals)）。
 - 在 macOS 上，当配套应用 exec 主机可达时，无头节点主机优先使用它，
   如果应用不可用则回退到本地执行。设置 `OPENCLAW_NODE_EXEC_HOST=app` 要求
   使用应用，或设置 `OPENCLAW_NODE_EXEC_FALLBACK=0` 禁用回退。

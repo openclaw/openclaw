@@ -41,5 +41,5 @@ Telegram 允许列表现在不区分大小写地接受 `telegram:` 和 `tg:` 前
 
 ## 相关文档
 
-- [群聊](/channels/groups)
-- [Telegram 提供商](/channels/telegram)
+- [群聊](/zh-CN/channels/groups)
+- [Telegram 提供商](/zh-CN/channels/telegram)

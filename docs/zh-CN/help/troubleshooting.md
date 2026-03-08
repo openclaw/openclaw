@@ -39,7 +39,7 @@ openclaw status --deep
 
 几乎总是 Node/npm PATH 问题。从这里开始：
 
-- [安装（Node/npm PATH 安装完整性检查）](/install#nodejs--npm-path-sanity)
+- [安装（Node/npm PATH 安装完整性检查）](/zh-CN/install#nodejs--npm-path-sanity)
 
 ### 安装程序失败（或你需要完整日志）
 
@@ -59,13 +59,13 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --beta --verbose
 
 ### Gateway 网关“unauthorized”、无法连接或持续重连
 
-- [Gateway 网关故障排除](/gateway/troubleshooting)
-- [Gateway 网关认证](/gateway/authentication)
+- [Gateway 网关故障排除](/zh-CN/gateway/troubleshooting)
+- [Gateway 网关认证](/zh-CN/gateway/authentication)
 
 ### 控制 UI 在 HTTP 上失败（需要设备身份）
 
-- [Gateway 网关故障排除](/gateway/troubleshooting)
-- [控制 UI](/web/control-ui#insecure-http)
+- [Gateway 网关故障排除](/zh-CN/gateway/troubleshooting)
+- [控制 UI](/zh-CN/web/control-ui#insecure-http)
 
 ### `docs.openclaw.ai` 显示 SSL 错误（Comcast/Xfinity）
 
@@ -77,13 +77,13 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --beta --verbose
 
 ### 服务显示运行中，但 RPC 探测失败
 
-- [Gateway 网关故障排除](/gateway/troubleshooting)
-- [后台进程/服务](/gateway/background-process)
+- [Gateway 网关故障排除](/zh-CN/gateway/troubleshooting)
+- [后台进程/服务](/zh-CN/gateway/background-process)
 
 ### 模型/认证失败（速率限制、账单、“all models failed”）
 
-- [模型](/cli/models)
-- [OAuth / 认证概念](/concepts/oauth)
+- [模型](/zh-CN/cli/models)
+- [OAuth / 认证概念](/zh-CN/concepts/oauth)
 
 ### `/model` 显示 `model not allowed`
 

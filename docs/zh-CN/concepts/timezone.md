@@ -93,4 +93,4 @@ OpenClaw 对时间戳进行标准化，使模型看到**单一的参考时间**�
 
 你可以通过 `agents.defaults.timeFormat`（`auto` | `12` | `24`）控制提示词格式。
 
-详情参见[日期与时间](/date-time)的完整行为和示例。
+详情参见[日期与时间](/zh-CN/date-time)的完整行为和示例。

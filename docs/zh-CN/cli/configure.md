@@ -22,8 +22,8 @@ x-i18n:
 
 相关内容：
 
-- Gateway 网关配置参考：[配置](/gateway/configuration)
-- Config CLI：[Config](/cli/config)
+- Gateway 网关配置参考：[配置](/zh-CN/gateway/configuration)
+- Config CLI：[Config](/zh-CN/cli/config)
 
 注意事项：
 

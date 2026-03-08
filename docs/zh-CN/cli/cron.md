@@ -19,7 +19,7 @@ x-i18n:
 
 相关内容：
 
-- Cron 作业：[Cron 作业](/automation/cron-jobs)
+- Cron 作业：[Cron 作业](/zh-CN/automation/cron-jobs)
 
 提示：运行 `openclaw cron --help` 查看完整的命令集。
 

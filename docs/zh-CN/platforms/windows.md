@@ -21,14 +21,14 @@ Windows 上的 OpenClaw 推荐**通过 WSL2**（推荐 Ubuntu）。CLI + Gateway
 
 ## 安装（WSL2）
 
-- [入门指南](/start/getting-started)（在 WSL 内使用）
-- [安装和更新](/install/updating)
+- [入门指南](/zh-CN/start/getting-started)（在 WSL 内使用）
+- [安装和更新](/zh-CN/install/updating)
 - 官方 WSL2 指南（Microsoft）：https://learn.microsoft.com/windows/wsl/install
 
 ## Gateway 网关
 
-- [Gateway 网关操作手册](/gateway)
-- [配置](/gateway/configuration)
+- [Gateway 网关操作手册](/zh-CN/gateway)
+- [配置](/zh-CN/gateway/configuration)
 
 ## Gateway 网关服务安装（CLI）
 
@@ -149,7 +149,7 @@ pnpm build
 openclaw onboard
 ```
 
-完整指南：[入门指南](/start/getting-started)
+完整指南：[入门指南](/zh-CN/start/getting-started)
 
 ## Windows 配套应用
 

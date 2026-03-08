@@ -18,7 +18,7 @@ x-i18n:
 
 相关内容：
 
-- 向导指南：[新手引导](/start/onboarding)
+- 向导指南：[新手引导](/zh-CN/start/onboarding)
 
 ## 示例
 

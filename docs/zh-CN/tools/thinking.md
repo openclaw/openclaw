@@ -66,7 +66,7 @@ x-i18n:
 
 ## 相关内容
 
-- 提权模式文档位于[提权模式](/tools/elevated)。
+- 提权模式文档位于[提权模式](/zh-CN/tools/elevated)。
 
 ## 心跳
 

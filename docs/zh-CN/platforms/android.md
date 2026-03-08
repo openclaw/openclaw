@@ -20,13 +20,13 @@ x-i18n:
 
 - 角色：配套节点应用（Android 不托管 Gateway 网关）。
 - 需要 Gateway 网关：是（在 macOS、Linux 或通过 WSL2 的 Windows 上运行）。
-- 安装：[入门指南](/start/getting-started) + [配对](/gateway/pairing)。
-- Gateway 网关：[操作手册](/gateway) + [配置](/gateway/configuration)。
-  - 协议：[Gateway 网关协议](/gateway/protocol)（节点 + 控制平面）。
+- 安装：[入门指南](/zh-CN/start/getting-started) + [配对](/zh-CN/gateway/pairing)。
+- Gateway 网关：[操作手册](/zh-CN/gateway) + [配置](/zh-CN/gateway/configuration)。
+  - 协议：[Gateway 网关协议](/zh-CN/gateway/protocol)（节点 + 控制平面）。
 
 ## 系统控制
 
-系统控制（launchd/systemd）位于 Gateway 网关主机上。参见 [Gateway 网关](/gateway)。
+系统控制（launchd/systemd）位于 Gateway 网关主机上。参见 [Gateway 网关](/zh-CN/gateway)。
 
 ## 连接操作手册
 
@@ -66,7 +66,7 @@ openclaw gateway --port 18789 --verbose
 dns-sd -B _openclaw-gw._tcp local.
 ```
 
-更多调试说明：[Bonjour](/gateway/bonjour)。
+更多调试说明：[Bonjour](/zh-CN/gateway/bonjour)。
 
 #### 通过 unicast DNS-SD 的 Tailnet（维也纳 ⇄ 伦敦）发现
 
@@ -75,7 +75,7 @@ Android NSD/mDNS 发现无法跨网络。如果你的 Android 节点和 Gateway 
 1. 在 Gateway 网关主机上设置 DNS-SD 区域（示例 `openclaw.internal.`）并发布 `_openclaw-gw._tcp` 记录。
 2. 配置 Tailscale split DNS，将你选择的域指向该 DNS 服务器。
 
-详情和示例 CoreDNS 配置：[Bonjour](/gateway/bonjour)。
+详情和示例 CoreDNS 配置：[Bonjour](/zh-CN/gateway/bonjour)。
 
 ### 3）从 Android 连接
 
@@ -100,7 +100,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-配对详情：[Gateway 网关配对](/gateway/pairing)。
+配对详情：[Gateway 网关配对](/zh-CN/gateway/pairing)。
 
 ### 5）验证节点已连接
 
@@ -152,4 +152,4 @@ Canvas 命令（仅前台）：
 - `camera.snap`（jpg）
 - `camera.clip`（mp4）
 
-参见 [Camera 节点](/nodes/camera) 了解参数和 CLI 助手。
+参见 [Camera 节点](/zh-CN/nodes/camera) 了解参数和 CLI 助手。

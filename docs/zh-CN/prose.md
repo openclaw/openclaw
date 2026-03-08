@@ -38,7 +38,7 @@ openclaw plugins enable open-prose
 
 开发/本地检出：`openclaw plugins install ./extensions/open-prose`
 
-相关文档：[插件](/tools/plugin)、[插件清单](/plugins/manifest)、[Skills](/tools/skills)。
+相关文档：[插件](/zh-CN/tools/plugin)、[插件清单](/zh-CN/plugins/manifest)、[Skills](/zh-CN/tools/skills)。
 
 ## 斜杠命令
 
@@ -132,10 +132,10 @@ OpenProse 程序映射到 OpenClaw 原语：
 | 文件读/写            | `read` / `write` |
 | Web 获取             | `web_fetch`      |
 
-如果你的工具白名单阻止这些工具，OpenProse 程序将失败。参见 [Skills 配置](/tools/skills-config)。
+如果你的工具白名单阻止这些工具，OpenProse 程序将失败。参见 [Skills 配置](/zh-CN/tools/skills-config)。
 
 ## 安全 + 批准
 
 将 `.prose` 文件视为代码。运行前请审查。使用 OpenClaw 工具白名单和批准门控来控制副作用。
 
-对于确定性的、批准门控的工作流，可与 [Lobster](/tools/lobster) 比较。
+对于确定性的、批准门控的工作流，可与 [Lobster](/zh-CN/tools/lobster) 比较。

@@ -193,7 +193,7 @@ CLI 模板还可以使用：
 
 - `openai/gpt-4o-mini-transcribe`、`groq/whisper-large-v3-turbo` 或 `deepgram/nova-3`。
 - CLI 回退：`whisper-cli`（whisper-cpp）或 `whisper`。
-- Deepgram 设置：[Deepgram（音频转录）](/providers/deepgram)。
+- Deepgram 设置：[Deepgram（音频转录）](/zh-CN/providers/deepgram)。
 
 **视频**
 
@@ -376,5 +376,5 @@ CLI 模板还可以使用：
 
 ## 相关文档
 
-- [配置](/gateway/configuration)
-- [图片和媒体支持](/nodes/images)
+- [配置](/zh-CN/gateway/configuration)
+- [图片和媒体支持](/zh-CN/nodes/images)

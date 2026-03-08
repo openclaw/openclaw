@@ -112,8 +112,8 @@ OpenClaw 从其工作区目录读取操作指令和"记忆"。
 openclaw setup
 ```
 
-完整工作区布局 + 备份指南：[智能体工作区](/concepts/agent-workspace)
-记忆工作流：[记忆](/concepts/memory)
+完整工作区布局 + 备份指南：[智能体工作区](/zh-CN/concepts/agent-workspace)
+记忆工作流：[记忆](/zh-CN/concepts/memory)
 
 可选：使用 `agents.defaults.workspace` 选择不同的工作区（支持 `~`）。
 
@@ -237,12 +237,12 @@ openclaw health --json   # Gateway 网关健康快照（WS）
 
 ## 下一步
 
-- WebChat：[WebChat](/web/webchat)
-- Gateway 网关运维：[Gateway 网关运行手册](/gateway)
-- 定时任务 + 唤醒：[定时任务](/automation/cron-jobs)
-- macOS 菜单栏配套应用：[OpenClaw macOS 应用](/platforms/macos)
-- iOS 节点应用：[iOS 应用](/platforms/ios)
-- Android 节点应用：[Android 应用](/platforms/android)
-- Windows 状态：[Windows (WSL2)](/platforms/windows)
-- Linux 状态：[Linux 应用](/platforms/linux)
-- 安全：[安全](/gateway/security)
+- WebChat：[WebChat](/zh-CN/web/webchat)
+- Gateway 网关运维：[Gateway 网关运行手册](/zh-CN/gateway)
+- 定时任务 + 唤醒：[定时任务](/zh-CN/automation/cron-jobs)
+- macOS 菜单栏配套应用：[OpenClaw macOS 应用](/zh-CN/platforms/macos)
+- iOS 节点应用：[iOS 应用](/zh-CN/platforms/ios)
+- Android 节点应用：[Android 应用](/zh-CN/platforms/android)
+- Windows 状态：[Windows (WSL2)](/zh-CN/platforms/windows)
+- Linux 状态：[Linux 应用](/zh-CN/platforms/linux)
+- 安全：[安全](/zh-CN/gateway/security)

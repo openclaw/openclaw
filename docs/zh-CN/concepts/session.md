@@ -44,11 +44,11 @@ OpenClaw 将**每个智能体的一个直接聊天会话**视为主会话。直�
 ## 会话修剪
 
 默认情况下，OpenClaw 在 LLM 调用之前从内存上下文中修剪**旧的工具结果**。
-这**不会**重写 JSONL 历史记录。参见 [/concepts/session-pruning](/concepts/session-pruning)。
+这**不会**重写 JSONL 历史记录。参见 [/concepts/session-pruning](/zh-CN/concepts/session-pruning)。
 
 ## 压缩前记忆刷新
 
-当会话接近自动压缩时，OpenClaw 可以运行一个**静默记忆刷新**轮次，提醒模型将持久性笔记写入磁盘。这仅在工作区可写时运行。参见[记忆](/concepts/memory)和[压缩](/concepts/compaction)。
+当会话接近自动压缩时，OpenClaw 可以运行一个**静默记忆刷新**轮次，提醒模型将持久性笔记写入磁盘。这仅在工作区可写时运行。参见[记忆](/zh-CN/concepts/memory)和[压缩](/zh-CN/concepts/compaction)。
 
 ## 传输到会话键的映射
 
@@ -146,7 +146,7 @@ OpenClaw 将**每个智能体的一个直接聊天会话**视为主会话。直�
 - 在聊天中单独发送 `/status` 消息可查看智能体是否可达、会话上下文使用了多少、当前的思考/详细模式开关，以及你的 WhatsApp Web 凭证上次刷新时间（有助于发现重新链接需求）。
 - 发送 `/context list` 或 `/context detail` 查看系统提示中的内容和注入的工作区文件（以及最大的上下文贡献者）。
 - 单独发送 `/stop` 消息可中止当前运行、清除该会话的排队后续操作，并停止从中生成的任何子智能体运行（回复包含已停止的数量）。
-- 单独发送 `/compact`（可选指令）消息可总结旧上下文并释放窗口空间。参见 [/concepts/compaction](/concepts/compaction)。
+- 单独发送 `/compact`（可选指令）消息可总结旧上下文并释放窗口空间。参见 [/concepts/compaction](/zh-CN/concepts/compaction)。
 - 可以直接打开 JSONL 对话记录查看完整轮次。
 
 ## 提示

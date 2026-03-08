@@ -16,8 +16,8 @@ x-i18n:
 
 # 模型 CLI
 
-参见 [/concepts/model-failover](/concepts/model-failover) 了解认证配置文件轮换、冷却时间及其与回退的交互。
-快速提供商概述 + 示例：[/concepts/model-providers](/concepts/model-providers)。
+参见 [/concepts/model-failover](/zh-CN/concepts/model-failover) 了解认证配置文件轮换、冷却时间及其与回退的交互。
+快速提供商概述 + 示例：[/concepts/model-providers](/zh-CN/concepts/model-providers)。
 
 ## 模型选择工作原理
 
@@ -31,7 +31,7 @@ OpenClaw 按以下顺序选择模型：
 
 - `agents.defaults.models` 是 OpenClaw 可使用的模型白名单/目录（加上别名）。
 - `agents.defaults.imageModel` **仅在**主要模型无法接受图像时使用。
-- 每个智能体的默认值可以通过 `agents.list[].model` 加绑定覆盖 `agents.defaults.model`（参见 [/concepts/multi-agent](/concepts/multi-agent)）。
+- 每个智能体的默认值可以通过 `agents.list[].model` 加绑定覆盖 `agents.defaults.model`（参见 [/concepts/multi-agent](/zh-CN/concepts/multi-agent)）。
 
 ## 快速模型推荐（经验之谈）
 
@@ -57,7 +57,7 @@ openclaw onboard
 
 模型引用会规范化为小写。提供商别名如 `z.ai/*` 会规范化为 `zai/*`。
 
-提供商配置示例（包括 OpenCode Zen）在 [/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy)。
+提供商配置示例（包括 OpenCode Zen）在 [/gateway/configuration](/zh-CN/gateway/configuration#opencode-zen-multi-model-proxy)。
 
 ## "Model is not allowed"（以及为什么回复停止）
 
@@ -108,7 +108,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 - 如果模型 ID 本身包含 `/`（OpenRouter 风格），你必须包含提供商前缀（例如：`/model openrouter/moonshotai/kimi-k2`）。
 - 如果省略提供商，OpenClaw 将输入视为别名或**默认提供商**的模型（仅在模型 ID 中没有 `/` 时有效）。
 
-完整命令行为/配置：[斜杠命令](/tools/slash-commands)。
+完整命令行为/配置：[斜杠命令](/zh-CN/tools/slash-commands)。
 
 ## CLI 命令
 
@@ -185,7 +185,7 @@ openclaw models status
 输入
 
 - OpenRouter `/models` 列表（筛选 `:free`）
-- 需要来自认证配置文件或 `OPENROUTER_API_KEY` 的 OpenRouter API 密钥（参见 [/environment](/help/environment)）
+- 需要来自认证配置文件或 `OPENROUTER_API_KEY` 的 OpenRouter API 密钥（参见 [/environment](/zh-CN/help/environment)）
 - 可选筛选器：`--max-age-days`、`--min-params`、`--provider`、`--max-candidates`
 - 探测控制：`--timeout`、`--concurrency`
 

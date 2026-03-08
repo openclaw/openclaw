@@ -79,7 +79,7 @@ x-i18n:
 ## 与其他限制的交互
 
 - 内置工具已经截断自己的输出；会话剪枝是一个额外的层，防止长时间运行的聊天在模型上下文中累积过多的工具输出。
-- 压缩是独立的：压缩进行总结并持久化，剪枝是每个请求的临时操作。参阅 [/concepts/compaction](/concepts/compaction)。
+- 压缩是独立的：压缩进行总结并持久化，剪枝是每个请求的临时操作。参阅 [/concepts/compaction](/zh-CN/concepts/compaction)。
 
 ## 默认值（启用时）
 
@@ -126,4 +126,4 @@ x-i18n:
 }
 ```
 
-参阅配置参考：[Gateway 网关配置](/gateway/configuration)
+参阅配置参考：[Gateway 网关配置](/zh-CN/gateway/configuration)

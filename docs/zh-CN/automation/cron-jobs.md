@@ -16,7 +16,7 @@ x-i18n:
 
 # 定时任务（Gateway网关调度器）
 
-> **定时任务还是心跳？** 请参阅[定时任务与心跳对比](/automation/cron-vs-heartbeat)了解何时使用哪种方式。
+> **定时任务还是心跳？** 请参阅[定时任务与心跳对比](/zh-CN/automation/cron-vs-heartbeat)了解何时使用哪种方式。
 
 定时任务是 Gateway网关内置的调度器。它持久化任务、在合适的时间唤醒智能体，并可选择将输出发送回聊天。
 
@@ -65,7 +65,7 @@ openclaw cron add \
 
 ## 工具调用等价形式（Gateway网关定时任务工具）
 
-有关规范的 JSON 结构和示例，请参阅[工具调用的 JSON 模式](/automation/cron-jobs#json-schema-for-tool-calls)。
+有关规范的 JSON 结构和示例，请参阅[工具调用的 JSON 模式](/zh-CN/automation/cron-jobs#json-schema-for-tool-calls)。
 
 ## 定时任务的存储位置
 
@@ -125,7 +125,7 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 - `wakeMode: "next-heartbeat"`（默认）：事件等待下一次计划心跳。
 - `wakeMode: "now"`：事件触发立即心跳运行。
 
-当你需要正常的心跳提示 + 主会话上下文时，这是最佳选择。参见[心跳](/gateway/heartbeat)。
+当你需要正常的心跳提示 + 主会话上下文时，这是最佳选择。参见[心跳](/zh-CN/gateway/heartbeat)。
 
 #### 隔离任务（专用定时会话）
 
@@ -408,7 +408,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 - `cron.list`、`cron.status`、`cron.add`、`cron.update`、`cron.remove`
 - `cron.run`（强制或到期）、`cron.runs`
-  如需不创建任务直接发送系统事件，请使用 [`openclaw system event`](/cli/system)。
+  如需不创建任务直接发送系统事件，请使用 [`openclaw system event`](/zh-CN/cli/system)。
 
 ## 故障排除
 

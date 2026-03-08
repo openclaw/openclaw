@@ -65,7 +65,7 @@ OpenClaw 可以为子智能体渲染更小的系统提示词。运行时为每�
 
 内部钩子可以通过 `agent:bootstrap` 拦截此步骤以修改或替换注入的引导文件（例如将 `SOUL.md` 替换为其他角色）。
 
-要检查每个注入文件贡献了多少（原始 vs 注入、截断，加上工具 schema 开销），使用 `/context list` 或 `/context detail`。参见[上下文](/concepts/context)。
+要检查每个注入文件贡献了多少（原始 vs 注入、截断，加上工具 schema 开销），使用 `/context list` 或 `/context detail`。参见[上下文](/zh-CN/concepts/context)。
 
 ## 时间处理
 
@@ -78,7 +78,7 @@ OpenClaw 可以为子智能体渲染更小的系统提示词。运行时为每�
 - `agents.defaults.userTimezone`
 - `agents.defaults.timeFormat`（`auto` | `12` | `24`）
 
-完整行为详情参见[日期和时间](/date-time)。
+完整行为详情参见[日期和时间](/zh-CN/date-time)。
 
 ## Skills
 
