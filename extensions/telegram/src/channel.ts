@@ -371,6 +371,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       return { channel: "telegram", ...result };
     },
     sendPayload: async ({
+      cfg,
       to,
       payload,
       mediaLocalRoots,
@@ -398,6 +399,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       if (mediaUrls.length === 0) {
         const result = await send(to, text, {
           verbose: false,
+          cfg,
           messageThreadId,
           replyToMessageId,
           accountId: accountId ?? undefined,
@@ -416,6 +418,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         const isFirst = i === 0;
         finalResult = await send(to, isFirst ? text : "", {
           verbose: false,
+          cfg,
           messageThreadId,
           replyToMessageId,
           accountId: accountId ?? undefined,
