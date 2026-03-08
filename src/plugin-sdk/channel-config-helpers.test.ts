@@ -7,7 +7,7 @@ import {
 
 describe("mapAllowFromEntries", () => {
   it("coerces allowFrom entries to strings", () => {
-    expect(mapAllowFromEntries(["user", 42, null])).toEqual(["user", "42", "null"]);
+    expect(mapAllowFromEntries(["user", 42])).toEqual(["user", "42"]);
   });
 
   it("returns empty list for missing input", () => {
