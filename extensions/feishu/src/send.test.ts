@@ -222,4 +222,54 @@ describe("parseInteractiveCardContent", () => {
     expect(parseInteractiveCardContent(null)).toBe("[Interactive Card]");
     expect(parseInteractiveCardContent(undefined)).toBe("[Interactive Card]");
   });
+
+  it("ignores malformed elements and still extracts nested valid text", () => {
+    const card = {
+      header: { title: { content: "Malformed Card" } },
+      body: {
+        elements: [
+          null,
+          "bad-element",
+          { tag: "markdown", content: 42 },
+          {
+            tag: "column_set",
+            columns: [
+              null,
+              { elements: "bad-elements" },
+              {
+                elements: [
+                  { tag: "markdown", content: "nested markdown" },
+                  { tag: "div", text: { content: "nested div" } },
+                ],
+              },
+            ],
+          },
+          {
+            tag: "form",
+            elements: [
+              { tag: "markdown", content: "form markdown" },
+              { tag: "div", text: { content: "form div" } },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(parseInteractiveCardContent(card)).toBe(
+      "Malformed Card\nnested markdown\nnested div\nform markdown\nform div",
+    );
+  });
+
+  it("falls back to [Interactive Card] when all extractable fields are malformed", () => {
+    const card = {
+      header: { title: { content: "   " } },
+      elements: [
+        { tag: "div", text: { content: 123 } },
+        { tag: "markdown", content: { bad: true } },
+        { tag: "column_set", columns: [{ elements: "bad-elements" }] },
+      ],
+    };
+
+    expect(parseInteractiveCardContent(card)).toBe("[Interactive Card]");
+  });
 });
