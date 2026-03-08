@@ -1107,11 +1107,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "HEARTBEAT.md"),
-      "- Check server logs\n",
-      "utf-8",
-    );
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "- Check server logs\n", "utf-8");
     const customPrompt = "Read heartbeat.md and summarise what's pending.";
     const cfg: OpenClawConfig = {
       agents: {
