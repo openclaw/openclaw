@@ -663,14 +663,16 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  if (!configValue) {
+                  const liveConfig = (state.configForm ?? state.configSnapshot?.config) as {
+                    agents?: { list?: unknown[] };
+                  } | null;
+                  if (!liveConfig) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const list = Array.isArray(liveConfig.agents?.list)
+                    ? [...liveConfig.agents.list]
+                    : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -678,6 +680,17 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
+                    const newEntry: Record<string, unknown> = { id: agentId };
+                    const tools: Record<string, unknown> = {};
+                    if (profile) {
+                      tools.profile = profile;
+                    }
+                    if (Object.keys(tools).length === 0) {
+                      return; // No meaningful change – agent already inherits defaults
+                    }
+                    newEntry.tools = tools;
+                    list.push(newEntry);
+                    updateConfigFormValue(state, ["agents", "list"], list);
                     return;
                   }
                   const basePath = ["agents", "list", index, "tools"];
@@ -691,14 +704,16 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                  if (!configValue) {
+                  const liveConfig = (state.configForm ?? state.configSnapshot?.config) as {
+                    agents?: { list?: unknown[] };
+                  } | null;
+                  if (!liveConfig) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
+                  const list = Array.isArray(liveConfig.agents?.list)
+                    ? [...liveConfig.agents.list]
+                    : [];
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
@@ -706,6 +721,21 @@ export function renderApp(state: AppViewState) {
                       (entry as { id?: string }).id === agentId,
                   );
                   if (index < 0) {
+                    // Agent not in config yet (e.g. disk-scanned only) – add entry so Save becomes enabled
+                    const newEntry: Record<string, unknown> = { id: agentId };
+                    const tools: Record<string, unknown> = {};
+                    if (alsoAllow.length > 0) {
+                      tools.alsoAllow = alsoAllow;
+                    }
+                    if (deny.length > 0) {
+                      tools.deny = deny;
+                    }
+                    if (Object.keys(tools).length === 0) {
+                      return; // No meaningful override to persist
+                    }
+                    newEntry.tools = tools;
+                    list.push(newEntry);
+                    updateConfigFormValue(state, ["agents", "list"], list);
                     return;
                   }
                   const basePath = ["agents", "list", index, "tools"];
