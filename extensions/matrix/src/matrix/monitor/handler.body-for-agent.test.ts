@@ -52,6 +52,10 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
         commands: {
           shouldHandleTextCommands: vi.fn().mockReturnValue(true),
         },
+        mentions: {
+          buildMentionRegexes: vi.fn().mockReturnValue([]),
+          matchesMentionPatterns: vi.fn().mockReturnValue(false),
+        },
         text: {
           hasControlCommand: vi.fn().mockReturnValue(false),
           resolveMarkdownTableMode: vi.fn().mockReturnValue("code"),
@@ -84,7 +88,6 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
       logVerboseMessage,
       allowFrom: [],
       roomsConfig: undefined,
-      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "first",
       threadReplies: "inbound",
