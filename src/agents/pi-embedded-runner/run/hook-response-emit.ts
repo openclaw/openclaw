@@ -108,7 +108,13 @@ export async function applyBeforeResponseEmitHook(
     const runAssistantTurnCount = activeSession.messages
       .slice(runStart)
       .filter((m) => m.role === "assistant" && extractAssistantText(m).length > 0).length;
-    scopeCount = Math.max(runAssistantTurnCount, 1);
+    // When runAssistantTurnCount is 0 (run ended with tool-call-only turn),
+    // fall back to assistantTexts.length instead of clamping to 1. Clamping
+    // to 1 would make getRunScopedMessages scan the entire session and
+    // potentially return a prior-history message, violating run-scoped isolation.
+    // The assistantTexts.length fallback lets the fail-closed guard catch the
+    // mismatch if no run-scoped messages are found.
+    scopeCount = runAssistantTurnCount > 0 ? runAssistantTurnCount : assistantTexts.length;
   } else {
     // No preRunMessageCount or compaction invalidated it — use assistantTexts.length.
     scopeCount = assistantTexts.length;
