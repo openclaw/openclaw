@@ -158,8 +158,9 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Timer should be rescheduled; next heartbeat should still fire
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // Schedule was NOT advanced, so the runner retries promptly.
+    // A small tick is enough for the retry to fire.
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
@@ -237,6 +238,38 @@ describe("startHeartbeatRunner", () => {
       }),
     );
     expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
+
+    runner.stop();
+  });
+
+  it("does not advance schedule when skipped due to requests-in-flight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        // First call: requests are in flight
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startDefaultRunner(runSpy);
+
+    // First heartbeat fires at 30m — returns requests-in-flight
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Without the fix, advanceAgentSchedule would push nextDueMs to 60m,
+    // so at 31m nothing would fire. With the fix, the schedule is NOT
+    // advanced, so the very next interval tick (at the original 30m mark
+    // which is already past) should re-fire almost immediately.
+    // Advance just 1 second — the runner should retry since nextDueMs was
+    // NOT pushed forward.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
   });

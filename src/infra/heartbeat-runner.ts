@@ -1190,7 +1190,8 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
+        // Do NOT advance the schedule — the in-flight request will finish
+        // and the next interval tick should retry immediately.
         scheduleNext();
         return res;
       }
