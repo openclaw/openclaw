@@ -69,6 +69,8 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -81,8 +83,6 @@ export async function loadChatHistory(state: ChatState) {
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
-    // History snapshots depend on chatMessages content; invalidate after async history replacement.
-    state.resetChatInputHistoryNavigation?.();
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.

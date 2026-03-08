@@ -946,4 +946,33 @@ describe("loadChatHistory", () => {
     expect(navigateChatInputHistory(state, "up")).toBe(true);
     expect(state.chatMessage).toBe("new-session-entry");
   });
+
+  it("invalidates cached input-history snapshot when history reload fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("history failed"));
+    const state = {
+      ...createState({
+        connected: true,
+        client: { request } as unknown as ChatState["client"],
+        sessionKey: "next",
+        chatMessages: [{ role: "user", content: [{ type: "text", text: "old-session-entry" }] }],
+      }),
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+    } as ChatState & ChatInputHistoryState;
+    state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
+
+    expect(navigateChatInputHistory(state, "up")).toBe(true);
+    expect(state.chatInputHistoryItems).toEqual(["old-session-entry"]);
+    expect(state.chatInputHistoryIndex).toBe(0);
+
+    await loadChatHistory(state);
+
+    expect(state.chatInputHistoryItems).toBeNull();
+    expect(state.chatInputHistorySessionKey).toBeNull();
+    expect(state.chatInputHistoryIndex).toBe(-1);
+    expect(state.chatDraftBeforeHistory).toBeNull();
+    expect(state.lastError).toContain("history failed");
+  });
 });
