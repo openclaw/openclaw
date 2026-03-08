@@ -129,11 +129,19 @@ export type ControlUiRootResolveOptions = {
 };
 
 function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
+  let realLeft: string;
+  let realRight: string;
   try {
-    return fs.realpathSync(left) === fs.realpathSync(right);
+    realLeft = fs.realpathSync(left);
   } catch {
-    return path.resolve(left) === path.resolve(right);
+    realLeft = path.resolve(left);
   }
+  try {
+    realRight = fs.realpathSync(right);
+  } catch {
+    realRight = path.resolve(right);
+  }
+  return realLeft === realRight;
 }
 
 function addCandidate(candidates: Set<string>, value: string | null) {
