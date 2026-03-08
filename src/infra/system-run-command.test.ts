@@ -158,6 +158,69 @@ describe("system run command helpers", () => {
     });
   });
 
+  test("validateSystemRunCommandConsistency accepts rawCommand with basename when argv has absolute path", () => {
+    // LLMs commonly send argv with absolute paths but rawCommand with short names.
+    // This is the most frequent real-world mismatch: the LLM resolves the binary
+    // to its absolute path in argv but uses the short name in rawCommand.
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/bin/echo", "hello"],
+      rawCommand: "echo hello",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.cmdText).toBe("echo hello");
+  });
+
+  test("validateSystemRunCommandConsistency accepts rawCommand with basename for multi-segment paths", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/usr/bin/curl", "-s", "http://example.com"],
+      rawCommand: "curl -s http://example.com",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test("validateSystemRunCommandConsistency accepts rawCommand with basename for Windows paths", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["C:\\Windows\\System32\\curl.exe", "-s", "http://example.com"],
+      rawCommand: "curl.exe -s http://example.com",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test("validateSystemRunCommandConsistency does not apply basename fallback for shell wrappers", () => {
+    // Shell-wrapper argv: /bin/sh -lc "echo hi" → inferred is "echo hi" (inner command).
+    // Basename fallback should NOT match 'sh -lc "echo hi"' as rawCommand — that would
+    // cause unexpected double-wrapping if downstream code spawns in another shell context.
+    expectRawCommandMismatch({
+      argv: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: 'sh -lc "echo hi"',
+    });
+  });
+
+  test("validateSystemRunCommandConsistency rejects relative path basename fallback", () => {
+    // Relative paths (./tool, ../bin/tool) should NOT trigger basename fallback.
+    // The user should see the relative path in approval prompts to know they're
+    // executing a local script, not a system binary.
+    expectRawCommandMismatch({
+      argv: ["./tool", "--flag"],
+      rawCommand: "tool --flag",
+    });
+    expectRawCommandMismatch({
+      argv: ["../bin/tool", "--flag"],
+      rawCommand: "tool --flag",
+    });
+  });
+
+  test("validateSystemRunCommandConsistency rejects genuinely different commands even with path prefix", () => {
+    // Basename fallback should not weaken security — different command names still fail.
+    expectRawCommandMismatch({
+      argv: ["/bin/echo", "hello"],
+      rawCommand: "cat hello",
+    });
+  });
+
   test("resolveSystemRunCommand requires command when rawCommand is present", () => {
     const res = resolveSystemRunCommand({ rawCommand: "echo hi" });
     expect(res.ok).toBe(false);

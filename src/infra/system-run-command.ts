@@ -117,7 +117,27 @@ export function validateSystemRunCommandConsistency(params: {
       ? shellCommand.trim()
       : formatExecCommand(params.argv);
 
-  if (raw && raw !== inferred) {
+  // Also accept rawCommand when the only difference is path resolution of argv[0].
+  // LLMs commonly send argv with absolute paths (e.g. ["/bin/echo", "hello"]) but rawCommand
+  // with the short name ("echo hello"). Compare using basename of argv[0] as a fallback to
+  // avoid rejecting semantically identical commands that differ only in path prefix.
+  //
+  // Only apply basename fallback for direct commands (not shell wrappers). When argv is a
+  // recognised shell wrapper, `inferred` is the extracted inner command, and comparing
+  // against a basename-formatted full argv would cause unintended acceptance of shell-wrapper
+  // strings as rawCommand.
+  //
+  // Restrict to absolute paths only. Relative paths (./tool, ../bin/tool) are semantically
+  // different from bare command names — the user should see the relative path in approval
+  // prompts to know they're executing a local script, not a system binary.
+  const argv0 = params.argv[0] ?? "";
+  const isAbsolutePath = /^(?:\/|[A-Za-z]:\\)/.test(argv0);
+  const inferredBasename =
+    shellCommand === null && params.argv.length > 0 && isAbsolutePath
+      ? formatExecCommand([argv0.split(/[/\\]/).pop()!, ...params.argv.slice(1)])
+      : null;
+
+  if (raw && raw !== inferred && raw !== inferredBasename) {
     return {
       ok: false,
       message: "INVALID_REQUEST: rawCommand does not match command",
