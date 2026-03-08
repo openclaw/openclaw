@@ -11,7 +11,11 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { createBoundDeliveryRouter } from "../../infra/outbound/bound-delivery-router.js";
+import {
+  getSessionBindingService,
+  type ConversationRef,
+} from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -175,6 +179,19 @@ export async function tryDispatchAcpReply(params: {
   }
 
   let queuedFinal = false;
+
+  // Build requester context for binding disambiguation
+  const requester: ConversationRef | undefined = (() => {
+    const channel = String(params.ctx.Surface ?? params.ctx.Provider ?? "").trim();
+    const accountId = String(params.ctx.AccountId ?? "").trim();
+    const threadId =
+      params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
+    if (!channel || !accountId || !threadId) {
+      return undefined;
+    }
+    return { channel, accountId, conversationId: threadId };
+  })();
+
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -186,6 +203,8 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    requester,
+    boundDeliveryRouter: createBoundDeliveryRouter(),
   });
 
   const promptText = resolveAcpPromptText(params.ctx);
