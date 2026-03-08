@@ -330,4 +330,4 @@ Notes:
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
-- If the API key is missing, `web_search` returns a short setup hint with a docs link.
+- If the API key is missing, `web_search` returns a short setup hint with a docs link. If you don't want to configure a search API key, you can often use `web_fetch` (URL fetch) or the `browser` tool instead.
