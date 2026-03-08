@@ -858,13 +858,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
-  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
+  async function expectNestedEnvShellDenied(params: {
+    depth: number;
+    markerName: string;
+    errorLabel: string;
+  }) {
     const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
       runCommand: vi.fn(async () => {
-        throw new Error("runCommand should not be called for depth-boundary shell wrappers");
+        throw new Error(params.errorLabel);
       }),
     });
 
@@ -877,11 +878,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       }),
       run: async ({ tempHome }) => {
-        const marker = path.join(tempHome, "depth4-pwned.txt");
+        const marker = path.join(tempHome, params.markerName);
         await runSystemInvoke({
           preferMacAppExecHost: false,
           command: buildNestedEnvShellCommand({
-            depth: 4,
+            depth: params.depth,
             payload: `echo PWNED > ${marker}`,
           }),
           security: "allowlist",
@@ -896,45 +897,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     expect(runCommand).not.toHaveBeenCalled();
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+  }
+
+  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await expectNestedEnvShellDenied({
+      depth: 4,
+      markerName: "depth4-pwned.txt",
+      errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
+    });
   });
 
   it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
-      runCommand: vi.fn(async () => {
-        throw new Error("runCommand should not be called for nested env depth overflow");
-      }),
+    await expectNestedEnvShellDenied({
+      depth: 5,
+      markerName: "pwned.txt",
+      errorLabel: "runCommand should not be called for nested env depth overflow",
     });
-
-    await withTempApprovalsHome({
-      approvals: createAllowlistOnMissApprovals({
-        agents: {
-          main: {
-            allowlist: [{ pattern: "/usr/bin/env" }],
-          },
-        },
-      }),
-      run: async ({ tempHome }) => {
-        const marker = path.join(tempHome, "pwned.txt");
-        await runSystemInvoke({
-          preferMacAppExecHost: false,
-          command: buildNestedEnvShellCommand({
-            depth: 5,
-            payload: `echo PWNED > ${marker}`,
-          }),
-          security: "allowlist",
-          ask: "on-miss",
-          runCommand,
-          sendInvokeResult,
-          sendNodeEvent,
-        });
-        expect(fs.existsSync(marker)).toBe(false);
-      },
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 });
