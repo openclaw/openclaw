@@ -306,6 +306,87 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("di_123...abc");
   });
 
+  it("shows configured fallback models when fallback is not active", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["openai-codex/gpt-5.3-codex"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "fb-configured",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback:");
+    expect(normalized).toContain("openai-codex/gpt-5.3-codex");
+    expect(normalized).toContain("configured");
+  });
+
+  it("shows active fallback instead of configured when fallback is active", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai/gpt-4.1-mini",
+      },
+      sessionEntry: {
+        sessionId: "fb-active",
+        updatedAt: 0,
+        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
+        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+        fallbackNoticeReason: "rate limit",
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
+    expect(normalized).toContain("rate limit");
+    expect(normalized).not.toContain("configured");
+  });
+
+  it("omits fallback line when no fallbacks are configured and not active", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "fb-none",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallback:");
+  });
+
   it("omits active fallback details when runtime drift does not match fallback state", () => {
     const text = buildStatusMessage({
       agent: {
