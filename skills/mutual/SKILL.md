@@ -9,9 +9,7 @@ P2P matchmaker CLI. Nodes publish skills, find each other via bootstrap registry
 
 ## Project location
 
-```bash
-cd /Users/hangchengliu/Documents/GitHub/Mutual
-```
+cd /path/to/mutual
 
 ## Two-process system
 
