@@ -178,6 +178,36 @@ export type LoggingConfig = {
   redactPatterns?: string[];
 };
 
+export type PrivacyConfig = {
+  /** Enable privacy filtering for outbound LLM traffic. Default: true. */
+  enabled?: boolean;
+  /**
+   * Rule set preset or path to a custom rules file.
+   * Built-in presets: "basic" | "extended"
+   */
+  rules?: string;
+  encryption?: {
+    /** Encryption algorithm for persisted mappings. */
+    algorithm?: string;
+    /** Optional user-provided salt. */
+    salt?: string;
+  };
+  mappings?: {
+    /** Mapping retention time in milliseconds. */
+    ttl?: number;
+    /** Optional custom mapping store path. */
+    storePath?: string;
+    /** Max wait time for file-lock acquisition in milliseconds. */
+    lockWaitTimeoutMs?: number;
+    /** Duration after which a stale lock file can be reclaimed. */
+    lockStaleAfterMs?: number;
+  };
+  log?: {
+    /** Whether logs should prefer replaced content. */
+    useReplacedContent?: boolean;
+  };
+};
+
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;

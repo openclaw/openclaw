@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
+import { getDefaultRedactPatterns, redactSensitiveText, redactToolDetail } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -118,5 +118,25 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+});
+
+describe("redactToolDetail", () => {
+  it("applies privacy detector redaction for values outside default token patterns", () => {
+    const input = "email admin@company.com and backup@example.org";
+    const output = redactToolDetail(input);
+    expect(output).toContain("***");
+    expect(output).not.toContain("admin@company.com");
+    expect(output).not.toContain("backup@example.org");
+  });
+
+  it("does not redact benign task labels flagged by heuristic-only detectors", () => {
+    const input = "double-message-bug-gpt";
+    expect(redactToolDetail(input)).toBe(input);
+  });
+
+  it("does not redact benign command/query text", () => {
+    const input = 'for "OpenClaw docs" (top 3)';
+    expect(redactToolDetail(input)).toBe(input);
   });
 });

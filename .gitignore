@@ -121,3 +121,7 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# AI review / process artifacts
+**/PR_FEEDBACK_FOLLOWUP_*.md
+**/SECURITY_REVIEW_*.md
