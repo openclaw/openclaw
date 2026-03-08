@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { minimatch } from "minimatch";
+import { minimatch, Minimatch } from "minimatch";
 
 export class PathGuardError extends Error {
   constructor(message: string) {
@@ -81,8 +81,21 @@ export async function checkPathGuardStrict(
     }
 
     const absoluteEntry = path.join(realWorkspaceRoot, entry);
+    const normalizedWorkspaceRoot = toPosixPath(realWorkspaceRoot);
+    const normalizedAbsoluteEntry = toPosixPath(absoluteEntry);
 
-    if (entry.includes("*") || entry.includes("?") || entry.includes("[")) {
+    // Relative policy entries are workspace-anchored and must never escape it.
+    if (!isPathInside(normalizedWorkspaceRoot, normalizedAbsoluteEntry)) {
+      return false;
+    }
+
+    const normalizedPattern = toPosixPath(entry);
+    const hasGlobMagic = new Minimatch(normalizedPattern, {
+      dot: true,
+      magicalBraces: true,
+    }).hasMagic();
+
+    if (hasGlobMagic) {
       const relativeToWorkspace = toPosixPath(path.relative(realWorkspaceRoot, realPath));
       // Relative policy entries are workspace-anchored and must never match
       // targets outside workspace.
@@ -92,11 +105,8 @@ export async function checkPathGuardStrict(
       if (path.isAbsolute(relativeToWorkspace)) {
         return false;
       }
-      const normalizedPattern = toPosixPath(entry);
-      return minimatch(relativeToWorkspace, normalizedPattern, { dot: true });
+      return minimatch(relativeToWorkspace, normalizedPattern, { dot: true, magicalBraces: true });
     }
-
-    const normalizedAbsoluteEntry = toPosixPath(absoluteEntry);
     return (
       normalizedRealPath === normalizedAbsoluteEntry ||
       isPathInside(normalizedAbsoluteEntry, normalizedRealPath)

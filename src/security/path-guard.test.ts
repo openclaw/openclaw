@@ -188,6 +188,34 @@ describe("PathGuard Exhaustive Tests", () => {
     await expect(checkPathGuardStrict(requested, policy, workspaceRoot)).resolves.toBeDefined();
   });
 
+  it("anchors non-glob relative policy entries to workspace root", async () => {
+    const requested = path.resolve(workspaceRoot, "..", "shared", "note.txt");
+
+    await expect(
+      checkPathGuardStrict(requested, { allowedPaths: ["../shared"] }, workspaceRoot),
+    ).rejects.toThrow(/not in the allowedPaths list/);
+    await expect(
+      checkPathGuardStrict(requested, { denyPaths: ["../shared"] }, workspaceRoot),
+    ).resolves.toBeDefined();
+  });
+
+  it("detects brace and extglob patterns as globs", async () => {
+    await expect(
+      checkPathGuardStrict(
+        path.join(workspaceRoot, ".env"),
+        { denyPaths: ["{.env,.npmrc}"] },
+        workspaceRoot,
+      ),
+    ).rejects.toThrow(/explicitly denied/);
+    await expect(
+      checkPathGuardStrict(
+        path.join(workspaceRoot, "src", "index.ts"),
+        { allowedPaths: ["+(src|lib)/**"] },
+        workspaceRoot,
+      ),
+    ).resolves.toBeDefined();
+  });
+
   it("resolves paths correctly even if they contain redundant separators or dots", async () => {
     const requested = path.join(workspaceRoot, "src/../src/./index.ts");
     const resolved = path.join(realWorkspaceRoot, "src/index.ts");
