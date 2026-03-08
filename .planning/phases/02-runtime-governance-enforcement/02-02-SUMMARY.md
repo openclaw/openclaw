@@ -20,9 +20,18 @@ Status: completed (code + config wiring), human checkpoint pending
 - `CLAUDE.md`
 
 ## Verification
+- `pnpm test -- extensions/frankos-governance/index.test.ts` passed (5 tests).
 - `pnpm test -- src/plugins/runtime/index.test.ts` passed.
 - `pnpm test -- extensions/diagnostics-otel/src/service.test.ts` passed.
 - `pnpm build` passed.
+
+## Automated Checkpoint Evidence
+- Shadow mode path validated in governance extension tests:
+  - prohibited action is allowed
+  - `governance.decision` is emitted with `runId`, `sessionId`, `sessionKey`, `toolName`, `decision`, `mode`, `reasonCode`
+- Enforce mode path validated:
+  - prohibited actions block with `GOVERNANCE_PROHIBITED`
+  - escalation-required actions block with `GOVERNANCE_ESCALATE_REQUIRED`
 
 ## Human Checkpoint
 - Required before marking full phase complete:

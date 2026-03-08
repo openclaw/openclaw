@@ -3,7 +3,7 @@
 ## Roadmap State
 - Date: 2026-03-08
 - Project file: `.planning/PROJECT.md`
-- Current planning baseline: Phase 01 researched and planned
+- Current planning baseline: Phase 02 and Phase 03 implemented; Phase 04 planned-ready
 
 ## Phase Overview
 
@@ -63,10 +63,14 @@
 ## Phase 04: Validation, Rollout, and Operations
 - ID: `04`
 - Slug: `04-validation-rollout-operations`
-- Status: `not-planned`
+- Status: `planned-ready`
 - Goal: Operationalize governance with repeatable tests, rollout controls, monitoring, and continuous review.
 - Dependencies:
   - Phase 03 complete
+- Existing artifacts:
+  - `.planning/phases/04-validation-rollout-operations/04-RESEARCH.md`
+  - `.planning/phases/04-validation-rollout-operations/04-01-PLAN.md`
+  - `.planning/phases/04-validation-rollout-operations/04-02-PLAN.md`
 - Planned deliverables:
   - Governance test suite and acceptance checklist.
   - Rollout plan with rollback and incident handling.

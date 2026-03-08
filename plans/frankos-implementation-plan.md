@@ -1,116 +1,104 @@
-# FrankOS Filesystem Architecture Implementation Plan
+# FrankOS Upgrade Consolidated Plan
 
-## Overview
-Transform the existing Second Brain vault at `C:\Users\fjventura20\myVault` into a FrankOS Agent Operating System filesystem.
+Date consolidated: 2026-03-08
 
-## Current State
-- Vault exists at `C:\Users\fjventura20\myVault`
-- Has governance directories: 10_Constitution, 11_Agents, 12_Ledger, 13_Memory, 14_Schemas, 15_ChangeLogs
-- Has existing agents including Tim Guardian Agent with defined roles
-- No FrankOS directories exist yet
+## Objective
+Unify FrankOS work into one execution track across:
+1. OpenClaw runtime governance (repo code + telemetry + rollout controls)
+2. Vault filesystem architecture (operational data plane in `myVault`)
 
-## Implementation Steps
+## Why This Exists
+Two parallel tracks were advanced independently:
+1. Governance implementation in `.planning/*` and OpenClaw code
+2. Vault architecture implementation in `plans/frankos-implementation-plan.md`
 
-### T001: Analyze existing vault structure (COMPLETE)
-- Verified existing directories
-- Reviewed existing agent definitions
-- Confirmed migration safety requirements
+This document is now the single checkpoint for status and next execution steps.
 
-### T002: Create 00_FrankOS Root Layer
-Create directory structure:
-```
-00_FrankOS/
-├── README.md
-├── VERSION (content: "1.0.0")
-├── BOOT.md
-├── DIRECTORY.md
-└── Interfaces/
-    ├── events.v1.md
-    ├── tasks.v1.md
-    └── capabilities.v1.md
-```
+## Current Consolidated Status
 
-### T003: Create Runtime Data Plane
-Create directory structure:
-```
-20_Runtime/
-├── _global/
-│   ├── status.json
-│   ├── health.json
-│   └── metrics.json
-├── agents/
-│   └── tim/
-│       ├── status.json
-│       ├── capabilities.json
-│       ├── locks/
-│       ├── logs/
-│       └── inbox/
-└── sessions/
-    ├── openclaw/
-    ├── claude-code/
-    └── kilo-code/
-```
+### Track A: Governance Runtime (OpenClaw repo)
+Status: completed through Phase 03, Phase 04 planning in progress
 
-### T004: Create Event System (Append-Only Log)
-Create directory and file:
-```
-30_Events/
-└── 2026-03.ndjson
-```
-With example events in specified format.
+Completed:
+1. Phase 02 runtime governance enforcement (`frankos-governance`) with `off|shadow|enforce` and fail-closed behavior in enforce mode.
+2. Governance telemetry pipeline (`governance.decision`) across diagnostics and OTEL.
+3. Phase 03 memory integrity extension (`frankos-memory-governance`) with provenance/confidence/inferred/supersession enforcement.
+4. Memory governance telemetry (`memory.governance.decision`, `memory.provenance.validation_failure`, `memory.correction.supersession`).
 
-### T005: Create Agent Package System
-Create directory structure:
-```
-40_Packages/
-├── email-agentmail/
-│   ├── README.md
-│   ├── policy.md
-│   ├── schema.json
-│   ├── install.md
-│   └── tests.md
-├── heartbeat/
-├── security-audit/
-└── ollama-ops/
-```
+Primary references:
+1. `.planning/ROADMAP.md`
+2. `.planning/phases/02-runtime-governance-enforcement/02-01-SUMMARY.md`
+3. `.planning/phases/02-runtime-governance-enforcement/02-02-SUMMARY.md`
+4. `.planning/phases/03-memory-integrity-traceability/03-02-SUMMARY.md`
+5. `CLAUDE.md`
 
-### T006: Create Artifact Storage
-Create directory structure:
-```
-50_Artifacts/
-├── reports/
-├── exports/
-└── screenshots/
-```
+### Track B: Vault Filesystem Architecture (`myVault`)
+Status: partially implemented
 
-### T007: Create Secure Secret Store
-Create directory structure:
-```
-90_Secrets/
-├── README.md
-├── agentmail/
-│   ├── api_key (placeholder)
-│   └── owner_email (placeholder)
-└── openrouter/
-    └── api_key (placeholder)
-```
+Observed state:
+1. `00_FrankOS/` exists.
+2. `20_Runtime/`, `30_Events/`, `40_Packages/`, `50_Artifacts/`, and `90_Secrets/` are not yet present.
+3. `00_FrankOS/BOOT.md` and `00_FrankOS/DIRECTORY.md` are not yet present.
 
-### T008-T011: Initialize Runtime Files
-- Create global and agent status JSON files
-- Define Tim capability manifest
-- Create BOOT.md specification
-- Create DIRECTORY.md map
+Implication:
+1. Governance runtime is ahead of the vault operational filesystem.
+2. Remaining work is primarily vault structure + bootstrap artifacts.
 
-### T012: Validation
-Run directory listing to verify structure matches specification.
+## Unified Backlog (Execution Order)
 
-## Migration Safety Rules
-- DO NOT modify existing files in:
-  - 02_Areas
-  - 10_Constitution
-  - 11_Agents
-  - 12_Ledger
-  - 13_Memory
-  - 14_Schemas
-  - 15_ChangeLogs
-- Only create NEW FrankOS directories
+### U001: Reconcile planning artifacts in repo
+Status: completed on 2026-03-08 (content reconciliation complete)
+Scope:
+1. Commit or intentionally discard dangling/untracked phase planning files after review.
+Done when:
+1. Governance planning artifacts are internally consistent and ready to commit.
+
+### U002: Complete vault base runtime directories
+Status: completed on 2026-03-08
+Scope:
+1. Create `20_Runtime/` with `_global`, `agents/tim`, and `sessions/*`.
+2. Create `30_Events/` with current monthly ndjson file.
+3. Create `40_Packages/`, `50_Artifacts/`, and `90_Secrets/`.
+Done when:
+1. Directory tree matches this plan and validation listing is captured.
+
+### U003: Complete `00_FrankOS` bootstrap docs
+Status: completed on 2026-03-08
+Scope:
+1. Create `00_FrankOS/BOOT.md`
+2. Create `00_FrankOS/DIRECTORY.md`
+3. Create `00_FrankOS/README.md`, `VERSION`, and `Interfaces/*.md`
+Done when:
+1. Boot and directory docs map governance + runtime + memory policy artifacts without ambiguity.
+
+### U004: Initialize runtime state files
+Status: completed on 2026-03-08
+Scope:
+1. Add `_global/status.json`, `_global/health.json`, `_global/metrics.json`
+2. Add `agents/tim/status.json` and `agents/tim/capabilities.json`
+Done when:
+1. JSON files validate and reflect current governance enforcement modes.
+
+### U005: Phase 04 governance operations plan
+Status: in progress on 2026-03-08 (Plan 01 baseline completed)
+Scope:
+1. Plan validation/rollout/operations phase in `.planning/phases/04-validation-rollout-operations/`
+2. Define acceptance suite for shadow to enforce promotion and rollback.
+Done when:
+1. Roadmap moves Phase 04 from `not-planned` to `planned-ready` or `in-progress` with explicit exit criteria tests.
+2. Plan 02 acceptance scenarios are executed with human checkpoint approval.
+
+## Constraints
+1. Do not modify legacy vault content in:
+   - `02_Areas`
+   - `10_Constitution`
+   - `11_Agents`
+   - `12_Ledger`
+   - `13_Memory`
+   - `14_Schemas`
+   - `15_ChangeLogs`
+2. Create new FrankOS runtime directories/files without destructive migration.
+3. Keep governance and vault changes traceable with dated summaries.
+
+## Resume Point
+Next actionable step: execute `U005` Plan 02 acceptance scenarios, capture evidence, and complete human verification gate.

@@ -68,3 +68,20 @@ For tool-level guardrails, use the `frankos-governance` plugin and emit `governa
   - `memory.governance.decision`
   - `memory.provenance.validation_failure`
   - `memory.correction.supersession`
+
+### Rollout Ops Quick Checks (Phase 4)
+
+- Stage progression:
+  - `dev-shadow`: all governance plugins in `shadow`; verify stable telemetry coverage.
+  - `canary-enforce`: limited traffic in `enforce`; verify block/escalate reason-code stability.
+  - `prod-enforce`: full rollout only after canary evidence and rollback readiness are approved.
+- Fast operator checks:
+  - mode check: confirm expected rollout mode in runtime/config and recent diagnostics events
+  - telemetry sanity: confirm `governance.decision` and memory governance events are present with session/run ids
+  - policy health: validate policy/schema files are readable and parse cleanly
+- Rollback triggers:
+  - sudden block-rate spike without policy change
+  - diagnostics/OTEL pipeline failure during enforce
+  - sustained escalation drift beyond expected baseline
+- Rollback action:
+  - switch mode to `shadow`, keep telemetry on, capture incident evidence, and review before re-promoting.
