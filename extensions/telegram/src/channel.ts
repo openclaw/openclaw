@@ -208,7 +208,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         collect: (groupPolicy) =>
           collectOpenGroupPolicyRouteAllowlistWarnings({
             groupPolicy,
-            routeAllowlistConfigured: groupAllowlistConfigured,
+            routeAllowlistConfigured: Boolean(groupAllowlistConfigured),
             restrictSenders: {
               surface: "Telegram groups",
               openScope: "any member in allowed groups",
