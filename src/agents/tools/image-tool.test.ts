@@ -273,6 +273,32 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs minimax-portal primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.5" } } },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
+        createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
+      );
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
   it("pairs zai primary with glm-4.6v (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("ZAI_API_KEY", "zai-test");

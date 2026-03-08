@@ -124,6 +124,41 @@ function mockAcpManager(params: {
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
 }
 
+async function withAcpSessionEnv(fn: () => Promise<void>) {
+  await withTempHome(async (home) => {
+    const storePath = path.join(home, "sessions.json");
+    writeAcpSessionStore(storePath);
+    mockConfig(home, storePath);
+    await fn();
+  });
+}
+
+function createRunTurnFromTextDeltas(chunks: string[]) {
+  return vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as {
+      onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+    };
+    for (const text of chunks) {
+      await params.onEvent?.({ type: "text_delta", text });
+    }
+    await params.onEvent?.({ type: "done", stopReason: "stop" });
+  });
+}
+
+function subscribeAssistantEvents() {
+  const assistantEvents: Array<{ text?: string; delta?: string }> = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.stream !== "assistant") {
+      return;
+    }
+    assistantEvents.push({
+      text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+      delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
+    });
+  });
+  return { assistantEvents, stop };
+}
+
 async function runAcpSessionWithPolicyOverrides(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
   resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
@@ -161,19 +196,8 @@ describe("agentCommand ACP runtime routing", () => {
   });
 
   it("routes ACP sessions through AcpSessionManager instead of embedded agent", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfig(home, storePath);
-
-      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
-        const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-        };
-        await params.onEvent?.({ type: "text_delta", text: "ACP_" });
-        await params.onEvent?.({ type: "text_delta", text: "OK" });
-        await params.onEvent?.({ type: "done", stopReason: "stop" });
-      });
+    await withAcpSessionEnv(async () => {
+      const runTurn = createRunTurnFromTextDeltas(["ACP_", "OK"]);
 
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
@@ -197,31 +221,15 @@ describe("agentCommand ACP runtime routing", () => {
   });
 
   it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfig(home, storePath);
-
-      const assistantEvents: Array<{ text?: string; delta?: string }> = [];
-      const stop = onAgentEvent((evt) => {
-        if (evt.stream !== "assistant") {
-          return;
-        }
-        assistantEvents.push({
-          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
-          delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
-        });
-      });
-
-      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
-        const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-        };
-        for (const text of ["NO", "NO_", "NO_RE", "NO_REPLY", "Actual answer"]) {
-          await params.onEvent?.({ type: "text_delta", text });
-        }
-        await params.onEvent?.({ type: "done", stopReason: "stop" });
-      });
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas([
+        "NO",
+        "NO_",
+        "NO_RE",
+        "NO_REPLY",
+        "Actual answer",
+      ]);
 
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
@@ -242,11 +250,7 @@ describe("agentCommand ACP runtime routing", () => {
   });
 
   it("keeps silent-only ACP turns out of assistant output", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfig(home, storePath);
-
+    await withAcpSessionEnv(async () => {
       const assistantEvents: string[] = [];
       const stop = onAgentEvent((evt) => {
         if (evt.stream !== "assistant") {
@@ -257,15 +261,7 @@ describe("agentCommand ACP runtime routing", () => {
         }
       });
 
-      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
-        const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-        };
-        for (const text of ["NO", "NO_", "NO_RE", "NO_REPLY"]) {
-          await params.onEvent?.({ type: "text_delta", text });
-        }
-        await params.onEvent?.({ type: "done", stopReason: "stop" });
-      });
+      const runTurn = createRunTurnFromTextDeltas(["NO", "NO_", "NO_RE", "NO_REPLY"]);
 
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
@@ -286,31 +282,9 @@ describe("agentCommand ACP runtime routing", () => {
   });
 
   it("preserves repeated identical ACP delta chunks", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfig(home, storePath);
-
-      const assistantEvents: Array<{ text?: string; delta?: string }> = [];
-      const stop = onAgentEvent((evt) => {
-        if (evt.stream !== "assistant") {
-          return;
-        }
-        assistantEvents.push({
-          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
-          delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
-        });
-      });
-
-      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
-        const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-        };
-        for (const text of ["b", "o", "o", "k"]) {
-          await params.onEvent?.({ type: "text_delta", text });
-        }
-        await params.onEvent?.({ type: "done", stopReason: "stop" });
-      });
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas(["b", "o", "o", "k"]);
 
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
@@ -335,31 +309,9 @@ describe("agentCommand ACP runtime routing", () => {
   });
 
   it("re-emits buffered NO prefix when ACP text becomes visible content", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfig(home, storePath);
-
-      const assistantEvents: Array<{ text?: string; delta?: string }> = [];
-      const stop = onAgentEvent((evt) => {
-        if (evt.stream !== "assistant") {
-          return;
-        }
-        assistantEvents.push({
-          text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
-          delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
-        });
-      });
-
-      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
-        const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-        };
-        for (const text of ["NO", "W"]) {
-          await params.onEvent?.({ type: "text_delta", text });
-        }
-        await params.onEvent?.({ type: "done", stopReason: "stop" });
-      });
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, stop } = subscribeAssistantEvents();
+      const runTurn = createRunTurnFromTextDeltas(["NO", "W"]);
 
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),

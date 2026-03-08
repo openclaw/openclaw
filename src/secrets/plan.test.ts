@@ -21,6 +21,22 @@ describe("secrets plan validation", () => {
     expect(resolved?.pathSegments).toEqual(["channels", "telegram", "botToken"]);
   });
 
+  it("accepts model provider header targets with wildcard-backed paths", () => {
+    const resolved = resolveValidatedPlanTarget({
+      type: "models.providers.headers",
+      path: "models.providers.openai.headers.x-api-key",
+      pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
+      providerId: "openai",
+    });
+    expect(resolved?.pathSegments).toEqual([
+      "models",
+      "providers",
+      "openai",
+      "headers",
+      "x-api-key",
+    ]);
+  });
+
   it("rejects target paths that do not match the registered shape", () => {
     const resolved = resolveValidatedPlanTarget({
       type: "channels.telegram.botToken",
