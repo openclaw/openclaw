@@ -125,15 +125,26 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentConfigOverride = normalizedRequested
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
-  const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  const {
+    model: overrideModel,
+    sandbox: _agentSandboxOverride,
+    ...agentOverrideRest
+  } = agentConfigOverride ?? {};
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
   const agentId = normalizedRequested ?? defaultAgentId;
+  // Keep sandbox overrides out of `agents.defaults` here. Sandbox resolution
+  // already merges global defaults with per-agent overrides using `agentId`;
+  // copying the agent sandbox into defaults clobbers global defaults and can
+  // double-apply nested agent overrides during isolated cron runs.
+  const definedOverrides = Object.fromEntries(
+    Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
+  );
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
-    agentOverrideRest as Partial<AgentDefaultsConfig>,
+    definedOverrides as Partial<AgentDefaultsConfig>,
   );
   // Merge agent model override with defaults instead of replacing, so that
   // `fallbacks` from `agents.defaults.model` are preserved when the agent
@@ -533,7 +544,7 @@ export async function runCronIsolatedAgentTurn(params: {
             // was successfully resolved. When resolution fails the agent should not
             // be blocked by a target it cannot satisfy (#27898).
             requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
-            disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
+            disableMessageTool: deliveryRequested,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
