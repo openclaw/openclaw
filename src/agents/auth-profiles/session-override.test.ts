@@ -52,7 +52,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("rewrites legacy openai-codex session override to canonical oidc profile id", async () => {
+  it("resolves legacy openai-codex session override without rewriting stored state", async () => {
     await withStateDirEnv("openclaw-auth-openai-", async ({ stateDir }) => {
       const agentDir = path.join(stateDir, "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -118,8 +118,11 @@ describe("resolveSessionAuthProfileOverride", () => {
       });
 
       expect(resolved).toBe(canonicalProfileId);
-      expect(sessionEntry.authProfileOverride).toBe(canonicalProfileId);
+      expect(sessionEntry.authProfileOverride).toBe("openai-codex:user@example.com");
       expect(sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(sessionStore["agent:main:main"]?.authProfileOverride).toBe(
+        "openai-codex:user@example.com",
+      );
     });
   });
 });

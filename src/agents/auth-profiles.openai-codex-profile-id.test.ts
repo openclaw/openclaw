@@ -3,7 +3,6 @@ import { makeJwt } from "../test-utils/openai-codex-profile-id.js";
 import type { AuthProfileStore, OAuthCredential } from "./auth-profiles.js";
 import {
   deriveOpenAICodexCanonicalProfileId,
-  migrateOpenAICodexProfileIdsInStore,
   resolveOpenAICodexCompatibleProfileId,
 } from "./auth-profiles/openai-codex-profile-id.js";
 
@@ -59,66 +58,42 @@ describe("openai-codex profile id canonicalization", () => {
     }
   });
 
-  it("migrates legacy openai-codex profile ids and remaps store references", () => {
-    const canonicalCredential = makeOpenAICredential({
-      accountId: "acct_abc",
-      iss: "https://auth.openai.com",
-      sub: "sub_abc",
-      email: "user@example.com",
-    });
+  it("leaves existing legacy openai-codex profile ids untouched", () => {
+    const legacyProfileId = "openai-codex:legacy@example.com";
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": canonicalCredential,
-      },
-      order: {
-        "openai-codex": ["openai-codex:user@example.com"],
-      },
-      lastGood: {
-        "openai-codex": "openai-codex:user@example.com",
-      },
-      usageStats: {
-        "openai-codex:user@example.com": {
-          lastUsed: 42,
-          errorCount: 2,
-        },
+        [legacyProfileId]: makeOpenAICredential({
+          accountId: "acct_legacy",
+          iss: "https://auth.openai.com",
+          sub: "sub_legacy",
+          email: "legacy@example.com",
+        }),
       },
     };
 
-    const migrated = migrateOpenAICodexProfileIdsInStore(store);
+    const resolved = resolveOpenAICodexCompatibleProfileId({
+      store,
+      profileId: legacyProfileId,
+    });
 
-    const canonicalProfileId = deriveOpenAICodexCanonicalProfileId(canonicalCredential);
-    expect(canonicalProfileId).toBeTruthy();
-    expect(migrated.mutated).toBe(true);
-    expect(migrated.mapping).toEqual({
-      "openai-codex:user@example.com": canonicalProfileId,
-    });
-    expect(store.profiles["openai-codex:user@example.com"]).toBeUndefined();
-    expect(store.profiles[canonicalProfileId!]).toMatchObject({
-      provider: "openai-codex",
-      type: "oauth",
-      accountId: "acct_abc",
-    });
-    expect(store.order?.["openai-codex"]).toEqual([canonicalProfileId]);
-    expect(store.lastGood?.["openai-codex"]).toBe(canonicalProfileId);
-    expect(store.usageStats?.["openai-codex:user@example.com"]).toBeUndefined();
-    expect(store.usageStats?.[canonicalProfileId!]?.lastUsed).toBe(42);
+    expect(resolved).toBe(legacyProfileId);
   });
 
-  it("resolves legacy openai-codex profile id to canonical profile id", () => {
+  it("resolves a legacy openai-codex reference to the stored canonical profile id", () => {
     const credential = makeOpenAICredential({
       accountId: "acct_legacy",
       iss: "https://auth.openai.com",
       sub: "sub_legacy",
       email: "legacy@example.com",
     });
+    const canonicalProfileId = deriveOpenAICodexCanonicalProfileId(credential)!;
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:legacy@example.com": credential,
+        [canonicalProfileId]: credential,
       },
     };
-    migrateOpenAICodexProfileIdsInStore(store);
 
     const resolved = resolveOpenAICodexCompatibleProfileId({
       store,
@@ -136,8 +111,7 @@ describe("openai-codex profile id canonicalization", () => {
       },
     });
 
-    expect(resolved).toBeTruthy();
-    expect(resolved).not.toBe("openai-codex:legacy@example.com");
+    expect(resolved).toBe(canonicalProfileId);
   });
 
   it("does not use lastGood fallback for non-legacy missing ids when ambiguous", () => {
@@ -156,11 +130,10 @@ describe("openai-codex profile id canonicalization", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:a@example.com": credA,
-        "openai-codex:b@example.com": credB,
+        [deriveOpenAICodexCanonicalProfileId(credA)!]: credA,
+        [deriveOpenAICodexCanonicalProfileId(credB)!]: credB,
       },
     };
-    migrateOpenAICodexProfileIdsInStore(store);
     const canonicalA = deriveOpenAICodexCanonicalProfileId(credA)!;
     store.lastGood = { "openai-codex": canonicalA };
 
@@ -188,11 +161,10 @@ describe("openai-codex profile id canonicalization", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default-a@example.com": credA,
-        "openai-codex:default-b@example.com": credB,
+        [deriveOpenAICodexCanonicalProfileId(credA)!]: credA,
+        [deriveOpenAICodexCanonicalProfileId(credB)!]: credB,
       },
     };
-    migrateOpenAICodexProfileIdsInStore(store);
     const canonicalA = deriveOpenAICodexCanonicalProfileId(credA)!;
     store.lastGood = { "openai-codex": canonicalA };
 
@@ -220,11 +192,10 @@ describe("openai-codex profile id canonicalization", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:legacy-dup-a": credA,
-        "openai-codex:legacy-dup-b": credB,
+        [deriveOpenAICodexCanonicalProfileId(credA)!]: credA,
+        [deriveOpenAICodexCanonicalProfileId(credB)!]: credB,
       },
     };
-    migrateOpenAICodexProfileIdsInStore(store);
 
     const resolved = resolveOpenAICodexCompatibleProfileId({
       store,

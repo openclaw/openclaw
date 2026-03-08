@@ -5,7 +5,6 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
-import { migrateOpenAICodexProfileIdsInStore } from "./openai-codex-profile-id.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -348,10 +347,11 @@ export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
+    // Preserve existing Codex profile ids on read; only fresh logins should
+    // start using canonical OIDC-derived ids.
     // Sync from external CLI tools on every load.
     const synced = syncExternalCliCredentials(asStore);
-    const migrated = migrateOpenAICodexProfileIdsInStore(asStore);
-    if (synced || migrated.mutated) {
+    if (synced) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
@@ -365,13 +365,11 @@ export function loadAuthProfileStore(): AuthProfileStore {
     };
     applyLegacyStore(store, legacy);
     syncExternalCliCredentials(store);
-    migrateOpenAICodexProfileIdsInStore(store);
     return store;
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
   syncExternalCliCredentials(store);
-  migrateOpenAICodexProfileIdsInStore(store);
   return store;
 }
 
@@ -383,11 +381,12 @@ function loadAuthProfileStoreForAgent(
   const authPath = resolveAuthStorePath(agentDir);
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
+    // Preserve existing Codex profile ids on read; only fresh logins should
+    // start using canonical OIDC-derived ids.
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
-    const migrated = migrateOpenAICodexProfileIdsInStore(asStore);
-    if ((synced || migrated.mutated) && !readOnly) {
+    if (synced && !readOnly) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
@@ -419,12 +418,8 @@ function loadAuthProfileStoreForAgent(
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
   const syncedCli = syncExternalCliCredentials(store);
-  const migratedOpenAICodexProfiles = migrateOpenAICodexProfileIdsInStore(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
-  const shouldWrite =
-    !readOnly &&
-    !forceReadOnly &&
-    (legacy !== null || mergedOAuth || syncedCli || migratedOpenAICodexProfiles.mutated);
+  const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
     saveJsonFile(authPath, store);
   }

@@ -77,15 +77,8 @@ export async function resolveSessionAuthProfileOverride(params: {
           })
         : null;
     if (compatible && compatible !== current && store.profiles[compatible]) {
+      // Honor legacy override references without renaming the persisted session entry.
       current = compatible;
-      sessionEntry.authProfileOverride = compatible;
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
-      }
     } else {
       await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
       current = undefined;

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { expectedOpenAICodexProfileId, makeJwt } from "../test-utils/openai-codex-profile-id.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { ensureAuthProfileStore, type AuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
@@ -48,7 +48,7 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
-  it("migrates legacy openai-codex profile ids to canonical oidc ids", () => {
+  it("keeps legacy openai-codex profile ids unchanged on load", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-openai-migrate-"));
     try {
       const legacyProfileId = "openai-codex:user@example.com";
@@ -94,16 +94,26 @@ describe("ensureAuthProfileStore", () => {
       );
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles[legacyProfileId]).toBeUndefined();
-      expect(store.profiles[canonicalProfileId]).toMatchObject({
+      expect(store.profiles[legacyProfileId]).toMatchObject({
         provider: "openai-codex",
         type: "oauth",
         accountId: "acct-openai",
       });
-      expect(store.order?.["openai-codex"]).toEqual([canonicalProfileId]);
-      expect(store.lastGood?.["openai-codex"]).toBe(canonicalProfileId);
-      expect(store.usageStats?.[legacyProfileId]).toBeUndefined();
-      expect(store.usageStats?.[canonicalProfileId]?.lastUsed).toBe(123);
+      expect(store.profiles[canonicalProfileId]).toBeUndefined();
+      expect(store.order?.["openai-codex"]).toEqual([legacyProfileId]);
+      expect(store.lastGood?.["openai-codex"]).toBe(legacyProfileId);
+      expect(store.usageStats?.[legacyProfileId]?.lastUsed).toBe(123);
+      expect(store.usageStats?.[canonicalProfileId]).toBeUndefined();
+
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(persisted.profiles[legacyProfileId]).toMatchObject({
+        provider: "openai-codex",
+        type: "oauth",
+      });
+      expect(persisted.profiles[canonicalProfileId]).toBeUndefined();
+      expect(persisted.order?.["openai-codex"]).toEqual([legacyProfileId]);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
