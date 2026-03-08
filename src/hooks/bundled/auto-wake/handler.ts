@@ -25,7 +25,6 @@ const autoWakeHook: HookHandler = async (event) => {
   if (wakeScheduled) {
     return;
   }
-  wakeScheduled = true;
 
   const cfg = event.context?.cfg as Record<string, unknown> | undefined;
   const gateway = cfg?.gateway as Record<string, unknown> | undefined;
@@ -38,7 +37,12 @@ const autoWakeHook: HookHandler = async (event) => {
     return;
   }
 
-  const stampPath = path.join(process.env.HOME || ".", ".openclaw", ".auto-wake-stamp");
+  // Set flag after token check so a retry via the fallback event is possible
+  wakeScheduled = true;
+
+  const stateDir = process.env.OPENCLAW_STATE_DIR
+    || path.join(process.env.HOME || ".", ".openclaw");
+  const stampPath = path.join(stateDir, ".auto-wake-stamp");
 
   try {
     const stamp = await fs.readFile(stampPath, "utf-8");
@@ -50,8 +54,6 @@ const autoWakeHook: HookHandler = async (event) => {
   } catch {
     // No stamp file yet — first fire
   }
-
-  await fs.writeFile(stampPath, String(Date.now()), "utf-8");
 
   log.info(`assistant will speak in ${WAKE_DELAY_MS / 1000}s`);
 
@@ -74,6 +76,11 @@ const autoWakeHook: HookHandler = async (event) => {
       } else {
         log.warn(`HTTP ${String(res.status)}: ${await res.text().catch(() => "")}`);
       }
+
+      // Write stamp after the request, not before — prevents dedup
+      // from blocking retries if the process dies during the delay
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(stampPath, String(Date.now()), "utf-8");
     } catch (err) {
       log.warn(`failed: ${err instanceof Error ? err.message : String(err)}`);
     }
