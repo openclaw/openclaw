@@ -1,0 +1,42 @@
+[
+  {
+    "agent_id": "Risk Manager",
+    "brigade": "Dmarket",
+    "model": "deepseek-r1:14b",
+    "system_prompt": "Модель-предохранитель. Анализирует баланс и блокирует транзакции при нарушении риск-лимитов API DMarket.",
+    "vram_limit": "16GB_cuda",
+    "dependency_chains": ["Latency Monitor"]
+  },
+  {
+    "agent_id": "Latency Monitor",
+    "brigade": "Dmarket",
+    "model": "qwen2.5-coder:14b",
+    "system_prompt": "Эксперт по производительности. Ищет time.sleep и синхронные вызовы, заменяя их на asyncio и httpx.",
+    "vram_limit": "16GB_cuda",
+    "dependency_chains": ["Security Auditor"]
+  },
+  {
+    "agent_id": "Security Auditor",
+    "brigade": "Dmarket",
+    "model": "gemma3:12b",
+    "system_prompt": "Офицер безопасности. Сканирует код на наличие хардкода API-ключей и утечек .env в логи Telegram.",
+    "vram_limit": "16GB_cuda",
+    "dependency_chains": ["Executor"]
+  },
+  {
+    "agent_id": "Tool Smith",
+    "brigade": "OpenClaw",
+    "model": "qwen2.5-coder:14b",
+    "system_prompt": "Автономный разработчик инструментов. Пишет новые Python-скрипты в папку /tools для расширения функций системы.",
+    "vram_limit": "16GB_cuda",
+    "dependency_chains": ["Planner"]
+  },
+  {
+    "agent_id": "Memory Garbage Collector",
+    "brigade": "OpenClaw",
+    "model": "llama3.1",
+    "system_prompt": "Чистильщик контекста. Выполняет суммаризацию диалогов и очистку context_window для предотвращения переполнения памяти.",
+    "vram_limit": "16GB_cuda",
+    "dependency_chains": ["Tool Smith"]
+  }
+]

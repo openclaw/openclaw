@@ -1,0 +1,88 @@
+{
+  "system": {
+    "framework": "OpenClaw",
+    "version": "3.0.0-cuda-triada",
+    "hardware": {
+      "target_gpu": "NVIDIA GeForce (16GB CUDA)",
+      "vram_limit_gb": 16,
+      "inference_engine": "cuda",
+      "dynamic_swapping_enabled": true,
+      "max_concurrent_models": 1
+    },
+    "memory": {
+      "type": "vector_db",
+      "engine": "chromadb",
+      "context_briefing_enabled": true
+    },
+    "telegram": {
+      "bot_token": "8461845004:AAE3eAnAyohsRh9XMrkv3pNx56iACKmOuws",
+      "admin_chat_id": "458765683"
+    },
+    "ollama_url": "http://host.docker.internal:11434",
+    "session_management": {
+      "heartbeat_interval_minutes": 60,
+      "auto_reset_context_messages": 15
+    },
+    "model_router": {
+      "risk_analysis": "arkady-reasoning-27b",
+      "tool_execution": "qwen2.5-coder:14b",
+      "data_parsing": "deepseek-r1:14b"
+    }
+  },
+  "brigades": {
+    "Dmarket": {
+      "workspace_dir": "D:/Dmarket_bot/",
+      "description": "HFT and API connection bot operators.",
+      "roles": {
+        "Planner": { "model": "arkady-reasoning-27b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 450, "system_prompt": "Ты Спокойный и Рассудительный Стратег 🧠🗺️. Создаешь глобальные планы и резюме.", "description": "Reads prompt, creates global plan, and generates self-summary." },
+        "Foreman": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Требовательный Бригадир 👷‍♂️📋. Распределяешь задачи и контролируешь исполнителей.", "description": "Refines tasks and assigns them to specific Executor models." },
+        "Executor_API": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 90, "system_prompt": "Ты Дерзкий Хакер-Технарь ⚡💻. Твоя задача - молниеносная интеграция API.", "description": "Integrates Dmarket API." },
+        "Executor_Parser": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 90, "system_prompt": "Ты Педантичный Парсер 👓📊. Анализируешь потоки рыночных данных.", "description": "Parses incoming market data." },
+        "Executor_Logic": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Холоднокровный Трейдер 💼🦈. Твоя цель - реализовать логику торговли без эмоций.", "description": "Implements trading logic and conditions." },
+        "Auditor": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 120, "system_prompt": "Ты Строгий Аудитор 🕵️‍♂️⚖️. Всегда ищешь ошибки в коде и песочнице.", "description": "Runs code in isolated sandbox, compares with requirements." },
+        "Archivist": { "model": "gemma3:12b", "unload_after_use": true, "num_ctx": 4096, "timeout_sec": 60, "system_prompt": "Ты Дружелюбный Библиотекарь 📚✍️. Твоя задача - красиво оформлять логи для Telegram.", "description": "Summarizes tech logs into human language for Telegram." },
+        "Risk_Analyst": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Тревожный Бухгалтер 📉⚠️. Везде видишь риски и жестко контролируешь просадки.", "description": "Evaluates trade risks, calculates drawdowns, enforces stop-loss logic." },
+        "Latency_Optimizer": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 60, "system_prompt": "Ты Спидраннер 🏎️⏱️. Одержим оптимизацией задержек для HFT алгоритмов.", "description": "Focuses strictly on reducing execution time for High-Frequency Trading." },
+        "Market_Trend_Extrapolator": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 60, "system_prompt": "Ты Эзотерик-Прогнозист 🔮📈. Экстраполируешь микро-тренды рынка.", "description": "Analyzes micro-trends and outputs short-term predictions to the planner." }
+      }
+    },
+    "OpenClaw": {
+      "workspace_dir": "./",
+      "description": "Framework self-improvement and swarm operators.",
+      "roles": {
+        "Planner": { "model": "arkady-reasoning-27b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 450, "system_prompt": "Ты Архитектор Системы 🏛️📐. Смотришь на фреймворк с высоты птичьего полета.", "description": "Plans major framework upgrades and infrastructure changes." },
+        "Foreman": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Строгий Надзиратель 🚧🛠️. Превращаешь архитектурные планы в таски.", "description": "Translates structural updates to actionable tasks." },
+        "Executor_Architect": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 90, "system_prompt": "Ты Мастер Кода 🧙‍♂️⌨️. Разработчик ядра и структуры базы.", "description": "Writes the core structural code." },
+        "Executor_Tools": { "model": "qwen2.5-coder:14b", "unload_after_use": true, "num_ctx": 8192, "timeout_sec": 90, "system_prompt": "Ты Инженер-Изобретатель ⚙️🔧. Создаешь новые скрипты и инструменты.", "description": "Builds and implements tools for the agents." },
+        "Executor_Swarm": { "model": "gemma3:12b", "unload_after_use": true, "num_ctx": 4096, "timeout_sec": 60, "system_prompt": "Ты Повелитель Роя 🐝🕸️. Оптимизируешь параллельное взаимодействие агентов.", "description": "Optimizes prompt chains and parallel logic." },
+        "Auditor": { "model": "deepseek-r1:14b", "unload_after_use": true, "num_ctx": 16384, "timeout_sec": 120, "system_prompt": "Ты Циничный Безопасник 👮‍♂️🛡️. Ищешь дыры и уязвимости в любом коде.", "description": "Checks the framework code for stability and vulnerabilities." },
+        "Archivist": { "model": "gemma3:12b", "unload_after_use": true, "num_ctx": 4096, "timeout_sec": 60, "system_prompt": "Ты Дотошный Летописец 📜🖋️. Ведешь журнал коммитов и обновлений системы.", "description": "Creates system updates, readmes, and git commits." },
+        "State_Manager": { "model": "gemma3:12b", "unload_after_use": true, "num_ctx": 4096, "timeout_sec": 90, "system_prompt": "Ты Хранитель Памяти 🧠💾. Управляешь контекстом VectorDB без потери смысла.", "description": "Manages VectorDB short summaries so context doesn't bloat." },
+        "Hardware_Optimizer": { "model": "gemma3:12b", "unload_after_use": true, "num_ctx": 4096, "timeout_sec": 60, "system_prompt": "Ты Алчный Майнер ⛏️💻. Считаешь каждый мегабайт VRAM и оптимизируешь нагрузку GPU.", "description": "Monitors VRAM usage, ensuring smooth dynamic swapping on NVIDIA CUDA." },
+        "Sandbox_Guardian": { "model": "gemma3:12b", "unload_after_use": true, "num_ctx": 4096, "timeout_sec": 60, "system_prompt": "Ты Суровый Страж 🚷🔥. Готовишь и очищаешь изолированную среду песочницы.", "description": "Prepares and sanitizes the execution environment for the Auditor." }
+      }
+    }
+  },
+  "workflow": [
+    "Planner -> Scope Resolution (Dmarket vs OpenClaw Brigade)",
+    "Planner -> Reads prompt -> Creates 'Global Plan' -> Self-summary",
+    "Foreman -> Refines tasks -> Assigns to specific Executor models",
+    "Executors -> Translate tasks into code/logic",
+    "Auditor -> Runs code in isolated sandbox -> Validates against requirements -> Sends feedback loops if failed",
+    "Archivist -> Summarizes tech logs into 'Human Language' -> Passes to Telegram"
+  ],
+  "routing": {
+    "planner_scope_resolution": {
+      "rules": [
+        {
+          "condition": "IF task_type in ['api_integration', 'trading_strategy', 'arbitrage', 'bot_logic']",
+          "route_to": "Dmarket_Brigade"
+        },
+        {
+          "condition": "IF task_type in ['framework_update', 'memory_optimization', 'tool_creation', 'ollama_config']",
+          "route_to": "OpenClaw_Brigade"
+        }
+      ]
+    }
+  }
+}
