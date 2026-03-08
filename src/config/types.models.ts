@@ -28,7 +28,7 @@ export type ModelCompatConfig = {
   requiresMistralToolIds?: boolean;
 };
 
-export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
+export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "google-adc" | "oauth" | "token";
 
 export type ModelDefinitionConfig = {
   id: string;

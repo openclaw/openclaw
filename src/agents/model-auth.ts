@@ -27,6 +27,9 @@ const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
 
+const GOOGLE_APPLICATION_CREDENTIALS_ENV = "GOOGLE_APPLICATION_CREDENTIALS";
+const GOOGLE_CLOUD_PROJECT_ENV = "GOOGLE_CLOUD_PROJECT";
+
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -63,7 +66,13 @@ function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "google-adc" ||
+    auth === "oauth" ||
+    auth === "token"
+  ) {
     return auth;
   }
   return undefined;
@@ -121,6 +130,31 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
+function resolveGoogleAdcAuthInfo(): { mode: "google-adc"; source: string } {
+  const applied = new Set(getShellEnvAppliedKeys());
+  if (process.env[GOOGLE_APPLICATION_CREDENTIALS_ENV]?.trim()) {
+    return {
+      mode: "google-adc",
+      source: resolveEnvSourceLabel({
+        applied,
+        envVars: [GOOGLE_APPLICATION_CREDENTIALS_ENV],
+        label: GOOGLE_APPLICATION_CREDENTIALS_ENV,
+      }),
+    };
+  }
+  if (process.env[GOOGLE_CLOUD_PROJECT_ENV]?.trim()) {
+    return {
+      mode: "google-adc",
+      source: resolveEnvSourceLabel({
+        applied,
+        envVars: [GOOGLE_CLOUD_PROJECT_ENV],
+        label: GOOGLE_CLOUD_PROJECT_ENV,
+      }),
+    };
+  }
+  return { mode: "google-adc", source: "google-adc default chain" };
+}
+
 function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   const applied = new Set(getShellEnvAppliedKeys());
   if (process.env[AWS_BEARER_ENV]?.trim()) {
@@ -160,7 +194,7 @@ export type ResolvedProviderAuth = {
   apiKey?: string;
   profileId?: string;
   source: string;
-  mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  mode: "api-key" | "oauth" | "token" | "aws-sdk" | "google-adc";
 };
 
 export async function resolveApiKeyForProvider(params: {
@@ -196,6 +230,9 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+  if (authOverride === "google-adc") {
+    return resolveGoogleAdcAuthInfo();
   }
 
   const order = resolveAuthProfileOrder({
@@ -247,6 +284,10 @@ export async function resolveApiKeyForProvider(params: {
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
   }
+  // google-vertex uses ADC when no explicit API key is configured — same pattern as amazon-bedrock
+  if (authOverride === undefined && normalized === "google-vertex") {
+    return resolveGoogleAdcAuthInfo();
+  }
 
   if (provider === "openai") {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
@@ -269,7 +310,14 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "google-adc"
+  | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
@@ -317,6 +365,9 @@ export function resolveModelAuthMode(
   if (authOverride === "aws-sdk") {
     return "aws-sdk";
   }
+  if (authOverride === "google-adc") {
+    return "google-adc";
+  }
 
   const authStore = store ?? ensureAuthProfileStore();
   const profiles = listProfilesForProvider(authStore, resolved);
@@ -345,6 +396,9 @@ export function resolveModelAuthMode(
 
   if (authOverride === undefined && normalizeProviderId(resolved) === "amazon-bedrock") {
     return "aws-sdk";
+  }
+  if (authOverride === undefined && normalizeProviderId(resolved) === "google-vertex") {
+    return "google-adc";
   }
 
   const envKey = resolveEnvApiKey(resolved);
