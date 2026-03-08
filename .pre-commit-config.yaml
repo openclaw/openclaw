@@ -78,7 +78,7 @@ repos:
           - --exclude-lines
           - 'apiKey: "pplx-test"'
           - --exclude-lines
-          - 'PERPLEXITY_DIRECT_BASE_URL|DEFAULT_PERPLEXITY_BASE_URL'
+          - "PERPLEXITY_DIRECT_BASE_URL|DEFAULT_PERPLEXITY_BASE_URL"
           - --exclude-files
           - '^docs/perplexity\.md$'
           - --exclude-files
