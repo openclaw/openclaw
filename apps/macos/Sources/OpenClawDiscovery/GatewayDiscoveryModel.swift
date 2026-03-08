@@ -338,13 +338,12 @@ public final class GatewayDiscoveryModel {
             var attempt = 0
             let startedAt = Date()
             while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
-                let hasResults = await MainActor.run {
-                    if self.filterLocalGateways {
-                        return !self.gateways.isEmpty
-                    }
-                    return self.gateways.contains(where: { !$0.isLocal })
+                let shouldContinue = await MainActor.run {
+                    Self.shouldContinueTailscaleServeDiscovery(
+                        currentGateways: self.gateways,
+                        tailscaleServeGateways: self.tailscaleServeFallbackGateways)
                 }
-                if hasResults { return }
+                if !shouldContinue { return }
 
                 let beacons = await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4)
                 if !beacons.isEmpty {
@@ -361,6 +360,15 @@ public final class GatewayDiscoveryModel {
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
             }
         }
+    }
+
+    static func shouldContinueTailscaleServeDiscovery(
+        currentGateways _: [DiscoveredGateway],
+        tailscaleServeGateways: [DiscoveredGateway]) -> Bool
+    {
+        // Tailscale Serve is a parallel discovery source. DNS-SD results should not suppress the
+        // probe, otherwise Serve-only gateways disappear as soon as any other remote gateway is found.
+        tailscaleServeGateways.isEmpty
     }
 
     private var hasUsableWideAreaResults: Bool {
