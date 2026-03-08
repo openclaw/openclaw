@@ -1,38 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const printModelTable = vi.fn();
-  const sourceConfig = {
-    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
-    models: {
-      providers: {
-        openai: {
-          apiKey: "$OPENAI_API_KEY", // pragma: allowlist secret
-        },
-      },
-    },
-  };
-  const resolvedConfig = {
-    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
-    models: {
-      providers: {
-        openai: {
-          apiKey: "sk-resolved-runtime-value", // pragma: allowlist secret
-        },
-      },
-    },
-  };
   return {
     loadConfig: vi.fn().mockReturnValue({
       agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
       models: { providers: {} },
-    }),
-    sourceConfig,
-    resolvedConfig,
-    loadModelsConfigWithSource: vi.fn().mockResolvedValue({
-      sourceConfig,
-      resolvedConfig,
-      diagnostics: [],
     }),
     ensureAuthProfileStore: vi.fn().mockReturnValue({ version: 1, profiles: {}, order: {} }),
     loadModelRegistry: vi
@@ -85,10 +58,6 @@ vi.mock("./list.registry.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
-}));
-
 vi.mock("./list.configured.js", () => ({
   resolveConfiguredEntries: mocks.resolveConfiguredEntries,
 }));
@@ -108,7 +77,41 @@ vi.mock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
 import { modelsListCommand } from "./list.list-command.js";
 
 describe("modelsListCommand forward-compat", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveConfiguredEntries.mockReturnValue({
+      entries: [
+        {
+          key: "openai-codex/gpt-5.4",
+          ref: { provider: "openai-codex", model: "gpt-5.4" },
+          tags: new Set(["configured"]),
+          aliases: [],
+        },
+      ],
+    });
+    mocks.resolveModelWithRegistry.mockReturnValue({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text"],
+      contextWindow: 272000,
+      maxTokens: 128000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    mocks.loadModelRegistry.mockResolvedValue({
+      models: [],
+      availableKeys: new Set(),
+      registry: {},
+    });
+  });
+
   it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
+    mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+      provider === "openai-codex" ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>) : [],
+    );
+
     const runtime = { log: vi.fn(), error: vi.fn() };
 
     await modelsListCommand({ json: true }, runtime as never);
@@ -126,14 +129,22 @@ describe("modelsListCommand forward-compat", () => {
     expect(codex?.tags).not.toContain("missing");
   });
 
-  it("passes source config to model registry loading for persistence safety", async () => {
+  it("includes configured model in --all output when registry misses it but forward-compat resolves it", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
-    await modelsListCommand({ json: true }, runtime as never);
+    await modelsListCommand({ all: true, json: true }, runtime as never);
 
-    expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
-      sourceConfig: mocks.sourceConfig,
-    });
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{
+      key: string;
+      available: boolean | null;
+    }>;
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        key: "openai-codex/gpt-5.4",
+        available: true,
+      }),
+    );
   });
 
   it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {
@@ -167,6 +178,41 @@ describe("modelsListCommand forward-compat", () => {
     expect(rows).toEqual([
       expect.objectContaining({
         key: "openai/gpt-5.4",
+      }),
+    ]);
+  });
+
+  it("keeps configured provider-key rows visible with --all --provider for normalized aliases", async () => {
+    mocks.resolveConfiguredEntries.mockReturnValueOnce({
+      entries: [
+        {
+          key: "zai/glm-4.6",
+          ref: { provider: "zai", model: "glm-4.6" },
+          tags: new Set(["configured"]),
+          aliases: [],
+        },
+      ],
+    });
+    mocks.resolveModelWithRegistry.mockReturnValueOnce({
+      provider: "z.ai",
+      id: "glm-4.6",
+      name: "GLM-4.6",
+      api: "openai-responses",
+      baseUrl: "https://api.z.ai/v1",
+      input: ["text"],
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await modelsListCommand({ all: true, provider: "zai", json: true }, runtime as never);
+
+    expect(mocks.printModelTable).toHaveBeenCalled();
+    const rows = mocks.printModelTable.mock.calls.at(-1)?.[0] as Array<{ key: string }>;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: "zai/glm-4.6",
       }),
     ]);
   });

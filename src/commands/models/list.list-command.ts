@@ -69,22 +69,44 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
 
   if (opts.all) {
-    const sorted = [...models].toSorted((a, b) => {
-      const p = a.provider.localeCompare(b.provider);
-      if (p !== 0) {
-        return p;
-      }
-      return a.id.localeCompare(b.id);
-    });
+    const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
 
-    for (const model of sorted) {
-      if (providerFilter && model.provider.toLowerCase() !== providerFilter) {
+    if (modelRegistry) {
+      for (const entry of entries) {
+        if (modelByKey.has(entry.key)) {
+          continue;
+        }
+        const resolved = resolveModelWithRegistry({
+          provider: entry.ref.provider,
+          modelId: entry.ref.model,
+          modelRegistry,
+          cfg,
+        });
+        if (resolved) {
+          modelByKey.set(entry.key, resolved);
+        }
+      }
+    }
+
+    const sorted = [...modelByKey.entries()]
+      .map(([key, model]) => ({ key, model }))
+      .toSorted((a, b) => {
+        const p = a.model.provider.localeCompare(b.model.provider);
+        if (p !== 0) {
+          return p;
+        }
+        return a.model.id.localeCompare(b.model.id);
+      });
+
+    for (const { key, model } of sorted) {
+      const slash = key.indexOf("/");
+      const keyProvider = slash === -1 ? key : key.slice(0, slash);
+      if (providerFilter && keyProvider.toLowerCase() !== providerFilter) {
         continue;
       }
       if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
         continue;
       }
-      const key = modelKey(model.provider, model.id);
       const configured = configuredByKey.get(key);
       rows.push(
         toModelRow({
@@ -95,6 +117,7 @@ export async function modelsListCommand(
           availableKeys,
           cfg,
           authStore,
+          allowProviderAvailabilityFallback: !discoveredKeys.has(key),
         }),
       );
     }
