@@ -411,7 +411,7 @@ export function buildModelOptions(
       <option value="" disabled>No configured models</option>
     `;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map((option) => html`<option value=${option.value} ?selected=${option.value === current}>${option.label}</option>`);
 }
 
 type CompiledPattern =
