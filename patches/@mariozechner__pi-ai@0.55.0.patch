@@ -1,0 +1,27 @@
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index 1111111..2222222 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -103,7 +103,14 @@
+                     }
+                 }
+             };
++            // Stream idle timeout: if no SSE event arrives within 120s, abort.
++            // Prevents hung connections where LiteLLM/proxy accepted the request
++            // (HTTP 200) but the backend stalls and never sends stream data.
++            const _IDLE_MS = 120000;
++            let _idleTimer = setTimeout(() => openaiStream.controller.abort(), _IDLE_MS);
+             for await (const chunk of openaiStream) {
++                clearTimeout(_idleTimer);
++                _idleTimer = setTimeout(() => openaiStream.controller.abort(), _IDLE_MS);
+                 if (chunk.usage) {
+                     const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens || 0;
+                     const reasoningTokens = chunk.usage.completion_tokens_details?.reasoning_tokens || 0;
+@@ -241,6 +248,7 @@
+                     }
+                 }
+             }
++            clearTimeout(_idleTimer);
+             finishCurrentBlock(currentBlock);
+             if (options?.signal?.aborted) {
+                 throw new Error("Request was aborted");
