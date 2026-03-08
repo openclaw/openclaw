@@ -171,6 +171,27 @@ Runtime: **Node ≥22**.
 
 </details>
 
+### How the agent uses QVeris tools
+
+QVerisBot exposes three QVeris tools to the agent, with built-in routing guidance to prevent misuse:
+
+| Tool                | When to use                                                                                                                                                                                                                                                     |
+| :------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qveris_search`     | Discover tools by **capability type** — real-time data APIs (prices, weather, financials), external service capabilities (image generation, OCR, TTS, translation), geo/location APIs. **Not for** local file reads, software config, or documentation lookups. |
+| `qveris_execute`    | Execute a tool returned by `qveris_search` or verified by `qveris_get_by_ids`. Pass parameters as JSON using `sample_parameters` from the search result as a template.                                                                                          |
+| `qveris_get_by_ids` | Re-verify a **known** tool ID without a full search — use when the agent has already found a good tool in this session. Skips the search round-trip and returns the current parameter schema.                                                                   |
+
+The agent follows a routing decision tree before calling `qveris_search`:
+
+1. **Local operation?** (read files, check config, session status) → use local tools, skip QVeris
+2. **Need a web page or article?** → use `web_search` / `web_fetch` directly
+3. **Need structured real-time data?** → `qveris_search("weather forecast API")` — describe the capability, not the task
+4. **Need an external service capability?** → `qveris_search("text to image generation API")`
+5. **Already used a QVeris tool this session?** → `qveris_get_by_ids` with the known ID, then execute directly
+6. **None of the above?** → do not call QVeris; use `web_search` or report the limitation
+
+A session-scoped **Tool Rolodex** tracks successfully executed tools. After a tool is used, it is annotated as `previously_used` in future search results and listed under `session_known_tools`, so the agent reuses verified tools instead of re-discovering them from scratch.
+
 ### What can you build with QVeris?
 
 | Scenario                    | Tools Used                                    | Workflow                                                                  |
@@ -192,7 +213,7 @@ Runtime: **Node ≥22**.
 
 ## What Else Makes QVerisBot Special
 
-- **OpenClaw + QVeris optimization layer** — keeps OpenClaw's core reliability while adding QVeris-first defaults for practical business/research workflows
+- **OpenClaw + QVeris optimization layer** — keeps OpenClaw's core reliability while adding QVeris-first defaults and a structured tool-routing layer (decision tree + session rolodex) for practical business/research workflows
 - **[Feishu Native Support](docs/qverisbot-from-source.md)** — WebSocket-based deep integration, ideal for Chinese enterprise users
 - **Improved onboarding across CLI/macOS/web wizard flows** — guided QVeris API key setup, auto-default `web_search` to QVeris Xiaosu Smart Search, and built-in X (Twitter) channel credential onboarding
 - **Multi-channel inbox** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, **Feishu**, Microsoft Teams, Matrix, Zalo, WebChat
@@ -405,6 +426,7 @@ QVerisBot is built on OpenClaw. For deep architecture, channel internals, platfo
 - **Bot migration (cross-OS):** see [Migrating Your Bot](#migrating-your-bot) above — `qverisbot migrate export|import|doctor`
 - **QVeris AI integrations:** https://qveris.ai/integrations
 - **QVeris dashboard / API keys:** https://qveris.ai/dashboard
+- **QVeris tool routing:** see [How the agent uses QVeris tools](#how-the-agent-uses-qveris-tools) above — `qveris_search`, `qveris_execute`, `qveris_get_by_ids`
 
 ## About QVerisBot
 
