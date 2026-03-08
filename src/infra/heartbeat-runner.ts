@@ -1194,7 +1194,9 @@ export function startHeartbeatRunner(opts: {
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
         // Track first skip time for timeout enforcement
         if (!agent.firstSkippedMs) {
-          state.agents.set(agent.agentId, { ...agent, firstSkippedMs: now });
+          const updated = { ...agent, firstSkippedMs: now };
+          state.agents.set(agent.agentId, updated);
+          agent = updated;
         }
         const skippedDuration = now - (agent.firstSkippedMs ?? now);
         
@@ -1204,9 +1206,23 @@ export function startHeartbeatRunner(opts: {
             agentId: agent.agentId,
             skippedDurationMs: skippedDuration,
           });
-          state.agents.set(agent.agentId, { ...agent, firstSkippedMs: undefined });
+          const cleared = { ...agent, firstSkippedMs: undefined };
+          state.agents.set(agent.agentId, cleared);
+          agent = cleared;
+          
+          // Force execution by bypassing queue check
+          const forceRes = await runOnce({
+            cfg: state.cfg,
+            agentId: agent.agentId,
+            heartbeat: agent.heartbeat,
+            reason,
+            deps: { ...(state.runtime ? { runtime: state.runtime } : {}), getQueueSize: () => 0 },
+          });
           advanceAgentSchedule(agent, now);
           scheduleNext();
+          if (forceRes.status === "ran") {
+            ran = true;
+          }
           continue;
         }
         

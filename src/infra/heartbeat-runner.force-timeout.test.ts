@@ -55,14 +55,15 @@ describe("heartbeat runner: force execution after timeout", () => {
     await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(runResults).toHaveLength(0);
 
-    // Advance 1 more second (total 5min 1s) - should force execution
+    // Advance 1 more second (total 5min 1s) - should force execution even with queue busy
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(mockGetQueueSize).toHaveBeenCalled();
+    expect(runResults).toHaveLength(1);
+    expect(runResults[0]).toBe("ran");
     
-    // Clear queue and verify next heartbeat runs normally
-    queueSize = 0;
+    // Verify next heartbeat respects queue again
+    queueSize = 1;
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(runResults.length).toBeGreaterThan(0);
+    expect(runResults).toHaveLength(1); // Still 1, didn't run due to queue
   });
 
   it("should reset skip tracking when queue clears", async () => {
