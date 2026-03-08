@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Nutrient Document Processing** — Process, convert, OCR, redact, watermark, sign, and extract content from documents via the Nutrient DWS API.
+  npm: `@nutrient-sdk/nutrient-openclaw`
+  repo: `https://github.com/PSPDFKit-labs/nutrient-openclaw`
+  install: `openclaw plugins install @nutrient-sdk/nutrient-openclaw`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
