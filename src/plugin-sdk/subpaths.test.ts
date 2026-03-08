@@ -3,6 +3,7 @@ import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
+import * as mattermostSdk from "openclaw/plugin-sdk/mattermost";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
@@ -96,6 +97,12 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Microsoft Teams helpers", () => {
     expect(typeof msteamsSdk.resolveControlCommandGate).toBe("function");
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
+  });
+
+  it("exports Mattermost helpers needed by the bundled plugin", () => {
+    expect(typeof mattermostSdk.parseStrictPositiveInteger).toBe("function");
+    expect(mattermostSdk.parseStrictPositiveInteger("9")).toBe(9);
+    expect(mattermostSdk.parseStrictPositiveInteger("0")).toBeUndefined();
   });
 
   it("resolves bundled extension subpaths", async () => {
