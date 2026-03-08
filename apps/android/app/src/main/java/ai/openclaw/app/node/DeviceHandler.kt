@@ -171,13 +171,6 @@ class DeviceHandler(
             ),
           )
           put(
-            "backgroundLocation",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
             "sms",
             permissionStateJson(
               granted = hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
