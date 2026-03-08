@@ -501,13 +501,17 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  // Allow and deny lists are filters — a missing or broken plugin in these
+  // lists is effectively a no-op.  Crashing the gateway because a plugin
+  // referenced in `allow` has a broken manifest is disproportionate
+  // (refs #5052, #28404, #38217).
   const allow = pluginsConfig?.allow ?? [];
   for (const pluginId of allow) {
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.allow", pluginId);
+      pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
   }
 
@@ -517,7 +521,7 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.deny", pluginId);
+      pushMissingPluginIssue("plugins.deny", pluginId, { warnOnly: true });
     }
   }
 
@@ -581,9 +585,14 @@ function validateConfigObjectWithPluginsBase(
           }
         }
       } else {
-        issues.push({
+        // A missing configSchema should not crash the gateway — the plugin
+        // loader already skips the plugin with status "error".  Treating it
+        // as a hard validation issue would prevent the gateway from starting
+        // at all, which is disproportionate when a single user-installed
+        // extension has a malformed manifest (refs #5052, #28404, #38217).
+        warnings.push({
           path: `plugins.entries.${pluginId}`,
-          message: `plugin schema missing for ${pluginId}`,
+          message: `plugin schema missing for ${pluginId}; the plugin will be skipped at runtime`,
         });
       }
     }
