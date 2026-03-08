@@ -345,7 +345,7 @@ describe("convertTools", () => {
     expect(convertTools([])).toEqual([]);
   });
 
-  it("converts tools to FunctionToolDefinition format", () => {
+  it("converts tools to Responses API flat format", () => {
     const tools = [
       {
         name: "exec",
@@ -357,18 +357,18 @@ describe("convertTools", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       type: "function",
-      function: {
-        name: "exec",
-        description: "Run a command",
-        parameters: { type: "object", properties: { cmd: { type: "string" } } },
-      },
+      name: "exec",
+      description: "Run a command",
+      parameters: { type: "object", properties: { cmd: { type: "string" } } },
     });
+    // Must NOT have nested `function` key (that's Chat Completions format)
+    expect(result[0]).not.toHaveProperty("function");
   });
 
   it("handles tools without description", () => {
     const tools = [{ name: "ping", description: "", parameters: {} }];
     const result = convertTools(tools as Parameters<typeof convertTools>[0]);
-    expect(result[0]?.function?.name).toBe("ping");
+    expect(result[0]?.name).toBe("ping");
   });
 });
 
