@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import { enforceAamaOutboundGuard } from "../aama-spine-controls.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -26,6 +27,12 @@ export type OutboundSendContext = {
   params: Record<string, unknown>;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  aamaPolicy?: {
+    alreadyEnforced?: boolean;
+    actor?: string;
+    requesterSenderId?: string | null;
+    actionParams?: Record<string, unknown>;
+  };
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -46,6 +53,10 @@ type PluginHandledResult = {
   payload: unknown;
   toolResult: AgentToolResult<unknown>;
 };
+
+function resolvePolicyActor(ctx: OutboundSendContext): string {
+  return ctx.aamaPolicy?.actor?.trim() || ctx.agentId?.trim() || "system";
+}
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
@@ -98,6 +109,24 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  await enforceAamaOutboundGuard({
+    alreadyEnforced: params.ctx.aamaPolicy?.alreadyEnforced,
+    action: "send",
+    channel: params.ctx.channel,
+    actor: resolvePolicyActor(params.ctx),
+    requesterSenderId: params.ctx.aamaPolicy?.requesterSenderId,
+    actionParams: params.ctx.aamaPolicy?.actionParams ?? params.ctx.params,
+    payload: {
+      channel: params.ctx.channel,
+      to: params.to,
+      message: params.message,
+      mediaUrl: params.mediaUrl ?? undefined,
+      mediaUrls: params.mediaUrls && params.mediaUrls.length > 0 ? params.mediaUrls : undefined,
+      replyToId: params.replyToId ?? undefined,
+      threadId: params.threadId ?? undefined,
+    },
+  });
+
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
@@ -142,6 +171,12 @@ export async function executeSendAction(params: {
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
+    aamaPolicy: {
+      alreadyEnforced: true,
+      actor: resolvePolicyActor(params.ctx),
+      requesterSenderId: params.ctx.aamaPolicy?.requesterSenderId,
+      actionParams: params.ctx.aamaPolicy?.actionParams ?? params.ctx.params,
+    },
   });
 
   return {
@@ -167,6 +202,26 @@ export async function executePollAction(params: {
   toolResult?: AgentToolResult<unknown>;
   pollResult?: MessagePollResult;
 }> {
+  await enforceAamaOutboundGuard({
+    alreadyEnforced: params.ctx.aamaPolicy?.alreadyEnforced,
+    action: "poll",
+    channel: params.ctx.channel,
+    actor: resolvePolicyActor(params.ctx),
+    requesterSenderId: params.ctx.aamaPolicy?.requesterSenderId,
+    actionParams: params.ctx.aamaPolicy?.actionParams ?? params.ctx.params,
+    payload: {
+      channel: params.ctx.channel,
+      to: params.to,
+      question: params.question,
+      options: params.options,
+      maxSelections: params.maxSelections,
+      durationSeconds: params.durationSeconds ?? undefined,
+      durationHours: params.durationHours ?? undefined,
+      threadId: params.threadId ?? undefined,
+      isAnonymous: params.isAnonymous ?? undefined,
+    },
+  });
+
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "poll",
@@ -190,6 +245,12 @@ export async function executePollAction(params: {
     isAnonymous: params.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
+    aamaPolicy: {
+      alreadyEnforced: true,
+      actor: resolvePolicyActor(params.ctx),
+      requesterSenderId: params.ctx.aamaPolicy?.requesterSenderId,
+      actionParams: params.ctx.aamaPolicy?.actionParams ?? params.ctx.params,
+    },
   });
 
   return {

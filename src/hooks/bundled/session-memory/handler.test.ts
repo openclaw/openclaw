@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resetAamaSpineControlsForTests } from "../../../infra/aama-spine-controls.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { writeAamaPhase1Fixture } from "../../../test-utils/aama-phase1.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import type { HookHandler } from "../../hooks.js";
 import { createHookEvent } from "../../hooks.js";
 
@@ -35,6 +38,10 @@ afterAll(async () => {
   await fs.rm(suiteWorkspaceRoot, { recursive: true, force: true });
   suiteWorkspaceRoot = "";
   workspaceCaseCounter = 0;
+});
+
+afterEach(() => {
+  resetAamaSpineControlsForTests();
 });
 
 /**
@@ -525,5 +532,32 @@ describe("session-memory hook", () => {
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  it("fails closed when AAMA memory gate blocks append_only writes", async () => {
+    const phaseRootParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-aama-hook-"));
+    const phaseRoot = path.join(phaseRootParent, "phase1");
+    try {
+      await writeAamaPhase1Fixture({ root: phaseRoot, appendOnlyAllowed: false });
+      await withEnvAsync(
+        {
+          OPENCLAW_AAMA_PHASE1_ENABLE: "1",
+          OPENCLAW_AAMA_PHASE1_ROOT: phaseRoot,
+          OPENCLAW_AAMA_APPROVAL_SECRET: "phase1-secret",
+        },
+        async () => {
+          const sessionContent = createMockSessionContent([
+            { role: "user", content: "Persist this summary" },
+            { role: "assistant", content: "Saving session memory now" },
+          ]);
+          const { tempDir } = await runNewWithPreviousSession({ sessionContent });
+          const memoryDir = path.join(tempDir, "memory");
+          const files = await fs.readdir(memoryDir);
+          expect(files).toEqual([]);
+        },
+      );
+    } finally {
+      await fs.rm(phaseRootParent, { recursive: true, force: true });
+    }
   });
 });

@@ -11,6 +11,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { enforceAamaMemoryGateWrite } from "../../../infra/aama-spine-controls.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
@@ -304,19 +305,60 @@ const saveSessionToMemory: HookHandler = async (event) => {
       entryParts.push("## Conversation Summary", "", sessionContent, "");
     }
 
+    const memoryRecord: Record<string, unknown> = {
+      memory_id: `${sessionId}:${dateStr}:${slug}`,
+      memory_class: "reflection",
+      module: "reflection",
+      entity_ref: `session:${sessionId}`,
+      payload: {
+        session_key: event.sessionKey,
+        source,
+        summary_file: filename,
+        has_conversation_content: Boolean(sessionContent?.trim()),
+      },
+      source_ref: sessionFile ?? `session:${sessionId}`,
+      confidence_score: 0.92,
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      status: "active",
+      retention_policy: "reflection",
+      created_by: "system",
+      review_required: false,
+      quarantine_state: "none",
+      contradiction_group_id: null,
+      integrity_level: "normal",
+    };
+
+    const memoryDecision = await enforceAamaMemoryGateWrite({
+      actor: "session_memory_hook",
+      writeMode: "append_only",
+      record: memoryRecord,
+    });
+
+    let relativeOutputPath = filename;
+    if (memoryDecision.quarantineRequired) {
+      relativeOutputPath = path.join("quarantine", filename);
+      entryParts.push(
+        "## Quarantine Notes",
+        "",
+        ...memoryDecision.quarantineReasons.map((reason) => `- ${reason}`),
+        "",
+      );
+    }
+
     const entry = entryParts.join("\n");
 
     // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
       rootDir: memoryDir,
-      relativePath: filename,
+      relativePath: relativeOutputPath,
       data: entry,
       encoding: "utf-8",
     });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
+    const relPath = path.join(memoryDir, relativeOutputPath).replace(os.homedir(), "~");
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {

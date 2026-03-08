@@ -2,6 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
+import { enforceAamaOutboundGuard } from "../../infra/aama-spine-controls.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -86,6 +87,52 @@ async function resolveRequestedChannel(params: {
   return { cfg, channel };
 }
 
+function trimOptional(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function buildAamaActionParams(input: {
+  approvalToken?: unknown;
+  approvalNonce?: unknown;
+  approval_token?: unknown;
+  approval_nonce?: unknown;
+  allowlistBypass?: unknown;
+  allowlist_bypass?: unknown;
+}): Record<string, unknown> {
+  const actionParams: Record<string, unknown> = {};
+  const approvalToken = trimOptional(input.approvalToken);
+  const approvalNonce = trimOptional(input.approvalNonce);
+  const approvalTokenSnake = trimOptional(input.approval_token);
+  const approvalNonceSnake = trimOptional(input.approval_nonce);
+  const allowlistBypass = trimOptional(input.allowlistBypass);
+  const allowlistBypassSnake = trimOptional(input.allowlist_bypass);
+
+  if (approvalToken) {
+    actionParams.approvalToken = approvalToken;
+  }
+  if (approvalNonce) {
+    actionParams.approvalNonce = approvalNonce;
+  }
+  if (approvalTokenSnake) {
+    actionParams.approval_token = approvalTokenSnake;
+  }
+  if (approvalNonceSnake) {
+    actionParams.approval_nonce = approvalNonceSnake;
+  }
+  if (allowlistBypass) {
+    actionParams.allowlistBypass = allowlistBypass;
+  }
+  if (allowlistBypassSnake) {
+    actionParams.allowlist_bypass = allowlistBypassSnake;
+  }
+
+  return actionParams;
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   send: async ({ params, respond, context }) => {
     const p = params;
@@ -111,6 +158,12 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       threadId?: string;
       sessionKey?: string;
+      approvalToken?: string;
+      approvalNonce?: string;
+      approval_token?: string;
+      approval_nonce?: string;
+      allowlistBypass?: string;
+      allowlist_bypass?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -243,6 +296,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
         });
+        const aamaActionParams = buildAamaActionParams(request);
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
@@ -253,6 +307,11 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
+          aamaPolicy: {
+            action: "send",
+            actor: effectiveAgentId ?? "system",
+            actionParams: aamaActionParams,
+          },
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,
@@ -345,6 +404,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       threadId?: string;
       channel?: string;
       accountId?: string;
+      agentId?: string;
+      approvalToken?: string;
+      approvalNonce?: string;
+      approval_token?: string;
+      approval_nonce?: string;
+      allowlistBypass?: string;
+      allowlist_bypass?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -424,6 +490,28 @@ export const sendHandlers: GatewayRequestHandlers = {
       const normalized = outbound.pollMaxOptions
         ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
         : normalizePollInput(poll);
+      const actor =
+        typeof request.agentId === "string" && request.agentId.trim().length > 0
+          ? request.agentId.trim()
+          : "system";
+      const aamaActionParams = buildAamaActionParams(request);
+      await enforceAamaOutboundGuard({
+        action: "poll",
+        channel,
+        actor,
+        actionParams: aamaActionParams,
+        payload: {
+          channel,
+          to: resolved.to,
+          question: normalized.question,
+          options: normalized.options,
+          maxSelections: normalized.maxSelections,
+          durationSeconds: normalized.durationSeconds ?? undefined,
+          durationHours: normalized.durationHours ?? undefined,
+          threadId,
+          isAnonymous: request.isAnonymous ?? undefined,
+        },
+      });
       const result = await outbound.sendPoll({
         cfg,
         to: resolved.to,

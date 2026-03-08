@@ -45,6 +45,18 @@ export const SendParamsSchema = Type.Object(
     threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
+    /** AAMA approval token (camelCase). */
+    approvalToken: Type.Optional(Type.String()),
+    /** AAMA approval nonce (camelCase). */
+    approvalNonce: Type.Optional(Type.String()),
+    /** AAMA approval token (snake_case alias). */
+    approval_token: Type.Optional(Type.String()),
+    /** AAMA approval nonce (snake_case alias). */
+    approval_nonce: Type.Optional(Type.String()),
+    /** AAMA allowlist bypass flag (camelCase) for explicit fail-closed handling. */
+    allowlistBypass: Type.Optional(Type.String()),
+    /** AAMA allowlist bypass flag (snake_case alias) for explicit fail-closed handling. */
+    allowlist_bypass: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -67,6 +79,20 @@ export const PollParamsSchema = Type.Object(
     threadId: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
+    /** Optional agent id for policy actor binding. */
+    agentId: Type.Optional(Type.String()),
+    /** AAMA approval token (camelCase). */
+    approvalToken: Type.Optional(Type.String()),
+    /** AAMA approval nonce (camelCase). */
+    approvalNonce: Type.Optional(Type.String()),
+    /** AAMA approval token (snake_case alias). */
+    approval_token: Type.Optional(Type.String()),
+    /** AAMA approval nonce (snake_case alias). */
+    approval_nonce: Type.Optional(Type.String()),
+    /** AAMA allowlist bypass flag (camelCase) for explicit fail-closed handling. */
+    allowlistBypass: Type.Optional(Type.String()),
+    /** AAMA allowlist bypass flag (snake_case alias) for explicit fail-closed handling. */
+    allowlist_bypass: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

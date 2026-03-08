@@ -35,6 +35,7 @@ import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
+import { enforceAamaOutboundGuard } from "../aama-spine-controls.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -248,6 +249,14 @@ type DeliverOutboundPayloadsCoreParams = {
     groupId?: string;
   };
   silent?: boolean;
+  aamaPolicy?: {
+    alreadyEnforced?: boolean;
+    action?: string;
+    actor?: string;
+    requesterSenderId?: string | null;
+    actionParams?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+  };
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -465,6 +474,24 @@ export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+  await enforceAamaOutboundGuard({
+    alreadyEnforced: params.aamaPolicy?.alreadyEnforced,
+    action: params.aamaPolicy?.action ?? "send",
+    channel,
+    actor:
+      params.aamaPolicy?.actor ?? params.session?.agentId ?? params.mirror?.agentId ?? "system",
+    requesterSenderId: params.aamaPolicy?.requesterSenderId,
+    actionParams: params.aamaPolicy?.actionParams,
+    payload:
+      params.aamaPolicy?.payload ??
+      ({
+        channel,
+        to,
+        payloads: normalizeReplyPayloadsForDelivery(payloads),
+        replyToId: params.replyToId ?? undefined,
+        threadId: params.threadId ?? undefined,
+      } as Record<string, unknown>),
+  });
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue

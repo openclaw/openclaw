@@ -7,6 +7,7 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
+  enforceAamaOutboundGuard: vi.fn(async () => undefined),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn(() => ({ ok: true, to: "resolved" })),
@@ -76,6 +77,10 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../infra/aama-spine-controls.js", () => ({
+  enforceAamaOutboundGuard: mocks.enforceAamaOutboundGuard,
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -151,6 +156,7 @@ describe("gateway send mirroring", () => {
       channel: "slack",
       configured: ["slack"],
     });
+    mocks.enforceAamaOutboundGuard.mockResolvedValue(undefined);
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
   });
@@ -502,6 +508,86 @@ describe("gateway send mirroring", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "1710000000.9999",
+      }),
+    );
+  });
+
+  it("forwards AAMA approval params for send through aamaPolicy.actionParams", async () => {
+    mockDeliverySuccess("m-aama-send");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      agentId: "main",
+      approvalToken: "token-1",
+      approvalNonce: "nonce-1",
+      idempotencyKey: "idem-aama-send",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aamaPolicy: expect.objectContaining({
+          action: "send",
+          actor: "main",
+          actionParams: expect.objectContaining({
+            approvalToken: "token-1",
+            approvalNonce: "nonce-1",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("enforces AAMA guard for poll with forwarded approval params", async () => {
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Ship?",
+      options: ["Yes", "No"],
+      channel: "slack",
+      agentId: "main",
+      approvalToken: "token-poll",
+      approvalNonce: "nonce-poll",
+      idempotencyKey: "idem-aama-poll",
+    });
+
+    expect(mocks.enforceAamaOutboundGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "poll",
+        channel: "slack",
+        actor: "main",
+        actionParams: expect.objectContaining({
+          approvalToken: "token-poll",
+          approvalNonce: "nonce-poll",
+        }),
+      }),
+    );
+    expect(mocks.sendPoll).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined, {
+      channel: "slack",
+    });
+  });
+
+  it("fails closed when AAMA guard blocks poll", async () => {
+    mocks.enforceAamaOutboundGuard.mockRejectedValueOnce(new Error("AAMA blocked poll"));
+
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Ship?",
+      options: ["Yes", "No"],
+      channel: "slack",
+      idempotencyKey: "idem-aama-poll-block",
+    });
+
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("AAMA blocked poll"),
+      }),
+      expect.objectContaining({
+        channel: "slack",
       }),
     );
   });
