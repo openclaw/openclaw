@@ -55,12 +55,12 @@ describe("MiniMax implicit provider (#15275)", () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.minimax).toBeDefined();
       expect(providers?.minimax?.api).toBe("anthropic-messages");
-      expect(providers?.minimax?.authHeader).toBe(true);
+      expect(providers?.minimax?.authHeader).toBeUndefined();
       expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     });
   });
 
-  it("should set authHeader for minimax portal provider", async () => {
+  it("should not set authHeader for minimax portal provider", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
@@ -84,7 +84,7 @@ describe("MiniMax implicit provider (#15275)", () => {
     );
 
     const providers = await resolveImplicitProviders({ agentDir });
-    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+    expect(providers?.["minimax-portal"]?.authHeader).toBeUndefined();
   });
 
   it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", async () => {

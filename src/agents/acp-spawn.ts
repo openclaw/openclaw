@@ -358,6 +358,7 @@ export async function spawnAcpDirect(
       mode: runtimeMode,
       cwd: params.cwd,
       backendId: cfg.acp?.backend,
+      permissionProfile: requestThreadBinding ? cfg.acp?.runtime?.permissionProfile : undefined,
     });
     initializedRuntime = {
       runtime: initialized.runtime,

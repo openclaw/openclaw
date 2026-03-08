@@ -45,6 +45,7 @@ export type AcpInitializeSessionInput = {
   mode: AcpRuntimeSessionMode;
   cwd?: string;
   backendId?: string;
+  permissionProfile?: string;
 };
 
 export type AcpRunTurnInput = {

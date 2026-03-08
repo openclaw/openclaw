@@ -198,6 +198,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
+  "acp.runtime.permissionProfile":
+    "Default permission profile for ACP sessions (e.g., 'trusted' for auto-approve file writes). Used for thread-bound ACP sessions where interactive approval is not possible.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":

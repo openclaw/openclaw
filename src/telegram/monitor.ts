@@ -129,7 +129,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     // polling stuck; force-stop the active runner so the loop can recover.
     if (isNetworkError && activeRunner && activeRunner.isRunning()) {
       forceRestarted = true;
-      void activeRunner.stop().catch(() => {});
+      void activeRunner.stop().catch(() => { });
       log(
         `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
       );

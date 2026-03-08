@@ -32,6 +32,12 @@ export type AcpRuntimeConfig = {
   ttlMinutes?: number;
   /** Optional operator install/setup command shown by `/acp install` and `/acp doctor`. */
   installCommand?: string;
+  /**
+   * Default permission profile for ACP sessions (e.g., "trusted", "strict").
+   * This is passed to the ACP backend (Codex) to control auto-approval behavior.
+   * Useful for thread-bound ACP sessions where interactive approval is not possible.
+   */
+  permissionProfile?: string;
 };
 
 export type AcpConfig = {

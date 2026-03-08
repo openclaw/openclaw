@@ -220,7 +220,11 @@ export class AcpSessionManager {
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
-      const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
+      const permissionProfile = input.permissionProfile;
+      const initialRuntimeOptions = validateRuntimeOptionPatch({
+        cwd: input.cwd,
+        ...(permissionProfile ? { permissionProfile } : {}),
+      });
       const requestedCwd = initialRuntimeOptions.cwd;
       this.enforceConcurrentSessionLimit({
         cfg: input.cfg,

@@ -181,7 +181,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
-    authHeader: true,
+    ...(params.providerId === "minimax-cn" ? { authHeader: true } : {}),
     ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
