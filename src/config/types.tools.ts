@@ -443,6 +443,8 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
       provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Brave Search base URL override (optional). */
+      baseUrl?: string;
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */

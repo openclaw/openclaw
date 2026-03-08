@@ -52,9 +52,11 @@ export function applyInputProvenanceToUserMessage(
   if (!inputProvenance) {
     return message;
   }
+
   if ((message as { role?: unknown }).role !== "user") {
     return message;
   }
+
   const existing = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
   if (existing) {
     return message;
