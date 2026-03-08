@@ -481,7 +481,12 @@ export async function startGatewayServer(
 
   // Plugin session store adapter: activate if a plugin registered one.
   const pluginStoreAdapter = getPluginSessionStoreAdapter();
-  if (pluginStoreAdapter && cfgAtStart.session?.storeAdapter === "plugin") {
+  if (cfgAtStart.session?.storeAdapter === "plugin") {
+    if (!pluginStoreAdapter) {
+      throw new Error(
+        'session.storeAdapter is "plugin" but no plugin registered a session store adapter',
+      );
+    }
     const storePath = resolveStorePath(cfgAtStart.session?.store, { agentId: defaultAgentId });
     await activatePluginSessionStoreAdapter({ adapter: pluginStoreAdapter, storePath });
   }

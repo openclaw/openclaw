@@ -59,10 +59,10 @@ export async function activatePluginSessionStoreAdapter(params: {
   adapter: SessionStoreAdapter;
   storePath: string;
 }): Promise<void> {
-  pluginAdapterConfig = { adapter: params.adapter, storePath: params.storePath };
   if (params.adapter.warmCache) {
     await params.adapter.warmCache();
   }
+  pluginAdapterConfig = { adapter: params.adapter, storePath: params.storePath };
 }
 
 export function clearPluginSessionStoreAdapter(): void {
@@ -549,7 +549,11 @@ async function saveSessionStoreUnlocked(
   if (pluginAdapterConfig && storePath === pluginAdapterConfig.storePath) {
     const adapter = pluginAdapterConfig.adapter;
     const saves = Object.entries(store).map(([key, entry]) => adapter.save(key, entry));
-    await Promise.allSettled(saves);
+    const results = await Promise.allSettled(saves);
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length > 0) {
+      log.warn(`plugin adapter sync: ${failed.length}/${results.length} save(s) failed`);
+    }
   }
 }
 
