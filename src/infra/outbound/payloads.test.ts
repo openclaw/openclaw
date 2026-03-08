@@ -46,6 +46,15 @@ describe("normalizeOutboundPayloadsForJson", () => {
       },
     ]);
   });
+
+  it("drops internal-only payloads", () => {
+    expect(
+      normalizeOutboundPayloadsForJson([
+        { text: "⚠️ 📝 Edit failed", internalOnly: true },
+        { text: "visible" },
+      ]),
+    ).toEqual([{ text: "visible", mediaUrl: null, mediaUrls: undefined, channelData: undefined }]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
@@ -53,6 +62,14 @@ describe("normalizeOutboundPayloads", () => {
     const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
     const normalized = normalizeOutboundPayloads([{ channelData }]);
     expect(normalized).toEqual([{ text: "", mediaUrls: [], channelData }]);
+  });
+
+  it("drops internal-only payloads", () => {
+    const normalized = normalizeOutboundPayloads([
+      { text: "⚠️ 📝 Edit failed", internalOnly: true },
+      { text: "visible" },
+    ]);
+    expect(normalized).toEqual([{ text: "visible", mediaUrls: [] }]);
   });
 });
 

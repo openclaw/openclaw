@@ -41,6 +41,7 @@ export type EmbeddedPiRunResult = {
     mediaUrls?: string[];
     replyToId?: string;
     isError?: boolean;
+    internalOnly?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
   // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)

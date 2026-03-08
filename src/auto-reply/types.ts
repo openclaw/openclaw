@@ -56,6 +56,8 @@ export type ReplyPayload = {
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;
+  /** Internal payloads are for local bookkeeping and must not be delivered to user chat surfaces. */
+  internalOnly?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

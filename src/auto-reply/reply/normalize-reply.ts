@@ -24,6 +24,10 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
+  if (payload.internalOnly) {
+    opts.onSkip?.("empty");
+    return null;
+  }
   const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
   const hasChannelData = Boolean(
     payload.channelData && Object.keys(payload.channelData).length > 0,

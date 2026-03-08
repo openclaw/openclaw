@@ -37,6 +37,7 @@ export function buildEmbeddedRunPayloads(params: {
   mediaUrls?: string[];
   replyToId?: string;
   isError?: boolean;
+  internalOnly?: boolean;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -45,6 +46,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    internalOnly?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -227,6 +229,8 @@ export function buildEmbeddedRunPayloads(params: {
       replyItems.push({
         text: `⚠️ ${toolSummary} failed${errorSuffix}`,
         isError: true,
+        // Preserve the fallback for internal consumers while preventing delivery to chat surfaces.
+        internalOnly: true,
       });
     }
   }
@@ -238,6 +242,7 @@ export function buildEmbeddedRunPayloads(params: {
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,
+      internalOnly: item.internalOnly,
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,

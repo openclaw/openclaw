@@ -427,7 +427,7 @@ export async function runCronIsolatedAgentTurn(params: {
     return withRunSession({ status: "error", error: String(err) });
   }
 
-  const payloads = runResult.payloads ?? [];
+  const payloads = (runResult.payloads ?? []).filter((payload) => !payload.internalOnly);
 
   // Update token+model fields in the session store.
   {

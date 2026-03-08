@@ -35,8 +35,11 @@ export function buildReplyPayloads(params: {
 }): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads
+    ? params.payloads.filter((payload) => !payload.internalOnly)
     : params.payloads.flatMap((payload) => {
+        if (payload.internalOnly) {
+          return [];
+        }
         let text = payload.text;
 
         if (payload.isError && text && isBunFetchSocketError(text)) {

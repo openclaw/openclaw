@@ -127,6 +127,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.internalOnly).toBe(true);
     expect(payloads[0]?.text).toContain("Browser");
     expect(payloads[0]?.text).toContain("tab not found");
   });
@@ -173,6 +174,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.internalOnly).toBe(true);
     expect(payloads[0]?.text).toContain("Exec");
     expect(payloads[0]?.text).toContain("code 1");
   });
@@ -242,6 +244,7 @@ describe("buildEmbeddedRunPayloads", () => {
     // Non-recoverable errors should still be shown
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.internalOnly).toBe(true);
     expect(payloads[0]?.text).toContain("connection timeout");
   });
 });
