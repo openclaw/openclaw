@@ -24,7 +24,15 @@ function requireSessionKey(key?: string | null): string {
   if (!trimmed) {
     throw new Error("system events require a sessionKey");
   }
-  return trimmed;
+  // Normalize to lowercase for case-insensitive matching.
+  // Session keys are canonicalized to lowercase by parseAgentSessionKey()
+  // throughout the codebase, but callers (e.g. plugins) may pass keys with
+  // mixed case (Slack channel IDs like C0AKA9RBSAU). Without normalization,
+  // enqueueSystemEvent("...", {sessionKey: "agent:main:slack:channel:C0XX"})
+  // stores under the mixed-case key while peekSystemEventEntries() and
+  // drainSystemEventEntries() look up the lowercase canonical form — causing
+  // events to silently disappear for channel sessions.
+  return trimmed.toLowerCase();
 }
 
 function normalizeContextKey(key?: string | null): string | null {
