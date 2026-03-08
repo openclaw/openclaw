@@ -75,7 +75,7 @@ openclaw channels add
 
 访问 [飞书开放平台](https://open.feishu.cn/app)，使用飞书账号登录。
 
-Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设置 `domain: "lark"`。
+Lark（国际版）请使用 [Lark Open Platform](https://open.larksuite.com/app)，并在配置中设置 `domain: "lark"`。
 
 ### 2. 创建应用
 
