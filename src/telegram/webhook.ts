@@ -236,14 +236,15 @@ export async function startTelegramWebhook(opts: {
   });
 
   const certPath = typeof opts.certPath === "string" ? opts.certPath.trim() : "";
-  const certificate = certPath
-    ? new InputFile(
-        await readFile(certPath),
-        certPath.split(/[\\/]/).pop() || "telegram-webhook-cert.pem",
-      )
-    : undefined;
 
   try {
+    const certificate = certPath
+      ? new InputFile(
+          await readFile(certPath),
+          certPath.split(/[\\/]/).pop() || "telegram-webhook-cert.pem",
+        )
+      : undefined;
+
     await withTelegramApiErrorLogging({
       operation: "setWebhook",
       runtime,
