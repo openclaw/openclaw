@@ -6,11 +6,18 @@ import {
   resolveEnabledConfiguredAccountId,
 } from "./shared.js";
 
+type TelegramProbeSummary = {
+  bot?: {
+    canReadAllGroupMessages?: boolean | null;
+  };
+};
+
 type TelegramAccountStatus = {
   accountId?: unknown;
   enabled?: unknown;
   configured?: unknown;
   allowUnmentionedGroups?: unknown;
+  probe?: unknown;
   audit?: unknown;
 };
 
@@ -36,7 +43,23 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     enabled: value.enabled,
     configured: value.configured,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
+    probe: value.probe,
     audit: value.audit,
+  };
+}
+
+function readTelegramProbeSummary(value: unknown): TelegramProbeSummary {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const bot = isRecord(value.bot) ? value.bot : undefined;
+  const canReadAllGroupMessagesRaw = bot?.canReadAllGroupMessages;
+  const canReadAllGroupMessages =
+    typeof canReadAllGroupMessagesRaw === "boolean" ? canReadAllGroupMessagesRaw : null;
+  return {
+    bot: {
+      canReadAllGroupMessages,
+    },
   };
 }
 
@@ -92,14 +115,25 @@ export function collectTelegramStatusIssues(
     }
 
     if (account.allowUnmentionedGroups === true) {
-      issues.push({
-        channel: "telegram",
-        accountId,
-        kind: "config",
-        message:
-          "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
-        fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
-      });
+      const probe = readTelegramProbeSummary(account.probe);
+      const canReadAllGroupMessages = probe.bot?.canReadAllGroupMessages;
+      if (canReadAllGroupMessages !== true) {
+        const modeHint =
+          canReadAllGroupMessages === false
+            ? "Telegram Bot API privacy mode is enabled for this bot"
+            : "Telegram Bot API privacy mode could not be confirmed from API probe";
+        const impactText =
+          canReadAllGroupMessages === false
+            ? "Telegram Bot API will block most group messages unless privacy mode is disabled."
+            : "Telegram Bot API may block most group messages unless privacy mode is disabled.";
+        issues.push({
+          channel: "telegram",
+          accountId,
+          kind: "config",
+          message: `Config allows unmentioned group messages (requireMention=false). ${modeHint}, ${impactText}`,
+          fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+        });
+      }
     }
 
     const audit = readTelegramGroupMembershipAuditSummary(account.audit);
