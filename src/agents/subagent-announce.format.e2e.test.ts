@@ -319,7 +319,7 @@ describe("subagent announce formatting", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        reason: "subagent:subagent task:completion",
+        reason: "subagent:subagent-task:completion",
         sessionKey: "agent:main:main",
       }),
     );

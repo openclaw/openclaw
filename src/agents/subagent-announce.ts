@@ -1016,6 +1016,11 @@ export type SubagentRunOutcome = {
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
+function buildWakeParentCompletionReason(announceType: SubagentAnnounceType): string {
+  const normalizedType = announceType.trim().replace(/\s+/g, "-");
+  return `subagent:${normalizedType}:completion`;
+}
+
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
@@ -1465,7 +1470,7 @@ export async function runSubagentAnnounceFlow(params: {
       if (queued) {
         requestHeartbeatNow(
           scopedHeartbeatWakeOptions(targetRequesterSessionKey, {
-            reason: `subagent:${announceType}:completion`,
+            reason: buildWakeParentCompletionReason(announceType),
           }),
         );
       }
