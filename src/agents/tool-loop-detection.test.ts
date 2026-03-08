@@ -292,6 +292,33 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(false);
     });
 
+    it("clears stale history before checking for loops", () => {
+      const state = createState();
+
+      // Simulate a previous heartbeat cycle with repeated calls that would
+      // normally trigger a warning.
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `old-${i}`);
+      }
+      expect(state.toolCallHistory).toHaveLength(WARNING_THRESHOLD);
+
+      // Backdate all entries to 2 minutes ago (stale)
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 120_000;
+      }
+
+      // detectToolCallLoop should clear stale history before checking,
+      // so the same tool+args should NOT trigger a warning.
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        enabledLoopDetectionConfig,
+      );
+      expect(result.stuck).toBe(false);
+      expect(state.toolCallHistory).toHaveLength(0);
+    });
+
     it("does not flag unique tool calls", () => {
       const state = createState();
 

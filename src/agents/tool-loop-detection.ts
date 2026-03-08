@@ -365,6 +365,23 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
+const STALE_HISTORY_THRESHOLD_MS = 60_000;
+
+/**
+ * Clear stale tool call history to prevent false positives across heartbeat
+ * cycles.  If the most recent entry is older than 60 seconds, the previous
+ * burst of tool calls belongs to a different heartbeat cycle.
+ */
+function clearStaleHistory(state: SessionState): void {
+  if (!state.toolCallHistory || state.toolCallHistory.length === 0) {
+    return;
+  }
+  const lastCall = state.toolCallHistory.at(-1);
+  if (lastCall && Date.now() - lastCall.timestamp > STALE_HISTORY_THRESHOLD_MS) {
+    state.toolCallHistory = [];
+  }
+}
+
 /**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
@@ -379,6 +396,10 @@ export function detectToolCallLoop(
   if (!resolvedConfig.enabled) {
     return { stuck: false };
   }
+  // Clear stale history before checking — in production, detectToolCallLoop
+  // is called before recordToolCall, so stale entries from a previous
+  // heartbeat cycle must be discarded here to avoid false positives.
+  clearStaleHistory(state);
   const history = state.toolCallHistory ?? [];
   const currentHash = hashToolCall(toolName, params);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
@@ -510,13 +531,7 @@ export function recordToolCall(
     state.toolCallHistory = [];
   }
 
-  // Clear stale history to prevent false positives across heartbeat cycles.
-  // If the most recent entry is older than 60 seconds, the previous burst of
-  // tool calls belongs to a different heartbeat cycle and should not count.
-  const lastCall = state.toolCallHistory.at(-1);
-  if (lastCall && Date.now() - lastCall.timestamp > 60_000) {
-    state.toolCallHistory = [];
-  }
+  clearStaleHistory(state);
 
   state.toolCallHistory.push({
     toolName,
