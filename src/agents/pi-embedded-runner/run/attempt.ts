@@ -1250,7 +1250,16 @@ export async function runEmbeddedAttempt(
         }
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        // For custom providers, try to get API key from authStorage
+        const customApiKey = await params.authStorage.getApiKey(params.provider);
+        if (customApiKey) {
+          // Wrap streamSimple to inject the apiKey
+          const baseStreamFn = streamSimple;
+          activeSession.agent.streamFn = (model, context, options) =>
+            baseStreamFn(model, context, { ...options, apiKey: customApiKey });
+        } else {
+          activeSession.agent.streamFn = streamSimple;
+        }
       }
 
       // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
