@@ -49,23 +49,39 @@ services:
         chown node:node /home/node /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.openclaw/workspace/data /home/node/.cache /home/node/.cache/ms-playwright
         chmod 755 /home/node
 
+        echo "[startup] Copying openclaw.json..."
         cp /tmp/openclaw-seed.json /home/node/.openclaw/openclaw.json
         chmod 600 /home/node/.openclaw/openclaw.json
         if [ -d /tmp/workspace-seed ]; then
+          echo "[startup] Syncing workspace from seed..."
           cp -rn /tmp/workspace-seed/. /home/node/.openclaw/workspace/ 2>/dev/null || true
           # Always sync managed files (they may have been updated in the repo)
           for f in /tmp/workspace-seed/*.md /tmp/workspace-seed/*.json; do
             [ -f "$$f" ] && cp "$$f" /home/node/.openclaw/workspace/ 2>/dev/null || true
           done
           if [ -d /tmp/workspace-seed/skills ]; then
+            echo "[startup] Copying skills..."
             cp -r /tmp/workspace-seed/skills/. /home/node/.openclaw/workspace/skills/ 2>/dev/null || true
+          else
+            echo "[startup] WARNING: /tmp/workspace-seed/skills/ does NOT exist"
           fi
           if [ -d /tmp/workspace-seed/scripts ]; then
+            echo "[startup] Copying scripts..."
             cp -r /tmp/workspace-seed/scripts/. /home/node/.openclaw/workspace/scripts/ 2>/dev/null || true
           fi
+        else
+          echo "[startup] WARNING: /tmp/workspace-seed does NOT exist!"
         fi
         chown -R node:node /home/node/.openclaw/workspace/skills /home/node/.openclaw/workspace/scripts 2>/dev/null || true
         chmod +x /home/node/.openclaw/workspace/skills/twitter-openclaw/bin/twclaw.js 2>/dev/null || true
+        # Verify skill exists
+        if [ -f /home/node/.openclaw/workspace/skills/twitter-openclaw/bin/twclaw.js ]; then
+          echo "[startup] OK: twclaw.js found"
+        else
+          echo "[startup] ERROR: twclaw.js NOT found after copy!"
+          ls -laR /home/node/.openclaw/workspace/skills/ 2>/dev/null || echo "[startup] skills/ dir missing"
+          ls -laR /tmp/workspace-seed/skills/ 2>/dev/null || echo "[startup] seed skills/ missing"
+        fi
 
         exec su -s /bin/sh node -c '
           daily_date=$$(TZ=America/New_York date +%F)
