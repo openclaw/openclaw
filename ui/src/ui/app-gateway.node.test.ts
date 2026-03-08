@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { connectGateway } from "./app-gateway.ts";
+import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  emitClose: (code: number, reason?: string) => void;
+  options: { clientVersion?: string };
+  emitClose: (info: {
+    code: number;
+    reason?: string;
+    error?: { code: string; message: string; details?: unknown };
+  }) => void;
   emitGap: (expected: number, received: number) => void;
   emitEvent: (evt: { event: string; payload?: unknown; seq?: number }) => void;
 };
@@ -13,13 +19,29 @@ type GatewayClientMock = {
 const gatewayClientInstances: GatewayClientMock[] = [];
 
 vi.mock("./gateway.ts", () => {
+  function resolveGatewayErrorDetailCode(
+    error: { details?: unknown } | null | undefined,
+  ): string | null {
+    const details = error?.details;
+    if (!details || typeof details !== "object") {
+      return null;
+    }
+    const code = (details as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
+  }
+
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
 
     constructor(
       private opts: {
-        onClose?: (info: { code: number; reason: string }) => void;
+        clientVersion?: string;
+        onClose?: (info: {
+          code: number;
+          reason: string;
+          error?: { code: string; message: string; details?: unknown };
+        }) => void;
         onGap?: (info: { expected: number; received: number }) => void;
         onEvent?: (evt: { event: string; payload?: unknown; seq?: number }) => void;
       },
@@ -27,8 +49,13 @@ vi.mock("./gateway.ts", () => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
-        emitClose: (code, reason) => {
-          this.opts.onClose?.({ code, reason: reason ?? "" });
+        options: { clientVersion: this.opts.clientVersion },
+        emitClose: (info) => {
+          this.opts.onClose?.({
+            code: info.code,
+            reason: info.reason ?? "",
+            error: info.error,
+          });
         },
         emitGap: (expected, received) => {
           this.opts.onGap?.({ expected, received });
@@ -40,7 +67,7 @@ vi.mock("./gateway.ts", () => {
     }
   }
 
-  return { GatewayBrowserClient };
+  return { GatewayBrowserClient, resolveGatewayErrorDetailCode };
 });
 
 function createHost() {
@@ -58,10 +85,12 @@ function createHost() {
       navGroupsCollapsed: {},
     },
     password: "",
+    clientInstanceId: "instance-test",
     client: null,
     connected: false,
     hello: null,
     lastError: null,
+    lastErrorCode: null,
     eventLogBuffer: [],
     eventLog: [],
     tab: "overview",
@@ -75,6 +104,7 @@ function createHost() {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
     refreshSessionsAfterChat: new Set<string>(),
@@ -171,10 +201,139 @@ describe("connectGateway", () => {
     const secondClient = gatewayClientInstances[1];
     expect(secondClient).toBeDefined();
 
-    firstClient.emitClose(1005);
+    firstClient.emitClose({ code: 1005 });
     expect(host.lastError).toBeNull();
+    expect(host.lastErrorCode).toBeNull();
 
-    secondClient.emitClose(1005);
+    secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
+    expect(host.lastError).toContain("gateway token mismatch");
+  });
+
+  it("maps TypeError fetch failures to actionable auth rate-limit guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "TypeError: Failed to fetch",
+        details: { code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_RATE_LIMITED);
+    expect(host.lastError).toContain("too many failed authentication attempts");
+  });
+
+  it("preserves specific close errors even when auth detail codes are present", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Failed to fetch gateway metadata from ws://127.0.0.1:18789",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
+    expect(host.lastError).toBe("Failed to fetch gateway metadata from ws://127.0.0.1:18789");
+  });
+
+  it("prefers structured connect errors over close reason", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
+        details: { code: "AUTH_TOKEN_MISMATCH" },
+      },
+    });
+
+    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+});
+
+describe("resolveControlUiClientVersion", () => {
+  it("returns serverVersion for same-origin websocket targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://localhost:8787",
+        serverVersion: "2026.3.7",
+        pageUrl: "http://localhost:8787/openclaw/",
+      }),
+    ).toBe("2026.3.7");
+  });
+
+  it("returns serverVersion for same-origin relative targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "/ws",
+        serverVersion: "2026.3.7",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.7");
+  });
+
+  it("returns serverVersion for same-origin http targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "https://control.example.com/ws",
+        serverVersion: "2026.3.7",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.7");
+  });
+
+  it("omits serverVersion for cross-origin targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "wss://gateway.example.com",
+        serverVersion: "2026.3.7",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBeUndefined();
   });
 });

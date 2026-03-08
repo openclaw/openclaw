@@ -29,14 +29,14 @@ Global defaults:
   tools: {
     loopDetection: {
       enabled: false,
-      historySize: 20,
-      detectorCooldownMs: 12000,
-      repeatThreshold: 3,
-      criticalThreshold: 6,
+      historySize: 30,
+      warningThreshold: 10,
+      criticalThreshold: 20,
+      globalCircuitBreakerThreshold: 30,
       detectors: {
-        repeatedFailure: true,
-        knownPollLoop: true,
-        repeatingNoProgress: true,
+        genericRepeat: true,
+        knownPollNoProgress: true,
+        pingPong: true,
       },
     },
   },
@@ -54,8 +54,8 @@ Per-agent override (optional):
         tools: {
           loopDetection: {
             enabled: true,
-            repeatThreshold: 2,
-            criticalThreshold: 5,
+            warningThreshold: 8,
+            criticalThreshold: 16,
           },
         },
       },
@@ -68,18 +68,20 @@ Per-agent override (optional):
 
 - `enabled`: Master switch. `false` means no loop detection is performed.
 - `historySize`: number of recent tool calls kept for analysis.
-- `detectorCooldownMs`: time window used by the no-progress detector.
-- `repeatThreshold`: minimum repeats before warning/blocking starts.
-- `criticalThreshold`: stronger threshold that can trigger stricter handling.
-- `detectors.repeatedFailure`: detects repeated failed attempts on the same call path.
-- `detectors.knownPollLoop`: detects known polling-like loops.
-- `detectors.repeatingNoProgress`: detects high-frequency repeated calls without state change.
+- `warningThreshold`: threshold before classifying a pattern as warning-only.
+- `criticalThreshold`: threshold for blocking repetitive loop patterns.
+- `globalCircuitBreakerThreshold`: global no-progress breaker threshold.
+- `detectors.genericRepeat`: detects repeated same-tool + same-params patterns.
+- `detectors.knownPollNoProgress`: detects known polling-like patterns with no state change.
+- `detectors.pingPong`: detects alternating ping-pong patterns.
 
 ## Recommended setup
 
 - Start with `enabled: true`, defaults unchanged.
+- Keep thresholds ordered as `warningThreshold < criticalThreshold < globalCircuitBreakerThreshold`.
 - If false positives occur:
-  - raise `repeatThreshold` and/or `criticalThreshold`
+  - raise `warningThreshold` and/or `criticalThreshold`
+  - (optionally) raise `globalCircuitBreakerThreshold`
   - disable only the detector causing issues
   - reduce `historySize` for less strict historical context
 

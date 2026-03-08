@@ -4,33 +4,35 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
-private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws -> T) rethrows -> T {
-    let defaults = UserDefaults.standard
-    var snapshot: [String: Any?] = [:]
-    for key in updates.keys {
-        snapshot[key] = defaults.object(forKey: key)
+private func makeAgentDeepLinkURL(
+    message: String,
+    deliver: Bool = false,
+    to: String? = nil,
+    channel: String? = nil,
+    key: String? = nil) -> URL
+{
+    var components = URLComponents()
+    components.scheme = "openclaw"
+    components.host = "agent"
+    var queryItems: [URLQueryItem] = [URLQueryItem(name: "message", value: message)]
+    if deliver {
+        queryItems.append(URLQueryItem(name: "deliver", value: "1"))
     }
-    for (key, value) in updates {
-        if let value {
-            defaults.set(value, forKey: key)
-        } else {
-            defaults.removeObject(forKey: key)
-        }
+    if let to {
+        queryItems.append(URLQueryItem(name: "to", value: to))
     }
-    defer {
-        for (key, value) in snapshot {
-            if let value {
-                defaults.set(value, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
+    if let channel {
+        queryItems.append(URLQueryItem(name: "channel", value: channel))
     }
-    return try body()
+    if let key {
+        queryItems.append(URLQueryItem(name: "key", value: key))
+    }
+    components.queryItems = queryItems
+    return components.url!
 }
 
 @MainActor
-private final class MockWatchMessagingService: WatchMessagingServicing, @unchecked Sendable {
+private final class MockWatchMessagingService: @preconcurrency WatchMessagingServicing, @unchecked Sendable {
     var currentStatus = WatchMessagingStatus(
         supported: true,
         paired: true,
@@ -42,23 +44,27 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         queuedForDelivery: false,
         transport: "sendMessage")
     var sendError: Error?
-    var lastSent: (id: String, title: String, body: String, priority: OpenClawNotificationPriority?)?
+    var lastSent: (id: String, params: OpenClawWatchNotifyParams)?
+    private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
 
     func status() async -> WatchMessagingStatus {
         self.currentStatus
     }
 
-    func sendNotification(
-        id: String,
-        title: String,
-        body: String,
-        priority: OpenClawNotificationPriority?) async throws -> WatchNotificationSendResult
-    {
-        self.lastSent = (id: id, title: title, body: body, priority: priority)
+    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
+        self.replyHandler = handler
+    }
+
+    func sendNotification(id: String, params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult {
+        self.lastSent = (id: id, params: params)
         if let sendError = self.sendError {
             throw sendError
         }
         return self.nextSendResult
+    }
+
+    func emitReply(_ event: WatchQuickReplyEvent) {
+        self.replyHandler?(event)
     }
 }
 
@@ -75,6 +81,19 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         }
         let json = try NodeAppModel._test_encodePayload(Payload(value: "ok"))
         #expect(json.contains("\"value\""))
+    }
+
+    @Test @MainActor func chatSessionKeyDefaultsToIOSBase() {
+        let appModel = NodeAppModel()
+        #expect(appModel.chatSessionKey == "ios")
+    }
+
+    @Test @MainActor func chatSessionKeyUsesAgentScopedKeyForNonDefaultAgent() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        appModel.setSelectedAgentId("agent-123")
+        #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "ios"))
+        #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
     @Test @MainActor func handleInvokeRejectsBackgroundCommands() async {
@@ -230,9 +249,9 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
 
         let res = await appModel._test_handleInvoke(req)
         #expect(res.ok == true)
-        #expect(watchService.lastSent?.title == "OpenClaw")
-        #expect(watchService.lastSent?.body == "Meeting with Peter is at 4pm")
-        #expect(watchService.lastSent?.priority == .timeSensitive)
+        #expect(watchService.lastSent?.params.title == "OpenClaw")
+        #expect(watchService.lastSent?.params.body == "Meeting with Peter is at 4pm")
+        #expect(watchService.lastSent?.params.priority == .timeSensitive)
 
         let payloadData = try #require(res.payloadJSON?.data(using: .utf8))
         let payload = try JSONDecoder().decode(OpenClawWatchNotifyPayload.self, from: payloadData)
@@ -352,6 +371,22 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         #expect(res.error?.message.contains("WATCH_UNAVAILABLE") == true)
     }
 
+    @Test @MainActor func watchReplyQueuesWhenGatewayOffline() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        watchService.emitReply(
+            WatchQuickReplyEvent(
+                replyId: "reply-offline-1",
+                promptId: "prompt-1",
+                actionId: "approve",
+                actionLabel: "Approve",
+                sessionKey: "ios",
+                note: nil,
+                sentAtMs: 1234,
+                transport: "transferUserInfo"))
+        #expect(appModel._test_queuedWatchReplyCount() == 1)
+    }
+
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async {
         let appModel = NodeAppModel()
         let url = URL(string: "openclaw://agent?message=hello")!
@@ -365,6 +400,72 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         let url = URL(string: "openclaw://agent?message=\(msg)")!
         await appModel.handleDeepLink(url: url)
         #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
+    }
+
+    @Test @MainActor func handleDeepLinkRequiresConfirmationWhenConnectedAndUnkeyed() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let url = makeAgentDeepLinkURL(message: "hello from deep link")
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt != nil)
+        #expect(appModel.openChatRequestID == 0)
+
+        await appModel.approvePendingAgentDeepLinkPrompt()
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
+    }
+
+    @Test @MainActor func handleDeepLinkCoalescesPromptWhenRateLimited() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "first prompt"))
+        let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "second prompt"))
+        let coalescedPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        #expect(coalescedPrompt.id != firstPrompt.id)
+        #expect(coalescedPrompt.messagePreview.contains("second prompt"))
+    }
+
+    @Test @MainActor func handleDeepLinkStripsDeliveryFieldsWhenUnkeyed() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let url = makeAgentDeepLinkURL(
+            message: "route this",
+            deliver: true,
+            to: "123456",
+            channel: "telegram")
+
+        await appModel.handleDeepLink(url: url)
+        let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+        #expect(prompt.request.deliver == false)
+        #expect(prompt.request.to == nil)
+        #expect(prompt.request.channel == nil)
+    }
+
+    @Test @MainActor func handleDeepLinkRejectsLongUnkeyedMessageWhenConnected() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let message = String(repeating: "x", count: 241)
+        let url = makeAgentDeepLinkURL(message: message)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.screen.errorText?.contains("blocked") == true)
+    }
+
+    @Test @MainActor func handleDeepLinkBypassesPromptWithValidKey() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let key = NodeAppModel._test_currentDeepLinkKey()
+        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
     }
 
     @Test @MainActor func sendVoiceTranscriptThrowsWhenGatewayOffline() async {

@@ -8,10 +8,26 @@
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 0;
   height: calc(100vh - 160px);
-  margin: -16px;
+  margin: 0 -16px -32px; /* preserve margin-top: 0 for onboarding mode */
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
   background: var(--panel);
+  overflow: hidden; /* fallback for older browsers */
+  overflow: clip;
+}
+
+/* Mobile: adjust margins to match mobile .content padding (4px 4px 16px) */
+@media (max-width: 600px) {
+  .config-layout {
+    margin: 0; /* safest: no negative margin cancellation on mobile */
+  }
+}
+
+/* Small mobile: even smaller padding */
+@media (max-width: 400px) {
+  .config-layout {
+    margin: 0;
+  }
 }
 
 /* ===========================================
@@ -246,7 +262,8 @@
   min-height: 0;
   min-width: 0;
   background: var(--panel);
-  overflow: hidden;
+  overflow: hidden; /* fallback for older browsers */
+  overflow: clip;
 }
 
 /* Actions Bar */
@@ -258,6 +275,9 @@
   padding: 14px 22px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
 }
 
 :root[data-theme="light"] .config-actions {

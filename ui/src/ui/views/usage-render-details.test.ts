@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 import {
   computeFilteredUsage,
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
 } from "./usage-render-details.ts";
+import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
 function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   return {
@@ -28,6 +28,10 @@ const baseUsage = {
   output: 400,
   cacheRead: 200,
   cacheWrite: 100,
+  inputCost: 0.3,
+  outputCost: 0.4,
+  cacheReadCost: 0.2,
+  cacheWriteCost: 0.1,
   durationMs: 60000,
   firstActivity: 0,
   lastActivity: 60000,

@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { DiscordGuildEntry } from "../../../config/types.discord.js";
+import { hasConfiguredSecretInput } from "../../../config/types.secrets.js";
+import { inspectDiscordAccount } from "../../../discord/account-inspect.js";
 import {
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
@@ -18,12 +20,13 @@ import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onb
 import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 import {
   applySingleTokenPromptResult,
+  buildSingleChannelSecretPromptState,
   parseMentionOrPrefixedId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
-  promptSingleChannelToken,
+  promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
   resolveOnboardingAccountId,
   setAccountGroupPolicyForChannel,
@@ -146,9 +149,10 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = listDiscordAccountIds(cfg).some((accountId) =>
-      Boolean(resolveDiscordAccount({ cfg, accountId }).token),
-    );
+    const configured = listDiscordAccountIds(cfg).some((accountId) => {
+      const account = inspectDiscordAccount({ cfg, accountId });
+      return account.configured;
+    });
     return {
       channel,
       configured,
@@ -157,7 +161,7 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 2 : 1,
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
+  configure: async ({ cfg, prompter, options, accountOverrides, shouldPromptAccountIds }) => {
     const defaultDiscordAccountId = resolveDefaultDiscordAccountId(cfg);
     const discordAccountId = await resolveAccountIdForConfigure({
       cfg,
@@ -174,33 +178,53 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       accountId: discordAccountId,
     });
-    const accountConfigured = Boolean(resolvedAccount.token);
     const allowEnv = discordAccountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv =
-      allowEnv && !resolvedAccount.config.token && Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
-    const hasConfigToken = Boolean(resolvedAccount.config.token);
+    const tokenPromptState = buildSingleChannelSecretPromptState({
+      accountConfigured: Boolean(resolvedAccount.token),
+      hasConfigToken: hasConfiguredSecretInput(resolvedAccount.config.token),
+      allowEnv,
+      envValue: process.env.DISCORD_BOT_TOKEN,
+    });
 
-    if (!accountConfigured) {
+    if (!tokenPromptState.accountConfigured) {
       await noteDiscordTokenHelp(prompter);
     }
 
-    const tokenResult = await promptSingleChannelToken({
+    const tokenResult = await promptSingleChannelSecretInput({
+      cfg: next,
       prompter,
-      accountConfigured,
-      canUseEnv,
-      hasConfigToken,
+      providerHint: "discord",
+      credentialLabel: "Discord bot token",
+      secretInputMode: options?.secretInputMode,
+      accountConfigured: tokenPromptState.accountConfigured,
+      canUseEnv: tokenPromptState.canUseEnv,
+      hasConfigToken: tokenPromptState.hasConfigToken,
       envPrompt: "DISCORD_BOT_TOKEN detected. Use env var?",
       keepPrompt: "Discord token already configured. Keep it?",
       inputPrompt: "Enter Discord bot token",
+      preferredEnvVar: allowEnv ? "DISCORD_BOT_TOKEN" : undefined,
     });
 
-    next = applySingleTokenPromptResult({
-      cfg: next,
-      channel: "discord",
-      accountId: discordAccountId,
-      tokenPatchKey: "token",
-      tokenResult,
-    });
+    let resolvedTokenForAllowlist: string | undefined;
+    if (tokenResult.action === "use-env") {
+      next = applySingleTokenPromptResult({
+        cfg: next,
+        channel: "discord",
+        accountId: discordAccountId,
+        tokenPatchKey: "token",
+        tokenResult: { useEnv: true, token: null },
+      });
+      resolvedTokenForAllowlist = process.env.DISCORD_BOT_TOKEN?.trim() || undefined;
+    } else if (tokenResult.action === "set") {
+      next = applySingleTokenPromptResult({
+        cfg: next,
+        channel: "discord",
+        accountId: discordAccountId,
+        tokenPatchKey: "token",
+        tokenResult: { useEnv: false, token: tokenResult.value },
+      });
+      resolvedTokenForAllowlist = tokenResult.resolvedValue;
+    }
 
     const currentEntries = Object.entries(resolvedAccount.config.guilds ?? {}).flatMap(
       ([guildKey, value]) => {
@@ -237,10 +261,11 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
           input,
           resolved: false,
         }));
-        if (accountWithTokens.token && entries.length > 0) {
+        const activeToken = accountWithTokens.token || resolvedTokenForAllowlist || "";
+        if (activeToken && entries.length > 0) {
           try {
             resolved = await resolveDiscordChannelAllowlist({
-              token: accountWithTokens.token,
+              token: activeToken,
               entries,
             });
             const resolvedChannels = resolved.filter((entry) => entry.resolved && entry.channelId);

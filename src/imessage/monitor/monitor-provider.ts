@@ -1,18 +1,17 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import {
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -25,23 +24,25 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
-import { mediaKindFromMime } from "../../media/constants.js";
 import {
   isInboundPathAllowed,
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../../media/inbound-path-policy.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { kindFromMime } from "../../media/mime.js";
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
+import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -49,6 +50,7 @@ import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
+import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -97,6 +99,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
+  const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -151,9 +154,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "imessage" });
-  const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
-    debounceMs: inboundDebounceMs,
+  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
+    message: IMessagePayload;
+  }>({
+    cfg,
+    channel: "imessage",
     buildKey: (entry) => {
       const sender = entry.message.sender?.trim();
       if (!sender) {
@@ -166,14 +171,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
     shouldDebounce: (entry) => {
-      const text = entry.message.text?.trim() ?? "";
-      if (!text) {
-        return false;
-      }
-      if (entry.message.attachments && entry.message.attachments.length > 0) {
-        return false;
-      }
-      return !hasControlCommand(text, cfg);
+      return shouldDebounceTextInbound({
+        text: entry.message.text,
+        cfg,
+        hasMedia: Boolean(entry.message.attachments && entry.message.attachments.length > 0),
+      });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -222,7 +224,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // Build arrays for all attachments (for multi-image support)
     const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
     const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
-    const kind = mediaKindFromMime(mediaType ?? undefined);
+    const kind = kindFromMime(mediaType ?? undefined);
     const placeholder = kind
       ? `<media:${kind}>`
       : validAttachments.length
@@ -253,46 +255,69 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose,
     });
 
+    // Build conversation key for rate limiting (used by both drop and dispatch paths).
+    const chatId = message.chat_id ?? undefined;
+    const senderForKey = (message.sender ?? "").trim();
+    const conversationKey = chatId != null ? `group:${chatId}` : `dm:${senderForKey}`;
+    const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
+
     if (decision.kind === "drop") {
+      // Record echo/reflection drops so the rate limiter can detect sustained loops.
+      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
+      // are normal and should not escalate.
+      const isLoopDrop =
+        decision.reason === "echo" ||
+        decision.reason === "reflected assistant content" ||
+        decision.reason === "from me";
+      if (isLoopDrop) {
+        loopRateLimiter.record(rateLimitKey);
+      }
       return;
     }
 
-    const chatId = message.chat_id ?? undefined;
+    // After repeated echo/reflection drops for a conversation, suppress all
+    // remaining messages as a safety net against amplification that slips
+    // through the primary guards.
+    if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
+      logVerbose(`imessage: rate-limited conversation ${conversationKey} (echo loop detected)`);
+      return;
+    }
+
     if (decision.kind === "pairing") {
       const sender = (message.sender ?? "").trim();
       if (!sender) {
         return;
       }
-      const { code, created } = await upsertChannelPairingRequest({
+      await issuePairingChallenge({
         channel: "imessage",
-        id: decision.senderId,
-        accountId: accountInfo.accountId,
+        senderId: decision.senderId,
+        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
         meta: {
           sender: decision.senderId,
           chatId: chatId ? String(chatId) : undefined,
         },
-      });
-      if (created) {
-        logVerbose(`imessage pairing request sender=${decision.senderId}`);
-        try {
-          await sendMessageIMessage(
-            sender,
-            buildPairingReply({
-              channel: "imessage",
-              idLine: `Your iMessage sender id: ${decision.senderId}`,
-              code,
-            }),
-            {
-              client,
-              maxBytes: mediaMaxBytes,
-              accountId: accountInfo.accountId,
-              ...(chatId ? { chatId } : {}),
-            },
-          );
-        } catch (err) {
+        upsertPairingRequest: async ({ id, meta }) =>
+          await upsertChannelPairingRequest({
+            channel: "imessage",
+            id,
+            accountId: accountInfo.accountId,
+            meta,
+          }),
+        onCreated: () => {
+          logVerbose(`imessage pairing request sender=${decision.senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessageIMessage(sender, text, {
+            client,
+            maxBytes: mediaMaxBytes,
+            accountId: accountInfo.accountId,
+            ...(chatId ? { chatId } : {}),
+          });
+        },
+        onReplyError: (err) => {
           logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
-        }
-      }
+        },
+      });
       return;
     }
 
@@ -320,6 +345,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     const updateTarget = chatTarget || decision.sender;
+    const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: cfg.session?.dmScope,
+      allowFrom,
+      normalizeEntry: normalizeIMessageHandle,
+    });
     await recordInboundSession({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
@@ -331,6 +361,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               channel: "imessage",
               to: updateTarget,
               accountId: decision.route.accountId,
+              mainDmOwnerPin:
+                pinnedMainDmOwner && decision.senderNormalized
+                  ? {
+                      ownerRecipient: pinnedMainDmOwner,
+                      senderRecipient: decision.senderNormalized,
+                      onSkip: ({ ownerRecipient, senderRecipient }) => {
+                        logVerbose(
+                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    }
+                  : undefined,
             }
           : undefined,
       onRecordError: (err) => {

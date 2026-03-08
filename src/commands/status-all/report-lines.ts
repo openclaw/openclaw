@@ -1,6 +1,7 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
+import { groupChannelIssuesByChannel } from "./channel-issues.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import { formatTimeAgo } from "./format.js";
 
@@ -81,19 +82,7 @@ export async function buildStatusAllReportLines(params: {
             : theme.accentDim("SETUP"),
     Detail: row.detail,
   }));
-  const channelIssuesByChannel = (() => {
-    const map = new Map<string, ChannelIssueLike[]>();
-    for (const issue of params.channelIssues) {
-      const key = issue.channel;
-      const list = map.get(key);
-      if (list) {
-        list.push(issue);
-      } else {
-        map.set(key, [issue]);
-      }
-    }
-    return map;
-  })();
+  const channelIssuesByChannel = groupChannelIssuesByChannel(params.channelIssues);
   const channelRowsWithIssues = channelRows.map((row) => {
     const issues = channelIssuesByChannel.get(row.channelId) ?? [];
     if (issues.length === 0) {

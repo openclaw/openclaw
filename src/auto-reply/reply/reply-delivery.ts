@@ -1,11 +1,11 @@
-import type { BlockReplyContext, ReplyPayload } from "../types.js";
-import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { TypingSignaler } from "./typing-mode.js";
 import { logVerbose } from "../../globals.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
+import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyPayloadKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
@@ -65,6 +65,7 @@ export function createBlockReplyDeliveryHandler(params: {
   currentMessageId?: string;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
@@ -101,7 +102,10 @@ export function createBlockReplyDeliveryHandler(params: {
       parseMode: "auto",
     });
 
-    const blockPayload = params.applyReplyToMode(normalized.payload);
+    const mediaNormalizedPayload = params.normalizeMediaPaths
+      ? await params.normalizeMediaPaths(normalized.payload)
+      : normalized.payload;
+    const blockPayload = params.applyReplyToMode(mediaNormalizedPayload);
     const blockHasMedia = hasRenderableMedia(blockPayload);
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).

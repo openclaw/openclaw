@@ -175,6 +175,24 @@ export function buildTelegramGroupPeerId(chatId: number | string, messageThreadI
   return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
 }
 
+/**
+ * Resolve the direct-message peer identifier for Telegram routing/session keys.
+ *
+ * In some Telegram DM deliveries (for example certain business/chat bridge flows),
+ * `chat.id` can differ from the actual sender user id. Prefer sender id when present
+ * so per-peer DM scopes isolate users correctly.
+ */
+export function resolveTelegramDirectPeerId(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+}) {
+  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  if (senderId) {
+    return senderId;
+  }
+  return String(params.chatId);
+}
+
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
@@ -262,18 +280,52 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
   return `group:${chatId}${topicSuffix}`;
 }
 
+export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
+
+export function getTelegramTextParts(
+  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
+): {
+  text: string;
+  entities: TelegramTextEntity[];
+} {
+  const text = msg.text ?? msg.caption ?? "";
+  const entities = msg.entities ?? msg.caption_entities ?? [];
+  return { text, entities };
+}
+
+function isTelegramMentionWordChar(char: string | undefined): boolean {
+  return char != null && /[a-z0-9_]/i.test(char);
+}
+
+function hasStandaloneTelegramMention(text: string, mention: string): boolean {
+  let startIndex = 0;
+  while (startIndex < text.length) {
+    const idx = text.indexOf(mention, startIndex);
+    if (idx === -1) {
+      return false;
+    }
+    const prev = idx > 0 ? text[idx - 1] : undefined;
+    const next = text[idx + mention.length];
+    if (!isTelegramMentionWordChar(prev) && !isTelegramMentionWordChar(next)) {
+      return true;
+    }
+    startIndex = idx + 1;
+  }
+  return false;
+}
+
 export function hasBotMention(msg: Message, botUsername: string) {
-  const text = (msg.text ?? msg.caption ?? "").toLowerCase();
-  if (text.includes(`@${botUsername}`)) {
+  const { text, entities } = getTelegramTextParts(msg);
+  const mention = `@${botUsername}`.toLowerCase();
+  if (hasStandaloneTelegramMention(text.toLowerCase(), mention)) {
     return true;
   }
-  const entities = msg.entities ?? msg.caption_entities ?? [];
   for (const ent of entities) {
     if (ent.type !== "mention") {
       continue;
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
+    const slice = text.slice(ent.offset, ent.offset + ent.length);
+    if (slice.toLowerCase() === mention) {
       return true;
     }
   }

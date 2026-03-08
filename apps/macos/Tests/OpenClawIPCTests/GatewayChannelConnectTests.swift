@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawKit
-import os
 import Testing
 @testable import OpenClaw
 
@@ -10,86 +9,33 @@ import Testing
         case invalid(delayMs: Int)
     }
 
-    private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
-        private let response: FakeResponse
-        private let connectRequestID = OSAllocatedUnfairLock<String?>(initialState: nil)
-        private let pendingReceiveHandler =
-            OSAllocatedUnfairLock<(@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?>(
-                initialState: nil)
-
-        var state: URLSessionTask.State = .suspended
-
-        init(response: FakeResponse) {
-            self.response = response
-        }
-
-        func resume() {
-            self.state = .running
-        }
-
-        func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-            _ = (closeCode, reason)
-            self.state = .canceling
-            let handler = self.pendingReceiveHandler.withLock { handler in
-                defer { handler = nil }
-                return handler
-            }
-            handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.cancelled)))
-        }
-
-        func send(_ message: URLSessionWebSocketTask.Message) async throws {
-            if let id = GatewayWebSocketTestSupport.connectRequestID(from: message) {
-                self.connectRequestID.withLock { $0 = id }
-            }
-        }
-
-        func receive() async throws -> URLSessionWebSocketTask.Message {
-            let delayMs: Int
-            let msg: URLSessionWebSocketTask.Message
-            switch self.response {
-            case let .helloOk(ms):
-                delayMs = ms
-                let id = self.connectRequestID.withLock { $0 } ?? "connect"
-                msg = .data(GatewayWebSocketTestSupport.connectOkData(id: id))
-            case let .invalid(ms):
-                delayMs = ms
-                msg = .string("not json")
-            }
-            try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-            return msg
-        }
-
-        func receive(
-            completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-        {
-            // The production channel sets up a continuous receive loop after hello.
-            // Tests only need the handshake receive; keep the loop idle.
-            self.pendingReceiveHandler.withLock { $0 = completionHandler }
-        }
-    }
-
-    private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
-        private let response: FakeResponse
-        private let makeCount = OSAllocatedUnfairLock(initialState: 0)
-
-        init(response: FakeResponse) {
-            self.response = response
-        }
-
-        func snapshotMakeCount() -> Int {
-            self.makeCount.withLock { $0 }
-        }
-
-        func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-            _ = url
-            self.makeCount.withLock { $0 += 1 }
-            let task = FakeWebSocketTask(response: self.response)
-            return WebSocketTaskBox(task: task)
-        }
+    private func makeSession(response: FakeResponse) -> GatewayTestWebSocketSession {
+        GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        let delayMs: Int
+                        let message: URLSessionWebSocketTask.Message
+                        switch response {
+                        case let .helloOk(ms):
+                            delayMs = ms
+                            let id = task.snapshotConnectRequestID() ?? "connect"
+                            message = .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+                        case let .invalid(ms):
+                            delayMs = ms
+                            message = .string("not json")
+                        }
+                        try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                        return message
+                    })
+            })
     }
 
     @Test func concurrentConnectIsSingleFlightOnSuccess() async throws {
-        let session = FakeWebSocketSession(response: .helloOk(delayMs: 200))
+        let session = self.makeSession(response: .helloOk(delayMs: 200))
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
@@ -105,7 +51,7 @@ import Testing
     }
 
     @Test func concurrentConnectSharesFailure() async throws {
-        let session = FakeWebSocketSession(response: .invalid(delayMs: 200))
+        let session = self.makeSession(response: .invalid(delayMs: 200))
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,

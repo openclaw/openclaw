@@ -1,4 +1,8 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import {
+  listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
+  listDirectoryUserEntriesFromAllowFromAndMapKeys,
+} from "openclaw/plugin-sdk/compat";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -15,6 +19,14 @@ export type FeishuDirectoryGroup = {
   name?: string;
 };
 
+function toFeishuDirectoryPeers(ids: string[]): FeishuDirectoryPeer[] {
+  return ids.map((id) => ({ kind: "user", id }));
+}
+
+function toFeishuDirectoryGroups(ids: string[]): FeishuDirectoryGroup[] {
+  return ids.map((id) => ({ kind: "group", id }));
+}
+
 export async function listFeishuDirectoryPeers(params: {
   cfg: ClawdbotConfig;
   query?: string;
@@ -22,31 +34,15 @@ export async function listFeishuDirectoryPeers(params: {
   accountId?: string;
 }): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const entry of feishuCfg?.allowFrom ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  for (const userId of Object.keys(feishuCfg?.dms ?? {})) {
-    const trimmed = userId.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
-  }
-
-  return Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((raw) => normalizeFeishuTarget(raw) ?? raw)
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user" as const, id }));
+  const entries = listDirectoryUserEntriesFromAllowFromAndMapKeys({
+    allowFrom: account.config.allowFrom,
+    map: account.config.dms,
+    query: params.query,
+    limit: params.limit,
+    normalizeAllowFromId: (entry) => normalizeFeishuTarget(entry) ?? entry,
+    normalizeMapKeyId: (entry) => normalizeFeishuTarget(entry) ?? entry,
+  });
+  return toFeishuDirectoryPeers(entries.map((entry) => entry.id));
 }
 
 export async function listFeishuDirectoryGroups(params: {
@@ -56,30 +52,13 @@ export async function listFeishuDirectoryGroups(params: {
   accountId?: string;
 }): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const groupId of Object.keys(feishuCfg?.groups ?? {})) {
-    const trimmed = groupId.trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  for (const entry of feishuCfg?.groupAllowFrom ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  return Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group" as const, id }));
+  const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
+    groups: account.config.groups,
+    allowFrom: account.config.groupAllowFrom,
+    query: params.query,
+    limit: params.limit,
+  });
+  return toFeishuDirectoryGroups(entries.map((entry) => entry.id));
 }
 
 export async function listFeishuDirectoryPeersLive(params: {

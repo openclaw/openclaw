@@ -17,6 +17,7 @@ host configuration.
 - **AccountId**: per‑channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
+  - In multi-account setups, set an explicit default (`defaultAccount` or `accounts.default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
 - **AgentId**: an isolated workspace + session store (“brain”).
 - **SessionKey**: the bucket key used to store context and control concurrency.
 
@@ -44,6 +45,19 @@ Examples:
 - agent:main:discord:channel:987654321012345678
 
 Discord note: parent linkage for thread inheritance is carried separately via parent-session metadata (for example ParentSessionKey), not by appending :thread:<id> to the session key.
+
+## Main DM route pinning
+
+When `session.dmScope` is `main`, direct messages may share one main session.
+To prevent the session’s `lastRoute` from being overwritten by non-owner DMs,
+OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
+
+- `allowFrom` has exactly one non-wildcard entry.
+- The entry can be normalized to a concrete sender ID for that channel.
+- The inbound DM sender does not match that pinned owner.
+
+In that mismatch case, OpenClaw still records inbound session metadata, but it
+skips updating the main session `lastRoute`.
 
 ## Routing rules (how an agent is chosen)
 

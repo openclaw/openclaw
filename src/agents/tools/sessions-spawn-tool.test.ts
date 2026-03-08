@@ -16,6 +16,7 @@ vi.mock("../subagent-spawn.js", () => ({
 
 vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
+  ACP_SPAWN_STREAM_TARGETS: ["parent"],
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
@@ -53,7 +54,6 @@ describe("sessions_spawn tool", () => {
       thread: true,
       mode: "session",
       cleanup: "keep",
-      sandbox: "require",
     });
 
     expect(result.details).toMatchObject({
@@ -71,7 +71,6 @@ describe("sessions_spawn tool", () => {
         thread: true,
         mode: "session",
         cleanup: "keep",
-        sandbox: "require",
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:main",
@@ -80,22 +79,22 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
-  it('defaults sandbox to "inherit" for subagent runtime', async () => {
+  it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      workspaceDir: "/parent/workspace",
     });
 
-    await tool.execute("call-sandbox-default", {
-      task: "summarize logs",
-      agentId: "main",
+    await tool.execute("call-ws", {
+      task: "inspect AGENTS",
+      workspaceDir: "/tmp/attempted-override",
     });
 
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sandbox: "inherit",
-      }),
       expect.any(Object),
+      expect.objectContaining({
+        workspaceDir: "/parent/workspace",
+      }),
     );
   });
 
@@ -115,6 +114,7 @@ describe("sessions_spawn tool", () => {
       cwd: "/workspace",
       thread: true,
       mode: "session",
+      streamTo: "parent",
     });
 
     expect(result.details).toMatchObject({
@@ -129,6 +129,7 @@ describe("sessions_spawn tool", () => {
         cwd: "/workspace",
         thread: true,
         mode: "session",
+        streamTo: "parent",
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:main",
@@ -137,25 +138,94 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it.each(["target", "transport", "channel", "to", "threadId", "thread_id", "replyTo", "reply_to"])(
-    "rejects unsupported routing parameter %s",
-    async (key) => {
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-        agentAccountId: "default",
-        agentTo: "channel:123",
-        agentThreadId: "456",
-      });
+  it("forwards ACP sandbox options and requester sandbox context", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      sandboxed: true,
+    });
 
-      await expect(
-        tool.execute("call-unsupported-param", {
-          task: "build feature",
-          [key]: "value",
-        }),
-      ).rejects.toThrow(`sessions_spawn does not support "${key}"`);
-      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    },
-  );
+    await tool.execute("call-2b", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+      sandbox: "require",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate",
+        sandbox: "require",
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:subagent:parent",
+        sandboxed: true,
+      }),
+    );
+  });
+
+  it("rejects attachments for ACP runtime", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+    });
+
+    const result = await tool.execute("call-3", {
+      runtime: "acp",
+      task: "analyze file",
+      attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects streamTo when runtime is not "acp"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-3b", {
+      runtime: "subagent",
+      task: "analyze file",
+      streamTo: "parent",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("streamTo is only supported for runtime=acp");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        attachments?: {
+          items?: {
+            properties?: {
+              content?: {
+                type?: string;
+                maxLength?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+
+    const contentSchema = schema.properties?.attachments?.items?.properties?.content;
+    expect(contentSchema?.type).toBe("string");
+    expect(contentSchema?.maxLength).toBeUndefined();
+  });
 });

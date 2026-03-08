@@ -1,14 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/tlon";
 import {
   formatDocsLink,
-  promptAccountId,
+  resolveAccountIdForConfigure,
   DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
   type ChannelOnboardingAdapter,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
-import type { TlonResolvedAccount } from "./types.js";
+} from "openclaw/plugin-sdk/tlon";
 import { buildTlonAccountFields } from "./account-fields.js";
+import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 
@@ -113,20 +112,16 @@ export const tlonOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const override = accountOverrides[channel]?.trim();
     const defaultAccountId = DEFAULT_ACCOUNT_ID;
-    let accountId = override ? normalizeAccountId(override) : defaultAccountId;
-
-    if (shouldPromptAccountIds && !override) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Tlon",
-        currentId: accountId,
-        listAccountIds: listTlonAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Tlon",
+      accountOverride: accountOverrides[channel],
+      shouldPromptAccountIds,
+      listAccountIds: listTlonAccountIds,
+      defaultAccountId,
+    });
 
     const resolved = resolveTlonAccount(cfg, accountId);
     await noteTlonHelp(prompter);

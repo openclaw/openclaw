@@ -66,6 +66,23 @@ struct RootCanvas: View {
         return .none
     }
 
+    static func shouldPresentQuickSetup(
+        quickSetupDismissed: Bool,
+        showOnboarding: Bool,
+        hasPresentedSheet: Bool,
+        gatewayConnected: Bool,
+        hasExistingGatewayConfig: Bool,
+        discoveredGatewayCount: Int) -> Bool
+    {
+        guard !quickSetupDismissed else { return false }
+        guard !showOnboarding else { return false }
+        guard !hasPresentedSheet else { return false }
+        guard !gatewayConnected else { return false }
+        // If a gateway target is already configured (manual or last-known), skip quick setup.
+        guard !hasExistingGatewayConfig else { return false }
+        return discoveredGatewayCount > 0
+    }
+
     var body: some View {
         ZStack {
             CanvasContent(
@@ -176,20 +193,7 @@ struct RootCanvas: View {
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
-
-        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
-            return .connecting
-        }
-
-        if text.localizedCaseInsensitiveContains("error") {
-            return .error
-        }
-
-        return .disconnected
+        GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
     private func updateIdleTimer() {
@@ -232,7 +236,12 @@ struct RootCanvas: View {
     }
 
     private func hasExistingGatewayConfig() -> Bool {
+        if self.appModel.activeGatewayConnectConfig != nil { return true }
         if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+
+        let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preferredStableID.isEmpty { return true }
+
         let manualHost = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return self.manualGatewayEnabled && !manualHost.isEmpty
     }
@@ -252,11 +261,14 @@ struct RootCanvas: View {
     }
 
     private func maybeShowQuickSetup() {
-        guard !self.quickSetupDismissed else { return }
-        guard !self.showOnboarding else { return }
-        guard self.presentedSheet == nil else { return }
-        guard self.appModel.gatewayServerName == nil else { return }
-        guard !self.gatewayController.gateways.isEmpty else { return }
+        let shouldPresent = Self.shouldPresentQuickSetup(
+            quickSetupDismissed: self.quickSetupDismissed,
+            showOnboarding: self.showOnboarding,
+            hasPresentedSheet: self.presentedSheet != nil,
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            discoveredGatewayCount: self.gatewayController.gateways.count)
+        guard shouldPresent else { return }
         self.presentedSheet = .quickSetup
     }
 }
@@ -276,61 +288,65 @@ private struct CanvasContent: View {
     var openSettings: () -> Void
 
     private var brightenButtons: Bool { self.systemColorScheme == .light }
+    private var talkActive: Bool { self.appModel.talkMode.isEnabled || self.talkEnabled }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             ScreenTab()
-
-            VStack(spacing: 10) {
-                OverlayButton(systemImage: "text.bubble.fill", brighten: self.brightenButtons) {
-                    self.openChat()
-                }
-                .accessibilityLabel("Chat")
-
-                if self.talkButtonEnabled {
-                    // Talk mode lives on a side bubble so it doesn't get buried in settings.
-                    OverlayButton(
-                        systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle",
-                        brighten: self.brightenButtons,
-                        tint: self.appModel.seamColor,
-                        isActive: self.appModel.talkMode.isEnabled)
-                    {
-                        let next = !self.appModel.talkMode.isEnabled
-                        self.talkEnabled = next
-                        self.appModel.setTalkEnabled(next)
-                    }
-                    .accessibilityLabel("Talk Mode")
-                }
-
-                OverlayButton(systemImage: "gearshape.fill", brighten: self.brightenButtons) {
-                    self.openSettings()
-                }
-                .accessibilityLabel("Settings")
-            }
-            .padding(.top, 10)
-            .padding(.trailing, 10)
         }
         .overlay(alignment: .center) {
-            if self.appModel.talkMode.isEnabled {
+            if self.talkActive {
                 TalkOrbOverlay()
                     .transition(.opacity)
             }
         }
         .overlay(alignment: .topLeading) {
-            StatusPill(
-                gateway: self.gatewayStatus,
-                voiceWakeEnabled: self.voiceWakeEnabled,
-                activity: self.statusActivity,
-                brighten: self.brightenButtons,
-                onTap: {
-                    if self.gatewayStatus == .connected {
-                        self.showGatewayActions = true
-                    } else {
+            HStack(alignment: .top, spacing: 8) {
+                StatusPill(
+                    gateway: self.gatewayStatus,
+                    voiceWakeEnabled: self.voiceWakeEnabled,
+                    activity: self.statusActivity,
+                    brighten: self.brightenButtons,
+                    onTap: {
+                        if self.gatewayStatus == .connected {
+                            self.showGatewayActions = true
+                        } else {
+                            self.openSettings()
+                        }
+                    })
+                    .layoutPriority(1)
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 8) {
+                    OverlayButton(systemImage: "text.bubble.fill", brighten: self.brightenButtons) {
+                        self.openChat()
+                    }
+                    .accessibilityLabel("Chat")
+
+                    if self.talkButtonEnabled {
+                        // Keep Talk mode near status controls while freeing right-side screen real estate.
+                        OverlayButton(
+                            systemImage: self.talkActive ? "waveform.circle.fill" : "waveform.circle",
+                            brighten: self.brightenButtons,
+                            tint: self.appModel.seamColor,
+                            isActive: self.talkActive)
+                        {
+                            let next = !self.talkActive
+                            self.talkEnabled = next
+                            self.appModel.setTalkEnabled(next)
+                        }
+                        .accessibilityLabel("Talk Mode")
+                    }
+
+                    OverlayButton(systemImage: "gearshape.fill", brighten: self.brightenButtons) {
                         self.openSettings()
                     }
-                })
-                .padding(.leading, 10)
-                .safeAreaPadding(.top, 10)
+                    .accessibilityLabel("Settings")
+                }
+            }
+            .padding(.horizontal, 10)
+            .safeAreaPadding(.top, 10)
         }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
@@ -342,82 +358,24 @@ private struct CanvasContent: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .confirmationDialog(
-            "Gateway",
+        .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
-            titleVisibility: .visible)
-        {
-            Button("Disconnect", role: .destructive) {
-                self.appModel.disconnectGateway()
+            onDisconnect: { self.appModel.disconnectGateway() },
+            onOpenSettings: { self.openSettings() })
+        .onAppear {
+            // Keep the runtime talk state aligned with persisted toggle state on cold launch.
+            if self.talkEnabled != self.appModel.talkMode.isEnabled {
+                self.appModel.setTalkEnabled(self.talkEnabled)
             }
-            Button("Open Settings") {
-                self.openSettings()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Disconnect from the gateway?")
         }
     }
 
     private var statusActivity: StatusPill.Activity? {
-        // Status pill owns transient activity state so it doesn't overlap the connection indicator.
-        if self.appModel.isBackgrounded {
-            return StatusPill.Activity(
-                title: "Foreground required",
-                systemImage: "exclamationmark.triangle.fill",
-                tint: .orange)
-        }
-
-        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let gatewayLower = gatewayStatus.lowercased()
-        if gatewayLower.contains("repair") {
-            return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
-        }
-        if gatewayLower.contains("approval") || gatewayLower.contains("pairing") {
-            return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
-        }
-        // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
-
-        if self.appModel.screenRecordActive {
-            return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)
-        }
-
-        if let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind {
-            let systemImage: String
-            let tint: Color?
-            switch cameraHUDKind {
-            case .photo:
-                systemImage = "camera.fill"
-                tint = nil
-            case .recording:
-                systemImage = "video.fill"
-                tint = .red
-            case .success:
-                systemImage = "checkmark.circle.fill"
-                tint = .green
-            case .error:
-                systemImage = "exclamationmark.triangle.fill"
-                tint = .red
-            }
-            return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
-        }
-
-        if self.voiceWakeEnabled {
-            let voiceStatus = self.appModel.voiceWake.statusText
-            if voiceStatus.localizedCaseInsensitiveContains("microphone permission") {
-                return StatusPill.Activity(title: "Mic permission", systemImage: "mic.slash", tint: .orange)
-            }
-            if voiceStatus == "Paused" {
-                // Talk mode intentionally pauses voice wake to release the mic. Don't spam the HUD for that case.
-                if self.appModel.talkMode.isEnabled {
-                    return nil
-                }
-                let suffix = self.appModel.isBackgrounded ? " (background)" : ""
-                return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
-            }
-        }
-
-        return nil
+        StatusActivityBuilder.build(
+            appModel: self.appModel,
+            voiceWakeEnabled: self.voiceWakeEnabled,
+            cameraHUDText: self.cameraHUDText,
+            cameraHUDKind: self.cameraHUDKind)
     }
 }
 

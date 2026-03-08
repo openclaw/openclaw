@@ -7,6 +7,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../config/types.js";
+import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { isSenderAllowed, type NormalizedAllowFrom } from "./bot-access.js";
 import { firstDefined } from "./bot-access.js";
 
@@ -18,6 +19,26 @@ export type TelegramGroupBaseBlockReason =
 export type TelegramGroupBaseAccessResult =
   | { allowed: true }
   | { allowed: false; reason: TelegramGroupBaseBlockReason };
+
+function isGroupAllowOverrideAuthorized(params: {
+  effectiveGroupAllow: NormalizedAllowFrom;
+  senderId?: string;
+  senderUsername?: string;
+  requireSenderForAllowOverride: boolean;
+}): boolean {
+  if (!params.effectiveGroupAllow.hasEntries) {
+    return false;
+  }
+  const senderId = params.senderId ?? "";
+  if (params.requireSenderForAllowOverride && !senderId) {
+    return false;
+  }
+  return isSenderAllowed({
+    allow: params.effectiveGroupAllow,
+    senderId,
+    senderUsername: params.senderUsername ?? "",
+  });
+}
 
 export const evaluateTelegramGroupBaseAccess = (params: {
   isGroup: boolean;
@@ -40,19 +61,14 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   if (!params.isGroup) {
     // For DMs, check allowFrom override if present
     if (params.enforceAllowOverride && params.hasGroupAllowOverride) {
-      if (!params.effectiveGroupAllow.hasEntries) {
-        return { allowed: false, reason: "group-override-unauthorized" };
-      }
-      const senderId = params.senderId ?? "";
-      if (params.requireSenderForAllowOverride && !senderId) {
-        return { allowed: false, reason: "group-override-unauthorized" };
-      }
-      const allowed = isSenderAllowed({
-        allow: params.effectiveGroupAllow,
-        senderId,
-        senderUsername: params.senderUsername ?? "",
-      });
-      if (!allowed) {
+      if (
+        !isGroupAllowOverrideAuthorized({
+          effectiveGroupAllow: params.effectiveGroupAllow,
+          senderId: params.senderId,
+          senderUsername: params.senderUsername,
+          requireSenderForAllowOverride: params.requireSenderForAllowOverride,
+        })
+      ) {
         return { allowed: false, reason: "group-override-unauthorized" };
       }
     }
@@ -62,22 +78,14 @@ export const evaluateTelegramGroupBaseAccess = (params: {
     return { allowed: true };
   }
 
-  // Explicit per-group/topic allowFrom override must fail closed when empty.
-  if (!params.effectiveGroupAllow.hasEntries) {
-    return { allowed: false, reason: "group-override-unauthorized" };
-  }
-
-  const senderId = params.senderId ?? "";
-  if (params.requireSenderForAllowOverride && !senderId) {
-    return { allowed: false, reason: "group-override-unauthorized" };
-  }
-
-  const allowed = isSenderAllowed({
-    allow: params.effectiveGroupAllow,
-    senderId,
-    senderUsername: params.senderUsername ?? "",
-  });
-  if (!allowed) {
+  if (
+    !isGroupAllowOverrideAuthorized({
+      effectiveGroupAllow: params.effectiveGroupAllow,
+      senderId: params.senderId,
+      senderUsername: params.senderUsername,
+      requireSenderForAllowOverride: params.requireSenderForAllowOverride,
+    })
+  ) {
     return { allowed: false, reason: "group-override-unauthorized" };
   }
   return { allowed: true };
@@ -167,31 +175,29 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   }
   if (groupPolicy === "allowlist" && params.enforceAllowlistAuthorization) {
     const senderId = params.senderId ?? "";
-    if (params.requireSenderForAllowlistAuthorization && !senderId) {
+    const senderAuthorization = evaluateMatchedGroupAccessForPolicy({
+      groupPolicy,
+      requireMatchInput: params.requireSenderForAllowlistAuthorization,
+      hasMatchInput: Boolean(senderId),
+      allowlistConfigured:
+        chatExplicitlyAllowed ||
+        params.allowEmptyAllowlistEntries ||
+        params.effectiveGroupAllow.hasEntries,
+      allowlistMatched:
+        (chatExplicitlyAllowed && !params.effectiveGroupAllow.hasEntries) ||
+        isSenderAllowed({
+          allow: params.effectiveGroupAllow,
+          senderId,
+          senderUsername: params.senderUsername ?? "",
+        }),
+    });
+    if (!senderAuthorization.allowed && senderAuthorization.reason === "missing_match_input") {
       return { allowed: false, reason: "group-policy-allowlist-no-sender", groupPolicy };
     }
-    // Skip the "empty allowlist" guard when the chat itself is explicitly
-    // listed in the groups config — the group ID acts as the allowlist entry.
-    if (
-      !chatExplicitlyAllowed &&
-      !params.allowEmptyAllowlistEntries &&
-      !params.effectiveGroupAllow.hasEntries
-    ) {
+    if (!senderAuthorization.allowed && senderAuthorization.reason === "empty_allowlist") {
       return { allowed: false, reason: "group-policy-allowlist-empty", groupPolicy };
     }
-    // When the chat is explicitly allowed and there are no sender-level entries,
-    // skip the sender check — the group ID itself is the authorization.
-    if (chatExplicitlyAllowed && !params.effectiveGroupAllow.hasEntries) {
-      return { allowed: true, groupPolicy };
-    }
-    const senderUsername = params.senderUsername ?? "";
-    if (
-      !isSenderAllowed({
-        allow: params.effectiveGroupAllow,
-        senderId,
-        senderUsername,
-      })
-    ) {
+    if (!senderAuthorization.allowed && senderAuthorization.reason === "not_allowlisted") {
       return { allowed: false, reason: "group-policy-allowlist-unauthorized", groupPolicy };
     }
   }

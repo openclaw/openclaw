@@ -11,7 +11,7 @@ description: Deploy OpenClaw on Fly.io
 
 - [flyctl CLI](https://fly.io/docs/hands-on/install-flyctl/) installed
 - Fly.io account (free tier works)
-- Model auth: Anthropic API key (or other provider keys)
+- Model auth: API key for your chosen model provider
 - Channel credentials: Discord bot token, Telegram token, etc.
 
 ## Beginner quick path

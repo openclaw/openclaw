@@ -1,12 +1,17 @@
-import { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { CoreConfig } from "../../types.js";
-import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../../runtime.js";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "../../secret-input.js";
+import type { CoreConfig } from "../../types.js";
+import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
+import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
-function clean(value?: string): string {
-  return value?.trim() ?? "";
+function clean(value: unknown, path: string): string {
+  return normalizeResolvedSecretInputString({ value, path }) ?? "";
 }
 
 /** Shallow-merge known nested config sub-objects so partial overrides inherit base values. */
@@ -52,11 +57,23 @@ export function resolveMatrixConfigForAccount(
   // nested object inheritance (dm, actions, groups) so partial overrides work.
   const matrix = accountConfig ? deepMergeConfig(matrixBase, accountConfig) : matrixBase;
 
-  const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
-  const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);
-  const accessToken = clean(matrix.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
-  const password = clean(matrix.password) || clean(env.MATRIX_PASSWORD) || undefined;
-  const deviceName = clean(matrix.deviceName) || clean(env.MATRIX_DEVICE_NAME) || undefined;
+  const homeserver =
+    clean(matrix.homeserver, "channels.matrix.homeserver") ||
+    clean(env.MATRIX_HOMESERVER, "MATRIX_HOMESERVER");
+  const userId =
+    clean(matrix.userId, "channels.matrix.userId") || clean(env.MATRIX_USER_ID, "MATRIX_USER_ID");
+  const accessToken =
+    clean(matrix.accessToken, "channels.matrix.accessToken") ||
+    clean(env.MATRIX_ACCESS_TOKEN, "MATRIX_ACCESS_TOKEN") ||
+    undefined;
+  const password =
+    clean(matrix.password, "channels.matrix.password") ||
+    clean(env.MATRIX_PASSWORD, "MATRIX_PASSWORD") ||
+    undefined;
+  const deviceName =
+    clean(matrix.deviceName, "channels.matrix.deviceName") ||
+    clean(env.MATRIX_DEVICE_NAME, "MATRIX_DEVICE_NAME") ||
+    undefined;
   const initialSyncLimit =
     typeof matrix.initialSyncLimit === "number"
       ? Math.max(0, Math.floor(matrix.initialSyncLimit))
@@ -119,6 +136,7 @@ export async function resolveMatrixAuth(params?: {
     if (!userId) {
       // Fetch userId from access token via whoami
       ensureMatrixSdkLoggingConfigured();
+      const { MatrixClient } = loadMatrixSdk();
       const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
       const whoami = await tempClient.getUserId();
       userId = whoami;
@@ -167,28 +185,36 @@ export async function resolveMatrixAuth(params?: {
     );
   }
 
-  // Login with password using HTTP API
-  const loginResponse = await fetch(`${resolved.homeserver}/_matrix/client/v3/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: resolved.userId },
-      password: resolved.password,
-      initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
-    }),
+  // Login with password using HTTP API.
+  const { response: loginResponse, release: releaseLoginResponse } = await fetchWithSsrFGuard({
+    url: `${resolved.homeserver}/_matrix/client/v3/login`,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "m.login.password",
+        identifier: { type: "m.id.user", user: resolved.userId },
+        password: resolved.password,
+        initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+      }),
+    },
+    auditContext: "matrix.login",
   });
-
-  if (!loginResponse.ok) {
-    const errorText = await loginResponse.text();
-    throw new Error(`Matrix login failed: ${errorText}`);
-  }
-
-  const login = (await loginResponse.json()) as {
-    access_token?: string;
-    user_id?: string;
-    device_id?: string;
-  };
+  const login = await (async () => {
+    try {
+      if (!loginResponse.ok) {
+        const errorText = await loginResponse.text();
+        throw new Error(`Matrix login failed: ${errorText}`);
+      }
+      return (await loginResponse.json()) as {
+        access_token?: string;
+        user_id?: string;
+        device_id?: string;
+      };
+    } finally {
+      await releaseLoginResponse();
+    }
+  })();
 
   const accessToken = login.access_token?.trim();
   if (!accessToken) {

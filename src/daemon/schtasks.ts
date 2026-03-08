@@ -132,6 +132,53 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   return info;
 }
 
+function normalizeTaskResultCode(value?: string): string | null {
+  if (!value) {
+    return null;
+  }
+  const raw = value.trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^0x[0-9a-f]+$/.test(raw)) {
+    return `0x${raw.slice(2).replace(/^0+/, "") || "0"}`;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number.parseInt(raw, 10);
+    if (Number.isFinite(numeric)) {
+      return `0x${numeric.toString(16)}`;
+    }
+  }
+
+  return null;
+}
+
+const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const UNKNOWN_STATUS_DETAIL =
+  "Task status is locale-dependent and no numeric Last Run Result was available.";
+
+export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
+  status: GatewayServiceRuntime["status"];
+  detail?: string;
+} {
+  const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
+  if (normalizedResult != null) {
+    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
+      return { status: "running" };
+    }
+    return {
+      status: "stopped",
+      detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
+    };
+  }
+  if (parsed.status?.trim()) {
+    return { status: "unknown", detail: UNKNOWN_STATUS_DETAIL };
+  }
+  return { status: "unknown" };
+}
+
 function buildTaskScript({
   description,
   programArguments,
@@ -150,6 +197,9 @@ function buildTaskScript({
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
       if (!value) {
+        continue;
+      }
+      if (key.toUpperCase() === "PATH") {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
@@ -307,12 +357,12 @@ export async function readScheduledTaskRuntime(
     };
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
-  const statusRaw = parsed.status?.toLowerCase();
-  const status = statusRaw === "running" ? "running" : statusRaw ? "stopped" : "unknown";
+  const derived = deriveScheduledTaskRuntimeStatus(parsed);
   return {
-    status,
+    status: derived.status,
     state: parsed.status,
     lastRunTime: parsed.lastRunTime,
     lastRunResult: parsed.lastRunResult,
+    ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }

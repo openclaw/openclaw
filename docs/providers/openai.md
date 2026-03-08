@@ -10,6 +10,7 @@ title: "OpenAI"
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
+OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 
@@ -29,9 +30,12 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```json5
 {
   env: { OPENAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
 }
 ```
+
+OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
+OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -52,9 +56,12 @@ openclaw models auth login --provider openai-codex
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
 }
 ```
+
+OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
+maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
 ### Transport default
 
@@ -71,13 +78,18 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
 For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
 default (`openaiWsWarmup: true`) when WebSocket transport is used.
 
+Related OpenAI docs:
+
+- [Realtime API with WebSocket](https://platform.openai.com/docs/guides/realtime-websocket)
+- [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
+
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "openai-codex/gpt-5.3-codex" },
+      model: { primary: "openai-codex/gpt-5.4" },
       models: {
-        "openai-codex/gpt-5.3-codex": {
+        "openai-codex/gpt-5.4": {
           params: {
             transport: "auto",
           },
@@ -100,7 +112,7 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.4": {
           params: {
             openaiWsWarmup: false,
           },
@@ -118,7 +130,7 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.4": {
           params: {
             openaiWsWarmup: true,
           },
@@ -128,6 +140,30 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
   },
 }
 ```
+
+### OpenAI priority processing
+
+OpenAI's API exposes priority processing via `service_tier=priority`. In
+OpenClaw, set `agents.defaults.models["openai/<model>"].params.serviceTier` to
+pass that field through on direct `openai/*` Responses requests.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            serviceTier: "priority",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Supported values are `auto`, `default`, `flex`, and `priority`.
 
 ### OpenAI Responses server-side compaction
 
@@ -151,7 +187,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "azure-openai-responses/gpt-4o": {
+        "azure-openai-responses/gpt-5.4": {
           params: {
             responsesServerCompaction: true,
           },
@@ -169,7 +205,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.4": {
           params: {
             responsesServerCompaction: true,
             responsesCompactThreshold: 120000,
@@ -188,7 +224,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.4": {
           params: {
             responsesServerCompaction: false,
           },

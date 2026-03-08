@@ -1,10 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import "./doctor.fast-path-mocks.js";
+
+vi.doUnmock("./doctor-state-integrity.js");
+
+let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
+  beforeAll(async () => {
+    ({ doctorCommand } = await import("./doctor.js"));
+  });
+
   it("warns when the state directory is missing", async () => {
     mockDoctorConfigSnapshot();
 
@@ -13,7 +22,6 @@ describe("doctor command", () => {
     process.env.OPENCLAW_STATE_DIR = missingDir;
     note.mockClear();
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
       workspaceSuggestions: false,
@@ -22,7 +30,7 @@ describe("doctor command", () => {
     const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
-  }, 30_000);
+  });
 
   it("warns about opencode provider overrides", async () => {
     mockDoctorConfigSnapshot({
@@ -38,7 +46,6 @@ describe("doctor command", () => {
       },
     });
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
       workspaceSuggestions: false,
@@ -63,7 +70,6 @@ describe("doctor command", () => {
     note.mockClear();
 
     try {
-      const { doctorCommand } = await import("./doctor.js");
       await doctorCommand(createDoctorRuntime(), {
         nonInteractive: true,
         workspaceSuggestions: false,
@@ -80,5 +86,34 @@ describe("doctor command", () => {
       String(message).includes("Gateway auth is off or missing a token"),
     );
     expect(warned).toBe(false);
+  });
+
+  it("warns when token and password are both configured and gateway.auth.mode is unset", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            token: "token-value",
+            password: "password-value", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    note.mockClear();
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
+    expect(gatewayAuthNote).toBeTruthy();
+    expect(String(gatewayAuthNote?.[0])).toContain("gateway.auth.mode is unset");
+    expect(String(gatewayAuthNote?.[0])).toContain("openclaw config set gateway.auth.mode token");
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "openclaw config set gateway.auth.mode password",
+    );
   });
 });

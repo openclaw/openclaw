@@ -10,10 +10,13 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
+const imageCreateMock = vi.hoisted(() => vi.fn());
 const imageGetMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
+
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -36,7 +39,30 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+import {
+  downloadImageFeishu,
+  downloadMessageResourceFeishu,
+  sanitizeFileNameForUpload,
+  sendMediaFeishu,
+} from "./media.js";
+
+function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
+  expect(pathValue).not.toContain(key);
+  expect(pathValue).not.toContain("..");
+
+  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const resolved = path.resolve(pathValue);
+  const rel = path.relative(tmpRoot, resolved);
+  expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+}
+
+function expectMediaTimeoutClientConfigured(): void {
+  expect(createFeishuClientMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+    }),
+  );
+}
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
@@ -60,6 +86,7 @@ describe("sendMediaFeishu msg_type routing", () => {
           create: fileCreateMock,
         },
         image: {
+          create: imageCreateMock,
           get: imageGetMock,
         },
         message: {
@@ -75,6 +102,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     fileCreateMock.mockResolvedValue({
       code: 0,
       data: { file_key: "file_key_1" },
+    });
+    imageCreateMock.mockResolvedValue({
+      code: 0,
+      data: { image_key: "image_key_1" },
     });
 
     messageCreateMock.mockResolvedValue({
@@ -98,7 +129,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
   });
 
-  it("uses msg_type=file for mp4", async () => {
+  it("uses msg_type=media for mp4 video", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -114,7 +145,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
   });
@@ -161,7 +192,23 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=file when replying with mp4", async () => {
+  it("configures the media client timeout for image uploads", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    expectMediaTimeoutClientConfigured();
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "image" }),
+      }),
+    );
+  });
+
+  it("uses msg_type=media when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -173,7 +220,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
 
@@ -193,7 +240,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
+        data: expect.objectContaining({
+          msg_type: "media",
+          reply_in_thread: true,
+        }),
       }),
     );
   });
@@ -273,15 +323,15 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
+    expect(imageGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { image_key: imageKey },
+      }),
+    );
+    expectMediaTimeoutClientConfigured();
     expect(result.buffer).toEqual(Buffer.from("image-data"));
     expect(capturedPath).toBeDefined();
-    expect(capturedPath).not.toContain(imageKey);
-    expect(capturedPath).not.toContain("..");
-
-    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
-    const resolved = path.resolve(capturedPath as string);
-    const rel = path.relative(tmpRoot, resolved);
-    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
   });
 
   it("uses isolated temp paths for message resource downloads", async () => {
@@ -304,13 +354,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(result.buffer).toEqual(Buffer.from("resource-data"));
     expect(capturedPath).toBeDefined();
-    expect(capturedPath).not.toContain(fileKey);
-    expect(capturedPath).not.toContain("..");
-
-    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
-    const resolved = path.resolve(capturedPath as string);
-    const rel = path.relative(tmpRoot, resolved);
-    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expectPathIsolatedToTmpRoot(capturedPath as string, fileKey);
   });
 
   it("rejects invalid image keys before calling feishu api", async () => {
@@ -335,6 +379,104 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).rejects.toThrow("invalid file_key");
 
     expect(messageResourceGetMock).not.toHaveBeenCalled();
+  });
+
+  it("encodes Chinese filenames for file uploads", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "测试文档.pdf",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(createCall.data.file_name).not.toBe("测试文档.pdf");
+    expect(createCall.data.file_name).toBe(encodeURIComponent("测试文档") + ".pdf");
+  });
+
+  it("preserves ASCII filenames unchanged for file uploads", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "report-2026.pdf",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(createCall.data.file_name).toBe("report-2026.pdf");
+  });
+
+  it("encodes special characters (em-dash, full-width brackets) in filenames", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "报告—详情（2026）.md",
+    });
+
+    const createCall = fileCreateMock.mock.calls[0][0];
+    expect(createCall.data.file_name).toMatch(/\.md$/);
+    expect(createCall.data.file_name).not.toContain("—");
+    expect(createCall.data.file_name).not.toContain("（");
+  });
+});
+
+describe("sanitizeFileNameForUpload", () => {
+  it("returns ASCII filenames unchanged", () => {
+    expect(sanitizeFileNameForUpload("report.pdf")).toBe("report.pdf");
+    expect(sanitizeFileNameForUpload("my-file_v2.txt")).toBe("my-file_v2.txt");
+  });
+
+  it("encodes Chinese characters in basename, preserves extension", () => {
+    const result = sanitizeFileNameForUpload("测试文件.md");
+    expect(result).toBe(encodeURIComponent("测试文件") + ".md");
+    expect(result).toMatch(/\.md$/);
+  });
+
+  it("encodes em-dash and full-width brackets", () => {
+    const result = sanitizeFileNameForUpload("文件—说明（v2）.pdf");
+    expect(result).toMatch(/\.pdf$/);
+    expect(result).not.toContain("—");
+    expect(result).not.toContain("（");
+    expect(result).not.toContain("）");
+  });
+
+  it("encodes single quotes and parentheses per RFC 5987", () => {
+    const result = sanitizeFileNameForUpload("文件'(test).txt");
+    expect(result).toContain("%27");
+    expect(result).toContain("%28");
+    expect(result).toContain("%29");
+    expect(result).toMatch(/\.txt$/);
+  });
+
+  it("handles filenames without extension", () => {
+    const result = sanitizeFileNameForUpload("测试文件");
+    expect(result).toBe(encodeURIComponent("测试文件"));
+  });
+
+  it("handles mixed ASCII and non-ASCII", () => {
+    const result = sanitizeFileNameForUpload("Report_报告_2026.xlsx");
+    expect(result).toMatch(/\.xlsx$/);
+    expect(result).not.toContain("报告");
+  });
+
+  it("encodes non-ASCII extensions", () => {
+    const result = sanitizeFileNameForUpload("报告.文档");
+    expect(result).toContain("%E6%96%87%E6%A1%A3");
+    expect(result).not.toContain("文档");
+  });
+
+  it("encodes emoji filenames", () => {
+    const result = sanitizeFileNameForUpload("report_😀.txt");
+    expect(result).toContain("%F0%9F%98%80");
+    expect(result).toMatch(/\.txt$/);
+  });
+
+  it("encodes mixed ASCII and non-ASCII extensions", () => {
+    const result = sanitizeFileNameForUpload("notes_总结.v测试");
+    expect(result).toContain("notes_");
+    expect(result).toContain("%E6%B5%8B%E8%AF%95");
+    expect(result).not.toContain("测试");
   });
 });
 
@@ -372,10 +514,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
-      params: { type: "file" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
+        params: { type: "file" },
+      }),
+    );
+    expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 
@@ -389,10 +534,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_img_msg", file_key: "img_key_1" },
-      params: { type: "image" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_img_msg", file_key: "img_key_1" },
+        params: { type: "image" },
+      }),
+    );
+    expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 });

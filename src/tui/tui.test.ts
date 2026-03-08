@@ -23,6 +23,16 @@ describe("resolveFinalAssistantText", () => {
       }),
     ).toBe("All done");
   });
+
+  it("falls back to formatted error text when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
+      }),
+    ).toContain("HTTP 401");
+  });
 });
 
 describe("tui slash commands", () => {
@@ -73,6 +83,27 @@ describe("resolveTuiSessionKey", () => {
         sessionMainKey: "agent:main:main",
       }),
     ).toBe("agent:ops:incident");
+  });
+
+  it("lowercases session keys with uppercase characters", () => {
+    // Uppercase in agent-prefixed form
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:main:Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+    // Uppercase in bare form (prefixed by currentAgentId)
+    expect(
+      resolveTuiSessionKey({
+        raw: "Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
   });
 });
 

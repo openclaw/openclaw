@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { ExtensionChannelConfig } from "../../config/types.channels.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget, resolveTelegramTargetChatType } from "../../telegram/targets.js";
@@ -204,7 +205,7 @@ export function resolveOutboundTarget(params: {
           accountId: params.accountId ?? undefined,
         })
       : undefined);
-  const allowFrom = allowFromRaw?.map((entry) => String(entry));
+  const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
 
   // Fall back to per-channel defaultTo when no explicit target is provided.
   const configDefaultTo =
@@ -506,9 +507,7 @@ function resolveHeartbeatSenderId(params: {
     provider && lastTo ? `${provider}:${lastTo}` : undefined,
   ].filter((val): val is string => Boolean(val?.trim()));
 
-  const allowList = allowFrom
-    .map((entry) => String(entry))
-    .filter((entry) => entry && entry !== "*");
+  const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
     return candidates[0] ?? "heartbeat";
   }
@@ -546,7 +545,7 @@ export function resolveHeartbeatSenderContext(params: {
         accountId,
       }) ?? [])
     : [];
-  const allowFrom = allowFromRaw.map((entry) => String(entry));
+  const allowFrom = mapAllowFromEntries(allowFromRaw);
 
   const sender = resolveHeartbeatSenderId({
     allowFrom,

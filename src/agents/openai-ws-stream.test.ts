@@ -396,7 +396,7 @@ describe("convertMessagesToInputItems", () => {
       ["Let me run that."],
       [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
     );
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     // Should produce a text message and a function_call item
@@ -421,6 +421,41 @@ describe("convertMessagesToInputItems", () => {
       type: "function_call_output",
       call_id: "call_1",
       output: "file.txt",
+    });
+  });
+
+  it("drops tool result messages with empty tool call id", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolCallId: "   ",
+      toolName: "test_tool",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toEqual([]);
+  });
+
+  it("falls back to toolUseId when toolCallId is missing", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolUseId: "call_from_tool_use",
+      toolName: "test_tool",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_from_tool_use",
+      output: "ok",
     });
   });
 
@@ -452,6 +487,14 @@ describe("convertMessagesToInputItems", () => {
     >[0]);
     expect(items).toHaveLength(1);
     expect(items[0]?.type).toBe("function_call");
+  });
+
+  it("drops assistant tool calls with empty ids", () => {
+    const msg = assistantMsg([], [{ id: "   ", name: "read", args: { path: "/tmp/a" } }]);
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toEqual([]);
   });
 
   it("skips thinking blocks in assistant messages", () => {
@@ -591,6 +634,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-tools");
+    releaseWsSession("sess-store-default");
+    releaseWsSession("sess-store-compat");
+    releaseWsSession("sess-max-tokens-zero");
   });
 
   it("connects to the WebSocket on first call", async () => {
@@ -646,6 +692,73 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.type).toBe("response.create");
     expect(sent.model).toBe("gpt-5.2");
     expect(Array.isArray(sent.input)).toBe(true);
+  });
+
+  it("includes store:false by default", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-default");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_store_default", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.store).toBe(false);
+  });
+
+  it("omits store when compat.supportsStore is false (#39086)", async () => {
+    releaseWsSession("sess-store-compat");
+    const noStoreModel = {
+      ...modelStub,
+      compat: { supportsStore: false },
+    };
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-compat");
+    const stream = streamFn(
+      noStoreModel as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_no_store", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("store");
   });
 
   it("emits an AssistantMessage on response.completed", async () => {
@@ -894,6 +1007,36 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.type).toBe("response.create");
     expect(sent.temperature).toBe(0.3);
     expect(sent.max_output_tokens).toBe(256);
+  });
+
+  it("forwards maxTokens: 0 to response.create as max_output_tokens", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-max-tokens-zero");
+    const opts = { maxTokens: 0 };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-max-zero", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.max_output_tokens).toBe(0);
   });
 
   it("forwards reasoningEffort/reasoningSummary to response.create reasoning block", async () => {

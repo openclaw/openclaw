@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -35,8 +36,10 @@ import {
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -46,9 +49,20 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import {
   mergeSessionEntry,
   parseSessionThreadInfo,
@@ -77,7 +91,7 @@ import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
-import type { AgentCommandOpts } from "./agent/types.js";
+import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -145,6 +159,80 @@ function prependInternalEventContext(
   return [renderedEvents, body].filter(Boolean).join("\n\n");
 }
 
+function createAcpVisibleTextAccumulator() {
+  let pendingSilentPrefix = "";
+  let visibleText = "";
+  const startsWithWordChar = (chunk: string): boolean => /^[\p{L}\p{N}]/u.test(chunk);
+
+  const resolveNextCandidate = (base: string, chunk: string): string => {
+    if (!base) {
+      return chunk;
+    }
+    if (
+      isSilentReplyText(base, SILENT_REPLY_TOKEN) &&
+      !chunk.startsWith(base) &&
+      startsWithWordChar(chunk)
+    ) {
+      return chunk;
+    }
+    // Some ACP backends emit cumulative snapshots even on text_delta-style hooks.
+    // Accept those only when they strictly extend the buffered text.
+    if (chunk.startsWith(base) && chunk.length > base.length) {
+      return chunk;
+    }
+    return `${base}${chunk}`;
+  };
+
+  const mergeVisibleChunk = (base: string, chunk: string): { text: string; delta: string } => {
+    if (!base) {
+      return { text: chunk, delta: chunk };
+    }
+    if (chunk.startsWith(base) && chunk.length > base.length) {
+      const delta = chunk.slice(base.length);
+      return { text: chunk, delta };
+    }
+    return {
+      text: `${base}${chunk}`,
+      delta: chunk,
+    };
+  };
+
+  return {
+    consume(chunk: string): { text: string; delta: string } | null {
+      if (!chunk) {
+        return null;
+      }
+
+      if (!visibleText) {
+        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+        const trimmedLeadCandidate = leadCandidate.trim();
+        if (
+          isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
+          isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
+        ) {
+          pendingSilentPrefix = leadCandidate;
+          return null;
+        }
+        if (pendingSilentPrefix) {
+          pendingSilentPrefix = "";
+          visibleText = leadCandidate;
+          return {
+            text: visibleText,
+            delta: leadCandidate,
+          };
+        }
+      }
+
+      const nextVisible = mergeVisibleChunk(visibleText, chunk);
+      visibleText = nextVisible.text;
+      return nextVisible.delta ? nextVisible : null;
+    },
+    finalize(): string {
+      return visibleText.trim();
+    },
+  };
+}
+
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
@@ -160,7 +248,7 @@ function runAgentAttempt(params: {
   resolvedThinkLevel: ThinkLevel;
   timeoutMs: number;
   runId: string;
-  opts: AgentCommandOpts;
+  opts: AgentCommandOpts & { senderIsOwner: boolean };
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
@@ -171,32 +259,41 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  allowTransientCooldownProbe?: boolean;
 }) {
-  const senderIsOwner = params.opts.senderIsOwner ?? true;
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
   });
+  const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+    params.sessionEntry?.systemPromptReport,
+  );
+  const bootstrapPromptWarningSignature =
+    bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
-    return runCliAgent({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      prompt: effectivePrompt,
-      provider: params.providerOverride,
-      model: params.modelOverride,
-      thinkLevel: params.resolvedThinkLevel,
-      timeoutMs: params.timeoutMs,
-      runId: params.runId,
-      extraSystemPrompt: params.opts.extraSystemPrompt,
-      cliSessionId,
-      images: params.isFallbackRetry ? undefined : params.opts.images,
-      streamParams: params.opts.streamParams,
-    }).catch(async (err) => {
+    const runCliWithSession = (nextCliSessionId: string | undefined) =>
+      runCliAgent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+        sessionFile: params.sessionFile,
+        workspaceDir: params.workspaceDir,
+        config: params.cfg,
+        prompt: effectivePrompt,
+        provider: params.providerOverride,
+        model: params.modelOverride,
+        thinkLevel: params.resolvedThinkLevel,
+        timeoutMs: params.timeoutMs,
+        runId: params.runId,
+        extraSystemPrompt: params.opts.extraSystemPrompt,
+        cliSessionId: nextCliSessionId,
+        bootstrapPromptWarningSignaturesSeen,
+        bootstrapPromptWarningSignature,
+        images: params.isFallbackRetry ? undefined : params.opts.images,
+        streamParams: params.opts.streamParams,
+      });
+    return runCliWithSession(cliSessionId).catch(async (err) => {
       // Handle CLI session expired error
       if (
         err instanceof FailoverError &&
@@ -237,24 +334,7 @@ function runAgentAttempt(params: {
         }
 
         // Retry with no session ID (will create a new session)
-        return runCliAgent({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.sessionAgentId,
-          sessionFile: params.sessionFile,
-          workspaceDir: params.workspaceDir,
-          config: params.cfg,
-          prompt: effectivePrompt,
-          provider: params.providerOverride,
-          model: params.modelOverride,
-          thinkLevel: params.resolvedThinkLevel,
-          timeoutMs: params.timeoutMs,
-          runId: params.runId,
-          extraSystemPrompt: params.opts.extraSystemPrompt,
-          cliSessionId: undefined, // No session ID to force new session
-          images: params.isFallbackRetry ? undefined : params.opts.images,
-          streamParams: params.opts.streamParams,
-        }).then(async (result) => {
+        return runCliWithSession(undefined).then(async (result) => {
           // Update session store with new CLI session ID if available
           if (
             result.meta.agentMeta?.sessionId &&
@@ -295,6 +375,7 @@ function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
+    trigger: "user",
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
@@ -307,7 +388,7 @@ function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner,
+    senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
@@ -329,14 +410,16 @@ function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     onAgentEvent: params.onAgentEvent,
+    bootstrapPromptWarningSignaturesSeen,
+    bootstrapPromptWarningSignature,
   });
 }
 
-export async function agentCommand(
-  opts: AgentCommandOpts,
-  runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+async function prepareAgentCommandExecution(
+  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  runtime: RuntimeEnv,
 ) {
   const message = (opts.message ?? "").trim();
   if (!message) {
@@ -347,7 +430,34 @@ export async function agentCommand(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
+  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "agent",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
+  const normalizedSpawned = normalizeSpawnedRunMetadata({
+    spawnedBy: opts.spawnedBy,
+    groupId: opts.groupId,
+    groupChannel: opts.groupChannel,
+    groupSpace: opts.groupSpace,
+    workspaceDir: opts.workspaceDir,
+  });
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -418,7 +528,7 @@ export async function agentCommand(
   const {
     sessionId,
     sessionKey,
-    sessionEntry: resolvedSessionEntry,
+    sessionEntry: sessionEntryRaw,
     sessionStore,
     storePath,
     isNewSession,
@@ -436,14 +546,15 @@ export async function agentCommand(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Internal callers (for example subagent spawns) may pin workspace inheritance.
+  const workspaceDirRaw =
+    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
-  let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
@@ -452,6 +563,65 @@ export async function agentCommand(
         sessionKey,
       })
     : null;
+
+  return {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionEntry: sessionEntryRaw,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  };
+}
+
+async function agentCommandInternal(
+  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const {
+    body,
+    cfg,
+    normalizedSpawned,
+    agentCfg,
+    thinkOverride,
+    thinkOnce,
+    verboseOverride,
+    timeoutMs,
+    sessionId,
+    sessionKey,
+    sessionStore,
+    storePath,
+    isNewSession,
+    persistedThinking,
+    persistedVerbose,
+    sessionAgentId,
+    outboundSession,
+    workspaceDir,
+    agentDir,
+    runId,
+    acpManager,
+    acpResolution,
+  } = prepared;
+  let sessionEntry = prepared.sessionEntry;
 
   try {
     if (opts.deliver === true) {
@@ -485,7 +655,7 @@ export async function agentCommand(
         },
       });
 
-      let streamedText = "";
+      const visibleTextAccumulator = createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
         const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
@@ -521,13 +691,16 @@ export async function agentCommand(
             if (!event.text) {
               return;
             }
-            streamedText += event.text;
+            const visibleUpdate = visibleTextAccumulator.consume(event.text);
+            if (!visibleUpdate) {
+              return;
+            }
             emitAgentEvent({
               runId,
               stream: "assistant",
               data: {
-                text: streamedText,
-                delta: event.text,
+                text: visibleUpdate.text,
+                delta: visibleUpdate.delta,
               },
             });
           },
@@ -559,14 +732,10 @@ export async function agentCommand(
         },
       });
 
-      const finalText = streamedText.trim();
-      const payloads = finalText
-        ? [
-            {
-              text: finalText,
-            },
-          ]
-        : [];
+      const normalizedFinalPayload = normalizeReplyPayload({
+        text: visibleTextAccumulator.finalize(),
+      });
+      const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
         payloads,
         meta: {
@@ -815,7 +984,7 @@ export async function agentCommand(
         runContext.messageChannel,
         opts.replyChannel ?? opts.channel,
       );
-      const spawnedBy = opts.spawnedBy ?? sessionEntry?.spawnedBy;
+      const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
@@ -833,7 +1002,7 @@ export async function agentCommand(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride) => {
+        run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -861,6 +1030,7 @@ export async function agentCommand(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
@@ -878,6 +1048,10 @@ export async function agentCommand(
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       if (!lifecycleEnded) {
+        const stopReason = result.meta.stopReason;
+        if (stopReason && stopReason !== "end_turn") {
+          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+        }
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -886,6 +1060,7 @@ export async function agentCommand(
             startedAt,
             endedAt: Date.now(),
             aborted: result.meta.aborted ?? false,
+            stopReason,
           },
         });
       }
@@ -936,4 +1111,42 @@ export async function agentCommand(
   } finally {
     clearAgentRunContext(runId);
   }
+}
+
+export async function agentCommand(
+  opts: AgentCommandOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  return await agentCommandInternal(
+    {
+      ...opts,
+      // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+      // Ingress callers must opt into owner semantics explicitly via
+      // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
+      senderIsOwner: opts.senderIsOwner ?? true,
+    },
+    runtime,
+    deps,
+  );
+}
+
+export async function agentCommandFromIngress(
+  opts: AgentCommandIngressOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  if (typeof opts.senderIsOwner !== "boolean") {
+    // HTTP/WS ingress must declare the trust level explicitly at the boundary.
+    // This keeps network-facing callers from silently picking up the local trusted default.
+    throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
+  }
+  return await agentCommandInternal(
+    {
+      ...opts,
+      senderIsOwner: opts.senderIsOwner,
+    },
+    runtime,
+    deps,
+  );
 }

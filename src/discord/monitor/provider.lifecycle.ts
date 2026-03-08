@@ -1,6 +1,7 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { createArmableStallWatchdog } from "../../channels/transport/stall-watchdog.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -182,8 +183,7 @@ export async function runDiscordGatewayLifecycle(params: {
     let sawConnected = gateway?.isConnected === true;
     if (sawConnected) {
       pushStatus({
-        connected: true,
-        lastConnectedAt: at,
+        ...createConnectedChannelStatusPatch(at),
         lastDisconnect: null,
       });
     }
@@ -196,9 +196,7 @@ export async function runDiscordGatewayLifecycle(params: {
       const connectedAt = Date.now();
       reconnectStallWatchdog.disarm();
       pushStatus({
-        connected: true,
-        lastEventAt: connectedAt,
-        lastConnectedAt: connectedAt,
+        ...createConnectedChannelStatusPatch(connectedAt),
         lastDisconnect: null,
       });
       if (helloConnectedPollId) {
@@ -245,6 +243,20 @@ export async function runDiscordGatewayLifecycle(params: {
     }, HELLO_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
+
+  // If the gateway is already connected when the lifecycle starts (the
+  // "WebSocket connection opened" debug event was emitted before we
+  // registered the listener above), push the initial connected status now.
+  // Guard against lifecycleStopping: if the abortSignal was already aborted,
+  // onAbort() ran synchronously above and pushed connected: false — don't
+  // contradict it with a spurious connected: true.
+  if (gateway?.isConnected && !lifecycleStopping) {
+    const at = Date.now();
+    pushStatus({
+      ...createConnectedChannelStatusPatch(at),
+      lastDisconnect: null,
+    });
+  }
 
   let sawDisallowedIntents = false;
   const logGatewayError = (err: unknown) => {

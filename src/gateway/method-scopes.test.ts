@@ -4,11 +4,15 @@ import {
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("method scope resolution", () => {
-  it("classifies sessions.resolve as read and poll as write", () => {
+  it("classifies sessions.resolve + config.schema.lookup as read and poll as write", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.resolve")).toEqual([
+      "operator.read",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("config.schema.lookup")).toEqual([
       "operator.read",
     ]);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual(["operator.write"]);
@@ -25,6 +29,9 @@ describe("operator scope authorization", () => {
       allowed: true,
     });
     expect(authorizeOperatorScopesForMethod("health", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("config.schema.lookup", ["operator.read"])).toEqual({
       allowed: true,
     });
   });
@@ -54,6 +61,13 @@ describe("operator scope authorization", () => {
 describe("core gateway method classification", () => {
   it("classifies every exposed core gateway handler method", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
+      (method) => !isGatewayMethodClassified(method),
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  it("classifies every listed gateway method name", () => {
+    const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toEqual([]);

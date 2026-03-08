@@ -1,14 +1,19 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/msteams";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
+  applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
   inferPlaceholder,
   isRecord,
+  isUrlAllowed,
+  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
-  resolveAllowedHosts,
   resolveMediaSsrfPolicy,
+  resolveAttachmentFetchPolicy,
+  resolveRequestUrl,
+  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -239,8 +244,11 @@ export async function downloadMSTeamsGraphMedia(params: {
   if (!params.messageUrl || !params.tokenProvider) {
     return { media: [] };
   }
-  const allowHosts = resolveAllowedHosts(params.allowHosts);
-  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
+  const policy: MSTeamsAttachmentFetchPolicy = resolveAttachmentFetchPolicy({
+    allowHosts: params.allowHosts,
+    authAllowHosts: params.authAllowHosts,
+  });
+  const ssrfPolicy = resolveMediaSsrfPolicy(policy.allowHosts);
   const messageUrl = params.messageUrl;
   let accessToken: string;
   try {
@@ -286,38 +294,41 @@ export async function downloadMSTeamsGraphMedia(params: {
           try {
             // SharePoint URLs need to be accessed via Graph shares API
             const shareUrl = att.contentUrl!;
+            if (!isUrlAllowed(shareUrl, policy.allowHosts)) {
+              continue;
+            }
             const encodedUrl = Buffer.from(shareUrl).toString("base64url");
             const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
-            const spRes = await fetchFn(sharesUrl, {
-              headers: { Authorization: `Bearer ${accessToken}` },
-              redirect: "follow",
+            const media = await downloadAndStoreMSTeamsRemoteMedia({
+              url: sharesUrl,
+              filePathHint: name,
+              maxBytes: params.maxBytes,
+              contentTypeHint: "application/octet-stream",
+              preserveFilenames: params.preserveFilenames,
+              ssrfPolicy,
+              fetchImpl: async (input, init) => {
+                const requestUrl = resolveRequestUrl(input);
+                const headers = new Headers(init?.headers);
+                applyAuthorizationHeaderForUrl({
+                  headers,
+                  url: requestUrl,
+                  authAllowHosts: policy.authAllowHosts,
+                  bearerToken: accessToken,
+                });
+                return await safeFetchWithPolicy({
+                  url: requestUrl,
+                  policy,
+                  fetchFn,
+                  requestInit: {
+                    ...init,
+                    headers,
+                  },
+                });
+              },
             });
-
-            if (spRes.ok) {
-              const buffer = Buffer.from(await spRes.arrayBuffer());
-              if (buffer.byteLength <= params.maxBytes) {
-                const mime = await getMSTeamsRuntime().media.detectMime({
-                  buffer,
-                  headerMime: spRes.headers.get("content-type") ?? undefined,
-                  filePath: name,
-                });
-                const originalFilename = params.preserveFilenames ? name : undefined;
-                const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-                  buffer,
-                  mime ?? "application/octet-stream",
-                  "inbound",
-                  params.maxBytes,
-                  originalFilename,
-                );
-                sharePointMedia.push({
-                  path: saved.path,
-                  contentType: saved.contentType,
-                  placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
-                });
-                downloadedReferenceUrls.add(shareUrl);
-              }
-            }
+            sharePointMedia.push(media);
+            downloadedReferenceUrls.add(shareUrl);
           } catch {
             // Ignore SharePoint download failures.
           }
@@ -365,8 +376,8 @@ export async function downloadMSTeamsGraphMedia(params: {
     attachments: filteredAttachments,
     maxBytes: params.maxBytes,
     tokenProvider: params.tokenProvider,
-    allowHosts,
-    authAllowHosts: params.authAllowHosts,
+    allowHosts: policy.allowHosts,
+    authAllowHosts: policy.authAllowHosts,
     fetchFn: params.fetchFn,
     preserveFilenames: params.preserveFilenames,
   });

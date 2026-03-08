@@ -24,22 +24,7 @@ extension OnboardingView {
         Task { await self.onboardingWizard.cancelIfRunning() }
         self.preferredGatewayID = gateway.stableID
         GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
-
-        if self.state.remoteTransport == .direct {
-            if let url = GatewayDiscoveryHelpers.directUrl(for: gateway) {
-                self.state.remoteUrl = url
-            }
-        } else if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
-            let user = NSUserName()
-            self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
-                user: user,
-                host: host,
-                port: gateway.sshPort)
-            OpenClawConfigFile.setRemoteGatewayUrl(
-                host: gateway.serviceHost ?? host,
-                port: gateway.servicePort ?? gateway.gatewayPort)
-        }
-        self.state.remoteCliPath = gateway.cliPath ?? ""
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
 
         self.state.connectionMode = .remote
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)

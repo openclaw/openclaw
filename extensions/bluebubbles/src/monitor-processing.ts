@@ -1,12 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
   DM_GROUP_ACCESS_REASON,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   evictOldHistoryKeys,
+  issuePairingChallenge,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
+  mapAllowFromEntries,
   readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   resolveAckReaction,
@@ -14,7 +16,7 @@ import {
   resolveControlCommandGate,
   stripMarkdown,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/bluebubbles";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -43,6 +45,7 @@ import type {
 } from "./monitor-shared.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
@@ -508,7 +511,7 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configuredAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
+  const configuredAllowFrom = mapAllowFromEntries(account.config.allowFrom);
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "bluebubbles",
     accountId: account.accountId,
@@ -594,25 +597,24 @@ export async function processMessage(
     }
 
     if (accessDecision.decision === "pairing") {
-      const { code, created } = await pairing.upsertPairingRequest({
-        id: message.senderId,
+      await issuePairingChallenge({
+        channel: "bluebubbles",
+        senderId: message.senderId,
+        senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
         meta: { name: message.senderName },
-      });
-      runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=${created}`);
-      if (created) {
-        logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
-        try {
-          await sendMessageBlueBubbles(
-            message.senderId,
-            core.channel.pairing.buildPairingReply({
-              channel: "bluebubbles",
-              idLine: `Your BlueBubbles sender id: ${message.senderId}`,
-              code,
-            }),
-            { cfg: config, accountId: account.accountId },
-          );
+        upsertPairingRequest: pairing.upsertPairingRequest,
+        onCreated: () => {
+          runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
+          logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessageBlueBubbles(message.senderId, text, {
+            cfg: config,
+            accountId: account.accountId,
+          });
           statusSink?.({ lastOutboundAt: Date.now() });
-        } catch (err) {
+        },
+        onReplyError: (err) => {
           logVerbose(
             core,
             runtime,
@@ -621,8 +623,8 @@ export async function processMessage(
           runtime.error?.(
             `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
           );
-        }
-      }
+        },
+      });
       return;
     }
 
@@ -731,8 +733,8 @@ export async function processMessage(
   // surfacing dropped content (allowlist/mention/command gating).
   cacheInboundMessage();
 
-  const baseUrl = account.config.serverUrl?.trim();
-  const password = account.config.password?.trim();
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
   const maxBytes =
     account.config.mediaMaxMb && account.config.mediaMaxMb > 0
       ? account.config.mediaMaxMb * 1024 * 1024

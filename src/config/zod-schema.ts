@@ -107,6 +107,37 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const ResponsesEndpointUrlFetchShape = {
+  allowUrl: z.boolean().optional(),
+  urlAllowlist: z.array(z.string()).optional(),
+  allowedMimes: z.array(z.string()).optional(),
+  maxBytes: z.number().int().positive().optional(),
+  maxRedirects: z.number().int().nonnegative().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+};
+
+const SkillEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    env: z.record(z.string(), z.string()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+const PluginEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    hooks: z
+      .object({
+        allowPromptInjection: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -221,6 +252,19 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    cli: z
+      .object({
+        banner: z
+          .object({
+            taglineMode: z
+              .union([z.literal("random"), z.literal("default"), z.literal("off")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
@@ -240,6 +284,7 @@ export const OpenClawSchema = z
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
+        cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
@@ -260,6 +305,7 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
               .strict()
@@ -268,6 +314,7 @@ export const OpenClawSchema = z
               }),
           )
           .optional(),
+        extraArgs: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
@@ -365,6 +412,12 @@ export const OpenClawSchema = z
     media: z
       .object({
         preserveFilenames: z.boolean().optional(),
+        ttlHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24 * 7)
+          .optional(),
       })
       .strict()
       .optional(),
@@ -382,24 +435,15 @@ export const OpenClawSchema = z
             maxAttempts: z.number().int().min(0).max(10).optional(),
             backoffMs: z.array(z.number().int().nonnegative()).min(1).max(10).optional(),
             retryOn: z
-              .array(z.enum(["rate_limit", "network", "timeout", "server_error"]))
+              .array(z.enum(["rate_limit", "overloaded", "network", "timeout", "server_error"]))
               .min(1)
               .optional(),
           })
           .strict()
           .optional(),
         webhook: HttpUrlSchema.optional(),
-        webhookToken: z.string().optional().register(sensitive),
-        sessionRetention: z
-          .union([
-            z
-              .string()
-              .refine((v) => /^(\d+(?:\.\d+)?(?:ms|s|m|h|d))+$/.test(v.trim().toLowerCase()), {
-                message: "sessionRetention must be a valid duration (e.g. '1h30m', '7d')",
-              }),
-            z.literal(false),
-          ])
-          .optional(),
+        webhookToken: SecretInputSchema.optional().register(sensitive),
+        sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
         runLog: z
           .object({
             maxBytes: z
@@ -417,6 +461,17 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             after: z.number().int().min(1).optional(),
             cooldownMs: z.number().int().min(0).optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
+            accountId: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        failureDestination: z
+          .object({
+            channel: z.string().optional(),
+            to: z.string().optional(),
+            accountId: z.string().optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
           })
           .strict()
           .optional(),
@@ -497,7 +552,7 @@ export const OpenClawSchema = z
                 voiceAliases: z.record(z.string(), z.string()).optional(),
                 modelId: z.string().optional(),
                 outputFormat: z.string().optional(),
-                apiKey: z.string().optional().register(sensitive),
+                apiKey: SecretInputSchema.optional().register(sensitive),
               })
               .catchall(z.unknown()),
           )
@@ -506,7 +561,7 @@ export const OpenClawSchema = z
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
         outputFormat: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         interruptOnSpeech: z.boolean().optional(),
       })
       .strict()
@@ -545,8 +600,8 @@ export const OpenClawSchema = z
                 z.literal("trusted-proxy"),
               ])
               .optional(),
-            token: z.string().optional().register(sensitive),
-            password: z.string().optional().register(sensitive),
+            token: SecretInputSchema.optional().register(sensitive),
+            password: SecretInputSchema.optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
             rateLimit: z
               .object({
@@ -588,8 +643,8 @@ export const OpenClawSchema = z
           .object({
             url: z.string().optional(),
             transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-            token: z.string().optional().register(sensitive),
-            password: z.string().optional().register(sensitive),
+            token: SecretInputSchema.optional().register(sensitive),
+            password: SecretInputSchema.optional().register(sensitive),
             tlsFingerprint: z.string().optional(),
             sshTarget: z.string().optional(),
             sshIdentity: z.string().optional(),
@@ -626,6 +681,15 @@ export const OpenClawSchema = z
                 chatCompletions: z
                   .object({
                     enabled: z.boolean().optional(),
+                    maxBodyBytes: z.number().int().positive().optional(),
+                    maxImageParts: z.number().int().nonnegative().optional(),
+                    maxTotalImageBytes: z.number().int().positive().optional(),
+                    images: z
+                      .object({
+                        ...ResponsesEndpointUrlFetchShape,
+                      })
+                      .strict()
+                      .optional(),
                   })
                   .strict()
                   .optional(),
@@ -636,13 +700,8 @@ export const OpenClawSchema = z
                     maxUrlParts: z.number().int().nonnegative().optional(),
                     files: z
                       .object({
-                        allowUrl: z.boolean().optional(),
-                        urlAllowlist: z.array(z.string()).optional(),
-                        allowedMimes: z.array(z.string()).optional(),
-                        maxBytes: z.number().int().positive().optional(),
+                        ...ResponsesEndpointUrlFetchShape,
                         maxChars: z.number().int().positive().optional(),
-                        maxRedirects: z.number().int().nonnegative().optional(),
-                        timeoutMs: z.number().int().positive().optional(),
                         pdf: z
                           .object({
                             maxPages: z.number().int().positive().optional(),
@@ -656,12 +715,7 @@ export const OpenClawSchema = z
                       .optional(),
                     images: z
                       .object({
-                        allowUrl: z.boolean().optional(),
-                        urlAllowlist: z.array(z.string()).optional(),
-                        allowedMimes: z.array(z.string()).optional(),
-                        maxBytes: z.number().int().positive().optional(),
-                        maxRedirects: z.number().int().nonnegative().optional(),
-                        timeoutMs: z.number().int().positive().optional(),
+                        ...ResponsesEndpointUrlFetchShape,
                       })
                       .strict()
                       .optional(),
@@ -735,19 +789,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        entries: z
-          .record(
-            z.string(),
-            z
-              .object({
-                enabled: z.boolean().optional(),
-                apiKey: SecretInputSchema.optional().register(sensitive),
-                env: z.record(z.string(), z.string()).optional(),
-                config: z.record(z.string(), z.unknown()).optional(),
-              })
-              .strict(),
-          )
-          .optional(),
+        entries: z.record(z.string(), SkillEntrySchema).optional(),
       })
       .strict()
       .optional(),
@@ -765,20 +807,11 @@ export const OpenClawSchema = z
         slots: z
           .object({
             memory: z.string().optional(),
+            contextEngine: z.string().optional(),
           })
           .strict()
           .optional(),
-        entries: z
-          .record(
-            z.string(),
-            z
-              .object({
-                enabled: z.boolean().optional(),
-                config: z.record(z.string(), z.unknown()).optional(),
-              })
-              .strict(),
-          )
-          .optional(),
+        entries: z.record(z.string(), PluginEntrySchema).optional(),
         installs: z
           .record(
             z.string(),

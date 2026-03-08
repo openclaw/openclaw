@@ -20,7 +20,77 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
-export function buildReplyPayloads(params: {
+function hasPayloadMedia(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+async function normalizeReplyPayloadMedia(params: {
+  payload: ReplyPayload;
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+}): Promise<ReplyPayload> {
+  if (!params.normalizeMediaPaths || !hasPayloadMedia(params.payload)) {
+    return params.payload;
+  }
+
+  try {
+    return await params.normalizeMediaPaths(params.payload);
+  } catch (err) {
+    logVerbose(`reply payload media normalization failed: ${String(err)}`);
+    return {
+      ...params.payload,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    };
+  }
+}
+
+async function normalizeSentMediaUrlsForDedupe(params: {
+  sentMediaUrls: string[];
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+}): Promise<string[]> {
+  if (params.sentMediaUrls.length === 0 || !params.normalizeMediaPaths) {
+    return params.sentMediaUrls;
+  }
+
+  const normalizedUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of params.sentMediaUrls) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      normalizedUrls.push(trimmed);
+    }
+    try {
+      const normalized = await params.normalizeMediaPaths({
+        mediaUrl: trimmed,
+        mediaUrls: [trimmed],
+      });
+      const normalizedMediaUrls = normalized.mediaUrls?.length
+        ? normalized.mediaUrls
+        : normalized.mediaUrl
+          ? [normalized.mediaUrl]
+          : [];
+      for (const mediaUrl of normalizedMediaUrls) {
+        const candidate = mediaUrl.trim();
+        if (!candidate || seen.has(candidate)) {
+          continue;
+        }
+        seen.add(candidate);
+        normalizedUrls.push(candidate);
+      }
+    } catch (err) {
+      logVerbose(`messaging tool sent-media normalization failed: ${String(err)}`);
+    }
+  }
+
+  return normalizedUrls;
+}
+
+export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
   didLogHeartbeatStrip: boolean;
@@ -40,7 +110,8 @@ export function buildReplyPayloads(params: {
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
-}): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
+  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
     ? params.payloads
@@ -66,22 +137,27 @@ export function buildReplyPayloads(params: {
         return [{ ...payload, text: stripped.text }];
       });
 
-  const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
-    payloads: sanitizedPayloads,
-    replyToMode: params.replyToMode,
-    replyToChannel: params.replyToChannel,
-    currentMessageId: params.currentMessageId,
-  })
-    .map(
-      (payload) =>
-        normalizeReplyPayloadDirectives({
+  const replyTaggedPayloads = (
+    await Promise.all(
+      applyReplyThreading({
+        payloads: sanitizedPayloads,
+        replyToMode: params.replyToMode,
+        replyToChannel: params.replyToChannel,
+        currentMessageId: params.currentMessageId,
+      }).map(async (payload) => {
+        const parsed = normalizeReplyPayloadDirectives({
           payload,
           currentMessageId: params.currentMessageId,
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
-        }).payload,
+        }).payload;
+        return await normalizeReplyPayloadMedia({
+          payload: parsed,
+          normalizeMediaPaths: params.normalizeMediaPaths,
+        });
+      }),
     )
-    .filter(isRenderablePayload);
+  ).filter(isRenderablePayload);
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -105,21 +181,30 @@ export function buildReplyPayloads(params: {
       originatingAccountId: params.accountId,
     }),
   });
-  const currentProvider = resolvedMessageProvider?.trim().toLowerCase();
-  const hasSameTargetSend =
-    !currentProvider ||
-    messagingToolSentTargets.length === 0 ||
-    messagingToolSentTargets.some(
-      (target) => target?.provider?.trim().toLowerCase() === currentProvider,
-    );
-  const dedupedPayloads = filterMessagingToolDuplicates({
-    payloads: replyTaggedPayloads,
-    sentTexts: hasSameTargetSend ? messagingToolSentTexts : [],
-  });
-  const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-    payloads: dedupedPayloads,
-    sentMediaUrls: hasSameTargetSend ? (params.messagingToolSentMediaUrls ?? []) : [],
-  });
+  // Only dedupe against messaging tool sends for the same origin target.
+  // Cross-target sends (for example posting to another channel) must not
+  // suppress the current conversation's final reply.
+  // If target metadata is unavailable, keep legacy dedupe behavior.
+  const dedupeMessagingToolPayloads =
+    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
+    ? await normalizeSentMediaUrlsForDedupe({
+        sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      })
+    : (params.messagingToolSentMediaUrls ?? []);
+  const dedupedPayloads = dedupeMessagingToolPayloads
+    ? filterMessagingToolDuplicates({
+        payloads: replyTaggedPayloads,
+        sentTexts: messagingToolSentTexts,
+      })
+    : replyTaggedPayloads;
+  const mediaFilteredPayloads = dedupeMessagingToolPayloads
+    ? filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: messagingToolSentMediaUrls,
+      })
+    : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
