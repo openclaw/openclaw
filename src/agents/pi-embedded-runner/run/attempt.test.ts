@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
-  buildAfterTurnLegacyCompactionParams,
+  buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
@@ -638,9 +638,9 @@ describe("prependSystemPromptAddition", () => {
   });
 });
 
-describe("buildAfterTurnLegacyCompactionParams", () => {
+describe("buildAfterTurnRuntimeContext", () => {
   it("uses primary model when compaction.model is not set", () => {
-    const legacy = buildAfterTurnLegacyCompactionParams({
+    const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",
@@ -668,7 +668,7 @@ describe("buildAfterTurnLegacyCompactionParams", () => {
   });
 
   it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
-    const legacy = buildAfterTurnLegacyCompactionParams({
+    const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",
@@ -704,9 +704,8 @@ describe("buildAfterTurnLegacyCompactionParams", () => {
       model: "gpt-5.3-codex",
     });
   });
-
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
-    const legacy = buildAfterTurnLegacyCompactionParams({
+    const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",
