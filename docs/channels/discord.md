@@ -445,11 +445,13 @@ Example:
     Mention detection includes:
 
     - explicit bot mention
+    - optional Discord `@everyone`/`@here` activation when `everyoneMentionsBot: true`
     - configured mention patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot behavior in supported cases
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
+    `everyoneMentionsBot` optionally treats Discord `@everyone`/`@here` as explicit bot mentions. It defaults to `false` and can be set at the account, guild, or channel level.
 
     Group DMs:
 

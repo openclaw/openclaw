@@ -37,6 +37,11 @@ export type DiscordGuildChannelConfig = {
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /**
+   * If true, treat Discord @everyone/@here as an explicit mention of this bot in this channel.
+   * Default: false.
+   */
+  everyoneMentionsBot?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -64,6 +69,11 @@ export type DiscordGuildEntry = {
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /**
+   * If true, treat Discord @everyone/@here as an explicit mention of this bot in this guild.
+   * Default: false.
+   */
+  everyoneMentionsBot?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -224,6 +234,11 @@ export type DiscordAccountConfig = {
   proxy?: string;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
+  /**
+   * If true, treat Discord @everyone/@here as an explicit mention of this bot in guild channels.
+   * Guild/channel overrides can narrow this further. Default: false.
+   */
+  everyoneMentionsBot?: boolean;
   /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.

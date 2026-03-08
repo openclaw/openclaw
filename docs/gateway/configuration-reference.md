@@ -221,6 +221,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       token: "your-bot-token",
       mediaMaxMb: 8,
       allowBots: false,
+      everyoneMentionsBot: false,
       actions: {
         reactions: true,
         stickers: true,
@@ -308,6 +309,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
+- `channels.discord.everyoneMentionsBot` treats Discord `@everyone`/`@here` as explicit mentions of this bot for guild mention gating. It defaults to `false` and can be overridden per guild/channel.
 - `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:

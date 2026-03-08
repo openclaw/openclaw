@@ -24,6 +24,7 @@ export type DiscordGuildEntryResolved = {
   slug?: string;
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
+  everyoneMentionsBot?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
@@ -33,6 +34,7 @@ export type DiscordGuildEntryResolved = {
       allow?: boolean;
       requireMention?: boolean;
       ignoreOtherMentions?: boolean;
+      everyoneMentionsBot?: boolean;
       skills?: string[];
       enabled?: boolean;
       users?: string[];
@@ -48,6 +50,7 @@ export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
+  everyoneMentionsBot?: boolean;
   skills?: string[];
   enabled?: boolean;
   users?: string[];
@@ -394,6 +397,7 @@ function resolveDiscordChannelConfigEntry(
     allowed: entry.allow !== false,
     requireMention: entry.requireMention,
     ignoreOtherMentions: entry.ignoreOtherMentions,
+    everyoneMentionsBot: entry.everyoneMentionsBot,
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,

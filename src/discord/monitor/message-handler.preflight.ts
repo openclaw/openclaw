@@ -404,14 +404,8 @@ export async function preflightDiscordMessage(
     return null;
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  const explicitlyMentioned = Boolean(
+  const explicitUserMention = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
-  );
-  const hasAnyMention = Boolean(
-    !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0 ||
-      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
   );
   const hasUserOrRoleMention = Boolean(
     !isDirectMessage &&
@@ -484,7 +478,7 @@ export async function preflightDiscordMessage(
   const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
   if (shouldLogVerbose()) {
     const channelConfigSummary = channelConfig
-      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} ignoreOtherMentions=${channelConfig.ignoreOtherMentions ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
+      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} ignoreOtherMentions=${channelConfig.ignoreOtherMentions ?? "unset"} everyoneMentionsBot=${channelConfig.everyoneMentionsBot ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
       : "none";
     logDebug(
       `[discord-preflight] channelConfig=${channelConfigSummary} channelMatchMeta=${channelMatchMeta} channelId=${messageChannelId}`,
@@ -509,6 +503,24 @@ export async function preflightDiscordMessage(
   if (isGroupDm && !groupDmAllowed) {
     return null;
   }
+
+  const everyoneMentionsBot = Boolean(
+    isGuildMessage &&
+    (channelConfig?.everyoneMentionsBot ??
+      guildInfo?.everyoneMentionsBot ??
+      params.discordConfig.everyoneMentionsBot ??
+      false),
+  );
+  const everyoneExplicitMention = Boolean(
+    everyoneMentionsBot && message.mentionedEveryone && (!author.bot || sender.isPluralKit),
+  );
+  const explicitlyMentioned = Boolean(explicitUserMention || everyoneExplicitMention);
+  const hasAnyMention = Boolean(
+    !isDirectMessage &&
+    ((message.mentionedUsers?.length ?? 0) > 0 ||
+      (message.mentionedRoles?.length ?? 0) > 0 ||
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+  );
 
   const channelAllowlistConfigured =
     Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
