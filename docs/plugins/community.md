@@ -34,6 +34,13 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Listed plugins
+
+- **Scientify** — AI-powered research workflow automation: 6-phase pipeline (literature survey → deep analysis → implementation plan → code → review → experiments), with arXiv/OpenAlex/GitHub search tools and persistent workspace management.
+  npm: `scientify`
+  repo: `https://github.com/tsingyuai/scientify`
+  install: `openclaw plugins install scientify`
+
 ## Candidate format
 
 Use this format when adding entries:
