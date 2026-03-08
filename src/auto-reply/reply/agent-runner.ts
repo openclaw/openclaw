@@ -218,6 +218,13 @@ export async function runReplyAgent(params: {
   if (activeRunQueueAction === "enqueue-followup") {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
+    // Notify callers that the message was queued (not dropped) so channels
+    // can provide user-visible feedback (e.g., ⏳ reaction).
+    try {
+      await opts?.onQueued?.();
+    } catch {
+      // Non-critical — don't let notification failures block the queue path.
+    }
     typing.cleanup();
     return undefined;
   }

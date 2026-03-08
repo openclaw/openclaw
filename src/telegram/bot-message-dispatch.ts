@@ -678,6 +678,13 @@ export const dispatchTelegramMessage = async ({
               await statusReactionController.setTool(payload.name);
             }
           : undefined,
+        onQueued: statusReactionController
+          ? async () => {
+              // When the message is queued (agent busy), show a distinct "queued"
+              // emoji so the user knows the message was received and is waiting.
+              await statusReactionController.setQueued();
+            }
+          : undefined,
         onModelSelected,
       },
     }));
