@@ -346,7 +346,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
   });
 
-  it("probes billing-cooldowned primary when no fallback candidates exist", async () => {
+  it("skips billing-cooldowned primary when no fallback candidates exist", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -363,54 +363,15 @@ describe("runWithModelFallback – probe logic", () => {
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
     mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
 
-    const run = vi.fn().mockResolvedValue("billing-recovered");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      fallbacksOverride: [],
-      run,
-    });
-
-    expect(result.result).toBe("billing-recovered");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
-      allowTransientCooldownProbe: true,
-    });
-  });
-
-  it("throttles billing probe for single-candidate at 30s intervals", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: [],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
-
-    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
-    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
-
-    // Simulate a recent probe 10s ago
-    _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
-
-    const run = vi.fn().mockResolvedValue("unreachable");
-
     await expect(
       runWithModelFallback({
         cfg,
         provider: "openai",
         model: "gpt-4.1-mini",
         fallbacksOverride: [],
-        run,
+        run: vi.fn().mockResolvedValue("billing-recovered"),
       }),
     ).rejects.toThrow("All models failed");
-
-    expect(run).not.toHaveBeenCalled();
   });
 
   it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {

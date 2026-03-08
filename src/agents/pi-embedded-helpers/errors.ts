@@ -277,6 +277,10 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
     return "billing";
   }
 
+  if (isRateLimitErrorMessage(normalized)) {
+    return "rate_limit";
+  }
+
   if (hasRetryable402TransientSignal(normalized)) {
     return "rate_limit";
   }

@@ -226,6 +226,21 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
+  it("keeps explicit 402 rate-limit wrappers aligned with status-split payloads", () => {
+    const message = "rate limit exceeded";
+    expect(
+      resolveFailoverReasonFromError({
+        message: `HTTP 402 Payment Required: ${message}`,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message,
+      }),
+    ).toBe("rate_limit");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({

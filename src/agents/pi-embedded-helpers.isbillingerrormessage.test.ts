@@ -571,6 +571,14 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReason(`402 Payment Required: ${billingMessage}`)).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, billingMessage)).toBe("billing");
   });
+
+  it("keeps explicit 402 rate-limit messages in the rate_limit lane", () => {
+    const transientMessage = "rate limit exceeded";
+    expect(classifyFailoverReason(`HTTP 402 Payment Required: ${transientMessage}`)).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(402, transientMessage)).toBe("rate_limit");
+  });
 });
 
 describe("classifyFailoverReason", () => {

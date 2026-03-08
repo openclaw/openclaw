@@ -429,19 +429,12 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Without fallback candidates, skipping is
-  // guaranteed failure so we attempt (throttled). With fallbacks, probe the
-  // primary when the standard probe schedule allows.
+  // 402 might have been misclassified. Probe the primary only when fallbacks
+  // exist; otherwise repeated single-provider probes just churn the disabled
+  // auth state without opening any recovery path.
   if (inferredReason === "billing") {
-    if (params.isPrimary) {
-      if (!params.hasFallbackCandidates) {
-        const lastProbe = lastProbeAttempt.get(params.probeThrottleKey) ?? 0;
-        if (params.now - lastProbe >= MIN_PROBE_INTERVAL_MS) {
-          return { type: "attempt", reason: inferredReason, markProbe: true };
-        }
-      } else if (shouldProbe) {
-        return { type: "attempt", reason: inferredReason, markProbe: true };
-      }
+    if (params.isPrimary && params.hasFallbackCandidates && shouldProbe) {
+      return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
       type: "skip",
