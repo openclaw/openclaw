@@ -12,6 +12,11 @@ export {
   uploadStickerDiscord,
 } from "./send.emojis-stickers.js";
 export {
+  fetchCurrentUserDiscord,
+  updateCurrentUserAvatarDiscord,
+  updateSelfNicknameDiscord,
+} from "./send.profile.js";
+export {
   addRoleDiscord,
   banMemberDiscord,
   createScheduledEventDiscord,

@@ -54,4 +54,28 @@ describe("message action sandbox media hydration", () => {
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
   });
+
+  it("normalizes avatar alias paths in sandbox mode", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-"));
+    try {
+      const avatarPath = path.join(sandboxRoot, "avatar.png");
+      await fs.writeFile(avatarPath, "png", "utf8");
+
+      const args: Record<string, unknown> = {
+        avatar: "/workspace/avatar.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+      });
+
+      expect(args.avatar).toBe(avatarPath);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
 });

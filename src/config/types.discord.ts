@@ -97,6 +97,8 @@ export type DiscordActionConfig = {
   channels?: boolean;
   /** Enable bot presence/activity changes (default: false). */
   presence?: boolean;
+  /** Enable self-only bot profile updates (nickname/avatar/status/activity). Default: false. */
+  selfProfile?: boolean;
 };
 
 export type DiscordIntentsConfig = {
