@@ -594,6 +594,18 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
   });
+
+  test("prefers external displayName over entry.displayName", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName: "Entry Display Name",
+      subject: "Group Chat",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, undefined, "External Display Name")).toBe(
+      "External Display Name",
+    );
+  });
 });
 
 describe("listSessionsFromStore search", () => {
