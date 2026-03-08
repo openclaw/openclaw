@@ -38,6 +38,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
+import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
@@ -375,6 +376,20 @@ export async function compactEmbeddedPiSessionDirect(
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
+    // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
+    // threshold uses the effective limit, not the native context window.
+    const ctxInfo = resolveContextWindowInfo({
+      cfg: params.config,
+      provider,
+      modelId,
+      modelContextWindow: model.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    const effectiveModel =
+      ctxInfo.tokens < (model.contextWindow ?? Infinity)
+        ? { ...model, contextWindow: ctxInfo.tokens }
+        : model;
+
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
       exec: {
@@ -397,10 +412,13 @@ export async function compactEmbeddedPiSessionDirect(
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
       modelId,
-      modelContextWindowTokens: model.contextWindow,
+      modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const tools = sanitizeToolsForGoogle({
+      tools: supportsModelTools(model) ? toolsRaw : [],
+      provider,
+    });
     const allowedToolNames = collectAllowedToolNames({ tools });
     logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
@@ -590,7 +608,7 @@ export async function compactEmbeddedPiSessionDirect(
         agentDir,
         authStorage,
         modelRegistry,
-        model,
+        model: effectiveModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,

@@ -473,6 +473,9 @@ export async function sendMessageTelegram(
     verbose: opts.verbose,
   });
   const mediaUrl = opts.mediaUrl?.trim();
+  const mediaMaxBytes =
+    opts.maxBytes ??
+    (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const threadParams = buildTelegramThreadReplyParams({
@@ -563,7 +566,7 @@ export async function sendMessageTelegram(
     const media = await loadWebMedia(
       mediaUrl,
       buildOutboundMediaLoadOptions({
-        maxBytes: opts.maxBytes,
+        maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
       }),
     );
@@ -573,7 +576,8 @@ export async function sendMessageTelegram(
       fileName: media.fileName,
     });
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
-    const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
+    const fileName =
+      media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
     const file = new InputFile(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;

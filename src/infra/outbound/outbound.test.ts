@@ -113,6 +113,52 @@ describe("delivery-queue", () => {
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
     });
+
+    it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      await expect(ackDelivery(id, tmpDir)).resolves.toBeUndefined();
+
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("ack removes .delivered marker so recovery does not replay", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      await ackDelivery(id, tmpDir);
+
+      // Neither .json nor .delivered should remain.
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("loadPendingDeliveries cleans up stale .delivered markers without replaying", async () => {
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      // Simulate crash between ack phase 1 (rename) and phase 2 (unlink):
+      // rename .json → .delivered, then pretend the process died.
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+
+      const entries = await loadPendingDeliveries(tmpDir);
+
+      // The .delivered entry must NOT appear as pending.
+      expect(entries).toHaveLength(0);
+      // And the marker file should have been cleaned up.
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
   });
 
   describe("failDelivery", () => {

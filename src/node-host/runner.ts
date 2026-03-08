@@ -1,6 +1,6 @@
 import { resolveBrowserConfig } from "../browser/config.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { GatewayClient } from "../gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -12,8 +12,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -117,27 +116,17 @@ async function resolveNodeHostSecretInputString(params: {
   path: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const defaults = params.config.secrets?.defaults;
-  const { ref } = resolveSecretInputRef({
+  const resolvedValue = await resolveSecretInputString({
+    config: params.config,
     value: params.value,
-    defaults,
+    env: params.env,
+    onResolveRefError: (error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
+        cause: error,
+      });
+    },
   });
-  if (!ref) {
-    return normalizeSecretInputString(params.value);
-  }
-  let resolved: Map<string, unknown>;
-  try {
-    resolved = await resolveSecretRefValues([ref], {
-      config: params.config,
-      env: params.env,
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
-      cause: error,
-    });
-  }
-  const resolvedValue = normalizeSecretInputString(resolved.get(secretRefKey(ref)));
   if (!resolvedValue) {
     throw new Error(`${params.path} resolved to an empty or non-string value.`);
   }

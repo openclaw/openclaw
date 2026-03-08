@@ -54,11 +54,28 @@ describe("system run command helpers", () => {
         "echo hi",
       ]),
     ).toBe("echo hi");
+    expect(
+      extractShellCommandFromArgv([
+        "/usr/bin/env",
+        "/usr/bin/env",
+        "/usr/bin/env",
+        "/usr/bin/env",
+        "/bin/sh",
+        "-c",
+        "echo hi",
+      ]),
+    ).toBe("echo hi");
   });
 
   test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {
     expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
+    expect(extractShellCommandFromArgv(["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="])).toBe(
+      "ZQBjAGgAbwA=",
+    );
+    expect(extractShellCommandFromArgv(["powershell", "-enc", "ZQBjAGgAbwA="])).toBe(
+      "ZQBjAGgAbwA=",
+    );
   });
 
   test("extractShellCommandFromArgv unwraps busybox/toybox shell applets", () => {
