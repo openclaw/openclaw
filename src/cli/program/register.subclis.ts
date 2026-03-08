@@ -281,6 +281,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "sessions",
+    description: "Manage session transcripts and session store",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../sessions-cli.js");
+      mod.registerSessionsCli(program);
+    },
+  },
+  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,
