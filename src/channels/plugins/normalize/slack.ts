@@ -22,5 +22,5 @@ export function looksLikeSlackTargetId(raw: string): boolean {
   if (/^[@#]/.test(trimmed)) {
     return true;
   }
-  return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
+  return /^[CUWGDZ][A-Z0-9]{8,}$/i.test(trimmed);
 }
