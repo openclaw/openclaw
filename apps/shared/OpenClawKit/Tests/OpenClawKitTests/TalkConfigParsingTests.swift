@@ -66,6 +66,36 @@ struct TalkConfigParsingTests {
         #expect(selection == nil)
     }
 
+    @Test func rejectsNormalizedPayloadWhenProviderMissingFromProviders() {
+        let talk: [String: AnyCodable] = [
+            "provider": AnyCodable("acme"),
+            "providers": AnyCodable([
+                "elevenlabs": [
+                    "voiceId": "voice-normalized",
+                ],
+            ]),
+        ]
+
+        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
+        #expect(selection == nil)
+    }
+
+    @Test func rejectsNormalizedPayloadWhenMultipleProvidersAndNoProvider() {
+        let talk: [String: AnyCodable] = [
+            "providers": AnyCodable([
+                "acme": [
+                    "voiceId": "voice-acme",
+                ],
+                "elevenlabs": [
+                    "voiceId": "voice-eleven",
+                ],
+            ]),
+        ]
+
+        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
+        #expect(selection == nil)
+    }
+
     @Test func bridgesFoundationDictionary() {
         let raw: [String: Any] = [
             "provider": "elevenlabs",
