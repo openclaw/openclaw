@@ -13,7 +13,8 @@ struct AppStateRemoteConfigTests {
             remoteHost: "gateway.example",
             remoteTarget: "alice@gateway.example",
             remoteIdentity: "/tmp/id_ed25519",
-            remoteToken: "  secret-token  ")
+            remoteToken: "  secret-token  ",
+            remoteTokenDirty: true)
 
         #expect(remote["token"] as? String == "secret-token")
     }
@@ -27,49 +28,101 @@ struct AppStateRemoteConfigTests {
             remoteHost: nil,
             remoteTarget: "",
             remoteIdentity: "",
-            remoteToken: "   ")
+            remoteToken: "   ",
+            remoteTokenDirty: true)
 
         #expect((remote["token"] as? String) == nil)
     }
 
     @Test
-    func syncedGatewayRootPreservesTokenAcrossModeToggleAndClearsOnBlankRemoteToken() {
-        let remoteRoot = AppState._testSyncedGatewayRoot(
-            currentRoot: [:],
+    func syncedGatewayRootPreservesObjectTokenAcrossModeAndTransportChangesWhenUntouched() {
+        let initialRoot: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://old-gateway.example",
+                    "token": [
+                        "$secretRef": "gateway-token",
+                    ],
+                ],
+            ],
+        ]
+
+        let sshRoot = AppState._testSyncedGatewayRoot(
+            currentRoot: initialRoot,
             connectionMode: .remote,
-            remoteTransport: .direct,
-            remoteTarget: "",
+            remoteTransport: .ssh,
+            remoteTarget: "alice@gateway.example",
             remoteIdentity: "",
-            remoteUrl: "wss://gateway.example",
-            remoteToken: "  persisted-token  ")
-        let remoteGateway = remoteRoot["gateway"] as? [String: Any]
-        let remoteConfig = remoteGateway?["remote"] as? [String: Any]
-        #expect(remoteGateway?["mode"] as? String == "remote")
-        #expect(remoteConfig?["token"] as? String == "persisted-token")
+            remoteUrl: "",
+            remoteToken: "",
+            remoteTokenDirty: false)
+        let sshRemote = (sshRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        #expect((sshRemote?["token"] as? [String: String])?["$secretRef"] == "gateway-token")
 
         let localRoot = AppState._testSyncedGatewayRoot(
-            currentRoot: remoteRoot,
+            currentRoot: sshRoot,
             connectionMode: .local,
-            remoteTransport: .direct,
+            remoteTransport: .ssh,
             remoteTarget: "",
             remoteIdentity: "",
             remoteUrl: "",
-            remoteToken: "")
+            remoteToken: "",
+            remoteTokenDirty: false)
         let localGateway = localRoot["gateway"] as? [String: Any]
-        let localRemoteConfig = localGateway?["remote"] as? [String: Any]
-        // Local mode should not discard remote token state; users can return to remote mode later.
+        let localRemote = localGateway?["remote"] as? [String: Any]
         #expect(localGateway?["mode"] as? String == "local")
-        #expect(localRemoteConfig?["token"] as? String == "persisted-token")
+        #expect((localRemote?["token"] as? [String: String])?["$secretRef"] == "gateway-token")
+    }
 
-        let clearedRoot = AppState._testSyncedGatewayRoot(
-            currentRoot: localRoot,
-            connectionMode: .remote,
-            remoteTransport: .direct,
+    @Test
+    func updatedRemoteGatewayConfigReplacesObjectTokenWhenUserEntersPlaintext() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: [
+                "token": [
+                    "$secretRef": "gateway-token",
+                ],
+            ],
+            transport: .direct,
+            remoteUrl: "wss://gateway.example",
+            remoteHost: nil,
             remoteTarget: "",
             remoteIdentity: "",
+            remoteToken: "  fresh-token  ",
+            remoteTokenDirty: true)
+
+        #expect(remote["token"] as? String == "fresh-token")
+    }
+
+    @Test
+    func updatedRemoteGatewayConfigClearsObjectTokenOnlyAfterExplicitEdit() {
+        let current: [String: Any] = [
+            "token": [
+                "$secretRef": "gateway-token",
+            ],
+        ]
+
+        let preserved = AppState._testUpdatedRemoteGatewayConfig(
+            current: current,
+            transport: .direct,
             remoteUrl: "wss://gateway.example",
-            remoteToken: "   ")
-        let clearedRemote = (clearedRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
-        #expect((clearedRemote?["token"] as? String) == nil)
+            remoteHost: nil,
+            remoteTarget: "",
+            remoteIdentity: "",
+            remoteToken: "",
+            remoteTokenDirty: false)
+        #expect((preserved["token"] as? [String: String])?["$secretRef"] == "gateway-token")
+
+        let cleared = AppState._testUpdatedRemoteGatewayConfig(
+            current: current,
+            transport: .direct,
+            remoteUrl: "wss://gateway.example",
+            remoteHost: nil,
+            remoteTarget: "",
+            remoteIdentity: "",
+            remoteToken: "   ",
+            remoteTokenDirty: true)
+        #expect((cleared["token"] as? String) == nil)
     }
 }
