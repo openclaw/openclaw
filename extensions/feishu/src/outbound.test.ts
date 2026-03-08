@@ -103,7 +103,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       expect(sendMessageFeishuMock).toHaveBeenCalledWith(
         expect.objectContaining({
           to: "chat_1",
-          text: "图片发送失败，请重试",
+          text: "Image upload failed. Please try again.",
           accountId: "main",
         }),
       );
@@ -197,7 +197,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
-        text: "音频发送失败，请重试",
+        text: "Media upload failed. Please try again.",
         accountId: "main",
       }),
     );
@@ -221,7 +221,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
-        text: "音频发送失败，请重试",
+        text: "Media upload failed. Please try again.",
         accountId: "main",
       }),
     );

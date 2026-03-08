@@ -88,7 +88,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         const result = await sendOutboundText({
           cfg,
           to,
-          text: "图片发送失败，请重试",
+          text: "Image upload failed. Please try again.",
           accountId: accountId ?? undefined,
         });
         return { channel: "feishu", ...result };
@@ -128,7 +128,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       } catch (err) {
         // Log the error for debugging
         console.error(`[feishu] sendMediaFeishu failed:`, err);
-        const fallbackText = isLocalMediaPath(mediaUrl) ? "音频发送失败，请重试" : `📎 ${mediaUrl}`;
+        const fallbackText = isLocalMediaPath(mediaUrl)
+          ? "Media upload failed. Please try again."
+          : `📎 ${mediaUrl}`;
         const result = await sendOutboundText({
           cfg,
           to,
