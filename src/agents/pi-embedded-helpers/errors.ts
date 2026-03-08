@@ -520,6 +520,13 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isSurrogateEncodingError(raw)) {
+    return (
+      "⚠️ Session history contains invalid Unicode characters (surrogate encoding error). " +
+      "Use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -754,6 +761,24 @@ export function isMissingToolCallInputError(raw: string): boolean {
     return false;
   }
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+}
+
+/**
+ * Detects Unicode surrogate encoding errors that occur when the conversation
+ * history contains unpaired surrogate characters (e.g. lone \uD800-\uDFFF).
+ * These cause JSON serialization to fail and can create an infinite loop where
+ * the error message itself is appended to history, causing every subsequent
+ * request to also fail.
+ */
+export function isSurrogateEncodingError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    (lower.includes("not valid json") || lower.includes("invalid json")) &&
+    (lower.includes("surrogate") || lower.includes("low surrogate") || lower.includes("high surrogate"))
+  );
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {

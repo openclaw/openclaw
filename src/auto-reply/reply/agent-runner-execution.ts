@@ -8,6 +8,7 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isSurrogateEncodingError,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -476,6 +477,7 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isSurrogateError = isSurrogateEncodingError(message);
       const isTransientHttp = isTransientHttpError(message);
 
       if (
@@ -501,6 +503,51 @@ export async function runAgentTurnWithFallback(params: {
             },
           };
         }
+      }
+
+      // Auto-recover from surrogate encoding errors by resetting the session.
+      // These errors occur when the conversation history contains unpaired Unicode
+      // surrogate characters, causing JSON serialization to fail. Without a reset,
+      // the error message itself gets appended to history, causing an infinite loop.
+      if (
+        isSurrogateError &&
+        params.sessionKey &&
+        params.activeSessionStore &&
+        params.storePath
+      ) {
+        const sessionKey = params.sessionKey;
+        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
+        defaultRuntime.error(
+          `Session history contains surrogate encoding error. Resetting session: ${params.sessionKey}`,
+        );
+
+        try {
+          if (corruptedSessionId) {
+            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
+            try {
+              fs.unlinkSync(transcriptPath);
+            } catch {
+              // Ignore if file doesn't exist
+            }
+          }
+
+          delete params.activeSessionStore[sessionKey];
+
+          await updateSessionStore(params.storePath, (store) => {
+            delete store[sessionKey];
+          });
+        } catch (cleanupErr) {
+          defaultRuntime.error(
+            `Failed to reset surrogate-corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,
+          );
+        }
+
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Session history contained invalid Unicode characters and has been reset. Please try again!",
+          },
+        };
       }
 
       // Auto-recover from Gemini session corruption by resetting the session
