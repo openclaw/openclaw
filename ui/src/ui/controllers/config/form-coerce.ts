@@ -34,15 +34,17 @@ function matchesConstConstraints(value: unknown, schema: JsonSchema): boolean {
     return true;
   }
   const record = value as Record<string, unknown>;
+  let sawConst = false;
   for (const [key, propSchema] of Object.entries(schema.properties ?? {})) {
     if (propSchema.const === undefined) {
       continue;
     }
+    sawConst = true;
     if (record[key] !== propSchema.const) {
       return false;
     }
   }
-  return true;
+  return sawConst;
 }
 
 function pickMatchingObjectVariant(value: unknown, variants: JsonSchema[]): JsonSchema | null {

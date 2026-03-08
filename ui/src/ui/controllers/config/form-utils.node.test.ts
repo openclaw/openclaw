@@ -512,4 +512,33 @@ describe("coerceFormValues", () => {
     const settings = coerced.settings as Record<string, unknown>;
     expect(settings.retries).toBe("03");
   });
+
+  it("does not let unconstrained object variants outrank matching const variants", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        settings: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                retries: { type: "number" },
+              },
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", const: "named" },
+                retries: { type: "string" },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const form = { settings: { kind: "named", retries: "03" } };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const settings = coerced.settings as Record<string, unknown>;
+    expect(settings.retries).toBe("03");
+  });
 });
