@@ -191,6 +191,77 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
+  it("follows symlinks pointing outside the workspace boundary", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const sharedDir = path.join(rootDir, "workspace-shared");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      const sharedSoul = path.join(sharedDir, "SOUL.md");
+      await fs.writeFile(sharedSoul, "shared soul content", "utf-8");
+      await fs.symlink(sharedSoul, path.join(workspaceDir, "SOUL.md"));
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const soul = files.find((file) => file.name === "SOUL.md");
+      expect(soul?.missing).toBe(false);
+      expect(soul?.content).toBe("shared soul content");
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("follows relative symlinks to sibling workspace directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-rel-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      const sharedDir = path.join(rootDir, "workspace-shared");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(path.join(sharedDir, "AGENTS.md"), "shared agents", "utf-8");
+      // Create a relative symlink: workspace/AGENTS.md -> ../workspace-shared/AGENTS.md
+      await fs.symlink(
+        path.join("..", "workspace-shared", "AGENTS.md"),
+        path.join(workspaceDir, "AGENTS.md"),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("shared agents");
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports dangling symlinks as missing", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-symlink-dangle-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      // Symlink to a non-existent target
+      await fs.symlink(
+        path.join(rootDir, "nonexistent", "SOUL.md"),
+        path.join(workspaceDir, "SOUL.md"),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const soul = files.find((file) => file.name === "SOUL.md");
+      expect(soul?.missing).toBe(true);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats hardlinked bootstrap aliases as missing", async () => {
     if (process.platform === "win32") {
       return;

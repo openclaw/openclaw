@@ -53,6 +53,35 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
+/**
+ * Attempt to read a workspace file that is a symlink pointing outside the
+ * workspace boundary.  Returns the file content when the symlink target is a
+ * regular file within the size budget, or `undefined` when the path is not a
+ * symlink or any check fails.
+ */
+async function tryReadSymlinkedWorkspaceFile(
+  filePath: string,
+): Promise<{ content: string; stat: syncFs.Stats; realPath: string } | undefined> {
+  try {
+    const lstat = await fs.lstat(filePath);
+    if (!lstat.isSymbolicLink()) {
+      return undefined;
+    }
+    const realPath = await fs.realpath(filePath);
+    const stat = await fs.stat(realPath);
+    if (!stat.isFile()) {
+      return undefined;
+    }
+    if (stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      return undefined;
+    }
+    const content = await fs.readFile(realPath, "utf-8");
+    return { content, stat: stat, realPath };
+  } catch {
+    return undefined;
+  }
+}
+
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
@@ -64,6 +93,19 @@ async function readWorkspaceFileWithGuards(params: {
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
   if (!opened.ok) {
+    // Symlink targets outside the workspace boundary are rejected by the
+    // boundary-path resolver.  For workspace bootstrap files this is a
+    // legitimate use-case (e.g. shared SOUL.md across workspaces via
+    // symlink), so we fall back to resolving the symlink and reading the
+    // target directly while still enforcing the size limit.
+    if (opened.reason === "path" || opened.reason === "validation") {
+      const symlinkResult = await tryReadSymlinkedWorkspaceFile(params.filePath);
+      if (symlinkResult !== undefined) {
+        const identity = workspaceFileIdentity(symlinkResult.stat, symlinkResult.realPath);
+        workspaceFileCache.set(params.filePath, { content: symlinkResult.content, identity });
+        return { ok: true, content: symlinkResult.content };
+      }
+    }
     workspaceFileCache.delete(params.filePath);
     return opened;
   }
