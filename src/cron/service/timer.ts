@@ -119,7 +119,10 @@ function errorBackoffMs(
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
 
 const TRANSIENT_PATTERNS: Record<string, RegExp> = {
-  rate_limit: /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare)/i,
+  rate_limit:
+    /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare|tokens per day)/i,
+  overloaded:
+    /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network: /(network|econnreset|econnrefused|fetch failed|socket)/i,
   timeout: /(timeout|etimedout)/i,
   server_error: /\b5\d{2}\b/,

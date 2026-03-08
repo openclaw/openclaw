@@ -252,7 +252,7 @@ ACP sessions currently run on the host runtime, not inside the OpenClaw sandbox.
 
 Current limitations:
 
-- If the requester session is sandboxed, ACP spawns are blocked.
+- If the requester session is sandboxed, ACP spawns are blocked for both `sessions_spawn({ runtime: "acp" })` and `/acp spawn`.
   - Error: `Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.`
 - `sessions_spawn` with `runtime: "acp"` does not support `sandbox: "require"`.
   - Error: `sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".`

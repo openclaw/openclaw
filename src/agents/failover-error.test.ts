@@ -18,6 +18,8 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
+  "The account associated with this API key has reached its maximum allowed monthly spending limit.";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
@@ -75,7 +77,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
   it("classifies documented provider error shapes at the error boundary", () => {
@@ -90,7 +92,7 @@ describe("failover-error", () => {
         status: 529,
         message: ANTHROPIC_OVERLOADED_PAYLOAD,
       }),
-    ).toBe("rate_limit");
+    ).toBe("overloaded");
     expect(
       resolveFailoverReasonFromError({
         status: 429,
@@ -126,7 +128,22 @@ describe("failover-error", () => {
         status: 503,
         message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
       }),
+    ).toBe("overloaded");
+  });
+
+  it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: "Internal database error",
+      }),
     ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: '{"error":{"message":"The model is overloaded. Please try later"}}',
+      }),
+    ).toBe("overloaded");
   });
 
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
@@ -151,10 +168,90 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
+  it("treats overloaded provider payloads as overloaded", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("overloaded");
+  });
+
   it("keeps raw-text 402 weekly/monthly limit errors in billing", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "402 Payment Required: Weekly/Monthly Limit Exhausted",
+      }),
+    ).toBe("billing");
+  });
+
+  it("keeps temporary 402 spend limits retryable without downgrading explicit billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Monthly spend limit reached. Please visit your billing settings.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "Workspace spend limit reached. Contact your admin.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: `${"x".repeat(520)} insufficient credits. Monthly spend limit reached.`,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: TOGETHER_MONTHLY_SPEND_CAP_MESSAGE,
+      }),
+    ).toBe("billing");
+  });
+
+  it("keeps raw 402 wrappers aligned with status-split temporary spend limits", () => {
+    const message = "Monthly spend limit reached. Please visit your billing settings.";
+    expect(
+      resolveFailoverReasonFromError({
+        message: `402 Payment Required: ${message}`,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message,
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("keeps explicit 402 rate-limit wrappers aligned with status-split payloads", () => {
+    const message = "rate limit exceeded";
+    expect(
+      resolveFailoverReasonFromError({
+        message: `HTTP 402 Payment Required: ${message}`,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message,
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("keeps plan-upgrade 402 wrappers aligned with status-split billing payloads", () => {
+    const message = "Your usage limit has been reached. Please upgrade your plan.";
+    expect(
+      resolveFailoverReasonFromError({
+        message: `HTTP 402 Payment Required: ${message}`,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message,
       }),
     ).toBe("billing");
   });
@@ -219,6 +316,10 @@ describe("failover-error", () => {
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-5");
+  });
+
+  it("maps overloaded to a 503 fallback status", () => {
+    expect(resolveFailoverStatus("overloaded")).toBe(503);
   });
 
   it("coerces format errors with a 400 status", () => {

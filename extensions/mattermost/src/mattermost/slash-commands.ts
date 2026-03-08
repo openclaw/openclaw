@@ -142,6 +142,13 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoCompleteHint: "[model-name]",
   },
   {
+    trigger: "oc_models",
+    originalName: "models",
+    description: "Browse available models",
+    autoComplete: true,
+    autoCompleteHint: "[provider]",
+  },
+  {
     trigger: "oc_new",
     originalName: "new",
     description: "Start a new conversation session",
