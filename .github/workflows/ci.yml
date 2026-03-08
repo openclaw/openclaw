@@ -308,6 +308,11 @@ jobs:
 
           BASE="${{ github.event.pull_request.base.sha }}"
           changed_files=()
+          if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+            # Fork PR checkouts are often shallow and may not include the base
+            # commit object yet. Fetch it so we can diff only changed files.
+            git fetch --no-tags --depth=1 origin "$BASE" || true
+          fi
           if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
