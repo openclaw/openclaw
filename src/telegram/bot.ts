@@ -106,16 +106,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
-      : undefined;
-  const client: ApiClientOptions | undefined =
-    shouldProvideFetch || timeoutSeconds
-      ? {
-          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
-          ...(timeoutSeconds ? { timeoutSeconds } : {}),
-        }
-      : undefined;
+      : 60; // explicit default: grammY's built-in default is 500s which stalls after Mac sleep
+  const client: ApiClientOptions = {
+    ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
+    timeoutSeconds,
+  };
 
-  const bot = new Bot(opts.token, client ? { client } : undefined);
+  const bot = new Bot(opts.token, { client });
   bot.api.config.use(apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
