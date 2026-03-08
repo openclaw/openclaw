@@ -820,7 +820,7 @@ describe("applyExtraParamsToAgent", () => {
         ],
         tool_choice: input,
       };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
