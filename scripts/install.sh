@@ -672,6 +672,94 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
+get_available_memory_mb() {
+    if [[ "$OS" == "linux" ]]; then
+        # Get available memory in MB from /proc/meminfo
+        local avail_kb
+        avail_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")"
+        echo $((avail_kb / 1024))
+    elif [[ "$OS" == "macos" ]]; then
+        # macOS: use vm_stat to estimate available memory
+        local pages_free pages_inactive page_size
+        pages_free="$(vm_stat | awk '/Pages free/ {print $3}' | tr -d '.')"
+        pages_inactive="$(vm_stat | awk '/Pages inactive/ {print $3}' | tr -d '.')"
+        page_size="$(pagesize 2>/dev/null || echo "4096")"
+        echo $(( (pages_free + pages_inactive) * page_size / 1024 / 1024 ))
+    else
+        echo "0"
+    fi
+}
+
+has_sufficient_swap() {
+    if [[ "$OS" != "linux" ]]; then
+        return 0  # Only check swap on Linux
+    fi
+    local swap_total_kb
+    swap_total_kb="$(awk '/SwapTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")"
+    [[ "$swap_total_kb" -ge 1048576 ]]  # At least 1GB swap
+}
+
+create_swap_file() {
+    if [[ "$OS" != "linux" ]]; then
+        return 1
+    fi
+
+    require_sudo
+    local swap_file="/swapfile-openclaw"
+    local swap_size_mb=2048  # 2GB swap
+
+    ui_info "Creating ${swap_size_mb}MB swap file to improve npm install stability"
+    
+    if is_root; then
+        dd if=/dev/zero of="$swap_file" bs=1M count="$swap_size_mb" status=none 2>/dev/null || return 1
+        chmod 600 "$swap_file" || return 1
+        mkswap "$swap_file" >/dev/null 2>&1 || return 1
+        swapon "$swap_file" || return 1
+    else
+        sudo dd if=/dev/zero of="$swap_file" bs=1M count="$swap_size_mb" status=none 2>/dev/null || return 1
+        sudo chmod 600 "$swap_file" || return 1
+        sudo mkswap "$swap_file" >/dev/null 2>&1 || return 1
+        sudo swapon "$swap_file" || return 1
+    fi
+    
+    ui_success "Swap file created and enabled"
+    return 0
+}
+
+setup_low_memory_environment() {
+    local available_mb
+    available_mb="$(get_available_memory_mb)"
+    
+    if [[ "$available_mb" -lt 2048 ]]; then
+        ui_warn "Low memory detected (${available_mb}MB available)"
+        
+        if ! has_sufficient_swap; then
+            ui_info "Insufficient swap space; creating swap file to prevent OOM during npm install"
+            if create_swap_file; then
+                return 0
+            else
+                ui_warn "Failed to create swap file; npm install may fail due to memory constraints"
+                ui_info "You can manually create swap with: sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile"
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+npm_log_indicates_oom_killed() {
+    local log="$1"
+    # Check if the process was killed (exit code 137 = SIGKILL, often OOM)
+    # The install.sh script will show "Killed" in the error output
+    if [[ ! -f "$log" ]]; then
+        return 1
+    fi
+    # Empty or very small log files often indicate OOM kill
+    local log_size
+    log_size="$(wc -c < "$log" 2>/dev/null || echo "0")"
+    [[ "$log_size" -lt 100 ]]
+}
+
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
@@ -786,8 +874,47 @@ install_openclaw_npm() {
     local spec="$1"
     local log
     log="$(mktempfile)"
+    
+    # Setup swap on low-memory systems before attempting npm install
+    setup_low_memory_environment || true
+    
     if ! run_npm_global_install "$spec" "$log"; then
         local attempted_build_tool_fix=false
+        local attempted_swap_fix=false
+        
+        # Check if process was OOM killed
+        if npm_log_indicates_oom_killed "$log"; then
+            ui_error "npm install was killed (likely out of memory)"
+            local available_mb
+            available_mb="$(get_available_memory_mb)"
+            ui_info "Available memory: ${available_mb}MB"
+            
+            if [[ "$available_mb" -lt 2048 ]] && ! has_sufficient_swap; then
+                ui_warn "System has insufficient memory and no swap"
+                ui_info "Creating swap file and retrying..."
+                if create_swap_file; then
+                    attempted_swap_fix=true
+                    if run_npm_global_install "$spec" "$log"; then
+                        ui_success "OpenClaw npm package installed"
+                        return 0
+                    fi
+                else
+                    ui_error "Failed to create swap file"
+                    ui_info "Manual workaround: create swap before retrying installer"
+                    echo "  sudo fallocate -l 2G /swapfile"
+                    echo "  sudo chmod 600 /swapfile"
+                    echo "  sudo mkswap /swapfile"
+                    echo "  sudo swapon /swapfile"
+                    return 1
+                fi
+            else
+                ui_error "npm install failed due to insufficient memory"
+                ui_info "This system needs more RAM or swap space to build native modules"
+                ui_info "Consider upgrading to a droplet with at least 2GB RAM"
+                return 1
+            fi
+        fi
+        
         if auto_install_build_tools_for_npm_failure "$log"; then
             attempted_build_tool_fix=true
             ui_info "Retrying npm install after build tools setup"
@@ -802,6 +929,8 @@ install_openclaw_npm() {
         if [[ "$VERBOSE" != "1" ]]; then
             if [[ "$attempted_build_tool_fix" == "true" ]]; then
                 ui_warn "npm install still failed after build tools setup; showing last log lines"
+            elif [[ "$attempted_swap_fix" == "true" ]]; then
+                ui_warn "npm install still failed after swap setup; showing last log lines"
             else
                 ui_warn "npm install failed; showing last log lines"
             fi
@@ -969,7 +1098,7 @@ USE_BETA=${OPENCLAW_BETA:-0}
 GIT_DIR_DEFAULT="${HOME}/openclaw"
 GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
+SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-0}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
@@ -1012,7 +1141,7 @@ Environment variables:
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
+  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 0 (use prebuilt sharp binaries; set to 1 to build from source)
 
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
