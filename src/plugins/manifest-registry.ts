@@ -229,12 +229,20 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Only warn when both candidates share the same precedence tier.
+      // When origins differ (e.g. a global plugin shadowing a bundled one),
+      // the higher-precedence copy is intentionally overriding the lower-
+      // precedence one — this is expected from `openclaw configure` installs.
+      const sameTier =
+        PLUGIN_ORIGIN_RANK[candidate.origin] === PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (sameTier) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

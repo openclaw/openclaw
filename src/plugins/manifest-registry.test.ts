@@ -130,18 +130,20 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("emits duplicate warning for truly distinct plugins with same id and same origin tier", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
     writeManifest(dirA, manifest);
     writeManifest(dirB, manifest);
 
+    // Two distinct directories with the same origin tier (global + global) —
+    // this is a genuine conflict the user needs to know about.
     const candidates: PluginCandidate[] = [
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirA,
-        origin: "bundled",
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",
@@ -151,6 +153,30 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning when higher-precedence plugin shadows bundled plugin", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    // global (rank 2) overriding bundled (rank 3) — expected from `openclaw configure` installs.
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
