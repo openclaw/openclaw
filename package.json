@@ -237,7 +237,7 @@
       "sharp"
     ],
     "patchedDependencies": {
-      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch"
+      "@mariozechner/pi-ai@0.53.0": "patches/@mariozechner__pi-ai.patch"
     }
   }
 }
