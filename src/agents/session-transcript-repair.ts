@@ -411,6 +411,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       // thinking + text content. (Fixes #21985)
       if (stopReason === "toolUse") {
         const corrected = { ...assistant, stopReason: "stop" };
+        changed = true;
         out.push(corrected as AgentMessage);
       } else {
         out.push(msg);
