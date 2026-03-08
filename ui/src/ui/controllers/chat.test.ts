@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import {
   handleChatDraftChange,
+  handleChatInputHistoryKey,
   navigateChatInputHistory,
   resetChatInputHistoryNavigation,
   type ChatInputHistoryState,
@@ -660,6 +661,128 @@ describe("chat input history navigation", () => {
     expect(host.chatInputHistoryItems).toBeNull();
     expect(host.chatInputHistoryIndex).toBe(-1);
     expect(host.chatDraftBeforeHistory).toBeNull();
+  });
+
+  it("enters history on ArrowUp only when caret is at start in editing mode", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "older")],
+    });
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 2,
+        selectionEnd: 2,
+        valueLength: 5,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: false,
+      decision: "blocked:arrowup-not-at-start",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+    });
+    expect(host.chatInputHistoryIndex).toBe(-1);
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 5,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up",
+      decision: "handled:enter-history-up",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatInputHistoryIndex).toBe(0);
+    expect(host.chatMessage).toBe("older");
+  });
+
+  it("navigates bidirectionally once history mode is active regardless of caret edge", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "oldest"), textMessage("user", "newest")],
+    });
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 5,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: true,
+      decision: "handled:enter-history-up",
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatMessage).toBe("newest");
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowUp",
+        selectionStart: 6,
+        selectionEnd: 6,
+        valueLength: 6,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 38,
+      }),
+    ).toMatchObject({
+      handled: true,
+      decision: "handled:history-up",
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatMessage).toBe("oldest");
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowDown",
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 6,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 40,
+      }),
+    ).toMatchObject({
+      handled: true,
+      decision: "handled:history-down",
+      restoreCaret: "down",
+      historyNavigationActiveBefore: true,
+      historyNavigationActiveAfter: true,
+    });
+    expect(host.chatMessage).toBe("newest");
   });
 });
 

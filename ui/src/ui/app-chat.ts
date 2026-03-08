@@ -5,8 +5,11 @@ import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import {
   handleChatDraftChange,
+  handleChatInputHistoryKey,
   navigateChatInputHistory,
   resetChatInputHistoryNavigation,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
@@ -29,7 +32,13 @@ export type ChatHost = ChatInputHistoryState & {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
-export { handleChatDraftChange, navigateChatInputHistory, resetChatInputHistoryNavigation };
+export {
+  handleChatDraftChange,
+  handleChatInputHistoryKey,
+  navigateChatInputHistory,
+  resetChatInputHistoryNavigation,
+};
+export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);

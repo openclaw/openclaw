@@ -11,6 +11,39 @@ export type ChatInputHistoryState = {
   chatDraftBeforeHistory: string | null;
 };
 
+export type ChatInputHistoryKeyInput = {
+  key: "ArrowUp" | "ArrowDown";
+  selectionStart: number;
+  selectionEnd: number;
+  valueLength: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  isComposing: boolean;
+  keyCode: number;
+};
+
+export type ChatInputHistoryKeyResult = {
+  handled: boolean;
+  preventDefault: boolean;
+  restoreCaret: "up" | "down" | null;
+  decision:
+    | "blocked:modifier-or-composition"
+    | "blocked:selection-range"
+    | "blocked:arrowup-not-at-start"
+    | "blocked:arrowdown-editing-mode"
+    | "blocked:history-boundary"
+    | "handled:enter-history-up"
+    | "handled:history-up"
+    | "handled:history-down";
+  historyNavigationActiveBefore: boolean;
+  historyNavigationActiveAfter: boolean;
+  selectionStart: number;
+  selectionEnd: number;
+  valueLength: number;
+};
+
 function collectUserInputHistory(messages: unknown[]): string[] {
   if (messages.length === 0) {
     return [];
@@ -94,4 +127,94 @@ export function navigateChatInputHistory(
   state.chatInputHistoryIndex -= 1;
   state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
   return true;
+}
+
+export function handleChatInputHistoryKey(
+  state: ChatInputHistoryState,
+  input: ChatInputHistoryKeyInput,
+): ChatInputHistoryKeyResult {
+  const historyNavigationActiveBefore = state.chatInputHistoryIndex !== -1;
+  const baseResult = {
+    historyNavigationActiveBefore,
+    historyNavigationActiveAfter: historyNavigationActiveBefore,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    valueLength: input.valueLength,
+  };
+
+  if (
+    input.altKey ||
+    input.ctrlKey ||
+    input.metaKey ||
+    input.shiftKey ||
+    input.isComposing ||
+    input.keyCode === 229
+  ) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:modifier-or-composition",
+    };
+  }
+
+  if (input.selectionStart !== input.selectionEnd) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:selection-range",
+    };
+  }
+
+  if (historyNavigationActiveBefore) {
+    const direction = input.key === "ArrowUp" ? "up" : "down";
+    const navigated = navigateChatInputHistory(state, direction);
+    const historyNavigationActiveAfter = state.chatInputHistoryIndex !== -1;
+    return {
+      ...baseResult,
+      handled: navigated,
+      preventDefault: navigated,
+      restoreCaret: navigated ? direction : null,
+      decision: navigated
+        ? direction === "up"
+          ? "handled:history-up"
+          : "handled:history-down"
+        : "blocked:history-boundary",
+      historyNavigationActiveAfter,
+    };
+  }
+
+  if (input.key === "ArrowDown") {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowdown-editing-mode",
+    };
+  }
+
+  if (input.selectionStart !== 0) {
+    return {
+      ...baseResult,
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowup-not-at-start",
+    };
+  }
+
+  const navigated = navigateChatInputHistory(state, "up");
+  const historyNavigationActiveAfter = state.chatInputHistoryIndex !== -1;
+  return {
+    ...baseResult,
+    handled: navigated,
+    preventDefault: navigated,
+    restoreCaret: navigated ? "up" : null,
+    decision: navigated ? "handled:enter-history-up" : "blocked:history-boundary",
+    historyNavigationActiveAfter,
+  };
 }

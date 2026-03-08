@@ -17,10 +17,12 @@ import {
 import {
   handleAbortChat as handleAbortChatInternal,
   handleChatDraftChange as handleChatDraftChangeInternal,
-  navigateChatInputHistory as navigateChatInputHistoryInternal,
+  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -159,7 +161,7 @@ export class OpenClawApp extends LitElement {
   @state() chatManualRefreshInFlight = false;
   chatInputHistorySessionKey: string | null = null;
   chatInputHistoryItems: string[] | null = null;
-  chatInputHistoryIndex = -1;
+  @state() chatInputHistoryIndex = -1;
   chatDraftBeforeHistory: string | null = null;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
@@ -499,10 +501,10 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  handleChatInputHistoryNavigate(direction: "up" | "down"): boolean {
-    return navigateChatInputHistoryInternal(
-      this as unknown as Parameters<typeof navigateChatInputHistoryInternal>[0],
-      direction,
+  handleChatInputHistoryKey(input: ChatInputHistoryKeyInput): ChatInputHistoryKeyResult {
+    return handleChatInputHistoryKeyInternal(
+      this as unknown as Parameters<typeof handleChatInputHistoryKeyInternal>[0],
+      input,
     );
   }
 

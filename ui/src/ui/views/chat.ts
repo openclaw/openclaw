@@ -7,6 +7,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -74,9 +75,7 @@ export type ChatProps = {
   onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
-  onHistoryNavigateUp?: () => boolean;
-  onHistoryNavigateDown?: () => boolean;
-  historyNavigationActive?: boolean;
+  onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
@@ -92,36 +91,6 @@ const FALLBACK_TOAST_DURATION_MS = 8000;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
-}
-
-function shouldHandleHistoryNavigation(
-  event: KeyboardEvent,
-  target: HTMLTextAreaElement,
-  historyNavigationActive: boolean,
-): boolean {
-  if (
-    event.altKey ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.shiftKey ||
-    event.isComposing ||
-    event.keyCode === 229
-  ) {
-    return false;
-  }
-  if (target.selectionStart !== target.selectionEnd) {
-    return false;
-  }
-  if (historyNavigationActive) {
-    return true;
-  }
-  if (event.key === "ArrowUp") {
-    return target.selectionStart === 0;
-  }
-  if (event.key === "ArrowDown") {
-    return false;
-  }
-  return false;
 }
 
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
@@ -471,30 +440,42 @@ export function renderChat(props: ChatProps) {
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
-              ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+              ${ref((el) => {
+                if (!el) {
+                  return;
+                }
+                adjustTextareaHeight(el as HTMLTextAreaElement);
+              })}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  const handleHistoryKeydown = props.onHistoryKeydown;
+                  if (!handleHistoryKeydown) {
+                    return;
+                  }
                   const target = e.target as HTMLTextAreaElement;
-                  if (
-                    !shouldHandleHistoryNavigation(
-                      e,
-                      target,
-                      Boolean(props.historyNavigationActive),
-                    )
-                  ) {
+                  const result = handleHistoryKeydown({
+                    key: e.key,
+                    selectionStart: target.selectionStart,
+                    selectionEnd: target.selectionEnd,
+                    valueLength: target.value.length,
+                    altKey: e.altKey,
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey,
+                    shiftKey: e.shiftKey,
+                    isComposing: e.isComposing,
+                    keyCode: e.keyCode,
+                  });
+                  if (!result.handled) {
                     return;
                   }
-                  const navigate =
-                    e.key === "ArrowUp" ? props.onHistoryNavigateUp : props.onHistoryNavigateDown;
-                  if (!navigate) {
-                    return;
-                  }
-                  if (navigate()) {
+                  if (result.preventDefault) {
                     e.preventDefault();
-                    restoreHistoryCaret(target, e.key === "ArrowUp" ? "up" : "down");
+                  }
+                  if (result.restoreCaret) {
+                    restoreHistoryCaret(target, result.restoreCaret);
                   }
                   return;
                 }
