@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - ACP/sessions.patch: allow `spawnedBy` and `spawnDepth` lineage fields on ACP session keys so `sessions_spawn` with `runtime: "acp"` no longer fails during child-session setup. Fixes #40971. (#40995) thanks @xaeon2026.
 - ACP/stop reason mapping: resolve gateway chat `state: "error"` completions as ACP `end_turn` instead of `refusal` so transient backend failures are not surfaced as deliberate refusals. (#41187) thanks @pejmanjohn.
 - ACP/setSessionMode: propagate gateway `sessions.patch` failures back to ACP clients so rejected mode changes no longer return silent success. (#41185) thanks @pejmanjohn.
+- Agents/auth errors: show the provider-specific env var name (e.g. `ANTHROPIC_API_KEY`) in the missing-key error instead of dumping internal auth-store paths. (#40338) Thanks @ademczuk.
 
 ## 2026.3.8
 
