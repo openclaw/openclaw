@@ -1397,16 +1397,15 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
 
+  const braveHeaders = resolveBraveRequestHeaders(params.apiKey);
+
   const mapped = await withTrustedWebSearchEndpoint(
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "GET",
-        headers: {
-          Accept: "application/json",
-          "X-Subscription-Token": params.apiKey,
-        },
+        headers: braveHeaders,
       },
     },
     async (res) => {
@@ -1449,6 +1448,14 @@ async function runWebSearch(params: {
   };
   writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
   return payload;
+}
+
+function resolveBraveRequestHeaders(apiKey: string): HeadersInit {
+  return {
+    Accept: "application/json",
+    // Lowercase key keeps compatibility with brittle intermediary gateways.
+    "x-subscription-token": apiKey,
+  };
 }
 
 export function createWebSearchTool(options?: {
@@ -1682,6 +1689,7 @@ export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveBraveRequestHeaders,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;
