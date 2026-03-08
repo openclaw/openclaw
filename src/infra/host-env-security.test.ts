@@ -22,6 +22,10 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
     expect(isDangerousHostEnvVarName("ld_preload")).toBe(true);
     expect(isDangerousHostEnvVarName("BASH_FUNC_echo%%")).toBe(true);
+    expect(isDangerousHostEnvVarName("GLIBC_TUNABLES")).toBe(true);
+    expect(isDangerousHostEnvVarName("JAVA_TOOL_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("JDK_JAVA_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("_JAVA_OPTIONS")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
   });
@@ -35,6 +39,10 @@ describe("sanitizeHostExecEnv", () => {
         BASH_ENV: "/tmp/pwn.sh",
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
         LD_PRELOAD: "/tmp/pwn.so",
+        GLIBC_TUNABLES: "glibc.malloc.hugetlb=2",
+        JAVA_TOOL_OPTIONS: "-javaagent:/tmp/pwn.jar",
+        JDK_JAVA_OPTIONS: "-javaagent:/tmp/pwn.jar",
+        _JAVA_OPTIONS: "-javaagent:/tmp/pwn.jar",
         OK: "1",
       },
     });
