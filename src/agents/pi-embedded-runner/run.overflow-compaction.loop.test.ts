@@ -306,7 +306,31 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.payloads?.[0]?.text).toContain("Request timed out.");
+    expect(result.payloads?.[0]?.text).toContain("agents.defaults.timeoutSeconds");
+  });
+
+  it("includes provider, model and timeout seconds in the timeout payload", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      provider: "anthropic",
+      model: "claude-sonnet-4.6",
+      timeoutMs: 900_000,
+    });
+
+    const text = result.payloads?.[0]?.text ?? "";
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(text).toContain("anthropic/");
+    expect(text).toContain("900s");
   });
 
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {

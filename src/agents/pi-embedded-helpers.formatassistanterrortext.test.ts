@@ -113,8 +113,22 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
-  it("returns a friendly message for empty stream chunk errors", () => {
+  it("returns a friendly message for timeout errors without provider context", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+  });
+
+  it("includes provider and model in timeout message when opts are provided", () => {
+    const msg = makeAssistantError("request timed out");
+    const result = formatAssistantErrorText(msg, {
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+    });
+    expect(result).toBe("LLM request timed out (anthropic/claude-sonnet-4).");
+  });
+
+  it("omits provider context in timeout message when opts are absent", () => {
+    const msg = makeAssistantError("request timed out");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
 });
