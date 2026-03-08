@@ -7,7 +7,10 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { installAotuiAdapterForRun, type OpenClawAgentHandle } from "../../../aotui/runtime.js";
+import {
+  installAotuiAdapterForRun,
+  type OpenClawAgentHandle,
+} from "../../../agent-apps/runtime.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";

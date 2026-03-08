@@ -1,7 +1,7 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
-import { syncAotuiDesktopForRun } from "../aotui/runtime.js";
+import { syncAotuiDesktopForRun } from "../agent-apps/runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");

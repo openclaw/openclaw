@@ -367,7 +367,7 @@ describe("OpenClawAgentAdapter", () => {
     const contents = (transformed ?? []).map(
       (message) => (message as { content?: unknown }).content,
     );
-    expect(contents).toEqual(["persistent-input", "persistent-tail", "fresh-view"]);
+    expect(contents).toEqual(["persistent-input", "fresh-view", "persistent-tail"]);
     expect(contents).not.toContain("stale-view");
     expect(originalTransformContext).toHaveBeenCalledTimes(1);
     expect(kernel.releaseSnapshot).toHaveBeenCalledTimes(2);

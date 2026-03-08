@@ -7,7 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { reinitializeAotuiDesktopForCompaction } from "../../aotui/runtime.js";
+import { reinitializeAotuiDesktopForCompaction } from "../../agent-apps/runtime.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";

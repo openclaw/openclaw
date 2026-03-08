@@ -26,8 +26,8 @@ importers:
         specifier: 0.14.1
         version: 0.14.1(zod@4.3.6)
       '@aotui/runtime':
-        specifier: 1.0.7
-        version: 1.0.7
+        specifier: 1.0.10
+        version: 1.0.10
       '@aws-sdk/client-bedrock':
         specifier: ^3.1000.0
         version: 3.1000.0
@@ -665,8 +665,8 @@ packages:
   '@aotui/agent-driver-v2@0.2.1':
     resolution: {integrity: sha512-4F+wpjQg43qj1Mb4m3YrszMQymxr8t/krhkVP9dWih4Z8O1P0aBeVnjchCM2I6UQJaGVVyWJ/C5YoaAppmrt1Q==}
 
-  '@aotui/runtime@1.0.7':
-    resolution: {integrity: sha512-MSVqdZo5sZRyCpNceHo4orqat6UucbGKyE+QhtcBwMZSyFUfXk4q7dok+PY8RUOxd4or7+zaKBKiHk0punFtYg==}
+  '@aotui/runtime@1.0.10':
+    resolution: {integrity: sha512-+ohVGW47bNPWZNig42t/4Hk6M/Hei2qZZ5oHtHKhoi83CFjLd9j9M6Pfb/M5FMEb2mn11Az0JzGi++AOE2RjPA==}
     hasBin: true
 
   '@aws-crypto/crc32@5.2.0':
@@ -6346,7 +6346,7 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@aotui/runtime@1.0.7':
+  '@aotui/runtime@1.0.10':
     dependencies:
       '@aotui/agent-driver-v2': 0.2.1(zod@4.3.6)
       ai: 6.0.116(zod@4.3.6)

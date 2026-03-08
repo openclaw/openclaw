@@ -323,6 +323,7 @@
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "vitest run extensions/voice-call/src/manager.test.ts extensions/voice-call/src/media-stream.test.ts src/plugins/voice-call.plugin.test.ts --maxWorkers=1",
     "test:watch": "vitest",
+    "trace:viewer": "node --import tsx scripts/cache-trace-viewer.ts",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
@@ -331,7 +332,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
-    "@aotui/runtime": "1.0.7",
+    "@aotui/runtime": "1.0.10",
     "@aws-sdk/client-bedrock": "^3.1000.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.0.1",

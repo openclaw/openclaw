@@ -61,7 +61,7 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
     this.sessionKey = normalizeSessionKey(options.sessionKey);
     this.ownerId = options.ownerId ?? "openclaw";
     this.baseTools = [...(options.baseTools ?? [])];
-    this.projector = options.projector ?? new OpenClawSnapshotProjector();
+    this.projector = options.projector ?? new OpenClawSnapshotProjector(options.kernel);
   }
 
   async install(): Promise<void> {

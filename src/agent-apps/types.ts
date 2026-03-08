@@ -1,7 +1,11 @@
 import type { CachedSnapshot, DesktopID, IKernel, Operation } from "@aotui/runtime";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 
-export type AotuiInjectedMessageKind = "system_instruction" | "desktop_state" | "view_state";
+export type AotuiInjectedMessageKind =
+  | "system_instruction"
+  | "desktop_state"
+  | "app_state"
+  | "view_state";
 
 export type AotuiInjectedMessageMeta = {
   aotui: true;
