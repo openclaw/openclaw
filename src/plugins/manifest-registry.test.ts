@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -206,6 +206,39 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("suppresses duplicate warning when source path matches but realpath is unavailable", () => {
+    const dir = makeTempDir();
+    const manifest = { id: "same-source-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    const source = path.join(dir, "index.ts");
+    fs.writeFileSync(source, "export default {};\n", "utf-8");
+
+    const candidates: PluginCandidate[] = [
+      {
+        idHint: "same-source-plugin",
+        source,
+        rootDir: dir,
+        origin: "bundled",
+      },
+      {
+        idHint: "same-source-plugin",
+        source,
+        rootDir: path.join(dir, "sub", ".."),
+        origin: "global",
+      },
+    ];
+
+    const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation(() => {
+      throw new Error("realpath unavailable");
+    });
+    try {
+      expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+    } finally {
+      realpathSpy.mockRestore();
+    }
   });
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
