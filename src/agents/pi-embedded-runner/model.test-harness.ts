@@ -42,6 +42,8 @@ export function buildOpenAICodexForwardCompatExpectation(
     api: "openai-codex-responses",
     baseUrl: "https://chatgpt.com/backend-api",
     reasoning: true,
+    // All codex forward-compat models default to the template's 272k context.
+    // Users can opt into higher context via contextTokens in their agent config.
     contextWindow: 272000,
     maxTokens: 128000,
   };

@@ -12,6 +12,11 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+// Default to the codex template ceiling (272k) rather than the native 1,050,000. Cost doubles
+// above 272k on the Codex path and there is real performance degradation at higher context.
+// Users can opt into the full native window via contextTokens in their agent config.
+const OPENAI_CODEX_DEFAULT_CONTEXT_TOKENS = 272_000;
+const OPENAI_CODEX_DEFAULT_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -137,30 +142,34 @@ function resolveOpenAICodexForwardCompatModel(
     return undefined;
   }
 
-  for (const templateId of templateIds) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
+  // Default to template context (272k for codex models). Users can opt into
+  // the full native 1,050,000 window via contextTokens in their agent config.
+  return (
+    cloneFirstTemplateModel({
+      normalizedProvider,
+      trimmedModelId,
+      templateIds: [...templateIds],
+      modelRegistry,
+    }) ??
+    normalizeModelCompat({
       id: trimmedModelId,
       name: trimmedModelId,
-    } as Model<Api>);
-  }
-
-  return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
-    api: "openai-codex-responses",
-    provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
-  } as Model<Api>);
+      api: "openai-codex-responses",
+      provider: normalizedProvider,
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow:
+        lower === OPENAI_CODEX_GPT_54_MODEL_ID
+          ? OPENAI_CODEX_DEFAULT_CONTEXT_TOKENS
+          : DEFAULT_CONTEXT_TOKENS,
+      maxTokens:
+        lower === OPENAI_CODEX_GPT_54_MODEL_ID
+          ? OPENAI_CODEX_DEFAULT_MAX_TOKENS
+          : DEFAULT_CONTEXT_TOKENS,
+    } as Model<Api>)
+  );
 }
 
 function resolveAnthropic46ForwardCompatModel(params: {

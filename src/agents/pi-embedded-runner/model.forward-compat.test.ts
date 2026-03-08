@@ -58,6 +58,22 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("preserves template context window for openai-codex/gpt-5.3-codex", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(272_000);
+  });
+
+  it("uses default context in openai-codex/gpt-5.4 fallback when no template is discovered", () => {
+    // No template models mocked — exercises the final fallback path.
+    // Even without a template, defaults to the safe 272k ceiling (not native 1,050,000).
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(272_000);
+  });
+
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
