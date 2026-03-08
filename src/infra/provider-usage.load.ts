@@ -62,7 +62,9 @@ export async function loadProviderUsageSummary(
           case "openai-codex":
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
-            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn, "minimax");
+          case "minimax-cn":
+            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn, "minimax-cn");
           case "xiaomi":
             return {
               provider: "xiaomi",
