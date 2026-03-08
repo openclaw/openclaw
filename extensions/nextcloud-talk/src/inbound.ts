@@ -27,7 +27,50 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
+import type {
+  CoreConfig,
+  GroupPolicy,
+  NextcloudTalkInboundMessage,
+  NextcloudTalkRichObjectParameter,
+} from "./types.js";
+
+/**
+ * Build a WebDAV download URL for a file parameter.
+ * Prefers constructing from known baseUrl/apiUser for security;
+ * falls back to the `link` field from the parameter.
+ */
+function buildFileDownloadUrl(
+  file: NextcloudTalkRichObjectParameter,
+  baseUrl: string,
+  apiUser: string | undefined,
+): string | undefined {
+  if (baseUrl && apiUser && file.path) {
+    const encodedPath = file.path.split("/").map(encodeURIComponent).join("/");
+    return `${baseUrl}/remote.php/dav/files/${encodeURIComponent(apiUser)}/${encodedPath}`;
+  }
+  return file.link || undefined;
+}
+
+/**
+ * Build attachment annotation lines for the agent body.
+ */
+function buildAttachmentBlock(
+  fileParams: NextcloudTalkRichObjectParameter[],
+  baseUrl: string,
+  apiUser: string | undefined,
+): string {
+  const lines: string[] = [];
+  for (const file of fileParams) {
+    const isImage = file.mimetype?.startsWith("image/") ?? false;
+    const typeLabel = isImage ? "an image" : "a file";
+    lines.push(`[User shared ${typeLabel}: ${file.name}]`);
+    const url = buildFileDownloadUrl(file, baseUrl, apiUser);
+    if (url) {
+      lines.push(`Attachment: ${url}`);
+    }
+  }
+  return lines.join("\n");
+}
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -66,7 +109,8 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const rawBody = message.text?.trim() ?? "";
-  if (!rawBody) {
+  const hasFileAttachments = (message.fileParameters?.length ?? 0) > 0;
+  if (!rawBody && !hasFileAttachments) {
     return;
   }
 
@@ -249,20 +293,34 @@ export async function handleNextcloudTalkInbound(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  // Build attachment block from file parameters if present
+  const attachmentBlock = hasFileAttachments
+    ? buildAttachmentBlock(
+        message.fileParameters!,
+        account.baseUrl,
+        account.config.apiUser?.trim(),
+      )
+    : "";
+  const agentBody = attachmentBlock
+    ? rawBody
+      ? `${rawBody}\n\n${attachmentBlock}`
+      : attachmentBlock
+    : rawBody;
+
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: rawBody,
+    body: agentBody,
   });
 
   const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: rawBody,
+    BodyForAgent: agentBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: isGroup ? `nextcloud-talk:room:${roomToken}` : `nextcloud-talk:${senderId}`,
