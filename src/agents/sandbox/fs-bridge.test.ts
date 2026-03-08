@@ -46,6 +46,12 @@ function findCallByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
 }
 
+function findCallsByScriptFragment(fragment: string) {
+  return mockedExecDockerRaw.mock.calls.filter(([args]) =>
+    getDockerScript(args).includes(fragment),
+  );
+}
+
 function dockerExecResult(stdout: string) {
   return {
     stdout: Buffer.from(stdout),
@@ -242,6 +248,40 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
     expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(true);
     expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+  });
+
+  it("anchors remove operations on canonical parent + basename", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.remove({ filePath: "nested/file.txt" });
+
+    const removeCall = findCallByScriptFragment('rm -f -- "$2"');
+    expect(removeCall).toBeDefined();
+    const args = removeCall?.[0] ?? [];
+    expect(getDockerArg(args, 1)).toBe("/workspace/nested");
+    expect(getDockerArg(args, 2)).toBe("file.txt");
+    expect(args).not.toContain("/workspace/nested/file.txt");
+
+    const canonicalCalls = findCallsByScriptFragment('readlink -f -- "$cursor"');
+    expect(
+      canonicalCalls.some(([callArgs]) => getDockerArg(callArgs, 1) === "/workspace/nested"),
+    ).toBe(true);
+  });
+
+  it("anchors rename operations on canonical parents + basenames", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.rename({ from: "from.txt", to: "nested/to.txt" });
+
+    const renameCall = findCallByScriptFragment('mv -- "$3" "$2/$4"');
+    expect(renameCall).toBeDefined();
+    const args = renameCall?.[0] ?? [];
+    expect(getDockerArg(args, 1)).toBe("/workspace");
+    expect(getDockerArg(args, 2)).toBe("/workspace/nested");
+    expect(getDockerArg(args, 3)).toBe("from.txt");
+    expect(getDockerArg(args, 4)).toBe("to.txt");
+    expect(args).not.toContain("/workspace/from.txt");
+    expect(args).not.toContain("/workspace/nested/to.txt");
   });
 
   it("re-validates target before final rename and cleans temp file on failure", async () => {
