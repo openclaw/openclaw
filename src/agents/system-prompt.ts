@@ -3,6 +3,7 @@ import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { resolveCronStyleNow } from "./current-time.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
@@ -98,7 +99,12 @@ function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  // Include actual current time so the model knows time-of-day for greetings
+  const { timeLine } = resolveCronStyleNow(
+    { agents: { defaults: { userTimezone: params.userTimezone } } },
+    Date.now(),
+  );
+  return ["## Current Date & Time", timeLine, ""];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {

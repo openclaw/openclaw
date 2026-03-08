@@ -386,7 +386,8 @@ describe("buildAgentSystemPrompt", () => {
     for (const testCase of cases) {
       const prompt = buildAgentSystemPrompt(testCase.params);
       expect(prompt, testCase.name).toContain("## Current Date & Time");
-      expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
+      expect(prompt, testCase.name).toContain("Current time:");
+      expect(prompt, testCase.name).toContain("America/Chicago");
     }
   });
 
@@ -400,29 +401,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("current date");
   });
 
-  // The system prompt intentionally does NOT include the current date/time.
-  // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
-  // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
-  it("does NOT include a date or time in the system prompt (cache stability)", () => {
+  // The system prompt now includes the current date/time so agents can greet
+  // with the correct time-of-day (morning/evening). This fixes a bug where
+  // the model would guess and often get it wrong.
+  // See: https://github.com/openclaw/openclaw/issues/38782
+  it("includes current date and time in the system prompt for correct time-of-day greetings", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
       userTimeFormat: "12",
     });
 
-    // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
-    expect(prompt).toContain("Time zone: America/Chicago");
-    expect(prompt).not.toContain("Monday, January 5th, 2026");
-    expect(prompt).not.toContain("3:26 PM");
-    expect(prompt).not.toContain("15:26");
+    // The prompt should contain both timezone and current time
+    expect(prompt).toContain("Current time:");
+    expect(prompt).toContain("America/Chicago");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
