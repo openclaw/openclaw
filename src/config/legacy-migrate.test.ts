@@ -96,6 +96,59 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
+describe("legacy migrate local onboarding tools profile", () => {
+  it("migrates legacy local onboarding messaging profile to coding", () => {
+    const res = migrateLegacyConfig({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(res.config?.tools?.profile).toBe("coding");
+    expect(res.changes).toContain(
+      "Migrated tools.profile messaging → coding for legacy local onboarding config (2026.3.2) to restore file/runtime tools.",
+    );
+  });
+
+  it("does not migrate messaging profile when tools policy includes additional keys", () => {
+    const res = migrateLegacyConfig({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["group:fs"],
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+
+  it("does not migrate messaging profile for newer onboarding versions", () => {
+    const res = migrateLegacyConfig({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.7",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toHaveLength(0);
+  });
+});
+
 describe("legacy migrate heartbeat config", () => {
   it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
     const res = migrateLegacyConfig({

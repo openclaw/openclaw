@@ -393,6 +393,49 @@ describe("legacy config detection", () => {
       }
     }
   });
+  it("flags legacy local onboarding tools.profile messaging defaults", async () => {
+    const validated = validateConfigObject({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+    expect(validated.ok).toBe(false);
+    if (!validated.ok) {
+      expect(validated.issues.some((issue) => issue.path === "tools.profile")).toBe(true);
+    }
+  });
+  it("does not flag messaging profile when tools policy includes additional keys", async () => {
+    const validated = validateConfigObject({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["group:fs"],
+      },
+    });
+    expect(validated.ok).toBe(true);
+  });
+  it("does not flag messaging profile for newer onboarding versions", async () => {
+    const validated = validateConfigObject({
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.7",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+    expect(validated.ok).toBe(true);
+  });
   it("flags gateway.bind host aliases as legacy to trigger auto-migration paths", async () => {
     const cases = ["0.0.0.0", "::", "127.0.0.1", "localhost", "::1"] as const;
     for (const bind of cases) {

@@ -16,6 +16,7 @@ import {
 } from "./legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { compareOpenClawVersions } from "./version.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -90,6 +91,43 @@ function mergeLegacyIntoDefaults(params: {
 
   root.defaults = defaults;
   params.raw[params.rootKey] = root;
+}
+
+function resolveLegacyLocalOnboardMessagingProfileVersion(
+  raw: Record<string, unknown>,
+): string | null {
+  const tools = getRecord(raw.tools);
+  if (!tools || tools.profile !== "messaging") {
+    return null;
+  }
+  // Preserve explicit custom messaging setups; only migrate the exact generated
+  // legacy shape from local onboarding defaults.
+  if (Object.keys(tools).some((key) => key !== "profile")) {
+    return null;
+  }
+  const wizard = getRecord(raw.wizard);
+  if (!wizard) {
+    return null;
+  }
+  const lastRunCommand =
+    typeof wizard.lastRunCommand === "string" ? wizard.lastRunCommand.trim() : "";
+  if (lastRunCommand !== "onboard") {
+    return null;
+  }
+  const lastRunMode = typeof wizard.lastRunMode === "string" ? wizard.lastRunMode.trim() : "";
+  if (lastRunMode !== "local") {
+    return null;
+  }
+  const lastRunVersion =
+    typeof wizard.lastRunVersion === "string" ? wizard.lastRunVersion.trim() : "";
+  if (!lastRunVersion) {
+    return null;
+  }
+  const compared = compareOpenClawVersions(lastRunVersion, "2026.3.2");
+  if (compared === null || compared > 0) {
+    return null;
+  }
+  return lastRunVersion;
 }
 
 // NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
@@ -200,6 +238,21 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         changes.push("Removed tools.bash (tools.exec already set).");
       }
       delete tools.bash;
+    },
+  },
+  {
+    id: "tools.profile.messaging->coding-legacy-local-onboard",
+    describe: "Migrate legacy local onboarding tools.profile from messaging to coding",
+    apply: (raw, changes) => {
+      const lastRunVersion = resolveLegacyLocalOnboardMessagingProfileVersion(raw);
+      if (!lastRunVersion) {
+        return;
+      }
+      const tools = ensureRecord(raw, "tools");
+      tools.profile = "coding";
+      changes.push(
+        `Migrated tools.profile messaging → coding for legacy local onboarding config (${lastRunVersion}) to restore file/runtime tools.`,
+      );
     },
   },
   {
