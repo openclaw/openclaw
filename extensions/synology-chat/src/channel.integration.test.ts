@@ -1,7 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resolveAgentRoute as resolveAgentRouteForTest } from "../../../src/routing/resolve-route.js";
+import {
+  resolveAgentRoute as resolveAgentRouteForTest,
+  type ResolveAgentRouteInput,
+  type ResolvedAgentRoute,
+} from "../../../src/routing/resolve-route.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
 type RegisteredRoute = {
@@ -22,8 +26,10 @@ const defaultResolvedRoute = {
   mainSessionKey: "agent:nas-code:main",
   lastRoutePolicy: "session",
   matchedBy: "binding.account",
-} as const;
-const resolveAgentRoute = vi.fn(() => ({ ...defaultResolvedRoute }));
+} satisfies ResolvedAgentRoute;
+const resolveAgentRoute = vi.fn<(params: ResolveAgentRouteInput) => ResolvedAgentRoute>(() => ({
+  ...defaultResolvedRoute,
+}));
 
 vi.mock("openclaw/plugin-sdk/synology-chat", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/synology-chat")>();
@@ -246,7 +252,9 @@ describe("Synology channel wiring integration", () => {
       abortSignal: abortController.signal,
     };
 
-    resolveAgentRoute.mockImplementation((params) => resolveAgentRouteForTest(params));
+    resolveAgentRoute.mockImplementation((params: ResolveAgentRouteInput) =>
+      resolveAgentRouteForTest(params),
+    );
     loadConfigMock.mockResolvedValue(cfg);
 
     const started = plugin.gateway.startAccount(ctx);
