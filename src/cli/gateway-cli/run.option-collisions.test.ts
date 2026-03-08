@@ -245,31 +245,35 @@ describe("gateway run option collisions", () => {
 
   it("reads gateway password from --password-file", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
-    const passwordFile = path.join(tempDir, "gateway-password.txt");
-    await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+    try {
+      const passwordFile = path.join(tempDir, "gateway-password.txt");
+      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
 
-    await runGatewayCli([
-      "gateway",
-      "run",
-      "--auth",
-      "password",
-      "--password-file",
-      passwordFile,
-      "--allow-unconfigured",
-    ]);
+      await runGatewayCli([
+        "gateway",
+        "run",
+        "--auth",
+        "password",
+        "--password-file",
+        passwordFile,
+        "--allow-unconfigured",
+      ]);
 
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        auth: expect.objectContaining({
-          mode: "password",
-          password: "pw_from_file",
+      expect(startGatewayServer).toHaveBeenCalledWith(
+        18789,
+        expect.objectContaining({
+          auth: expect.objectContaining({
+            mode: "password",
+            password: "pw_from_file",
+          }),
         }),
-      }),
-    );
-    expect(runtimeErrors).not.toContain(
-      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
-    );
+      );
+      expect(runtimeErrors).not.toContain(
+        "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("warns when gateway password is passed inline", async () => {
@@ -290,21 +294,25 @@ describe("gateway run option collisions", () => {
 
   it("rejects using both --password and --password-file", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
-    const passwordFile = path.join(tempDir, "gateway-password.txt");
-    await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+    try {
+      const passwordFile = path.join(tempDir, "gateway-password.txt");
+      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
 
-    await expect(
-      runGatewayCli([
-        "gateway",
-        "run",
-        "--password",
-        "pw_inline",
-        "--password-file",
-        passwordFile,
-        "--allow-unconfigured",
-      ]),
-    ).rejects.toThrow("__exit__:1");
+      await expect(
+        runGatewayCli([
+          "gateway",
+          "run",
+          "--password",
+          "pw_inline",
+          "--password-file",
+          passwordFile,
+          "--allow-unconfigured",
+        ]),
+      ).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors).toContain("Error: Use either --password or --password-file.");
+      expect(runtimeErrors).toContain("Error: Use either --password or --password-file.");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
