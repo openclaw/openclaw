@@ -480,13 +480,29 @@ export async function runReplyAgent(params: {
     if (payloadArray.length === 0) {
       // When auto-compaction occurred but the model produced no output, inject a
       // compaction notice so the user is never left in complete silence.
-      if (autoCompactionCompleted && sessionKey) {
-        enqueueSystemEvent(
-          "Auto-compaction completed. Previous context was summarized. Agent should resume the task in progress.",
-          { sessionKey },
-        );
+      // Note: run.ts already enqueues a system event after successful compaction,
+      // so we only need the user-facing payload here.
+      if (autoCompactionCompleted) {
+        await incrementRunCompactionCount({
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          contextTokensUsed,
+        });
+        if (sessionKey) {
+          try {
+            const contextContent = await readPostCompactionContext(process.cwd(), cfg);
+            if (contextContent) {
+              enqueueSystemEvent(contextContent, { sessionKey });
+            }
+          } catch {
+            // Best-effort: workspace file may be inaccessible during compaction edge cases.
+          }
+        }
         return finalizeWithFollowup(
-          { text: "🧹 Context was auto-compacted. Please re-state your request." },
+          { text: "🧹 Context was auto-compacted. Resuming task." },
           queueKey,
           runFollowupTurn,
         );
@@ -520,19 +536,9 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
-      // Same compaction-silence guard as above: filtered payloads should not
-      // leave the user with zero response when compaction just happened.
-      if (autoCompactionCompleted && sessionKey) {
-        enqueueSystemEvent(
-          "Auto-compaction completed. Previous context was summarized. Agent should resume the task in progress.",
-          { sessionKey },
-        );
-        return finalizeWithFollowup(
-          { text: "🧹 Context was auto-compacted. Please re-state your request." },
-          queueKey,
-          runFollowupTurn,
-        );
-      }
+      // payloadArray was non-empty but replyPayloads is empty after filtering.
+      // This typically means content was already delivered via block streaming,
+      // messaging tools, or dedup — not a silence bug. No fallback needed.
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
