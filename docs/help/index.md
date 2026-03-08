@@ -11,6 +11,7 @@ title: "Help"
 If you want a quick “get unstuck” flow, start here:
 
 - **Troubleshooting:** [Start here](/help/troubleshooting)
+- **RAG and agent debugging:** [Checklist](/help/rag-debugging)
 - **Install sanity (Node/npm/PATH):** [Install](/install#nodejs--npm-path-sanity)
 - **Gateway issues:** [Gateway troubleshooting](/gateway/troubleshooting)
 - **Logs:** [Logging](/logging) and [Gateway logging](/gateway/logging)
