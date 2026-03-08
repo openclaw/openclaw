@@ -135,4 +135,70 @@ struct CronModelsTests {
         #expect(job.nextRunDate == Date(timeIntervalSince1970: 1_700_000_000))
         #expect(job.lastRunDate == Date(timeIntervalSince1970: 1_700_000_050))
     }
+
+    @Test func decodeCronListResponseSkipsMalformedJobs() throws {
+        let json = """
+        {
+          "jobs": [
+            {
+              "id": "good",
+              "name": "Healthy job",
+              "enabled": true,
+              "createdAtMs": 1,
+              "updatedAtMs": 2,
+              "schedule": { "kind": "at", "at": "2026-03-01T10:00:00Z" },
+              "sessionTarget": "main",
+              "wakeMode": "now",
+              "payload": { "kind": "systemEvent", "text": "hello" },
+              "state": {}
+            },
+            {
+              "id": "bad",
+              "name": "Broken job",
+              "enabled": true,
+              "createdAtMs": 1,
+              "updatedAtMs": 2,
+              "schedule": { "kind": "at", "at": "2026-03-01T10:00:00Z" },
+              "payload": { "kind": "systemEvent", "text": "hello" },
+              "state": {}
+            }
+          ],
+          "total": 2,
+          "offset": 0,
+          "limit": 50,
+          "hasMore": false,
+          "nextOffset": null
+        }
+        """
+
+        let jobs = try GatewayConnection.decodeCronListResponse(Data(json.utf8))
+
+        #expect(jobs.count == 1)
+        #expect(jobs.first?.id == "good")
+    }
+
+    @Test func decodeCronRunsResponseSkipsMalformedEntries() throws {
+        let json = """
+        {
+          "entries": [
+            {
+              "ts": 1,
+              "jobId": "good",
+              "action": "finished",
+              "status": "ok"
+            },
+            {
+              "jobId": "bad",
+              "action": "finished",
+              "status": "ok"
+            }
+          ]
+        }
+        """
+
+        let entries = try GatewayConnection.decodeCronRunsResponse(Data(json.utf8))
+
+        #expect(entries.count == 1)
+        #expect(entries.first?.jobId == "good")
+    }
 }
