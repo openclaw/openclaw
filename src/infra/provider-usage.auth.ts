@@ -20,13 +20,17 @@ export type ProviderAuth = {
   provider: UsageProviderId;
   token: string;
   accountId?: string;
+  projectId?: string;
 };
 
-function parseGoogleToken(apiKey: string): { token: string } | null {
+function parseGoogleToken(apiKey: string): { token: string; projectId?: string } | null {
   try {
-    const parsed = JSON.parse(apiKey) as { token?: unknown };
+    const parsed = JSON.parse(apiKey) as { token?: unknown; projectId?: unknown };
     if (parsed && typeof parsed.token === "string") {
-      return { token: parsed.token };
+      return {
+        token: parsed.token,
+        projectId: typeof parsed.projectId === "string" ? parsed.projectId : undefined,
+      };
     }
   } catch {
     // ignore
@@ -170,16 +174,27 @@ async function resolveOAuthToken(params: {
         if (params.provider === "google-gemini-cli") {
           const parsed = parseGoogleToken(resolved.apiKey);
           token = parsed?.token ?? resolved.apiKey;
+          projectId = parsed?.projectId ?? (cred.type === "oauth" ? cred.projectId : undefined);
         }
         return {
           provider: params.provider,
           token,
+          projectId,
           accountId:
             cred.type === "oauth" && "accountId" in cred
               ? (cred as { accountId?: string }).accountId
               : undefined,
         };
       }
+      return {
+        provider: params.provider,
+        token,
+        projectId,
+        accountId:
+          cred.type === "oauth" && "accountId" in cred
+            ? (cred as { accountId?: string }).accountId
+            : undefined,
+      };
     } catch {
       // ignore
     }
