@@ -93,6 +93,27 @@ function resolveXiaomiApiKey(): string | undefined {
   });
 }
 
+/**
+ * Resolve Ollama session cookie.
+ *
+ * Ollama doesn't have a public API for usage. We need the browser session cookie
+ * to fetch usage data from ollama.com/settings.
+ *
+ * SECURITY: Only accept explicit OLLAMA_COOKIE environment variable.
+ *
+ * We do NOT read from auth profile store because token profiles are also
+ * used for Ollama model/API authentication (resolveApiKeyFromProfiles for ollama).
+ * Using a token as a Cookie header would:
+ * 1. Leak API secrets to https://ollama.com/settings
+ * 2. Fail usage auth anyway (it's an API token, not a browser cookie)
+ *
+ * Users must explicitly set OLLAMA_COOKIE env var for usage tracking.
+ * The cookie string should be in format: "name1=value1; name2=value2"
+ * Common session cookie names: __Secure-session, session, next-auth.session-token
+ */
+async function resolveOllamaCookie(): Promise<string | undefined> {
+  return normalizeSecretInput(process.env.OLLAMA_COOKIE);
+}
 function resolveProviderApiKeyFromConfigAndStore(params: {
   providerId: UsageProviderId;
   envDirect: Array<string | undefined>;
@@ -248,6 +269,13 @@ export async function resolveProviderAuths(params: {
       const apiKey = resolveXiaomiApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "ollama") {
+      const cookie = await resolveOllamaCookie();
+      if (cookie) {
+        auths.push({ provider, token: cookie });
       }
       continue;
     }

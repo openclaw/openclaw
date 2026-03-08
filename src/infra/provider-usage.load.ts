@@ -6,6 +6,7 @@ import {
   fetchCopilotUsage,
   fetchGeminiUsage,
   fetchMinimaxUsage,
+  fetchOllamaUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
 import {
@@ -63,6 +64,8 @@ export async function loadProviderUsageSummary(
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
             return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+          case "ollama":
+            return await fetchOllamaUsage(auth.token, timeoutMs, fetchFn, auth.provider);
           case "xiaomi":
             return {
               provider: "xiaomi",
