@@ -130,9 +130,10 @@ export function createProfileTabOps({
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
-    // For remote profiles, use Playwright's persistent connection to create tabs
-    // This ensures the tab persists beyond a single request.
-    if (!profile.cdpIsLoopback) {
+    // Most remote profiles need Playwright's persistent connection so new tabs survive
+    // beyond a single HTTP request. Attach-only remotes already expose a stable target
+    // set, so prefer raw CDP there and avoid Playwright's newPage() path.
+    if (!profile.cdpIsLoopback && !profile.attachOnly) {
       const mod = await getPwAiModule({ mode: "strict" });
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {

@@ -151,6 +151,11 @@ export function isDockerizedSandboxGatewayRuntime(params?: {
   return existsSync(DOCKER_ENV_MARKER) && existsSync(DOCKER_SOCKET_PATH);
 }
 
+type ResolvedSandboxBrowserCdpTarget = {
+  host: string;
+  port: number;
+};
+
 async function inspectDockerNetworks(containerName: string): Promise<DockerNetworkMap> {
   const result = await execDocker(["inspect", containerName], { allowFailure: true });
   if (result.code !== 0) {
@@ -245,6 +250,48 @@ export async function resolveSandboxBrowserCdpHost(params: {
     }
   }
   return SANDBOX_BRIDGE_CONTAINER_HOST;
+}
+
+export async function resolveSandboxBrowserCdpTarget(params: {
+  containerName?: string;
+  cdpHost?: string;
+  dockerizedGatewayRuntime?: boolean;
+  mappedCdpPort: number;
+  internalCdpPort: number;
+}): Promise<ResolvedSandboxBrowserCdpTarget> {
+  const configuredHost = params.cdpHost?.trim();
+  if (configuredHost) {
+    return {
+      host: configuredHost,
+      port: params.mappedCdpPort,
+    };
+  }
+  if (!params.dockerizedGatewayRuntime) {
+    return {
+      host: "127.0.0.1",
+      port: params.mappedCdpPort,
+    };
+  }
+  if (params.containerName) {
+    const gatewayNetwork = await resolveDockerizedGatewayNetworkName();
+    if (gatewayNetwork) {
+      const networkIp = await ensureContainerNetworkIp({
+        containerName: params.containerName,
+        network: gatewayNetwork,
+        alias: params.containerName,
+      });
+      if (networkIp) {
+        return {
+          host: networkIp,
+          port: params.internalCdpPort,
+        };
+      }
+    }
+  }
+  return {
+    host: SANDBOX_BRIDGE_CONTAINER_HOST,
+    port: params.mappedCdpPort,
+  };
 }
 
 function buildSandboxBrowserResolvedConfig(params: {
@@ -463,10 +510,12 @@ export async function ensureSandboxBrowser(params: {
   if (!mappedCdp) {
     throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
   }
-  const sandboxCdpHost = await resolveSandboxBrowserCdpHost({
+  const sandboxCdpTarget = await resolveSandboxBrowserCdpTarget({
     containerName,
     cdpHost: params.cfg.browser.cdpHost,
     dockerizedGatewayRuntime: isDockerizedSandboxGatewayRuntime(),
+    mappedCdpPort: mappedCdp,
+    internalCdpPort: params.cfg.browser.cdpPort,
   });
 
   const mappedNoVnc = noVncEnabled
@@ -498,8 +547,8 @@ export async function ensureSandboxBrowser(params: {
   const shouldReuse =
     existing &&
     existing.containerName === containerName &&
-    existingProfile?.cdpPort === mappedCdp &&
-    existing.bridge.state.resolved.cdpHost === sandboxCdpHost;
+    existingProfile?.cdpPort === sandboxCdpTarget.port &&
+    existing.bridge.state.resolved.cdpHost === sandboxCdpTarget.host;
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -537,13 +586,13 @@ export async function ensureSandboxBrowser(params: {
             await execDocker(["start", containerName]);
           }
           const ok = await waitForSandboxCdp({
-            cdpHost: sandboxCdpHost,
-            cdpPort: mappedCdp,
+            cdpHost: sandboxCdpTarget.host,
+            cdpPort: sandboxCdpTarget.port,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
           if (!ok) {
             throw new Error(
-              `Sandbox browser CDP did not become reachable on ${sandboxCdpHost}:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
+              `Sandbox browser CDP did not become reachable on ${sandboxCdpTarget.host}:${sandboxCdpTarget.port} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
             );
           }
         }
@@ -552,8 +601,8 @@ export async function ensureSandboxBrowser(params: {
     return await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
-        cdpHost: sandboxCdpHost,
-        cdpPort: mappedCdp,
+        cdpHost: sandboxCdpTarget.host,
+        cdpPort: sandboxCdpTarget.port,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),

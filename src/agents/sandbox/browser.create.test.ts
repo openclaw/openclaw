@@ -3,6 +3,7 @@ import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
   applySandboxBridgeAccessToDockerConfig,
   ensureSandboxBrowser,
+  resolveSandboxBrowserCdpTarget,
   isDockerizedSandboxGatewayRuntime,
   resolveSandboxBrowserCdpHost,
   resolveSandboxBridgeAccess,
@@ -263,10 +264,36 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
+  it("uses the mapped CDP port for non-Dockerized gateway runtimes", async () => {
+    await expect(
+      resolveSandboxBrowserCdpTarget({
+        dockerizedGatewayRuntime: false,
+        mappedCdpPort: 49100,
+        internalCdpPort: 9222,
+      }),
+    ).resolves.toEqual({
+      host: "127.0.0.1",
+      port: 49100,
+    });
+  });
+
   it("falls back to the Docker host alias when no direct gateway network path is available", async () => {
     await expect(resolveSandboxBrowserCdpHost({ dockerizedGatewayRuntime: true })).resolves.toBe(
       "host.docker.internal",
     );
+  });
+
+  it("falls back to the mapped CDP port when only the Docker host alias is available", async () => {
+    await expect(
+      resolveSandboxBrowserCdpTarget({
+        dockerizedGatewayRuntime: true,
+        mappedCdpPort: 49100,
+        internalCdpPort: 9222,
+      }),
+    ).resolves.toEqual({
+      host: "host.docker.internal",
+      port: 49100,
+    });
   });
 
   it("detects Dockerized gateway runtime only when both dockerenv and docker.sock exist", () => {
@@ -299,6 +326,11 @@ describe("ensureSandboxBrowser create args", () => {
         resolved: expect.objectContaining({
           cdpHost: "gateway-host.internal",
           cdpIsLoopback: false,
+          profiles: {
+            openclaw: expect.objectContaining({
+              cdpPort: 49100,
+            }),
+          },
         }),
       }),
     );
@@ -359,6 +391,17 @@ describe("ensureSandboxBrowser create args", () => {
           dockerizedGatewayRuntime: true,
         }),
       ).resolves.toBe("172.18.0.3");
+      await expect(
+        resolveSandboxBrowserCdpTarget({
+          containerName: "sandbox-browser",
+          dockerizedGatewayRuntime: true,
+          mappedCdpPort: 49100,
+          internalCdpPort: 9222,
+        }),
+      ).resolves.toEqual({
+        host: "172.18.0.3",
+        port: 9222,
+      });
       expect(dockerMocks.execDocker).toHaveBeenCalledWith(
         ["network", "connect", "--alias", "sandbox-browser", "openclaw_default", "sandbox-browser"],
         { allowFailure: true },
