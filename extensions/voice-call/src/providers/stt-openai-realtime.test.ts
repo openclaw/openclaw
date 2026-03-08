@@ -14,7 +14,7 @@ function createProvider(config: RealtimeSTTConfig): ProviderInternals {
 describe("OpenAIRealtimeSTTProvider constructor defaults", () => {
   it("uses vadThreshold: 0 when explicitly configured (max sensitivity)", () => {
     const provider = createProvider({
-      apiKey: "sk-test",
+      apiKey: "sk-test", // pragma: allowlist secret
       vadThreshold: 0,
     });
     expect(provider.vadThreshold).toBe(0);
@@ -22,7 +22,7 @@ describe("OpenAIRealtimeSTTProvider constructor defaults", () => {
 
   it("uses silenceDurationMs: 0 when explicitly configured", () => {
     const provider = createProvider({
-      apiKey: "sk-test",
+      apiKey: "sk-test", // pragma: allowlist secret
       silenceDurationMs: 0,
     });
     expect(provider.silenceDurationMs).toBe(0);
@@ -30,7 +30,7 @@ describe("OpenAIRealtimeSTTProvider constructor defaults", () => {
 
   it("falls back to defaults when values are undefined", () => {
     const provider = createProvider({
-      apiKey: "sk-test",
+      apiKey: "sk-test", // pragma: allowlist secret
     });
     expect(provider.vadThreshold).toBe(0.5);
     expect(provider.silenceDurationMs).toBe(800);
