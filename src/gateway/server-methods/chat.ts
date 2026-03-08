@@ -1114,7 +1114,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             broadcastChatFinal({
               context,
               runId: clientRunId,
-              sessionKey: rawSessionKey,
+              sessionKey,
               message,
             });
           }
@@ -1147,7 +1147,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           broadcastChatError({
             context,
             runId: clientRunId,
-            sessionKey: rawSessionKey,
+            sessionKey,
             errorMessage: String(err),
           });
         })
@@ -1197,7 +1197,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry } = loadSessionEntry(rawSessionKey);
+    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
@@ -1228,7 +1228,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Broadcast to webchat for immediate UI update
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
-      sessionKey: rawSessionKey,
+      sessionKey,
       seq: 0,
       state: "final" as const,
       message: stripInlineDirectiveTagsFromMessageForDisplay(
@@ -1236,7 +1236,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       ),
     };
     context.broadcast("chat", chatPayload);
-    context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
+    context.nodeSendToSession(sessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
   },
