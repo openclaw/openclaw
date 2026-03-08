@@ -440,6 +440,76 @@ export function renderNode(params: {
         });
       }
     }
+
+    // Handle mixed primitive + object types (e.g., string | {source, provider, id})
+    const hasObject = nonNull.some((v) => schemaType(v) === "object");
+    const hasPrimitive = nonNull.some((v) => ["string", "number", "boolean"].includes(schemaType(v) ?? ""));
+
+    if (hasObject && hasPrimitive) {
+      const displayValue = value ?? schema.default;
+      let displayStr = "";
+      if (typeof displayValue === "string") {
+        displayStr = displayValue;
+      } else if (displayValue !== undefined && displayValue !== null) {
+        try {
+          displayStr = JSON.stringify(displayValue, null, 2);
+        } catch {
+          displayStr = String(displayValue);
+        }
+      }
+
+      return html`
+        <div class="cfg-field">
+          ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+          ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+          ${renderTags(tags)}
+          <div class="cfg-input-wrap">
+            <textarea
+              class="cfg-textarea"
+              placeholder="Enter value as a string or JSON object"
+              rows="3"
+              .value=${displayStr}
+              ?disabled=${disabled}
+              @change=${(e: Event) => {
+                const target = e.target as HTMLTextAreaElement;
+                const raw = target.value.trim();
+                if (!raw) {
+                  onPatch(path, undefined);
+                  return;
+                }
+                try {
+                  const parsed = JSON.parse(raw);
+                  onPatch(path, parsed);
+                } catch {
+                  onPatch(path, raw);
+                }
+              }}
+            />
+            ${schema.default !== undefined
+              ? html`
+                  <button
+                    type="button"
+                    class="cfg-input__reset"
+                    title="Reset to default"
+                    ?disabled=${disabled}
+                    @click=${() => {
+                      const def = schema.default;
+                      if (typeof def === "string") {
+                        onPatch(path, def);
+                      } else {
+                        onPatch(path, def);
+                      }
+                    }}
+                  >↺</button>
+                `
+              : nothing}
+          </div>
+          <div class="cfg-field__help" style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--color-help-text);">
+            Supports plain string or JSON object (e.g., {"source":"env","provider":"1password","id":"..."})
+          </div>
+        </div>
+      `;
+    }
   }
 
   // Enum - use segmented for small, dropdown for large
