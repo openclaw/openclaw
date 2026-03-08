@@ -805,6 +805,8 @@ channels:
     proxy: socks5://<user>:<password>@proxy-host:1080
 ```
 
+    - If no `channels.telegram.proxy` is set, OpenClaw falls back to standard proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`, `http_proxy`). `channels.telegram.proxy` always takes precedence over env vars when both are present.
+
     - Node 22+ defaults to `autoSelectFamily=true` (except WSL2) and `dnsResultOrder=ipv4first`.
     - If your host is WSL2 or explicitly works better with IPv4-only behavior, force family selection:
 
@@ -875,7 +877,7 @@ Primary reference:
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
-- `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
+- `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP). Overrides `HTTPS_PROXY`/`HTTP_PROXY` env vars; when not set, env vars are used as a fallback.
 - `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
 - `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).

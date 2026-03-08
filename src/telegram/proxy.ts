@@ -1,1 +1,1 @@
-export { makeProxyFetch } from "../infra/net/proxy-fetch.js";
+export { makeProxyFetch, resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
