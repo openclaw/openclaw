@@ -46,7 +46,7 @@ vi.mock("./streaming-card.js", () => ({
   FeishuStreamingSession: class {
     active = false;
     start = vi.fn(async () => {
-      this.active = true;
+      this.active = true; // Set immediately so isActive() returns true after await
     });
     update = vi.fn(async () => {});
     close = vi.fn(async () => {
@@ -224,7 +224,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses internal block payload delivery", async () => {
+  it("block chunks in non-card mode are sent immediately (not accumulated)", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -233,15 +233,52 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
-    await options.deliver({ text: "internal reasoning chunk" }, { kind: "block" });
+    await options.deliver({ text: "Plain text block" }, { kind: "block" });
 
+    // Non-card mode blocks are sent immediately (no streaming accumulation)
     expect(streamingInstances).toHaveLength(0);
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    // Block messages are sent right away in non-card mode
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
+  it("processes block chunks in card mode (markdown content)", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+
+    // Card mode blocks start streaming
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows text with <thought> tags in body (not suppressed)", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    // Code example with <thought> tags should be delivered (markdown triggers card mode)
+    await options.deliver(
+      { text: "Example:\n```ts\n// <thought>reasoning</thought>\nconst x = 1\n```" },
+      { kind: "final" },
+    );
+
+    // Should be delivered (not suppressed based on content)
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not set disableBlockStreaming in replyOptions", async () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -249,7 +286,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       chatId: "oc_chat",
     });
 
-    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+    expect(result.replyOptions).not.toHaveProperty("disableBlockStreaming");
   });
 
   it("uses streaming session for auto mode markdown payloads", async () => {
@@ -587,5 +624,299 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: true,
       }),
     );
+  });
+
+  it("processes block chunks with renderMode=card", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "Block content" }, { kind: "block" });
+
+    // Card mode always processes blocks via streaming
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+  });
+
+  it("final messages are always sent regardless of block handling", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    // Markdown content triggers card mode + streaming
+    await options.deliver({ text: "```md\nFinal answer\n```" }, { kind: "final" });
+
+    // Final messages bypass block filtering
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("media is sent even when block text is processed in non-card mode", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver(
+      { text: "Plain block", mediaUrl: "https://example.com/img.png" },
+      { kind: "block" },
+    );
+
+    // Non-card mode blocks now continue to final processing
+    // Text is sent via normal path, media is also sent
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("block+final flow: block accumulates, final sends via streaming without duplication", async () => {
+    // Clear instances from beforeEach setup
+    streamingInstances.length = 0;
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    // Block chunk with markdown code block triggers streaming
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+
+    // Final chunk completes and closes streaming
+    await options.deliver({ text: "```ts\nconst x = 1\nconst y = 2\n```" }, { kind: "final" });
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    // Should not send via regular path (streaming handled it)
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("block chunk returns early when streaming is active (no duplicate send)", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\nLine 1\n```" }, { kind: "block" });
+
+    // Streaming should be active, block should return early
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].isActive()).toBe(true);
+    // No regular message send for block when streaming is active
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("streaming start delay: block awaits streamingStartPromise before proceeding", async () => {
+    streamingInstances.length = 0;
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Deliver block with markdown - triggers streaming start
+    await options.deliver({ text: "```ts\ncode block\n```" }, { kind: "block" });
+
+    // Verify streaming was started
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    // Block should not send via regular path (waits for final)
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("degraded path: when streaming is disabled, block falls back to card send", async () => {
+    streamingInstances.length = 0;
+
+    // Disable streaming via config
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false, // Disable streaming
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nfallback test\n```" }, { kind: "block" });
+
+    // No streaming instances created (streaming disabled)
+    expect(streamingInstances).toHaveLength(0);
+    // Should fall back to card send path (markdown triggers card mode)
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("useCard consistency: plain text blocks skip streaming, code blocks use streaming", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Plain text (no markdown code blocks) - should NOT use streaming
+    await options.deliver({ text: "Plain text without code" }, { kind: "block" });
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    streamingInstances.length = 0;
+
+    // Code block - should use streaming
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    // Should not send immediately (waits for final)
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("useCard consistency: markdown tables trigger streaming", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Markdown table - should use streaming
+    await options.deliver(
+      { text: "| Col1 | Col2 |\n|------|------|\n| A    | B    |" },
+      { kind: "block" },
+    );
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("multiple block chunks accumulate correctly before final", async () => {
+    streamingInstances.length = 0;
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Multiple block chunks with complete markdown
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+    await options.deliver({ text: "```ts\nconst y = 2\n```" }, { kind: "block" });
+    await options.deliver({ text: "```ts\nconst z = 3\n```" }, { kind: "block" });
+
+    // Give partialUpdateQueue time to process
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(streamingInstances).toHaveLength(1);
+    // Updates are queued and processed asynchronously
+    expect(streamingInstances[0].update).toHaveBeenCalled();
+
+    // Final closes streaming
+    await options.deliver(
+      { text: "```ts\nconst x = 1\nconst y = 2\nconst z = 3\n```" },
+      { kind: "final" },
+    );
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("renderMode=card: all blocks use streaming regardless of content", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Plain text in card mode - should still use streaming
+    await options.deliver({ text: "Plain text in card mode" }, { kind: "block" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("threadReply=true disables streaming even for markdown content", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+
+    // Streaming should be disabled for thread replies
+    expect(streamingInstances).toHaveLength(0);
+    // Should use regular card send
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
   });
 });

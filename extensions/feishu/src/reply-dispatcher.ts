@@ -257,16 +257,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
+          // Handle block chunks: start streaming in card mode, but DON'T send yet
+          // The actual message will be sent in the "final" phase
           if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
-              return;
+            // Start streaming for card mode blocks (code blocks, tables, etc. need markdown rendering)
+            if (streamingEnabled && shouldDeliverText && useCard) {
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+              // Mirror block text into streamText so onIdle close still sends content
+              queueStreamingUpdate(text, { mode: "delta" });
+              // Block phase: only collect text for streaming, don't send yet
+              // Media is sent immediately even in block phase
+              if (hasMedia) {
+                for (const mediaUrl of mediaList) {
+                  await sendMediaFeishu({
+                    cfg,
+                    to: chatId,
+                    mediaUrl,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    accountId,
+                  });
+                }
+              }
+              return; // Don't send text in block phase - wait for final
             }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
+            // Non-card mode: continue to regular send path below
           }
 
           if (info?.kind === "final" && streamingEnabled && useCard) {
@@ -382,7 +400,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      disableBlockStreaming: true,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
