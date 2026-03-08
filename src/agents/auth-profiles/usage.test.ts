@@ -26,6 +26,7 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
       "openai:default": { type: "api_key", provider: "openai", key: "sk-test-2" },
       "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
+      "kilocode:default": { type: "api_key", provider: "kilocode", key: "sk-kc-test" },
     },
     usageStats,
   };
@@ -120,6 +121,17 @@ describe("isProfileInCooldown", () => {
     });
     expect(isProfileInCooldown(store, "openrouter:default")).toBe(false);
   });
+
+  it("returns false for Kilocode even when cooldown fields exist", () => {
+    const store = makeStore({
+      "kilocode:default": {
+        cooldownUntil: Date.now() + 60_000,
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    });
+    expect(isProfileInCooldown(store, "kilocode:default")).toBe(false);
+  });
 });
 
 describe("resolveProfilesUnavailableReason", () => {
@@ -175,6 +187,24 @@ describe("resolveProfilesUnavailableReason", () => {
         now,
       }),
     ).toBe("auth");
+  });
+
+  it("returns overloaded for active overloaded cooldown windows", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { overloaded: 2, rate_limit: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("overloaded");
   });
 
   it("falls back to rate_limit when active cooldown has no reason history", () => {

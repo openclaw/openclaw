@@ -56,6 +56,23 @@ const withRootMountedControlUiServer = (params: {
 const withPluginGatewayServer = (params: Parameters<typeof withGatewayServer>[0]) =>
   withGatewayServer(params);
 
+const PROBE_CASES = [
+  { path: "/health", status: "live" },
+  { path: "/healthz", status: "live" },
+  { path: "/ready", status: "ready" },
+  { path: "/readyz", status: "ready" },
+] as const;
+
+async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {
+  for (const probeCase of PROBE_CASES) {
+    const response = await sendRequest(server, { path: probeCase.path });
+    expect(response.res.statusCode, probeCase.path).toBe(200);
+    expect(response.getBody(), probeCase.path).toBe(
+      JSON.stringify({ ok: true, status: probeCase.status }),
+    );
+  }
+}
+
 function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHandler) {
   return {
     handlePluginRequest,
@@ -98,20 +115,7 @@ describe("gateway plugin HTTP auth boundary", () => {
       prefix: "openclaw-plugin-http-probes-test-",
       resolvedAuth: AUTH_TOKEN,
       run: async (server) => {
-        const probeCases = [
-          { path: "/health", status: "live" },
-          { path: "/healthz", status: "live" },
-          { path: "/ready", status: "ready" },
-          { path: "/readyz", status: "ready" },
-        ] as const;
-
-        for (const probeCase of probeCases) {
-          const response = await sendRequest(server, { path: probeCase.path });
-          expect(response.res.statusCode, probeCase.path).toBe(200);
-          expect(response.getBody(), probeCase.path).toBe(
-            JSON.stringify({ ok: true, status: probeCase.status }),
-          );
-        }
+        await expectProbeRoutesHealthy(server);
       },
     });
   });
@@ -490,6 +494,44 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
         expect(response.res.statusCode).toBe(503);
         expect(response.getBody()).toContain("Control UI assets not found");
+      },
+    });
+  });
+
+  test("root-mounted control ui does not swallow gateway probe routes", async () => {
+    const handlePluginRequest = vi.fn(async () => false);
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-control-ui-probes-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        await expectProbeRoutesHealthy(server);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(PROBE_CASES.length);
+      },
+    });
+  });
+
+  test("root-mounted control ui still lets plugins claim probe paths first", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname !== "/healthz") {
+        return false;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-control-ui-probe-shadow-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/healthz" });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
   });

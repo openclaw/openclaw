@@ -1,4 +1,7 @@
-import type { SubagentRunRecord } from "../../../agents/subagent-registry.js";
+import {
+  countPendingDescendantRuns,
+  type SubagentRunRecord,
+} from "../../../agents/subagent-registry.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
@@ -15,23 +18,38 @@ import { parseDiscordTarget } from "../../../discord/targets.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   formatDurationCompact,
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
+import {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+} from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
-import { isDiscordSurface, resolveDiscordAccountId } from "../discord-context.js";
 import {
   formatRunLabel,
   formatRunStatus,
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
+import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
-export { isDiscordSurface, resolveDiscordAccountId };
+export {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+  resolveTelegramConversationId,
+};
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -57,8 +75,6 @@ export const ACTIONS = new Set([
 export const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
-
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function compactLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -104,7 +120,15 @@ function resolveModelDisplay(
   return combined;
 }
 
-export function resolveDisplayStatus(entry: SubagentRunRecord) {
+export function resolveDisplayStatus(
+  entry: SubagentRunRecord,
+  options?: { pendingDescendants?: number },
+) {
+  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
+  if (pendingDescendants > 0) {
+    const childLabel = pendingDescendants === 1 ? "child" : "children";
+    return `active (waiting on ${pendingDescendants} ${childLabel})`;
+  }
   const status = formatRunStatus(entry);
   return status === "error" ? "failed" : status;
 }
@@ -114,12 +138,15 @@ export function formatSubagentListLine(params: {
   index: number;
   runtimeMs: number;
   sessionEntry?: SessionEntry;
+  pendingDescendants?: number;
 }) {
   const usageText = formatTokenUsageDisplay(params.sessionEntry);
   const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
   const task = formatTaskPreview(params.entry.task);
   const runtime = formatDurationCompact(params.runtimeMs);
-  const status = resolveDisplayStatus(params.entry);
+  const status = resolveDisplayStatus(params.entry, {
+    pendingDescendants: params.pendingDescendants,
+  });
   return `${params.index}. ${label} (${resolveModelDisplay(params.sessionEntry, params.entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
 }
 
@@ -177,6 +204,8 @@ export function resolveSubagentTarget(
     token,
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
+    isActive: (entry) =>
+      !entry.endedAt || Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
       invalidIndex: (value) => `Invalid subagent index: ${value}`,
@@ -206,7 +235,9 @@ export function resolveRequesterSessionKey(
 ): string | undefined {
   const commandTarget = params.ctx.CommandTargetSessionKey?.trim();
   const commandSession = params.sessionKey?.trim();
-  const raw = opts?.preferCommandTarget
+  const shouldPreferCommandTarget =
+    opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
+  const raw = shouldPreferCommandTarget
     ? commandTarget || commandSession
     : commandSession || commandTarget;
   if (!raw) {
@@ -313,7 +344,7 @@ export async function resolveFocusTargetSession(params: {
 
   const attempts: Array<Record<string, string>> = [];
   attempts.push({ key: token });
-  if (SESSION_ID_RE.test(token)) {
+  if (looksLikeSessionId(token)) {
     attempts.push({ sessionId: token });
   }
   attempts.push({ label: token });

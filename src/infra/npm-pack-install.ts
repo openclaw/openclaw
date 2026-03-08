@@ -8,6 +8,11 @@ import {
   type NpmIntegrityDriftPayload,
   resolveNpmIntegrityDriftWithDefaultMessage,
 } from "./npm-integrity.js";
+import {
+  formatPrereleaseResolutionError,
+  isPrereleaseResolutionAllowed,
+  parseRegistryNpmSpec,
+} from "./npm-registry-spec.js";
 
 export type NpmSpecArchiveInstallFlowResult<TResult extends { ok: boolean }> =
   | {
@@ -94,6 +99,13 @@ export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>
   installFromArchive: (params: { archivePath: string }) => Promise<TResult>;
 }): Promise<NpmSpecArchiveInstallFlowResult<TResult>> {
   return await withTempDir(params.tempDirPrefix, async (tmpDir) => {
+    const parsedSpec = parseRegistryNpmSpec(params.spec);
+    if (!parsedSpec) {
+      return {
+        ok: false,
+        error: "unsupported npm spec",
+      };
+    }
     const packedResult = await packNpmSpecToArchive({
       spec: params.spec,
       timeoutMs: params.timeoutMs,
@@ -107,6 +119,21 @@ export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>
       ...packedResult.metadata,
       resolvedAt: new Date().toISOString(),
     };
+    if (
+      npmResolution.version &&
+      !isPrereleaseResolutionAllowed({
+        spec: parsedSpec,
+        resolvedVersion: npmResolution.version,
+      })
+    ) {
+      return {
+        ok: false,
+        error: formatPrereleaseResolutionError({
+          spec: parsedSpec,
+          resolvedVersion: npmResolution.version,
+        }),
+      };
+    }
 
     const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
       spec: params.spec,
