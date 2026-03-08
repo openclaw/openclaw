@@ -1,7 +1,6 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -199,19 +198,24 @@ export async function handleInlineActions(params: {
         resolveGatewayMessageChannel(ctx.Provider) ??
         undefined;
 
-      const tools = createOpenClawTools({
-        agentSessionKey: sessionKey,
-        agentChannel: channel,
-        agentAccountId: (ctx as { AccountId?: string }).AccountId,
-        agentTo: ctx.OriginatingTo ?? ctx.To,
-        agentThreadId: ctx.MessageThreadId ?? undefined,
-        agentDir,
-        workspaceDir,
+      const tools = createOpenClawCodingTools({
         config: cfg,
+        agentId,
+        workspaceDir,
+        sessionKey,
+        messageProvider: command.channel ?? channel,
+        modelProvider: provider,
+        modelId: model,
+        groupId: sessionEntry?.groupId ?? undefined,
+        groupChannel: sessionEntry?.groupChannel ?? undefined,
+        groupSpace: sessionEntry?.space ?? undefined,
+        spawnedBy: sessionEntry?.spawnedBy ?? undefined,
+        senderIsOwner: command.senderIsOwner,
+        senderId: command.senderId,
+        agentAccountId: (ctx as { AccountId?: string }).AccountId,
+        agentDir,
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
-
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      const tool = tools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
