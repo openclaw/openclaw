@@ -123,6 +123,8 @@ export function createBlockReplyDeliveryHandler(params: {
     }
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
+
+    // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
     } else if (params.blockStreamingEnabled) {

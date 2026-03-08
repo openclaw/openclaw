@@ -88,4 +88,34 @@ describe("subscribeEmbeddedPiSession", () => {
       onBlockReplyFlush.mock.invocationCallOrder[0],
     );
   });
+
+  it("does not emit an empty block reply when no text was buffered before tool_execution_start", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+    const onBlockReplyFlush = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-flush-empty",
+      onBlockReply,
+      onBlockReplyFlush,
+      blockReplyBreak: "text_end",
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    // No assistant text before tool; flush must not deliver an empty block to channels.
+    emit({
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "tool-flush-empty-1",
+      args: { command: "echo no-text" },
+    });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
 });
