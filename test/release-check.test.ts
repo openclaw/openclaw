@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectAppcastSparkleVersionErrors } from "../scripts/release-check.ts";
+import {
+  collectAppcastSparkleVersionErrors,
+  collectBundledExtensionRootDependencyGapErrors,
+} from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -24,5 +27,71 @@ describe("collectAppcastSparkleVersionErrors", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+  });
+});
+
+describe("collectBundledExtensionRootDependencyGapErrors", () => {
+  it("allows known gaps but still flags unallowlisted ones", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: {} },
+        extensions: [
+          {
+            id: "googlechat",
+            packageJson: {
+              dependencies: { "google-auth-library": "^1.0.0" },
+              openclaw: { install: { npmSpec: "@openclaw/googlechat" } },
+            },
+          },
+          {
+            id: "feishu",
+            packageJson: {
+              dependencies: { "@larksuiteoapi/node-sdk": "^1.59.0" },
+              openclaw: { install: { npmSpec: "@openclaw/feishu" } },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'feishu' root dependency mirror drift | missing in root package: @larksuiteoapi/node-sdk | new gaps: @larksuiteoapi/node-sdk",
+    ]);
+  });
+
+  it("flags newly introduced bundled extension dependency gaps", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: {} },
+        extensions: [
+          {
+            id: "googlechat",
+            packageJson: {
+              dependencies: { "google-auth-library": "^1.0.0", undici: "^7.0.0" },
+              openclaw: { install: { npmSpec: "@openclaw/googlechat" } },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'googlechat' root dependency mirror drift | missing in root package: google-auth-library, undici | new gaps: undici",
+    ]);
+  });
+
+  it("flags stale allowlist entries once a gap is resolved", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: { "google-auth-library": "^1.0.0" } },
+        extensions: [
+          {
+            id: "googlechat",
+            packageJson: {
+              dependencies: { "google-auth-library": "^1.0.0" },
+              openclaw: { install: { npmSpec: "@openclaw/googlechat" } },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'googlechat' root dependency mirror drift | missing in root package: (none) | remove stale allowlist entries: google-auth-library",
+    ]);
   });
 });

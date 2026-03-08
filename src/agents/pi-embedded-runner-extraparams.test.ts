@@ -803,7 +803,11 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("normalizes anthropic tool_choice modes for kimi-coding endpoints", () => {
+  it.each([
+    { input: { type: "auto" }, expected: "auto" },
+    { input: { type: "none" }, expected: "none" },
+    { input: { type: "required" }, expected: "required" },
+  ])("normalizes anthropic tool_choice %j for kimi-coding endpoints", ({ input, expected }) => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -814,7 +818,7 @@ describe("applyExtraParamsToAgent", () => {
             input_schema: { type: "object", properties: {} },
           },
         ],
-        tool_choice: { type: "auto" },
+        tool_choice: input,
       };
       options?.onPayload?.(payload);
       payloads.push(payload);
@@ -834,7 +838,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.tool_choice).toBe("auto");
+    expect(payloads[0]?.tool_choice).toBe(expected);
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
