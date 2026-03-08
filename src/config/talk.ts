@@ -47,6 +47,13 @@ function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] 
   return coerceSecretRef(value) ?? undefined;
 }
 
+function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
   if (!isPlainObject(value)) {
     return undefined;
@@ -124,6 +131,10 @@ function normalizedLegacyTalkFields(source: Record<string, unknown>): Partial<Ta
   const apiKey = normalizeTalkSecretInput(source.apiKey);
   if (apiKey !== undefined) {
     legacy.apiKey = apiKey;
+  }
+  const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
+  if (silenceTimeoutMs !== undefined) {
+    legacy.silenceTimeoutMs = silenceTimeoutMs;
   }
   return legacy;
 }
@@ -266,6 +277,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfig | undefined 
   const payload: TalkConfig = {};
   if (typeof normalized.interruptOnSpeech === "boolean") {
     payload.interruptOnSpeech = normalized.interruptOnSpeech;
+  }
+  if (typeof normalized.silenceTimeoutMs === "number") {
+    payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
   }
   if (normalized.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;
