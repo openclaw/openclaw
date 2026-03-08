@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/crust-proxy",
+  "version": "2026.3.3",
+  "private": true,
+  "description": "OpenClaw Crust provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

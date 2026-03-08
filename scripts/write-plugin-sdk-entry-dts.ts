@@ -21,6 +21,7 @@ const entrypoints = [
   "acpx",
   "bluebubbles",
   "copilot-proxy",
+  "crust-proxy",
   "device-pair",
   "diagnostics-otel",
   "diffs",

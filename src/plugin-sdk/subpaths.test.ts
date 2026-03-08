@@ -13,6 +13,7 @@ const bundledExtensionSubpathLoaders = [
   { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
   { id: "bluebubbles", load: () => import("openclaw/plugin-sdk/bluebubbles") },
   { id: "copilot-proxy", load: () => import("openclaw/plugin-sdk/copilot-proxy") },
+  { id: "crust-proxy", load: () => import("openclaw/plugin-sdk/crust-proxy") },
   { id: "device-pair", load: () => import("openclaw/plugin-sdk/device-pair") },
   { id: "diagnostics-otel", load: () => import("openclaw/plugin-sdk/diagnostics-otel") },
   { id: "diffs", load: () => import("openclaw/plugin-sdk/diffs") },

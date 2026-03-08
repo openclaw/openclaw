@@ -263,6 +263,8 @@ importers:
 
   extensions/copilot-proxy: {}
 
+  extensions/crust-proxy: {}
+
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
