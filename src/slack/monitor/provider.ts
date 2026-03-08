@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { PassThrough } from "node:stream";
 import SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -46,6 +47,11 @@ import {
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
+interface UrlVerificationBody {
+  type: "url_verification";
+  challenge: string;
+}
+
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
   default?: typeof import("@slack/bolt");
 };
@@ -92,6 +98,20 @@ function publishSlackDisconnectedStatus(
     lastDisconnect: message ? { at, error: message } : { at },
     lastError: message ?? null,
   });
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+function respondJson(res: ServerResponse, statusCode: number, body: unknown): void {
+  res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
 }
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
@@ -210,7 +230,44 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
-          const guard = installRequestBodyLimitGuard(req, res, {
+          // Slack sends url_verification WITHOUT a signature (by design).
+          // We must intercept this BEFORE the receiver's signature verification.
+          // Read the body first to check the request type.
+          const body = await readRequestBody(req);
+
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            // Not JSON, let the receiver handle it (will fail signature verification)
+            parsed = null;
+          }
+
+          const verification = parsed as UrlVerificationBody | null;
+          if (verification?.type === "url_verification" && verification?.challenge) {
+            respondJson(res, 200, { challenge: verification.challenge });
+            return;
+          }
+
+          // Not a url_verification request - replay the body to the receiver
+          // Create a new IncomingMessage with the pre-read body
+          const passThrough = new PassThrough();
+          passThrough.end(body);
+
+          // Create a mock IncomingMessage with the pre-loaded body
+          const mockReq = Object.create(req);
+          mockReq.headers = { ...req.headers };
+          mockReq.method = req.method;
+          mockReq.url = req.url;
+          mockReq.socket = req.socket;
+
+          // Replace the stream with our pre-loaded one
+          mockReq.read = passThrough.read.bind(passThrough);
+          mockReq.on = passThrough.on.bind(passThrough);
+          mockReq.removeListener = passThrough.removeListener.bind(passThrough);
+          mockReq.emit = passThrough.emit.bind(passThrough);
+
+          const guard = installRequestBodyLimitGuard(mockReq, res, {
             maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
             timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
             responseFormat: "text",
@@ -219,7 +276,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             return;
           }
           try {
-            await Promise.resolve(receiver.requestListener(req, res));
+            await Promise.resolve(receiver.requestListener(mockReq, res));
           } catch (err) {
             if (!guard.isTripped()) {
               throw err;
