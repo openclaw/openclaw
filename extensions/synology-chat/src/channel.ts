@@ -259,6 +259,15 @@ export function createSynologyChatPlugin() {
           deliver: async (msg) => {
             const rt = getSynologyRuntime();
             const currentCfg = await rt.config.loadConfig();
+            const route = rt.channel.routing.resolveAgentRoute({
+              cfg: currentCfg,
+              channel: CHANNEL_ID,
+              accountId: account.accountId,
+              peer: {
+                kind: "direct",
+                id: msg.from,
+              },
+            });
 
             // The Chat API user_id (for sending) may differ from the webhook
             // user_id (used for sessions/pairing). Use chatUserId for API calls.
@@ -271,8 +280,8 @@ export function createSynologyChatPlugin() {
               CommandBody: msg.body,
               From: `synology-chat:${msg.from}`,
               To: `synology-chat:${msg.from}`,
-              SessionKey: msg.sessionKey,
-              AccountId: account.accountId,
+              SessionKey: route.sessionKey,
+              AccountId: route.accountId,
               OriginatingChannel: CHANNEL_ID,
               OriginatingTo: `synology-chat:${msg.from}`,
               ChatType: msg.chatType,
