@@ -139,6 +139,12 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
+  if (typeof extraParams.topP === "number") {
+    (streamParams as Record<string, unknown>).topP = extraParams.topP;
+  }
+  if (typeof extraParams.presencePenalty === "number") {
+    (streamParams as Record<string, unknown>).presencePenalty = extraParams.presencePenalty;
+  }
   const transport = extraParams.transport;
   if (transport === "sse" || transport === "websocket" || transport === "auto") {
     streamParams.transport = transport;
@@ -178,6 +184,21 @@ function createStreamFnWithExtraParams(
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) => {
+    const originalOnPayload =
+      options && typeof options === "object"
+        ? (options as { onPayload?: unknown }).onPayload
+        : undefined;
+    const injectedTopP =
+      options && typeof options === "object" && (options as { topP?: unknown }).topP !== undefined
+        ? (options as { topP?: unknown }).topP
+        : extraParams?.topP;
+    const injectedPresencePenalty =
+      options &&
+      typeof options === "object" &&
+      (options as { presencePenalty?: unknown }).presencePenalty !== undefined
+        ? (options as { presencePenalty?: unknown }).presencePenalty
+        : extraParams?.presencePenalty;
+
     // When provider routing is configured, inject it into model.compat so
     // pi-ai picks it up via model.compat.openRouterRouting.
     const effectiveModel = providerRouting
@@ -189,6 +210,20 @@ function createStreamFnWithExtraParams(
     return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,
+      onPayload: (payload: unknown) => {
+        if (payload && typeof payload === "object") {
+          const obj = payload as Record<string, unknown>;
+          if (typeof injectedTopP === "number" && obj.top_p === undefined) {
+            obj.top_p = injectedTopP;
+          }
+          if (typeof injectedPresencePenalty === "number" && obj.presence_penalty === undefined) {
+            obj.presence_penalty = injectedPresencePenalty;
+          }
+        }
+        if (typeof originalOnPayload === "function") {
+          (originalOnPayload as (p: unknown) => void)(payload);
+        }
+      },
     });
   };
 
