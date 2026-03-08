@@ -39,19 +39,17 @@ services:
     volumes:
       - openclaw-config:/home/node/.openclaw
       - openclaw-workspace:/home/node/.openclaw/workspace
-    # Coolify manages the reverse proxy — expose the container port so
-    # Coolify/Traefik can route to it. Do NOT use host port mapping (ports:)
-    # as Coolify handles that via its proxy configuration.
-    expose:
-      - "18789"
+    ports:
+      - "18789:18789"
     init: true
     restart: unless-stopped
     # Override CMD to bind to 0.0.0.0 (lan) so the Coolify reverse proxy
     # can reach the gateway inside the Docker network.
+    # Uses dist/index.js (same as docker-compose.yml) — NOT openclaw.mjs.
     command:
       [
         "node",
-        "openclaw.mjs",
+        "dist/index.js",
         "gateway",
         "--bind",
         "lan",
