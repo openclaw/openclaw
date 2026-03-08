@@ -21,6 +21,7 @@ export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
@@ -41,6 +42,7 @@ type BackupManifest = {
   nodeVersion: string;
   options: {
     includeWorkspace: boolean;
+    onlyConfig?: boolean;
   };
   paths: {
     stateDir: string;
@@ -63,6 +65,7 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  onlyConfig: boolean;
   verified: boolean;
   assets: BackupAsset[];
   skipped: Array<{
@@ -189,6 +192,7 @@ function buildManifest(params: {
   createdAt: string;
   archiveRoot: string;
   includeWorkspace: boolean;
+  onlyConfig: boolean;
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
@@ -205,6 +209,7 @@ function buildManifest(params: {
     nodeVersion: process.version,
     options: {
       includeWorkspace: params.includeWorkspace,
+      onlyConfig: params.onlyConfig,
     },
     paths: {
       stateDir: params.stateDir,
@@ -271,8 +276,9 @@ export async function backupCreateCommand(
 ): Promise<BackupCreateResult> {
   const nowMs = opts.nowMs ?? Date.now();
   const archiveRoot = buildBackupArchiveRoot(nowMs);
-  const includeWorkspace = opts.includeWorkspace ?? true;
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, nowMs });
+  const onlyConfig = Boolean(opts.onlyConfig);
+  const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -281,7 +287,11 @@ export async function backupCreateCommand(
   });
 
   if (plan.included.length === 0) {
-    throw new Error("No local OpenClaw state was found to back up.");
+    throw new Error(
+      onlyConfig
+        ? "No OpenClaw config file was found to back up."
+        : "No local OpenClaw state was found to back up.",
+    );
   }
 
   const canonicalOutputPath = await canonicalizePathForContainment(outputPath);
@@ -305,6 +315,7 @@ export async function backupCreateCommand(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    onlyConfig,
     verified: false,
     assets: plan.included,
     skipped: plan.skipped,
@@ -320,6 +331,7 @@ export async function backupCreateCommand(
         createdAt,
         archiveRoot,
         includeWorkspace,
+        onlyConfig,
         assets: result.assets,
         skipped: result.skipped,
         stateDir: plan.stateDir,

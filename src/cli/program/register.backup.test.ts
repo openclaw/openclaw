@@ -51,6 +51,7 @@ describe("registerBackupCommand", () => {
         json: true,
         dryRun: true,
         verify: false,
+        onlyConfig: false,
         includeWorkspace: true,
       }),
     );
@@ -74,6 +75,17 @@ describe("registerBackupCommand", () => {
       runtime,
       expect.objectContaining({
         verify: true,
+      }),
+    );
+  });
+
+  it("forwards --only-config to backup create", async () => {
+    await runCli(["backup", "create", "--only-config"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        onlyConfig: true,
       }),
     );
   });

@@ -348,4 +348,53 @@ describe("backup commands", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     }
   });
+
+  it("backs up only the active config file when --only-config is requested", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({ theme: "config-only" }), "utf8");
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), "{}", "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const result = await backupCreateCommand(runtime, {
+      dryRun: true,
+      onlyConfig: true,
+    });
+
+    expect(result.onlyConfig).toBe(true);
+    expect(result.includeWorkspace).toBe(false);
+    expect(result.assets).toHaveLength(1);
+    expect(result.assets[0]?.kind).toBe("config");
+  });
+
+  it("allows config-only backups even when the config file is invalid", async () => {
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      const result = await backupCreateCommand(runtime, {
+        dryRun: true,
+        onlyConfig: true,
+      });
+
+      expect(result.assets).toHaveLength(1);
+      expect(result.assets[0]?.kind).toBe("config");
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+  });
 });

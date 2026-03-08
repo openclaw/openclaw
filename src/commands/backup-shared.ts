@@ -106,14 +106,56 @@ async function canonicalizeExistingPath(targetPath: string): Promise<string> {
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
+    onlyConfig?: boolean;
     nowMs?: number;
   } = {},
 ): Promise<BackupPlan> {
   const includeWorkspace = params.includeWorkspace ?? true;
-  const configSnapshot = await readConfigFileSnapshot();
+  const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();
+  const archiveRoot = buildBackupArchiveRoot(params.nowMs);
+
+  if (onlyConfig) {
+    const resolvedConfigPath = path.resolve(configPath);
+    if (!(await pathExists(resolvedConfigPath))) {
+      return {
+        stateDir,
+        configPath,
+        oauthDir,
+        workspaceDirs: [],
+        included: [],
+        skipped: [
+          {
+            kind: "config",
+            sourcePath: resolvedConfigPath,
+            displayPath: shortenHomePath(resolvedConfigPath),
+            reason: "missing",
+          },
+        ],
+      };
+    }
+
+    const canonicalConfigPath = await canonicalizeExistingPath(resolvedConfigPath);
+    return {
+      stateDir,
+      configPath,
+      oauthDir,
+      workspaceDirs: [],
+      included: [
+        {
+          kind: "config",
+          sourcePath: canonicalConfigPath,
+          displayPath: shortenHomePath(canonicalConfigPath),
+          archivePath: buildBackupArchivePath(archiveRoot, canonicalConfigPath),
+        },
+      ],
+      skipped: [],
+    };
+  }
+
+  const configSnapshot = await readConfigFileSnapshot();
   if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
     throw new Error(
       `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
@@ -165,8 +207,6 @@ export async function resolveBackupPlanFromDisk(
     seenCanonicalPaths.add(candidate.canonicalPath);
     uniqueCandidates.push(candidate);
   }
-  const archiveRoot = buildBackupArchiveRoot(params.nowMs);
-
   const included: BackupAsset[] = [];
   const skipped: SkippedBackupAsset[] = [];
 
