@@ -86,16 +86,7 @@ export function createProfileSelectionOps({
       return page ?? candidates.at(0) ?? null;
     };
 
-    let chosen = targetId ? resolveById(targetId) : pickDefault();
-    if (
-      !chosen &&
-      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
-      candidates.length === 1
-    ) {
-      // If an agent passes a stale/foreign targetId but only one candidate remains,
-      // recover by using that tab instead of failing hard.
-      chosen = candidates[0] ?? null;
-    }
+    const chosen = targetId ? resolveById(targetId) : pickDefault();
 
     if (chosen === "AMBIGUOUS") {
       throw new Error("ambiguous target id prefix");
