@@ -1,17 +1,35 @@
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+function normalizeGraphSessionKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("agent:")) {
+    return lowered;
+  }
+  if (lowered.startsWith("subagent:")) {
+    return `agent:main:${lowered}`;
+  }
+  if (lowered.startsWith("acp:")) {
+    return `agent:main:${lowered}`;
+  }
+  return trimmed;
+}
+
 export function findRunIdsByChildSessionKeyFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
 ): string[] {
-  const key = childSessionKey.trim();
+  const key = normalizeGraphSessionKey(childSessionKey);
   if (!key) {
     return [];
   }
   const runIds: string[] = [];
   for (const [runId, entry] of runs.entries()) {
-    if (entry.childSessionKey === key) {
+    if (normalizeGraphSessionKey(entry.childSessionKey) === key) {
       runIds.push(runId);
     }
   }
@@ -25,7 +43,7 @@ export function listRunsForRequesterFromRuns(
     requesterRunId?: string;
   },
 ): SubagentRunRecord[] {
-  const key = requesterSessionKey.trim();
+  const key = normalizeGraphSessionKey(requesterSessionKey);
   if (!key) {
     return [];
   }
@@ -38,7 +56,7 @@ export function listRunsForRequesterFromRuns(
   const upperBound = requesterRunMatchesScope?.endedAt;
 
   return [...runs.values()].filter((entry) => {
-    if (entry.requesterSessionKey !== key) {
+    if (normalizeGraphSessionKey(entry.requesterSessionKey) !== key) {
       return false;
     }
     if (typeof lowerBound === "number" && entry.createdAt < lowerBound) {
@@ -55,13 +73,13 @@ function findLatestRunForChildSession(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
 ): SubagentRunRecord | undefined {
-  const key = childSessionKey.trim();
+  const key = normalizeGraphSessionKey(childSessionKey);
   if (!key) {
     return undefined;
   }
   let latest: SubagentRunRecord | undefined;
   for (const entry of runs.values()) {
-    if (entry.childSessionKey !== key) {
+    if (normalizeGraphSessionKey(entry.childSessionKey) !== key) {
       continue;
     }
     if (!latest || entry.createdAt > latest.createdAt) {
@@ -106,7 +124,7 @@ export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
 ): number {
-  const key = requesterSessionKey.trim();
+  const key = normalizeGraphSessionKey(requesterSessionKey);
   if (!key) {
     return 0;
   }
@@ -123,7 +141,7 @@ export function countActiveRunsForSessionFromRuns(
 
   let count = 0;
   for (const entry of runs.values()) {
-    if (entry.requesterSessionKey !== key) {
+    if (normalizeGraphSessionKey(entry.requesterSessionKey) !== key) {
       continue;
     }
     if (typeof entry.endedAt !== "number") {
@@ -142,7 +160,7 @@ function forEachDescendantRun(
   rootSessionKey: string,
   visitor: (runId: string, entry: SubagentRunRecord) => void,
 ): boolean {
-  const root = rootSessionKey.trim();
+  const root = normalizeGraphSessionKey(rootSessionKey);
   if (!root) {
     return false;
   }
@@ -154,11 +172,11 @@ function forEachDescendantRun(
       continue;
     }
     for (const [runId, entry] of runs.entries()) {
-      if (entry.requesterSessionKey !== requester) {
+      if (normalizeGraphSessionKey(entry.requesterSessionKey) !== requester) {
         continue;
       }
       visitor(runId, entry);
-      const childKey = entry.childSessionKey.trim();
+      const childKey = normalizeGraphSessionKey(entry.childSessionKey);
       if (!childKey || visited.has(childKey)) {
         continue;
       }

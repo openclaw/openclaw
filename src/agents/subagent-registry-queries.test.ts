@@ -175,6 +175,27 @@ describe("subagent registry query regressions", () => {
     expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
   });
 
+  it("treats legacy subagent requester keys as canonical descendants", () => {
+    const parentSessionKey = "agent:main:subagent:orchestrator";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-parent-ended",
+        childSessionKey: parentSessionKey,
+        requesterSessionKey: "agent:main:main",
+        endedAt: 100,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-child-active",
+        childSessionKey: `${parentSessionKey}:subagent:child`,
+        requesterSessionKey: "subagent:orchestrator",
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(1);
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
+  });
+
   it("scopes direct child listings to the requester run window when requesterRunId is provided", () => {
     const requesterSessionKey = "agent:main:subagent:orchestrator";
     const runs = toRunMap([
