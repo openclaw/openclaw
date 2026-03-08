@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
-  buildAfterTurnLegacyCompactionParams,
+  buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
@@ -638,9 +638,74 @@ describe("prependSystemPromptAddition", () => {
   });
 });
 
-describe("buildAfterTurnLegacyCompactionParams", () => {
+describe("buildAfterTurnRuntimeContext", () => {
+  it("uses primary model when compaction.model is not set", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                model: "openrouter/anthropic/claude-sonnet-4-5",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
+    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
+    expect(legacy).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
+  });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
-    const legacy = buildAfterTurnLegacyCompactionParams({
+    const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",

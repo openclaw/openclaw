@@ -8,6 +8,8 @@ import {
 import type { ProviderConfig } from "./models-config.providers.js";
 
 describe("models-config merge helpers", () => {
+  const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
+
   it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
     const merged = mergeProviderModels(
       {
@@ -54,8 +56,7 @@ describe("models-config merge helpers", () => {
       explicit: {
         " custom ": {
           api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          models: [],
+          models: [] as ProviderConfig["models"],
         } as ProviderConfig,
       },
     });
@@ -76,7 +77,7 @@ describe("models-config merge helpers", () => {
       existingProviders: {
         custom: {
           baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY", // pragma: allowlist secret
+          apiKey: preservedApiKey,
           models: [{ id: "model", api: "openai-completions" }],
         } as ExistingProviderConfig,
       },
@@ -86,7 +87,7 @@ describe("models-config merge helpers", () => {
 
     expect(merged.custom).toEqual(
       expect.objectContaining({
-        apiKey: "AGENT_KEY", // pragma: allowlist secret
+        apiKey: preservedApiKey,
         baseUrl: "https://config.example/v1",
       }),
     );
