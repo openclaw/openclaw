@@ -28,7 +28,7 @@
 
 - [x] **TEST-01**: Unit tests for `isDomainBlocked()` — exact match, subdomain, non-blocked, edge cases
 - [x] **TEST-02**: Integration test proving blocked hostname causes error through SSRF pipeline
-- [ ] **TEST-03**: Catalog of all outbound HTTP paths documented (hook one, note others)
+- [x] **TEST-03**: Catalog of all outbound HTTP paths documented (hook one, note others)
 
 ## v2 Requirements
 
@@ -77,7 +77,7 @@
 | OBS-01      | Phase 1 | Complete |
 | TEST-01     | Phase 1 | Complete |
 | TEST-02     | Phase 2 | Complete |
-| TEST-03     | Phase 3 | Pending  |
+| TEST-03     | Phase 3 | Complete |
 
 **Coverage:**
 
