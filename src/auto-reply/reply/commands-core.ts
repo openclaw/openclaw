@@ -70,9 +70,8 @@ export async function emitResetCommandHooks(params: {
 
   // Send hook messages immediately if present
   if (hookEvent.messages.length > 0) {
-    // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
+    // Use OriginatingChannel/To if available, otherwise fall back to command channelId/from
+    const channel = params.ctx.OriginatingChannel || params.command.channelId;
     // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 
