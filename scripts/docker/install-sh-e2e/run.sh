@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-extract_cli_semver() {
-  local raw="$1"
-  printf '%s\n' "$raw" | sed -E 's/^OpenClaw ([^ ]+)( \\([0-9a-f]{7}\\))?$/\\1/'
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERIFY_HELPER_PATH="/usr/local/install-sh-common/version-parse.sh"
+if [[ ! -f "$VERIFY_HELPER_PATH" ]]; then
+  VERIFY_HELPER_PATH="${SCRIPT_DIR}/../install-sh-common/version-parse.sh"
+fi
+# shellcheck source=../install-sh-common/version-parse.sh
+source "$VERIFY_HELPER_PATH"
 
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://openclaw.bot/install.sh}}"
 MODELS_MODE="${OPENCLAW_E2E_MODELS:-${CLAWDBOT_E2E_MODELS:-both}}" # both|openai|anthropic
@@ -74,7 +77,7 @@ fi
 
 echo "==> Verify installed version"
 INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
-INSTALLED_VERSION="$(extract_cli_semver "$INSTALLED_VERSION")"
+INSTALLED_VERSION="$(extract_openclaw_semver "$INSTALLED_VERSION")"
 echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
 if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
   echo "ERROR: expected openclaw@$EXPECTED_VERSION, got openclaw@$INSTALLED_VERSION" >&2

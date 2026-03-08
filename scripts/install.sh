@@ -2085,14 +2085,47 @@ run_bootstrap_onboarding_if_needed() {
     }
 }
 
+load_install_version_helpers() {
+    local script_dir=""
+    local helper_path=""
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
+    helper_path="${script_dir}/docker/install-sh-common/version-parse.sh"
+    if [[ -n "$script_dir" && -r "$helper_path" ]]; then
+        # shellcheck source=docker/install-sh-common/version-parse.sh
+        source "$helper_path"
+    fi
+}
+
+load_install_version_helpers
+
+if ! declare -F extract_openclaw_semver >/dev/null 2>&1; then
+extract_openclaw_semver() {
+    local raw="${1:-}"
+    local parsed=""
+    parsed="$(
+        printf '%s\n' "$raw" \
+            | tr -d '\r' \
+            | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
+            | head -n 1 \
+            || true
+    )"
+    printf '%s' "${parsed#v}"
+}
+fi
+
 resolve_openclaw_version() {
     local version=""
+    local raw_version_output=""
     local claw="${OPENCLAW_BIN:-}"
     if [[ -z "$claw" ]] && command -v openclaw &> /dev/null; then
         claw="$(command -v openclaw)"
     fi
     if [[ -n "$claw" ]]; then
-        version=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        raw_version_output=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        version="$(extract_openclaw_semver "$raw_version_output")"
+        if [[ -z "$version" ]]; then
+            version="$raw_version_output"
+        fi
     fi
     if [[ -z "$version" ]]; then
         local npm_root=""

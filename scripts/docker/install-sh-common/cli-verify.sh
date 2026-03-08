@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 
-extract_cli_semver() {
-  local raw="$1"
-  printf '%s\n' "$raw" | sed -E 's/^OpenClaw ([^ ]+)( \\([0-9a-f]{7}\\))?$/\\1/'
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./version-parse.sh
+source "$SCRIPT_DIR/version-parse.sh"
 
 verify_installed_cli() {
   local package_name="$1"
@@ -37,7 +36,7 @@ verify_installed_cli() {
     installed_version="$(node "$entry_path" --version 2>/dev/null | head -n 1 | tr -d '\r')"
   fi
 
-  installed_version="$(extract_cli_semver "$installed_version")"
+  installed_version="$(extract_openclaw_semver "$installed_version")"
 
   echo "cli=$cli_name installed=$installed_version expected=$expected_version"
   if [[ "$installed_version" != "$expected_version" ]]; then
