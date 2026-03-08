@@ -41,3 +41,18 @@ git rebase --abort
 **Branch Strategy:**
 - `main` - Always matches GitHub (safe to reset)
 - `local/custom-features` - Your local customizations (never force-reset)
+
+---
+
+## FrankOS Governance Runtime
+
+When operating in FrankOS mode, use runtime governance controls in addition to document guidance.
+
+- Load runtime policy artifact: `10_Constitution/GOVERNANCE_RUNTIME_POLICY.json`
+- Governance decision hierarchy: Mission > Constitution > Safety > Working Principles > Project Context > Task Instructions
+- Enforcement modes:
+  - `off`: no runtime governance checks
+  - `shadow`: evaluate and log decisions, do not block
+  - `enforce`: block `prohibit` and `escalate` outcomes
+
+For tool-level guardrails, use the `frankos-governance` plugin and emit `governance.decision` diagnostics for auditability.

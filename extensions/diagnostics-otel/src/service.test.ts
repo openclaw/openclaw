@@ -242,6 +242,14 @@ describe("diagnostics-otel service", () => {
       runId: "run-1",
       attempt: 2,
     });
+    emitDiagnosticEvent({
+      type: "governance.decision",
+      toolName: "write",
+      decision: "prohibit",
+      mode: "enforce",
+      reasonCode: "NO_DIRECT_WRITE",
+      durationMs: 7,
+    });
 
     expect(telemetryState.counters.get("openclaw.webhook.received")?.add).toHaveBeenCalled();
     expect(
@@ -258,11 +266,16 @@ describe("diagnostics-otel service", () => {
       telemetryState.histograms.get("openclaw.session.stuck_age_ms")?.record,
     ).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalled();
+    expect(telemetryState.counters.get("openclaw.governance.decision")?.add).toHaveBeenCalled();
+    expect(
+      telemetryState.histograms.get("openclaw.governance.decision.duration_ms")?.record,
+    ).toHaveBeenCalled();
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
     expect(spanNames).toContain("openclaw.webhook.processed");
     expect(spanNames).toContain("openclaw.message.processed");
     expect(spanNames).toContain("openclaw.session.stuck");
+    expect(spanNames).toContain("openclaw.governance.decision");
 
     expect(registerLogTransportMock).toHaveBeenCalledTimes(1);
     expect(registeredTransports).toHaveLength(1);

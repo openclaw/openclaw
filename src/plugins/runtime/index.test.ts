@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { emitDiagnosticEvent, onDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -46,6 +47,8 @@ describe("plugin runtime command execution", () => {
   it("exposes runtime.events listener registration helpers", () => {
     const runtime = createPluginRuntime();
     expect(runtime.events.onAgentEvent).toBe(onAgentEvent);
+    expect(runtime.events.onDiagnosticEvent).toBe(onDiagnosticEvent);
+    expect(runtime.events.emitDiagnosticEvent).toBe(emitDiagnosticEvent);
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
   });
 

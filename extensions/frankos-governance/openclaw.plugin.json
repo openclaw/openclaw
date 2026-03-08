@@ -1,0 +1,43 @@
+{
+  "id": "frankos-governance",
+  "name": "FrankOS Governance",
+  "description": "Runtime governance guardrails for constitutional permit/prohibit/escalate decisions.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["off", "shadow", "enforce"]
+      },
+      "policyFile": {
+        "type": "string"
+      },
+      "emitDecisionLog": {
+        "type": "boolean"
+      },
+      "mutatingTools": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Enforcement Mode",
+      "help": "off = disabled, shadow = evaluate+log only, enforce = block prohibit/escalate decisions"
+    },
+    "policyFile": {
+      "label": "Policy File",
+      "help": "Absolute path to GOVERNANCE_RUNTIME_POLICY.json"
+    },
+    "emitDecisionLog": {
+      "label": "Emit Decision Events",
+      "help": "Emit governance.decision diagnostic events for each evaluated mutating tool call"
+    },
+    "mutatingTools": {
+      "label": "Mutating Tools",
+      "help": "Optional override list of tool names treated as mutating"
+    }
+  }
+}

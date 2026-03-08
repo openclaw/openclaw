@@ -317,6 +317,52 @@ export function logToolLoopAction(
   markActivity();
 }
 
+export function logGovernanceDecision(
+  params: SessionRef & {
+    runId?: string;
+    toolName: string;
+    decision: "permit" | "prohibit" | "escalate";
+    mode: "off" | "shadow" | "enforce";
+    reasonCode: string;
+    reasonText?: string;
+    policyVersion?: string;
+    ruleId?: string;
+    durationMs?: number;
+  },
+) {
+  const payload = `governance decision: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+    params.sessionKey ?? "unknown"
+  } runId=${params.runId ?? "unknown"} tool=${params.toolName} decision=${params.decision} mode=${
+    params.mode
+  } reason=${params.reasonCode}${params.ruleId ? ` rule=${params.ruleId}` : ""}${
+    params.policyVersion ? ` policy=${params.policyVersion}` : ""
+  }${params.durationMs != null ? ` duration=${params.durationMs}ms` : ""}${
+    params.reasonText ? ` detail="${params.reasonText}"` : ""
+  }`;
+
+  if (params.decision === "permit") {
+    diag.info(payload);
+  } else {
+    diag.warn(payload);
+  }
+
+  emitDiagnosticEvent({
+    type: "governance.decision",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    toolName: params.toolName,
+    decision: params.decision,
+    mode: params.mode,
+    reasonCode: params.reasonCode,
+    reasonText: params.reasonText,
+    policyVersion: params.policyVersion,
+    ruleId: params.ruleId,
+    durationMs: params.durationMs,
+  });
+  markActivity();
+}
+
 export function logActiveRuns() {
   const activeSessions = Array.from(diagnosticSessionStates.entries())
     .filter(([, s]) => s.state === "processing")

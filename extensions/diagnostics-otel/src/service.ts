@@ -239,6 +239,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Run attempts",
       });
+      const governanceDecisionCounter = meter.createCounter("openclaw.governance.decision", {
+        unit: "1",
+        description: "Governance decision outcomes by tool/reason/mode",
+      });
+      const governanceDecisionDurationHistogram = meter.createHistogram(
+        "openclaw.governance.decision.duration_ms",
+        {
+          unit: "ms",
+          description: "Governance decision evaluation duration",
+        },
+      );
 
       if (logsEnabled) {
         const logExporter = new OTLPLogExporter({
@@ -616,6 +627,50 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
+      const recordGovernanceDecision = (
+        evt: Extract<DiagnosticEventPayload, { type: "governance.decision" }>,
+      ) => {
+        const attrs = {
+          "openclaw.tool": evt.toolName ?? "unknown",
+          "openclaw.decision": evt.decision ?? "unknown",
+          "openclaw.mode": evt.mode ?? "unknown",
+          "openclaw.reason": evt.reasonCode ?? "unknown",
+        };
+        governanceDecisionCounter.add(1, attrs);
+        if (typeof evt.durationMs === "number") {
+          governanceDecisionDurationHistogram.record(evt.durationMs, attrs);
+        }
+        if (!tracesEnabled || evt.decision === "permit") {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+        };
+        addSessionIdentityAttrs(spanAttrs, evt);
+        if (evt.runId) {
+          spanAttrs["openclaw.runId"] = evt.runId;
+        }
+        if (evt.policyVersion) {
+          spanAttrs["openclaw.policyVersion"] = evt.policyVersion;
+        }
+        if (evt.ruleId) {
+          spanAttrs["openclaw.ruleId"] = evt.ruleId;
+        }
+        if (evt.reasonText) {
+          spanAttrs["openclaw.reasonText"] = redactSensitiveText(evt.reasonText);
+        }
+        const span = spanWithDuration(
+          "openclaw.governance.decision",
+          spanAttrs,
+          evt.durationMs,
+        );
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: evt.reasonCode,
+        });
+        span.end();
+      };
+
       unsubscribe = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
         try {
           switch (evt.type) {
@@ -654,6 +709,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
+              return;
+            case "governance.decision":
+              recordGovernanceDecision(evt);
               return;
           }
         } catch (err) {

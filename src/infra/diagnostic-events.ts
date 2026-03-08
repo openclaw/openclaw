@@ -147,6 +147,21 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticGovernanceDecisionEvent = DiagnosticBaseEvent & {
+  type: "governance.decision";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  toolName: string;
+  decision: "permit" | "prohibit" | "escalate";
+  mode: "off" | "shadow" | "enforce";
+  reasonCode: string;
+  reasonText?: string;
+  policyVersion?: string;
+  ruleId?: string;
+  durationMs?: number;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -160,7 +175,8 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticGovernanceDecisionEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
