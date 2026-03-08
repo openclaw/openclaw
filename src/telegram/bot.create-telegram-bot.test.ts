@@ -2259,4 +2259,122 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
+  it("buffers channel_post and uses edited text after edits settle", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      createTelegramBot({
+        token: "tok",
+        testTimings: { ...TELEGRAM_TEST_TIMINGS, channelEditBufferMs: 50 },
+      });
+      const channelPostHandler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      const editedHandler = getOnHandler("edited_channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      // Initial partial channel post (streaming start)
+      await channelPostHandler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 501,
+          date: 1736380800,
+          text: "partial...",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      // Not processed yet — still in buffer
+      expect(replySpy).not.toHaveBeenCalled();
+
+      // Edited channel post arrives with final text (streaming complete)
+      await editedHandler({
+        editedChannelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 501,
+          date: 1736380801,
+          text: "This is the complete final message from the other bot.",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      // Still not processed — timer reset by edit
+      expect(replySpy).not.toHaveBeenCalled();
+
+      // Advance past the buffer timeout
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { RawBody?: string };
+      expect(payload.RawBody).toContain("complete final message");
+      expect(payload.RawBody).not.toContain("partial...");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("processes channel_post after timeout when no edits arrive", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      createTelegramBot({
+        token: "tok",
+        testTimings: { ...TELEGRAM_TEST_TIMINGS, channelEditBufferMs: 50 },
+      });
+      const channelPostHandler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await channelPostHandler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 601,
+          date: 1736380800,
+          text: "A non-streaming message sent to the channel.",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      // Not processed yet — still in buffer
+      expect(replySpy).not.toHaveBeenCalled();
+
+      // Advance past the buffer timeout
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { RawBody?: string };
+      expect(payload.RawBody).toContain("non-streaming message");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

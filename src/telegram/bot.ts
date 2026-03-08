@@ -61,6 +61,7 @@ export type TelegramBotOptions = {
   testTimings?: {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
+    channelEditBufferMs?: number;
   };
 };
 

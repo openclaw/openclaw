@@ -153,6 +153,23 @@ export const registerTelegramHandlers = ({
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
+  const DEFAULT_CHANNEL_EDIT_BUFFER_MS = 3000;
+  const channelEditBufferMs =
+    typeof opts.testTimings?.channelEditBufferMs === "number" &&
+    Number.isFinite(opts.testTimings.channelEditBufferMs)
+      ? Math.max(10, Math.floor(opts.testTimings.channelEditBufferMs))
+      : DEFAULT_CHANNEL_EDIT_BUFFER_MS;
+
+  type ChannelEditBufferEntry = {
+    key: string;
+    chatId: number;
+    post: Record<string, unknown>;
+    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown };
+    timer: ReturnType<typeof setTimeout>;
+  };
+  const channelEditBuffer = new Map<string, ChannelEditBufferEntry>();
+  let channelEditProcessing: Promise<void> = Promise.resolve();
+
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   type TelegramDebounceLane = "default" | "forward";
@@ -1510,56 +1527,183 @@ export const registerTelegramHandlers = ({
     });
   });
 
+  // Flush a buffered channel post — builds a synthetic message and dispatches it.
+  // Dedupe (shouldSkipUpdate) was already checked when the post entered the buffer.
+  // Auth and group checks are performed here at flush time with fresh config.
+  const flushChannelEditEntry = async (entry: ChannelEditBufferEntry) => {
+    try {
+      const post = entry.post as Record<string, unknown> & {
+        chat: { id: number; title?: string; username?: string; type: string };
+        from?: { id: number; username?: string };
+        sender_chat?: { id: number; title?: string; username?: string };
+        message_id: number;
+      };
+
+      const syntheticFrom = post.sender_chat
+        ? {
+            id: post.sender_chat.id,
+            is_bot: true as const,
+            first_name: post.sender_chat.title || "Channel",
+            username: post.sender_chat.username,
+          }
+        : {
+            id: entry.chatId,
+            is_bot: true as const,
+            first_name: post.chat.title || "Channel",
+            username: post.chat.username,
+          };
+      const syntheticMsg: Message = {
+        ...post,
+        from: (post.from as Message["from"]) ?? syntheticFrom,
+        chat: {
+          ...post.chat,
+          type: "supergroup" as const,
+        },
+      } as Message;
+
+      const senderId =
+        post.sender_chat?.id != null
+          ? String(post.sender_chat.id)
+          : post.from?.id != null
+            ? String(post.from.id)
+            : "";
+      const senderUsername = post.sender_chat?.username ?? post.from?.username ?? "";
+
+      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        chatId: entry.chatId,
+        isGroup: true,
+        isForum: false,
+      });
+      const {
+        resolvedThreadId,
+        storeAllowFrom,
+        groupConfig,
+        topicConfig,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+      } = eventAuthContext;
+
+      if (!groupConfig || groupConfig.enabled === false) {
+        logVerbose(`Blocked telegram channel ${entry.chatId} (channel disabled)`);
+        return;
+      }
+
+      if (
+        shouldSkipGroupMessage({
+          isGroup: true,
+          chatId: entry.chatId,
+          chatTitle: syntheticMsg.chat.title,
+          resolvedThreadId,
+          senderId,
+          senderUsername,
+          effectiveGroupAllow,
+          hasGroupAllowOverride,
+          groupConfig,
+          topicConfig,
+        })
+      ) {
+        return;
+      }
+
+      await processInboundMessage({
+        ctx: buildSyntheticContext(entry.ctx as TelegramContext, syntheticMsg),
+        msg: syntheticMsg,
+        chatId: entry.chatId,
+        resolvedThreadId,
+        storeAllowFrom,
+        sendOversizeWarning: false,
+        oversizeLogMessage: "channel post media exceeds size limit",
+      });
+    } catch (err) {
+      runtime.error?.(danger(`channel_post handler failed: ${String(err)}`));
+    }
+  };
+
+  const queueChannelEditFlush = (entry: ChannelEditBufferEntry) => {
+    channelEditProcessing = channelEditProcessing
+      .then(async () => {
+        await flushChannelEditEntry(entry);
+      })
+      .catch(() => undefined);
+  };
+
   // Handle channel posts — enables bot-to-bot communication via Telegram channels.
   // Telegram bots cannot see other bot messages in groups, but CAN in channels.
   // This handler normalizes channel_post updates into the standard message pipeline.
+  // Posts are buffered briefly so that streaming edits (edited_channel_post) can
+  // replace the partial text before we dispatch the final message.
   bot.on("channel_post", async (ctx) => {
     const post = ctx.channelPost;
     if (!post) {
       return;
     }
+    if (shouldSkipUpdate(ctx)) {
+      return;
+    }
 
     const chatId = post.chat.id;
-    const syntheticFrom = post.sender_chat
-      ? {
-          id: post.sender_chat.id,
-          is_bot: true as const,
-          first_name: post.sender_chat.title || "Channel",
-          username: post.sender_chat.username,
-        }
-      : {
-          id: chatId,
-          is_bot: true as const,
-          first_name: post.chat.title || "Channel",
-          username: post.chat.username,
-        };
-    const syntheticMsg: Message = {
-      ...post,
-      from: post.from ?? syntheticFrom,
-      chat: {
-        ...post.chat,
-        type: "supergroup" as const,
-      },
-    } as Message;
+    const key = `channel-edit:${chatId}:${post.message_id}`;
 
-    await handleInboundMessageLike({
-      ctxForDedupe: ctx,
-      ctx: buildSyntheticContext(ctx, syntheticMsg),
-      msg: syntheticMsg,
+    const existing = channelEditBuffer.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.post = { ...post };
+      existing.ctx = ctx;
+      existing.timer = setTimeout(() => {
+        channelEditBuffer.delete(key);
+        queueChannelEditFlush(existing);
+      }, channelEditBufferMs);
+      return;
+    }
+
+    const entry: ChannelEditBufferEntry = {
+      key,
       chatId,
-      isGroup: true,
-      isForum: false,
-      senderId:
-        post.sender_chat?.id != null
-          ? String(post.sender_chat.id)
-          : post.from?.id != null
-            ? String(post.from.id)
-            : "",
-      senderUsername: post.sender_chat?.username ?? post.from?.username ?? "",
-      requireConfiguredGroup: true,
-      sendOversizeWarning: false,
-      oversizeLogMessage: "channel post media exceeds size limit",
-      errorMessage: "channel_post handler failed",
-    });
+      post: { ...post },
+      ctx,
+      timer: setTimeout(() => {}, 0), // replaced below
+    };
+    entry.timer = setTimeout(() => {
+      channelEditBuffer.delete(key);
+      queueChannelEditFlush(entry);
+    }, channelEditBufferMs);
+    channelEditBuffer.set(key, entry);
+  });
+
+  // Handle edited channel posts — updates the buffer entry with new text from
+  // streaming edits and resets the flush timer. If the original post was already
+  // flushed (timer expired), we ignore the late edit.
+  bot.on("edited_channel_post", async (ctx) => {
+    const post = ctx.editedChannelPost;
+    if (!post) {
+      return;
+    }
+
+    const chatId = post.chat.id;
+    const key = `channel-edit:${chatId}:${post.message_id}`;
+
+    const existing = channelEditBuffer.get(key);
+    if (!existing) {
+      return;
+    }
+
+    // Guard against out-of-order edit delivery: only accept if this edit
+    // is at least as recent as what we already have buffered.
+    const existingDate =
+      (existing.post as { edit_date?: number }).edit_date ??
+      (existing.post as { date?: number }).date ??
+      0;
+    const incomingDate = post.edit_date ?? post.date ?? 0;
+    if (incomingDate < existingDate) {
+      return;
+    }
+
+    clearTimeout(existing.timer);
+    existing.post = { ...post };
+    existing.ctx = ctx;
+    existing.timer = setTimeout(() => {
+      channelEditBuffer.delete(key);
+      queueChannelEditFlush(existing);
+    }, channelEditBufferMs);
   });
 };
