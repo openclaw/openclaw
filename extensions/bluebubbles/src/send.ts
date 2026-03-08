@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
-  getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
+  resolveBlueBubblesPrivateApiStatus,
 } from "./probe.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { normalizeSecretInputString } from "./secret-input.js";
@@ -77,6 +77,7 @@ function resolveEffectId(raw?: string): string | undefined {
 }
 
 type PrivateApiDecision = {
+  usePrivateApiMethod: boolean;
   canUsePrivateApi: boolean;
   throwEffectDisabledError: boolean;
   warningMessage?: string;
@@ -89,11 +90,11 @@ function resolvePrivateApiDecision(params: {
 }): PrivateApiDecision {
   const { privateApiStatus, wantsReplyThread, wantsEffect } = params;
   const needsPrivateApi = wantsReplyThread || wantsEffect;
-  const canUsePrivateApi =
-    needsPrivateApi && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+  const usePrivateApiMethod = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+  const canUsePrivateApi = needsPrivateApi && usePrivateApiMethod;
   const throwEffectDisabledError = wantsEffect && privateApiStatus === false;
   if (!needsPrivateApi || privateApiStatus !== null) {
-    return { canUsePrivateApi, throwEffectDisabledError };
+    return { usePrivateApiMethod, canUsePrivateApi, throwEffectDisabledError };
   }
   const requested = [
     wantsReplyThread ? "reply threading" : null,
@@ -102,6 +103,7 @@ function resolvePrivateApiDecision(params: {
     .filter(Boolean)
     .join(" + ");
   return {
+    usePrivateApiMethod,
     canUsePrivateApi,
     throwEffectDisabledError,
     warningMessage: `Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
@@ -389,7 +391,12 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  const privateApiStatus = await resolveBlueBubblesPrivateApiStatus({
+    baseUrl,
+    password,
+    accountId: account.accountId,
+    timeoutMs: opts.timeoutMs,
+  });
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -435,7 +442,7 @@ export async function sendMessageBlueBubbles(
     tempGuid: crypto.randomUUID(),
     message: strippedText,
   };
-  if (privateApiDecision.canUsePrivateApi) {
+  if (privateApiDecision.usePrivateApiMethod) {
     payload.method = "private-api";
   }
 
