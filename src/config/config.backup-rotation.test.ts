@@ -218,7 +218,7 @@ describe("config backup rotation", () => {
   describe("isDatetimeSuffix", () => {
     it("matches valid datetime suffixes", () => {
       expect(isDatetimeSuffix("20260308-143022")).toBe(true);
-      expect(isDatetimeSuffix("20260308-143022-2")).toBe(true);
+      expect(isDatetimeSuffix("20260308-143022-02")).toBe(true);
       expect(isDatetimeSuffix("20260308-143022-15")).toBe(true);
     });
 
@@ -228,6 +228,11 @@ describe("config backup rotation", () => {
       expect(isDatetimeSuffix("1772352289")).toBe(false);
       expect(isDatetimeSuffix("before-marketing")).toBe(false);
       expect(isDatetimeSuffix("orphan")).toBe(false);
+    });
+
+    it("rejects collision suffixes the code never produces", () => {
+      expect(isDatetimeSuffix("20260308-143022-0")).toBe(false);
+      expect(isDatetimeSuffix("20260308-143022-1")).toBe(false);
     });
   });
 });
