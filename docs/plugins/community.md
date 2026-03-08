@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **ClawdBoost** — Smart context injection that automatically boosts AI conversations with pattern-matched, time-aware context snippets. Supports regex triggers, time-of-day rules, priority-weighted snippet selection, and a full CLI.
+  npm: `clawdboost`
+  repo: `https://github.com/NikeGunn/clawdboost`
+  install: `openclaw plugins install clawdboost`
