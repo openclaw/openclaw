@@ -54,6 +54,32 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("logs unknown-key warnings even when invalid known fields still fail closed", async () => {
+    await withTempHomeConfig(
+      {
+        nope: true,
+        gateway: { port: -1 },
+        agents: { list: [{ id: "main" }] },
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (err) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect(errorSpy).toHaveBeenCalled();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).toContain("unknown config key ignored");
+      },
+    );
+  });
+
   it("still loads valid security settings unchanged", async () => {
     await withTempHomeConfig(
       {

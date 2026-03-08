@@ -728,6 +728,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const validated = validateConfigObjectWithPlugins(resolvedConfig);
       if (!validated.ok) {
+        if (validated.warnings.length > 0) {
+          const warningDetails = validated.warnings
+            .map(
+              (iss) =>
+                `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+            )
+            .join("\n");
+          deps.logger.warn(`Config warnings:\n${warningDetails}`);
+        }
         const details = validated.issues
           .map(
             (iss) =>
