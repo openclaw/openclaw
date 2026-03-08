@@ -277,7 +277,11 @@ function buildTelegramThreadReplyParams(params: {
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
 
-  if (params.replyToMessageId != null) {
+  if (
+    params.replyToMessageId != null &&
+    Number.isFinite(params.replyToMessageId) &&
+    params.replyToMessageId > 0
+  ) {
     const replyToMessageId = Math.trunc(params.replyToMessageId);
     if (params.quoteText?.trim()) {
       threadParams.reply_parameters = {
