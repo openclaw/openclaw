@@ -134,18 +134,24 @@ export async function resolveMatrixAuth(params?: {
   if (resolved.accessToken) {
     let userId = resolved.userId;
     if (!userId) {
-      // Fetch userId from access token via whoami
       ensureMatrixSdkLoggingConfigured();
       const { MatrixClient } = loadMatrixSdk();
       const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
-      const whoami = await tempClient.getUserId();
-      userId = whoami;
-      // Save the credentials with the fetched userId
+      const whoami = (await tempClient.getWhoAmI()) as {
+        user_id?: string;
+        device_id?: string;
+      };
+      const fetchedUserId = whoami.user_id?.trim();
+      if (!fetchedUserId) {
+        throw new Error("Matrix whoami did not return a user_id");
+      }
+      userId = fetchedUserId;
       saveMatrixCredentials(
         {
           homeserver: resolved.homeserver,
           userId,
           accessToken: resolved.accessToken,
+          ...(whoami.device_id ? { deviceId: whoami.device_id } : {}),
         },
         env,
         accountId,
