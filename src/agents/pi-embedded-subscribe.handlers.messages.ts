@@ -1,6 +1,6 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN, HEARTBEAT_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -202,6 +202,22 @@ export function handleMessageUpdate(
     let deltaText = "";
     if (!cleanedText && !hasMedia && !hasAudio) {
       shouldEmit = false;
+      // parseReplyDirectives strips silent reply tokens (NO_REPLY, HEARTBEAT_OK) from
+      // the text, which prevents downstream sign-off detection (e.g. reply-chain-enforcer).
+      // When the raw cumulative text IS a silent reply token but cleanedText is empty,
+      // emit a "signoff" event so consumers can detect the agent intentionally signed off.
+      // See: https://github.com/openclaw/openclaw/issues/28693
+      const trimmedNext = next.trim();
+      if (
+        isSilentReplyText(trimmedNext, SILENT_REPLY_TOKEN) ||
+        isSilentReplyText(trimmedNext, HEARTBEAT_TOKEN)
+      ) {
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "signoff",
+          data: { token: trimmedNext },
+        });
+      }
     } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
       shouldEmit = false;
     } else {
