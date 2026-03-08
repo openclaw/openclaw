@@ -1335,6 +1335,34 @@ export const FIELD_HELP: Record<string, string> = {
     "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
   "messages.inbound.byChannel":
     "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
+  "messages.inbound.smartDebounce":
+    "Dynamic smart debounce configuration that analyzes message content to adjust debounce times and detect user intent. Combines message batching with intent recognition to improve conversational flow.",
+  "messages.inbound.smartDebounce.enabled":
+    "Enable smart debounce for dynamic message timing and intent detection. Default: true.",
+  "messages.inbound.smartDebounce.incompleteSignals":
+    "Patterns that indicate the user is still typing (e.g., ..., comma, 'continue', '待续').",
+  "messages.inbound.smartDebounce.completeSignals":
+    "Patterns that indicate the user has finished their input (e.g., periods, 'done', '完了').",
+  "messages.inbound.smartDebounce.executionIntentSignals":
+    "Keywords that indicate an execution intent (search, fix, deploy, etc.).",
+  "messages.inbound.smartDebounce.chatIntentSignals":
+    "Keywords that indicate a chat intent (hello, thanks, what do you think, etc.).",
+  "messages.inbound.smartDebounce.followupIntentSignals":
+    "Keywords that indicate a followup intent (continue, follow, monitor, etc.).",
+  "messages.inbound.smartDebounce.incompleteMultiplier":
+    "Multiplier applied to debounce time when message appears incomplete. Default: 1.5.",
+  "messages.inbound.smartDebounce.completeMultiplier":
+    "Multiplier applied to debounce time when message appears complete. Default: 0.7.",
+  "messages.inbound.smartDebounce.chatMultiplier":
+    "Multiplier applied to debounce time for chat intent. Default: 0.8.",
+  "messages.inbound.smartDebounce.executionMultiplier":
+    "Multiplier applied to debounce time for execution intent. Default: 1.2.",
+  "messages.inbound.smartDebounce.followupMultiplier":
+    "Multiplier applied to debounce time for followup intent. Default: 1.1.",
+  "messages.inbound.smartDebounce.minMessageLength":
+    "Minimum message length to analyze for completeness detection. Default: 3.",
+  "messages.inbound.smartDebounce.maxMultiplier":
+    "Maximum multiplier cap for debounce time. Default: 3.0.",
   "messages.removeAckAfterReply":
     "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
   "messages.tts":

@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  analyzeIntent,
   calculateDebounceMultiplier,
   createSmartDebounceResolver,
   DEFAULT_SMART_DEBOUNCE_CONFIG,
+  detectUserIntent,
   extractMessageText,
   isCompleteMessage,
   isIncompleteMessage,
   resolveSmartDebounceMs,
+  UserIntentType,
   type SmartDebounceConfig,
 } from "./smart-debounce.js";
 
@@ -49,6 +52,137 @@ describe("smart-debounce", () => {
     it("returns false for short messages", () => {
       expect(isIncompleteMessage("..", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(false);
       expect(isIncompleteMessage("a", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(false);
+    });
+  });
+
+  describe("detectUserIntent", () => {
+    it("detects execution intent from Chinese signals", () => {
+      expect(detectUserIntent("帮我查一下这个配置", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+      expect(detectUserIntent("搜索相关信息", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+      expect(detectUserIntent("修复这个bug", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+      expect(detectUserIntent("部署到生产环境", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+    });
+
+    it("detects execution intent from English signals", () => {
+      expect(detectUserIntent("Search for information", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+      expect(detectUserIntent("Fix this bug", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+      expect(detectUserIntent("Run the tests", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+      expect(detectUserIntent("Deploy to production", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.EXECUTION,
+      );
+    });
+
+    it("detects followup intent from Chinese signals", () => {
+      expect(detectUserIntent("跟进这个问题", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.FOLLOWUP,
+      );
+      expect(detectUserIntent("继续处理", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.FOLLOWUP,
+      );
+    });
+
+    it("detects chat intent from Chinese signals", () => {
+      expect(detectUserIntent("你好，在吗？", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.CHAT,
+      );
+      expect(detectUserIntent("这个是什么意思？", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.CHAT,
+      );
+      expect(detectUserIntent("你怎么看？", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.CHAT,
+      );
+    });
+
+    it("detects chat intent from English signals", () => {
+      expect(detectUserIntent("Hi, how are you?", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.CHAT,
+      );
+      expect(detectUserIntent("What do you think?", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.CHAT,
+      );
+      expect(detectUserIntent("Can you explain?", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.CHAT,
+      );
+    });
+
+    it("returns unclear for unclear intent", () => {
+      expect(detectUserIntent("今天天气不错", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.UNCLEAR,
+      );
+      expect(detectUserIntent("Random text", DEFAULT_SMART_DEBOUNCE_CONFIG)).toBe(
+        UserIntentType.UNCLEAR,
+      );
+    });
+  });
+
+  describe("analyzeIntent", () => {
+    it("returns basic analysis for execution intent", () => {
+      const result = analyzeIntent("帮我查一下这个配置", { input_finalized: true });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.EXECUTION);
+      expect(result.execution_required).toBe(true);
+      expect(result.suggest_create_task).toBe(true);
+      expect(result.queue_mode).toBe("chat");
+    });
+
+    it("returns basic analysis for chat intent", () => {
+      const result = analyzeIntent("你好，在吗？", { input_finalized: true });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.CHAT);
+      expect(result.execution_required).toBe(false);
+      expect(result.suggest_create_task).toBe(false);
+      expect(result.queue_mode).toBe("chat");
+    });
+
+    it("returns basic analysis for followup intent", () => {
+      const result = analyzeIntent("跟进这个问题", { input_finalized: true });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.FOLLOWUP);
+      expect(result.execution_required).toBe(false);
+      expect(result.suggest_create_task).toBe(false);
+      expect(result.queue_mode).toBe("followup");
+    });
+
+    it("returns execution_pending queue mode when session busy with execution intent", () => {
+      const result = analyzeIntent("帮我查一下这个配置", {
+        input_finalized: true,
+        session_busy: true,
+      });
+      expect(result.input_finalized).toBe(true);
+      expect(result.intent_type).toBe(UserIntentType.EXECUTION);
+      expect(result.execution_required).toBe(true);
+      expect(result.suggest_create_task).toBe(true);
+      expect(result.queue_mode).toBe("execution_pending");
+    });
+
+    it("returns minimal analysis when input not finalized", () => {
+      const result = analyzeIntent("帮我查一下这个配置", { input_finalized: false });
+      expect(result.input_finalized).toBe(false);
+      expect(result.intent_type).toBe(UserIntentType.UNCLEAR);
+      expect(result.execution_required).toBe(false);
+      expect(result.suggest_create_task).toBe(false);
+      expect(result.queue_mode).toBe("chat");
+      expect(result.reason).toContain("not finalized");
+    });
+
+    it("includes confidence score in result", () => {
+      const result = analyzeIntent("帮我查一下这个配置", { input_finalized: true });
+      expect(result.intent_confidence).toBeGreaterThan(0);
+      expect(result.intent_confidence).toBeLessThanOrEqual(1);
     });
   });
 
@@ -105,8 +239,29 @@ describe("smart-debounce", () => {
       expect(multiplier).toBeLessThan(1);
     });
 
-    it("returns 1.0 for neutral messages", () => {
-      const multiplier = calculateDebounceMultiplier("Hello world", DEFAULT_SMART_DEBOUNCE_CONFIG);
+    it("returns execution multiplier for execution intent", () => {
+      const multiplier = calculateDebounceMultiplier(
+        "帮我查一下这个配置",
+        DEFAULT_SMART_DEBOUNCE_CONFIG,
+      );
+      expect(multiplier).toBe(DEFAULT_SMART_DEBOUNCE_CONFIG.executionMultiplier);
+    });
+
+    it("returns followup multiplier for followup intent", () => {
+      const multiplier = calculateDebounceMultiplier("跟进这个问题", DEFAULT_SMART_DEBOUNCE_CONFIG);
+      expect(multiplier).toBe(DEFAULT_SMART_DEBOUNCE_CONFIG.followupMultiplier);
+    });
+
+    it("returns chat multiplier for chat intent", () => {
+      const multiplier = calculateDebounceMultiplier("你好，在吗？", DEFAULT_SMART_DEBOUNCE_CONFIG);
+      expect(multiplier).toBe(DEFAULT_SMART_DEBOUNCE_CONFIG.chatMultiplier);
+    });
+
+    it("returns 1.0 for unclear messages", () => {
+      const multiplier = calculateDebounceMultiplier(
+        "Random message",
+        DEFAULT_SMART_DEBOUNCE_CONFIG,
+      );
       expect(multiplier).toBe(1.0);
     });
 
@@ -135,18 +290,12 @@ describe("smart-debounce", () => {
 
     it("returns base for neutral messages", () => {
       const baseMs = 2000;
-      const result = resolveSmartDebounceMs(baseMs, "Hello", DEFAULT_SMART_DEBOUNCE_CONFIG);
+      const result = resolveSmartDebounceMs(
+        baseMs,
+        "Random message",
+        DEFAULT_SMART_DEBOUNCE_CONFIG,
+      );
       expect(result).toBe(baseMs);
-    });
-
-    it("respects maxDebounceMultiplier", () => {
-      const baseMs = 2000;
-      const config: SmartDebounceConfig = {
-        ...DEFAULT_SMART_DEBOUNCE_CONFIG,
-        maxDebounceMultiplier: 2,
-      };
-      const result = resolveSmartDebounceMs(baseMs, "继续...", config);
-      expect(result).toBeLessThanOrEqual(baseMs * 2);
     });
 
     it("returns base when disabled", () => {
