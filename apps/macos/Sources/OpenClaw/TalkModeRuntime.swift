@@ -12,7 +12,7 @@ actor TalkModeRuntime {
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
-    private static let defaultSilenceTimeoutMs = 700
+    private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
