@@ -76,13 +76,23 @@ export function createTelegramRetryRunner(params: {
   configRetry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
+  /**
+   * When true, the custom shouldRetry predicate is used exclusively —
+   * the default TELEGRAM_RETRY_RE fallback regex is NOT OR'd in.
+   * Use this for non-idempotent operations (e.g. sendMessage) where
+   * the regex fallback would cause duplicate message delivery.
+   */
+  strictShouldRetry?: boolean;
 }): RetryRunner {
   const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
   const shouldRetry = params.shouldRetry
-    ? (err: unknown) => params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
+    ? params.strictShouldRetry
+      ? params.shouldRetry
+      : (err: unknown) =>
+          params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err))
     : (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
 
   return <T>(fn: () => Promise<T>, label?: string) =>
