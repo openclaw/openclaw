@@ -35,6 +35,10 @@ export function readCache<T>(
     cache.delete(key);
     return null;
   }
+  // LRU promotion: move to end of Map iteration order so the
+  // least-recently-used entry stays at the front for eviction.
+  cache.delete(key);
+  cache.set(key, entry);
   return { value: entry.value, cached: true };
 }
 
