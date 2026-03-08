@@ -103,7 +103,7 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
       cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
       cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
     },
-    contextWindow: entry.context_length || KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    contextWindow: entry.context_length ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
     maxTokens: entry.top_provider?.max_completion_tokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
   };
 }

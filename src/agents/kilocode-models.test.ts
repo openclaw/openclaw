@@ -182,6 +182,24 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
   });
 
+  it("preserves zero context_length instead of falling back to default", async () => {
+    const zeroCtxModel = makeGatewayModel({
+      id: "provider/zero-ctx-model",
+      context_length: 0,
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [zeroCtxModel] }),
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+      const model = models.find((m) => m.id === "provider/zero-ctx-model");
+      expect(model).toBeDefined();
+      expect(model?.contextWindow).toBe(0);
+    });
+  });
+
   it("detects text-only models without image modality", async () => {
     const textOnlyModel = makeGatewayModel({
       id: "some/text-model",
