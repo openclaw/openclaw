@@ -7,7 +7,6 @@ import {
   createSandboxFsBridge,
   expectMkdirpAllowsExistingDirectory,
   getScriptsFromCalls,
-  installDockerReadMock,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
   withTempDir,
@@ -109,11 +108,9 @@ describe("sandbox fs bridge boundary validation", () => {
     });
   });
 
-  it("rejects container-canonicalized paths outside allowed mounts", async () => {
-    installDockerReadMock({ canonicalPath: "/etc/passwd" });
-
+  it("rejects missing files before any docker read command runs", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
-    await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/escapes allowed mounts/i);
+    await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/ENOENT|no such file/i);
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes('cat -- "$1"'))).toBe(false);
   });

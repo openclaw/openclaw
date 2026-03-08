@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openBoundaryFile, type BoundaryFileOpenResult } from "../../infra/boundary-file-read.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
@@ -49,13 +49,40 @@ export class SandboxFsPathGuard {
   }
 
   async assertPathSafety(target: SandboxResolvedFsPath, options: PathSafetyOptions) {
-    const lexicalMount = this.resolveMountByContainerPath(target.containerPath);
-    if (!lexicalMount) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
-      );
-    }
+    const lexicalMount = this.resolveRequiredMount(target.containerPath, options.action);
+    await this.assertPathSafetyWithinMount(target, options, lexicalMount);
+  }
 
+  async openReadableFile(
+    target: SandboxResolvedFsPath,
+  ): Promise<BoundaryFileOpenResult & { ok: true }> {
+    const lexicalMount = this.resolveRequiredMount(target.containerPath, "read files");
+    const opened = await openBoundaryFile({
+      absolutePath: target.hostPath,
+      rootPath: lexicalMount.hostRoot,
+      boundaryLabel: "sandbox mount root",
+    });
+    if (!opened.ok) {
+      throw opened.error instanceof Error
+        ? opened.error
+        : new Error(`Sandbox boundary checks failed; cannot read files: ${target.containerPath}`);
+    }
+    return opened;
+  }
+
+  private resolveRequiredMount(containerPath: string, action: string): SandboxFsMount {
+    const lexicalMount = this.resolveMountByContainerPath(containerPath);
+    if (!lexicalMount) {
+      throw new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${containerPath}`);
+    }
+    return lexicalMount;
+  }
+
+  private async assertPathSafetyWithinMount(
+    target: SandboxResolvedFsPath,
+    options: PathSafetyOptions,
+    lexicalMount: SandboxFsMount,
+  ) {
     const guarded = await openBoundaryFile({
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
