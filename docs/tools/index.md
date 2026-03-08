@@ -148,8 +148,9 @@ Per-agent override: `agents.list[].tools.profile`.
 <Note>
 `messaging` is intentionally narrow for channel-focused agents. It leaves out
 broader command/control tools such as filesystem, runtime, browser, canvas,
-nodes, cron, and gateway control. Use `full` when you want the unrestricted
-baseline and prefer to trim access with `tools.allow` / `tools.deny`.
+nodes, cron, and gateway control. Use `tools.profile: "full"` when you want
+the unrestricted baseline and prefer to trim access with `tools.allow` /
+`tools.deny`.
 </Note>
 
 `coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
