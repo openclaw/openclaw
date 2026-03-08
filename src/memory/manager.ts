@@ -42,6 +42,28 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
+/**
+ * Evict all cached managers, closing their SQLite connections and file watchers.
+ * The next call to `MemoryIndexManager.get()` will create fresh instances that
+ * re-open the (possibly rebuilt) SQLite database.
+ *
+ * This should be called when the underlying index files may have been rebuilt
+ * externally (e.g., by `openclaw memory index --force` in a separate CLI process).
+ */
+export async function evictAllMemoryManagers(): Promise<number> {
+  const count = INDEX_CACHE.size;
+  const managers = Array.from(INDEX_CACHE.values());
+  for (const manager of managers) {
+    try {
+      await manager.close();
+    } catch {
+      // close() already deletes from INDEX_CACHE; ignore errors
+    }
+  }
+  INDEX_CACHE.clear();
+  return count;
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
