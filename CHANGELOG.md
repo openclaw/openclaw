@@ -725,6 +725,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/macOS restart: remove self-issued `launchctl kickstart -k` from launchd supervised restart path to prevent race with launchd's async bootout state machine that permanently unloads the LaunchAgent. With `ThrottleInterval=1` (current default), `exit(0)` + `KeepAlive=true` restarts the service within ~1s without the race condition. (#39760) Landed from contributor PR #39763 by @daymade. Thanks @daymade.
 - Exec/system.run env sanitization: block dangerous override-only env pivots such as `GIT_SSH_COMMAND`, editor/pager hooks, and `GIT_CONFIG_` / `NPM_CONFIG_` override prefixes so allowlisted tools cannot smuggle helper command execution through subprocess environment overrides. Thanks @tdjackey and @SnailSploit for reporting.
 - Network/fetch guard redirect auth stripping: switch cross-origin redirect handling in `fetchWithSsrFGuard` from a narrow sensitive-header denylist to a safe-header allowlist so custom auth headers like `X-Api-Key` and `Private-Token` no longer leak on origin changes. Thanks @Rickidevs for reporting.
 - Security/Sandbox media reads: eliminate sandbox media TOCTOU symlink-retarget escapes by enforcing root-scoped boundary-safe reads at attachment/image load time and consolidating shared safe-read helpers across sandbox media callsites. This ships in the next npm release. Thanks @tdjackey for reporting.
