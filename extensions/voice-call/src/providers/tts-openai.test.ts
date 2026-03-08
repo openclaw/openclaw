@@ -2,18 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { OpenAITTSConfig } from "./tts-openai.js";
 import { OpenAITTSProvider } from "./tts-openai.js";
 
-type ProviderInternals = OpenAITTSProvider & {
+type ProviderInternals = {
   speed: number;
 };
 
-function createProvider(config: OpenAITTSConfig): ProviderInternals {
-  return new OpenAITTSProvider(config) as ProviderInternals;
+function readProviderInternals(config: OpenAITTSConfig): ProviderInternals {
+  return new OpenAITTSProvider(config) as unknown as ProviderInternals;
 }
 
 describe("OpenAITTSProvider constructor defaults", () => {
   it("uses speed: 0 when explicitly configured", () => {
-    const provider = createProvider({
-      apiKey: "sk-test",
+    const provider = readProviderInternals({
+      apiKey: "sk-test", // pragma: allowlist secret
       speed: 0,
     });
 
@@ -21,8 +21,8 @@ describe("OpenAITTSProvider constructor defaults", () => {
   });
 
   it("falls back to speed default when undefined", () => {
-    const provider = createProvider({
-      apiKey: "sk-test",
+    const provider = readProviderInternals({
+      apiKey: "sk-test", // pragma: allowlist secret
     });
 
     expect(provider.speed).toBe(1.0);
