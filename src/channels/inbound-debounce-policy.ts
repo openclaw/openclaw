@@ -6,6 +6,10 @@ import {
   type InboundDebounceCreateParams,
 } from "../auto-reply/inbound-debounce.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createSmartDebounceResolver, type SmartDebounceConfig } from "./smart-debounce.js";
+
+// Re-export SmartDebounceConfig for consumers
+export type { SmartDebounceConfig } from "./smart-debounce.js";
 
 export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;
@@ -32,6 +36,10 @@ export function createChannelInboundDebouncer<T>(
     cfg: OpenClawConfig;
     channel: string;
     debounceMsOverride?: number;
+    /** Smart debounce configuration for dynamic debounce times */
+    smartDebounce?: SmartDebounceConfig;
+    /** Function to extract text from item for smart debounce analysis */
+    extractText?: (item: T) => string;
   },
 ): {
   debounceMs: number;
@@ -42,9 +50,24 @@ export function createChannelInboundDebouncer<T>(
     channel: params.channel,
     overrideMs: params.debounceMsOverride,
   });
-  const { cfg: _cfg, channel: _channel, debounceMsOverride: _override, ...rest } = params;
+  const {
+    cfg: _cfg,
+    channel: _channel,
+    debounceMsOverride: _override,
+    smartDebounce,
+    extractText,
+    ...rest
+  } = params;
+
+  // Create smart debounce resolver if enabled
+  const resolveDebounceMs =
+    smartDebounce?.enabled !== false
+      ? createSmartDebounceResolver<T>(debounceMs, smartDebounce, extractText)
+      : undefined;
+
   const debouncer = createInboundDebouncer<T>({
     debounceMs,
+    resolveDebounceMs,
     ...rest,
   });
   return { debounceMs, debouncer };
