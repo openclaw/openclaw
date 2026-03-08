@@ -217,15 +217,22 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
 describe("runOnboardingWizard", () => {
   let suiteRoot = "";
   let suiteCase = 0;
+  const previousLocale = process.env.OPENCLAW_LOCALE;
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-suite-"));
+    process.env.OPENCLAW_LOCALE = "en";
   });
 
   afterAll(async () => {
     await fs.rm(suiteRoot, { recursive: true, force: true });
     suiteRoot = "";
     suiteCase = 0;
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
   });
 
   async function makeCaseDir(prefix: string): Promise<string> {

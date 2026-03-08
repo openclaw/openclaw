@@ -13,12 +13,29 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { cliT } from "../i18n/cli.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+
+async function promptCliLocaleSelection(prompter: WizardPrompter): Promise<void> {
+  const explicit = process.env.OPENCLAW_LOCALE?.trim();
+  if (explicit) {
+    return;
+  }
+  const locale = await prompter.select({
+    message: "Language / 语言",
+    options: [
+      { value: "en", label: "English", hint: "Default" },
+      { value: "zh-CN", label: "简体中文", hint: "推荐" },
+    ],
+    initialValue: "en",
+  });
+  process.env.OPENCLAW_LOCALE = locale;
+}
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -57,12 +74,11 @@ async function requireRiskAcknowledgement(params: {
       "",
       "Must read: https://docs.openclaw.ai/gateway/security",
     ].join("\n"),
-    "Security",
+    cliT("wizard.securityTitle", process.env),
   );
 
   const ok = await params.prompter.confirm({
-    message:
-      "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
+    message: cliT("wizard.securityConfirm", process.env),
     initialValue: false,
   });
   if (!ok) {
@@ -75,9 +91,11 @@ export async function runOnboardingWizard(
   runtime: RuntimeEnv = defaultRuntime,
   prompter: WizardPrompter,
 ) {
+  await promptCliLocaleSelection(prompter);
+  const t = (key: Parameters<typeof cliT>[0]) => cliT(key, process.env);
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
-  await prompter.intro("OpenClaw onboarding");
+  await prompter.intro(t("wizard.onboardingTitle"));
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
@@ -96,14 +114,18 @@ export async function runOnboardingWizard(
       );
     }
     await prompter.outro(
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run onboarding.`,
+      cliT("wizard.configInvalidOutro", process.env, {
+        doctorCommand: formatCliCommand("openclaw doctor"),
+      }),
     );
     runtime.exit(1);
     return;
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
-  const manualHint = "Configure port, network, Tailscale, and auth options.";
+  const quickstartHint = cliT("wizard.modeQuickstartHint", process.env, {
+    configureCommand: formatCliCommand("openclaw configure"),
+  });
+  const manualHint = t("wizard.modeManualHint");
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (
@@ -122,19 +144,16 @@ export async function runOnboardingWizard(
   let flow: WizardFlow =
     explicitFlow ??
     (await prompter.select({
-      message: "Onboarding mode",
+      message: t("wizard.modeQuestion"),
       options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Manual", hint: manualHint },
+        { value: "quickstart", label: t("wizard.modeQuickstart"), hint: quickstartHint },
+        { value: "advanced", label: t("wizard.modeManual"), hint: manualHint },
       ],
       initialValue: "quickstart",
     }));
 
   if (opts.mode === "remote" && flow === "quickstart") {
-    await prompter.note(
-      "QuickStart only supports local gateways. Switching to Manual mode.",
-      "QuickStart",
-    );
+    await prompter.note(t("wizard.quickstartSwitchToManual"), t("wizard.quickstartTitle"));
     flow = "advanced";
   }
 
@@ -391,7 +410,7 @@ export async function runOnboardingWizard(
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
     logConfigUpdated(runtime);
-    await prompter.outro("Remote gateway configured.");
+    await prompter.outro(t("wizard.remoteConfigured"));
     return;
   }
 
