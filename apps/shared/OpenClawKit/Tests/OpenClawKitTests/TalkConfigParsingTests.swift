@@ -2,6 +2,28 @@ import OpenClawKit
 import Testing
 
 struct TalkConfigParsingTests {
+    @Test func prefersCanonicalResolvedTalkProviderPayload() {
+        let talk: [String: AnyCodable] = [
+            "resolved": AnyCodable([
+                "provider": "elevenlabs",
+                "config": [
+                    "voiceId": "voice-resolved",
+                ],
+            ]),
+            "provider": AnyCodable("elevenlabs"),
+            "providers": AnyCodable([
+                "elevenlabs": [
+                    "voiceId": "voice-normalized",
+                ],
+            ]),
+        ]
+
+        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
+        #expect(selection?.provider == "elevenlabs")
+        #expect(selection?.normalizedPayload == true)
+        #expect(selection?.config["voiceId"]?.stringValue == "voice-resolved")
+    }
+
     @Test func prefersNormalizedTalkProviderPayload() {
         let talk: [String: AnyCodable] = [
             "provider": AnyCodable("elevenlabs"),
