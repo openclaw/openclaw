@@ -105,13 +105,14 @@ Copy **both**:
 Common approaches:
 
 - `scp` the tarballs and extract
-- `rsync -a` over SSH
+- `rsync -a --no-owner --no-group` over SSH when the target is root-owned or runs as a different user
 - external drive
 
 After copying, ensure:
 
 - Hidden directories were included (e.g. `.openclaw/`)
 - File ownership is correct for the user running the gateway
+- If you used `rsync`, you did not preserve the source machine's owner/group onto root-owned target paths
 
 ### Step 3 — Run Doctor (migrations + service repair)
 
@@ -160,6 +161,10 @@ Always migrate the entire `$OPENCLAW_STATE_DIR` folder.
 If you copied as root or changed users, the gateway may fail to read credentials/sessions.
 
 Fix: ensure the state dir + workspace are owned by the user running the gateway.
+
+If you copy from another machine with owner/group preservation enabled, you can also drift ownership on
+root-owned targets. Prefer `rsync --no-owner --no-group` (or `scp` + extract) unless you are certain the
+source and destination ownership model is identical.
 
 ### Footgun: migrating between remote/local modes
 
