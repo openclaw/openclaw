@@ -89,6 +89,10 @@ USER.md
 # local tooling
 .serena/
 
+# Local IBM WML bridge files
+scripts/dev/.env.ibm-wml
+scripts/dev/ibm-wml-bridge.log
+
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
