@@ -17,9 +17,11 @@ from unittest.mock import patch
 from model_usage import (
     filter_by_days,
     latest_model_date,
-    main as model_usage_main,
     model_seen,
     positive_int,
+)
+from model_usage import (
+    main as model_usage_main,
 )
 
 
