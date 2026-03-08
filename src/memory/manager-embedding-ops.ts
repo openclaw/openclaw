@@ -727,14 +727,27 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
           .run(entry.path, options.source);
-      } catch {}
+      } catch (err) {
+        // sqlite-vec extension may not be loaded; vector rows will be orphaned until next full reindex
+        log.debug("Failed to delete from vector table before reindex", {
+          path: entry.path,
+          source: options.source,
+          err,
+        });
+      }
     }
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db
           .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
           .run(entry.path, options.source, this.provider.model);
-      } catch {}
+      } catch (err) {
+        log.debug("Failed to delete from FTS table before reindex", {
+          path: entry.path,
+          source: options.source,
+          err,
+        });
+      }
     }
     this.db
       .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
@@ -771,7 +784,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (vectorReady && embedding.length > 0) {
         try {
           this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
-        } catch {}
+        } catch (err) {
+          // sqlite-vec extension may not be loaded; stale vector row will be replaced on insert
+          log.debug("Failed to delete stale vector row before upsert", { id, err });
+        }
         this.db
           .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
           .run(id, vectorToBlob(embedding));

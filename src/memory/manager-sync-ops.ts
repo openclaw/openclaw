@@ -708,14 +708,25 @@ export abstract class MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
           .run(stale.path, "memory");
-      } catch {}
+      } catch (err) {
+        // sqlite-vec extension may not be loaded; vector rows cleaned up with chunks below
+        log.debug("Failed to delete from vector table for stale memory file", {
+          path: stale.path,
+          err,
+        });
+      }
       this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
             .run(stale.path, "memory", this.provider.model);
-        } catch {}
+        } catch (err) {
+          log.debug("Failed to delete from FTS table for stale memory file", {
+            path: stale.path,
+            err,
+          });
+        }
       }
     }
   }
@@ -813,7 +824,13 @@ export abstract class MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
           .run(stale.path, "sessions");
-      } catch {}
+      } catch (err) {
+        // sqlite-vec extension may not be loaded; vector rows cleaned up with chunks below
+        log.debug("Failed to delete from vector table for stale session file", {
+          path: stale.path,
+          err,
+        });
+      }
       this.db
         .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
         .run(stale.path, "sessions");
@@ -822,7 +839,12 @@ export abstract class MemoryManagerSyncOps {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
             .run(stale.path, "sessions", this.provider.model);
-        } catch {}
+        } catch (err) {
+          log.debug("Failed to delete from FTS table for stale session file", {
+            path: stale.path,
+            err,
+          });
+        }
       }
     }
   }
@@ -1175,7 +1197,9 @@ export abstract class MemoryManagerSyncOps {
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db.exec(`DELETE FROM ${FTS_TABLE}`);
-      } catch {}
+      } catch (err) {
+        log.debug("Failed to clear FTS table during index reset", { err });
+      }
     }
     this.dropVectorTable();
     this.vector.dims = undefined;
