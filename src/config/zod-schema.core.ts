@@ -240,6 +240,15 @@ export const ModelProviderSchema = z
   })
   .strict();
 
+export const BedrockModelCostSchema = z
+  .object({
+    input: z.number().nonnegative().optional(),
+    output: z.number().nonnegative().optional(),
+    cacheRead: z.number().nonnegative().optional(),
+    cacheWrite: z.number().nonnegative().optional(),
+  })
+  .strict();
+
 export const BedrockDiscoverySchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -248,6 +257,7 @@ export const BedrockDiscoverySchema = z
     refreshInterval: z.number().int().nonnegative().optional(),
     defaultContextWindow: z.number().int().positive().optional(),
     defaultMaxTokens: z.number().int().positive().optional(),
+    costs: z.record(z.string().min(1), BedrockModelCostSchema).optional(),
   })
   .strict()
   .optional();
