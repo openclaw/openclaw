@@ -520,6 +520,32 @@ describe("createTelegramDraftStream", () => {
     expect(stream.sendMayHaveLanded?.()).toBe(false);
   });
 
+  it("applies reply_to_message_id only to the first message, not after forceNewMessage (#39718)", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      replyToMessageId: 999,
+    });
+
+    // First message should include reply_to_message_id
+    stream.update("Hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { reply_to_message_id: 999 });
+
+    // After forceNewMessage, the second message should NOT include reply_to_message_id
+    // This prevents "Deleted message" artifacts when the first preview is archived
+    stream.forceNewMessage();
+    stream.update("After rotation");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After rotation", undefined);
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
