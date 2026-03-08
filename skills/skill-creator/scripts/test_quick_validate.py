@@ -254,6 +254,28 @@ allowed-tools: [gh, 'git status', "npm test"]
 
         self.assertTrue(valid, message)
 
+    def test_fallback_rejects_non_string_yaml_flow_scalars(self):
+        skill_dir = self.temp_dir / "fallback-flow-non-string-scalars"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: fallback-flow-non-string-scalars
+description: flow list has non-string scalars
+allowed-tools: [gh, 123, true]
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        previous_yaml = quick_validate.yaml
+        quick_validate.yaml = None
+        try:
+            valid, message = quick_validate.validate_skill(skill_dir)
+        finally:
+            quick_validate.yaml = previous_yaml
+
+        self.assertFalse(valid)
+        self.assertEqual(message, "'allowed-tools' entry #2 must be a string")
+
 
 if __name__ == "__main__":
     main()

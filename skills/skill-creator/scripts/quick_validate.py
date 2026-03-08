@@ -65,6 +65,41 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     return parsed
 
 
+def _coerce_fallback_scalar(token: str):
+    stripped = token.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}:
+        quote = stripped[0]
+        inner = stripped[1:-1]
+        if quote == '"':
+            return bytes(inner, "utf-8").decode("unicode_escape")
+        # YAML single-quoted strings escape apostrophes by doubling them.
+        return inner.replace("''", "'")
+
+    lowered = stripped.lower()
+    if lowered in {"null", "~"}:
+        return None
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+
+    if re.fullmatch(r"[+-]?\d+", stripped):
+        try:
+            return int(stripped)
+        except ValueError:
+            pass
+
+    if re.fullmatch(r"[+-]?(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?", stripped) or re.fullmatch(
+        r"[+-]?\d+[eE][+-]?\d+", stripped
+    ):
+        try:
+            return float(stripped)
+        except ValueError:
+            pass
+
+    return stripped
+
+
 def _parse_fallback_flow_list(value: str):
     """Best-effort parser for YAML/JSON flow lists in no-PyYAML mode."""
     stripped = value.strip()
@@ -75,29 +110,28 @@ def _parse_fallback_flow_list(value: str):
     if not inner:
         return []
 
-    items = []
+    raw_items = []
     current: list[str] = []
     quote: Optional[str] = None
     escape = False
 
     for char in inner:
         if quote is not None:
+            current.append(char)
             if escape:
-                current.append(char)
                 escape = False
             elif quote == '"' and char == "\\":
                 escape = True
             elif char == quote:
                 quote = None
-            else:
-                current.append(char)
             continue
 
         if char in {'"', "'"}:
             quote = char
+            current.append(char)
             continue
         if char == ",":
-            items.append("".join(current).strip())
+            raw_items.append("".join(current).strip())
             current = []
             continue
         current.append(char)
@@ -105,8 +139,8 @@ def _parse_fallback_flow_list(value: str):
     if quote is not None or escape:
         return None
 
-    items.append("".join(current).strip())
-    return items
+    raw_items.append("".join(current).strip())
+    return [_coerce_fallback_scalar(item) for item in raw_items]
 
 
 def _coerce_allowed_tools(value):
