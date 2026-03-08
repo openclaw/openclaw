@@ -3,6 +3,8 @@ import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
   applySandboxBridgeAccessToDockerConfig,
   ensureSandboxBrowser,
+  isDockerizedSandboxGatewayRuntime,
+  resolveSandboxBrowserCdpHost,
   resolveSandboxBridgeAccess,
 } from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
@@ -253,5 +255,116 @@ describe("ensureSandboxBrowser create args", () => {
       listenHost: "0.0.0.0",
       advertisedHost: "gateway.internal",
     });
+  });
+
+  it("defaults sandbox browser CDP host to loopback outside Dockerized gateway runtimes", async () => {
+    await expect(resolveSandboxBrowserCdpHost({ dockerizedGatewayRuntime: false })).resolves.toBe(
+      "127.0.0.1",
+    );
+  });
+
+  it("falls back to the Docker host alias when no direct gateway network path is available", async () => {
+    await expect(resolveSandboxBrowserCdpHost({ dockerizedGatewayRuntime: true })).resolves.toBe(
+      "host.docker.internal",
+    );
+  });
+
+  it("detects Dockerized gateway runtime only when both dockerenv and docker.sock exist", () => {
+    const paths = new Set(["/.dockerenv", "/var/run/docker.sock"]);
+    expect(
+      isDockerizedSandboxGatewayRuntime({
+        existsSync: (path) => paths.has(path),
+      }),
+    ).toBe(true);
+    expect(
+      isDockerizedSandboxGatewayRuntime({
+        existsSync: (path) => path === "/.dockerenv",
+      }),
+    ).toBe(false);
+  });
+
+  it("passes an explicit sandbox browser cdpHost into the bridge config", async () => {
+    const cfg = buildConfig(false);
+    cfg.browser.cdpHost = "gateway-host.internal";
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolved: expect.objectContaining({
+          cdpHost: "gateway-host.internal",
+          cdpIsLoopback: false,
+        }),
+      }),
+    );
+  });
+
+  it("uses the browser container IP on the shared gateway network for Dockerized runtimes", async () => {
+    const originalHostname = process.env.HOSTNAME;
+    try {
+      process.env.HOSTNAME = "gateway-container";
+      let browserInspectCount = 0;
+      dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+        if (args[0] === "inspect" && args[1] === "gateway-container") {
+          return {
+            stdout: JSON.stringify([
+              {
+                NetworkSettings: {
+                  Networks: {
+                    openclaw_default: { IPAddress: "172.18.0.2" },
+                  },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (args[0] === "inspect" && args[1] === "sandbox-browser") {
+          browserInspectCount += 1;
+          return {
+            stdout: JSON.stringify([
+              {
+                NetworkSettings: {
+                  Networks:
+                    browserInspectCount === 1
+                      ? {}
+                      : {
+                          openclaw_default: { IPAddress: "172.18.0.3" },
+                        },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (args[0] === "network" && args[1] === "connect") {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (args[0] === "image" && args[1] === "inspect") {
+          return { stdout: "[]", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      });
+
+      await expect(
+        resolveSandboxBrowserCdpHost({
+          containerName: "sandbox-browser",
+          dockerizedGatewayRuntime: true,
+        }),
+      ).resolves.toBe("172.18.0.3");
+      expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+        ["network", "connect", "--alias", "sandbox-browser", "openclaw_default", "sandbox-browser"],
+        { allowFailure: true },
+      );
+    } finally {
+      process.env.HOSTNAME = originalHostname;
+    }
   });
 });

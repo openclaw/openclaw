@@ -303,6 +303,33 @@ describe("sandbox browser binds config", () => {
     }
   });
 
+  it("prefers agent cdpHost over global browser cdpHost", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "agent",
+      globalBrowser: { cdpHost: "global-cdp.internal" },
+      agentBrowser: { cdpHost: "agent-cdp.internal" },
+    });
+    expect(resolved.cdpHost).toBe("agent-cdp.internal");
+  });
+
+  it("accepts sandbox.browser.cdpHost in config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              cdpHost: "gateway-cdp.internal",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.browser?.cdpHost).toBe("gateway-cdp.internal");
+    }
+  });
+
   it("merges cdpSourceRange with agent override", () => {
     const resolved = resolveSandboxBrowserConfig({
       scope: "agent",
