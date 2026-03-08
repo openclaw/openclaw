@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/email",
+  "version": "2026.2.9-1",
+  "description": "OpenClaw email channel plugin for American Claw managed hosting",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
