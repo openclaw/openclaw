@@ -277,6 +277,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     replyToMode,
     threadHistoryScope,
     threadInheritParent,
+    implicitThreadMention: slackCfg.implicitThreadMention,
     slashCommand,
     textLimit,
     ackReactionScope,

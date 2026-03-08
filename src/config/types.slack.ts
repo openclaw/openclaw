@@ -160,6 +160,8 @@ export type SlackAccountConfig = {
    * Example: { direct: "all", group: "first", channel: "off" }.
    */
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  /** If false, Slack thread replies only count as mentions when they explicitly mention the bot. Default: true. */
+  implicitThreadMention?: boolean;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;

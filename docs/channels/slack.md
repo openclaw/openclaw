@@ -188,7 +188,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
     - explicit app mention (`<@botId>`)
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - implicit reply-to-bot thread behavior
+    - implicit reply-to-bot thread behavior (disable with `channels.slack.implicitThreadMention: false`)
 
     Per-channel controls (`channels.slack.channels.<id|name>`):
 
