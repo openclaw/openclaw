@@ -102,7 +102,6 @@ export async function monitorWebhook({
   const webhookHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
 
   server.on("request", (req, res) => {
-    statusSink?.({ connected: true, mode: "webhook", lastEventAt: Date.now(), lastError: null });
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
     });
@@ -126,6 +125,7 @@ export async function monitorWebhook({
       timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
       responseFormat: "text",
     });
+    statusSink?.({ connected: true, mode: "webhook", lastEventAt: Date.now(), lastError: null });
     if (guard.isTripped()) {
       return;
     }

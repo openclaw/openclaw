@@ -558,7 +558,21 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   });
 
   if (connectionMode === "webhook") {
-    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher, statusSink });
+    return monitorWebhook({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      statusSink,
+    });
   }
-  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher, statusSink });
+  return monitorWebSocket({
+    account,
+    accountId,
+    runtime,
+    abortSignal,
+    eventDispatcher,
+    statusSink,
+  });
 }
