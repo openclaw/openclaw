@@ -72,6 +72,25 @@ export {
   unbindThreadBindingsBySessionKey,
 } from "../discord/monitor/thread-bindings.js";
 export type {
+  BindingTargetKind,
+  BindingStatus,
+  SessionBindingPlacement,
+  SessionBindingErrorCode,
+  ConversationRef,
+  SessionBindingRecord,
+  SessionBindingBindInput,
+  SessionBindingUnbindInput,
+  SessionBindingCapabilities,
+  SessionBindingAdapter,
+  SessionBindingAdapterCapabilities,
+} from "../infra/outbound/session-binding-service.js";
+export {
+  SessionBindingError,
+  isSessionBindingError,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+} from "../infra/outbound/session-binding-service.js";
+export type {
   AcpRuntimeCapabilities,
   AcpRuntimeControl,
   AcpRuntimeDoctorReport,
