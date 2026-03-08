@@ -220,11 +220,11 @@ describe("modelsStatusCommand auth overview", () => {
     const anthropic = providers.find((p) => p.provider === "anthropic");
     expect(anthropic).toBeTruthy();
     expect(anthropic?.profiles.labels.join(" ")).toContain("OAuth");
-    expect(anthropic?.profiles.labels.join(" ")).toContain("...");
+    expect(anthropic?.profiles.labels.join(" ")).toContain("****");
 
     const openai = providers.find((p) => p.provider === "openai");
     expect(openai?.env?.source).toContain("OPENAI_API_KEY");
-    expect(openai?.env?.value).toContain("...");
+    expect(openai?.env?.value).toContain("****");
 
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("anthropic")),
@@ -256,7 +256,7 @@ describe("modelsStatusCommand auth overview", () => {
       }>;
       const openai = providers.find((p) => p.provider === "openai");
       const labels = openai?.profiles.labels ?? [];
-      expect(labels.join(" ")).toContain("...");
+      expect(labels.join(" ")).toContain("****");
       expect(labels.join(" ")).not.toContain(shortSecret);
     } finally {
       mocks.store.profiles = originalProfiles;
