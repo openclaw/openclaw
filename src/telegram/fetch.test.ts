@@ -130,6 +130,18 @@ describe("resolveTelegramFetch", () => {
     expect(resolved).toBe(alreadyWrapped);
   });
 
+  it("does not mutate global network defaults when a proxy fetch is injected", async () => {
+    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
+
+    resolveTelegramFetch(proxyFetch, {
+      network: { autoSelectFamily: true, dnsResultOrder: "verbatim" },
+    });
+
+    expect(setDefaultAutoSelectFamily).not.toHaveBeenCalled();
+    expect(setDefaultResultOrder).not.toHaveBeenCalled();
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+
   it("honors env enable override", async () => {
     vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "1");
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
@@ -178,6 +190,13 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("keeps an existing proxy-like global dispatcher", async () => {
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("ALL_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("all_proxy", "");
+
     getGlobalDispatcherState.value = {
       constructor: { name: "ProxyAgent" },
     };
