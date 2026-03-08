@@ -30,8 +30,8 @@ node openclaw.mjs pairing approve telegram 2F2HJ4BD
 ### 方案 A: 使用 PM2 + Tmux (最推荐：持久运行 + 实时监控)
 将 PM2 进程管理器运行在 Tmux 会话中，既能保证后台持续运行，又能随时查看实时面板。
 
-1. 启动服务并开启监控面板:
-   tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot && pm2 monit'
+1. 启动服务并开启监控面板 (包含网络重连优化):
+   tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time && pm2 monit'
 
 2. 退出监控面板 (不影响后台运行):
    按下 Ctrl+B 然后按 D (Detach)
@@ -41,12 +41,14 @@ node openclaw.mjs pairing approve telegram 2F2HJ4BD
 
 ---
 
-### 方案 B: 仅使用 PM2 (纯后台运行)
-1. 启动服务:
-   pm2 start "pnpm start" --name moltbot
+### 方案 B: 仅使用 PM2 (纯后台运行 - 网络增强版)
+1. 启动服务 (带自动增加等待时间的重启，应对 WiFi 掉线):
+   pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time
 2. 查看状态:
    pm2 status
-3. 停止服务:
+3. 查看带时间戳的日志:
+   pm2 logs moltbot --time
+4. 停止服务:
    pm2 stop moltbot
 
 ---
@@ -58,3 +60,71 @@ node openclaw.mjs pairing approve telegram 2F2HJ4BD
    按下 Ctrl+B 然后按 D
 3. 重新连入:
    tmux attach -t moltbot
+
+   tmux kill-server
+
+
+新增agent
+openclaw agents add "Agent 名称"
+
+非交互式
+openclaw agents add "My Agent" --workspace ./my-workspace --model gpt-4 --bind "telegram:123456" --non-interactive
+
+你也可以直接编辑配置文件（默认路径通常是 ~/.openclaw/openclaw.json）。
+
+在 agents.list 数组中添加一个新项：
+你也可以直接编辑配置文件（默认路径通常是 ~/.openclaw/openclaw.json）。
+{
+  "agents": {
+    "list": [
+      {
+        "id": "my-new-agent",
+        "name": "我的新 Agent",
+        "workspace": "/Users/yourname/.openclaw/agents/my-new-agent",
+        "model": "gpt-4"
+      }
+    ]
+  }
+}
+
+每个 agent 都需要一个独立的 Workspace 目录。在新增 agent 后，该目录下通常需要包含以下文件：
+
+AGENTS.md：高层级说明和项目上下文。
+SOUL.md：定义 agent 的性格、动机和行为准则（最重要的文件）。
+TOOLS.md：(可选) 定义该 agent 可用的自定义工具或技能。
+IDENTITY.md：(可选) 设置 agent 的显示名称、Emoji 和头像。
+
+# 将 Telegram 上的某个账号路由到新 agent
+openclaw agents bind --agent my-new-agent --bind "telegram:your_account_id"
+
+# 进入会话
+tmux attach -t moltbot
+
+# 在里面你可以查看状态
+pm2 status
+# 或者查看实时日志
+pm2 logs moltbot
+
+# 按 Ctrl+B 然后按 D 可以退出 tmux 回到主界面（服务会继续运行）
+
+
+其他常用命令
+openclaw dashboard
+
+# 查看所有已安装技能
+
+openclaw skills check
+
+openclaw skills list
+
+# 搜索技能
+openclaw skills search weather
+
+# 查看技能详情
+openclaw skills show weather
+
+重启
+pm2 restart moltbot
+
+
+保证网络不掉线 caffeinate -dimsu pm2 resurrect

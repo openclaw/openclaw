@@ -11,11 +11,11 @@ const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
-const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
@@ -115,6 +115,7 @@ const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
 const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 
 function resolveOpenAICodexForwardCompatModel(
+
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
@@ -333,6 +334,7 @@ export function resolveForwardCompatModel(
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
+
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
