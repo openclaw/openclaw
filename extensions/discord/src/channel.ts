@@ -301,9 +301,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     textChunkLimit: 2000,
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-    sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
-      const result = await send(to, text, {
+      // Route to the thread channel when threadId is set; Discord threads are addressed by channel ID.
+      const target =
+        threadId != null && String(threadId).trim() ? `channel:${String(threadId).trim()}` : to;
+      const result = await send(target, text, {
         verbose: false,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
@@ -319,10 +322,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       accountId,
       deps,
       replyToId,
+      threadId,
       silent,
     }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
-      const result = await send(to, text, {
+      // Route to the thread channel when threadId is set; Discord threads are addressed by channel ID.
+      const target =
+        threadId != null && String(threadId).trim() ? `channel:${String(threadId).trim()}` : to;
+      const result = await send(target, text, {
         verbose: false,
         mediaUrl,
         mediaLocalRoots,
