@@ -148,7 +148,7 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps shared auth token separate from cached device token", async () => {
+  it("signs with the shared auth token when one is provided", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -167,14 +167,39 @@ describe("GatewayBrowserClient", () => {
     const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
       id?: string;
       method?: string;
-      params?: { auth?: { token?: string } };
+      params?: { auth?: { token?: string; deviceToken?: string } };
     };
     expect(connectFrame.id).toBe("req-1");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBeUndefined();
     expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
-    expect(signedPayload).toContain("|stored-device-token|nonce-1");
-    expect(signedPayload).not.toContain("shared-auth-token");
+    expect(signedPayload).toContain("|shared-auth-token|nonce-1|test-platform|");
+    expect(signedPayload).not.toContain("stored-device-token");
+  });
+
+  it("falls back to the cached device token when no shared token is provided", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    await Promise.resolve();
+
+    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+      params?: { auth?: { token?: string; deviceToken?: string } };
+    };
+    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
+    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    expect(signedPayload).toContain("|stored-device-token|nonce-1|test-platform|");
   });
 });
