@@ -211,6 +211,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("injects canonical approval buttons for exec approval prompts", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            channelData: {
+              telegram: {
+                buttons: [
+                  [
+                    { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
+                    { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
+                  ],
+                  [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
+                ],
+              },
+            },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("uses 30-char preview debounce for legacy block stream mode", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

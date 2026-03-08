@@ -23,7 +23,11 @@ import {
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
 } from "./bash-tools.exec-host-shared.js";
-import { createApprovalSlug, emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
+import {
+  buildApprovalPendingMessage,
+  createApprovalSlug,
+  emitExecSystemEvent,
+} from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -323,9 +327,15 @@ export async function executeNodeHostCommand(
       content: [
         {
           type: "text",
-          text:
-            `${warningText}Approval required (id ${approvalSlug}). ` +
-            "Approve to run; updates will arrive after completion.",
+          text: buildApprovalPendingMessage({
+            warningText,
+            approvalSlug,
+            approvalId,
+            command: prepared.cmdText,
+            cwd: runCwd,
+            host: "node",
+            nodeId,
+          }),
         },
       ],
       details: {

@@ -74,6 +74,9 @@ import {
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
+const APPROVE_CALLBACK_DATA_RE =
+  /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
+
 function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
@@ -1080,6 +1083,30 @@ export const registerTelegramHandlers = ({
           params,
         );
       };
+      const clearCallbackButtons = async () => {
+        const emptyKeyboard = { inline_keyboard: [] };
+        const replyMarkup = { reply_markup: emptyKeyboard };
+        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof editReplyMarkupFn === "function") {
+          return await ctx.editMessageReplyMarkup(replyMarkup);
+        }
+        const apiEditReplyMarkupFn = (bot.api as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof apiEditReplyMarkupFn === "function") {
+          return await bot.api.editMessageReplyMarkup(
+            callbackMessage.chat.id,
+            callbackMessage.message_id,
+            replyMarkup,
+          );
+        }
+        // Fallback path for older clients that do not expose editMessageReplyMarkup.
+        const messageText = callbackMessage.text ?? callbackMessage.caption;
+        if (typeof messageText !== "string" || messageText.trim().length === 0) {
+          return undefined;
+        }
+        return await editCallbackMessage(messageText, replyMarkup);
+      };
       const deleteCallbackMessage = async () => {
         const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
         if (typeof deleteFn === "function") {
@@ -1147,6 +1174,20 @@ export const registerTelegramHandlers = ({
       });
       if (!senderAuthorization.allowed) {
         return;
+      }
+
+      if (APPROVE_CALLBACK_DATA_RE.test(data)) {
+        try {
+          await clearCallbackButtons();
+        } catch (editErr) {
+          const errStr = String(editErr);
+          if (
+            !errStr.includes("message is not modified") &&
+            !errStr.includes("there is no text in the message to edit")
+          ) {
+            logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
+          }
+        }
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);

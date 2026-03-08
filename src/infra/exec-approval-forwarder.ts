@@ -191,6 +191,10 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   }
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
+  lines.push("Mode: foreground (interactive approvals available in this chat).");
+  lines.push(
+    "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
+  );
   lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
   return lines.join("\n");
 }

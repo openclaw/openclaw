@@ -493,6 +493,373 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("processes exec-event wakes without periodic heartbeat config", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-no-interval");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string };
+      expect(calledCtx.Provider).toBe("exec-event");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("preserves topic thread context for exec-event heartbeat wakes", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-topic-thread");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:99";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["-1003841603622"],
+        },
+      },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-1003841603622",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m-wa", toJid: "jid" });
+    const sendTelegram = vi
+      .fn<NonNullable<HeartbeatDeps["sendTelegram"]>>()
+      .mockResolvedValue({ messageId: "m-tg", chatId: "-1003841603622" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        sessionKey,
+        deps: {
+          ...createHeartbeatDeps(sendWhatsApp),
+          sendTelegram,
+        },
+      });
+      expect(res.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        MessageThreadId?: string | number;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.MessageThreadId).toBe("99");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("preserves topic thread context for explicit telegram heartbeat targets", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-topic-thread-target-telegram");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:99";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { target: "telegram" },
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["-1003841603622"],
+        },
+      },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-1003841603622",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m-wa", toJid: "jid" });
+    const sendTelegram = vi
+      .fn<NonNullable<HeartbeatDeps["sendTelegram"]>>()
+      .mockResolvedValue({ messageId: "m-tg", chatId: "-1003841603622" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        sessionKey,
+        deps: {
+          ...createHeartbeatDeps(sendWhatsApp),
+          sendTelegram,
+        },
+      });
+      expect(res.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        MessageThreadId?: string | number;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.MessageThreadId).toBe("99");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("preserves topic thread context when explicit telegram target matches source chat", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-topic-thread-target-telegram-explicit");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:99";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { target: "telegram", to: "-1003841603622" },
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["-1003841603622"],
+        },
+      },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-1003841603622",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m-wa", toJid: "jid" });
+    const sendTelegram = vi
+      .fn<NonNullable<HeartbeatDeps["sendTelegram"]>>()
+      .mockResolvedValue({ messageId: "m-tg", chatId: "-1003841603622" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        sessionKey,
+        deps: {
+          ...createHeartbeatDeps(sendWhatsApp),
+          sendTelegram,
+        },
+      });
+      expect(res.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        MessageThreadId?: string | number;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.MessageThreadId).toBe("99");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("does not carry source thread context to explicit cross-channel heartbeat targets", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-cross-channel-thread");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:99";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { target: "whatsapp" },
+        },
+      },
+      channels: {
+        whatsapp: {
+          allowFrom: ["120363401234567890@g.us"],
+        },
+      },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m-wa", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        sessionKey,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        MessageThreadId?: string | number;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.MessageThreadId).toBeUndefined();
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("does not carry source thread context to target=last when session lastChannel moved cross-channel", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-last-cross-channel-thread");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:99";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { target: "last" },
+        },
+      },
+      channels: {
+        whatsapp: {
+          allowFrom: ["120363401234567890@g.us"],
+        },
+      },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Processed exec follow-up" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m-wa", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        sessionKey,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        MessageThreadId?: string | number;
+      };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.MessageThreadId).toBeUndefined();
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("skips outside active hours", async () => {
     const cfg: OpenClawConfig = {
       agents: {

@@ -531,6 +531,27 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("-10063448508");
     expect(resolved.threadId).toBe(1008013);
   });
+
+  it("preserves explicitThreadId override in heartbeat mode", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-telegram-topic",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-10063448508",
+      },
+      heartbeat: {
+        target: "last",
+      },
+      explicitThreadId: "1008013",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-10063448508");
+    expect(resolved.threadId).toBe("1008013");
+  });
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
