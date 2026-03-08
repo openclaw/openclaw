@@ -651,6 +651,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.modelId": "Talk Model ID",
   "talk.outputFormat": "Talk Output Format",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
+  "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.responsePrefix": "Outbound Response Prefix",

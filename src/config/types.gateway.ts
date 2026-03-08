@@ -70,6 +70,8 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+  /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
+  silenceTimeoutMs?: number;
 
   /**
    * Legacy ElevenLabs compatibility fields.

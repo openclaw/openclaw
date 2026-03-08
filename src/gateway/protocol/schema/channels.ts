@@ -42,6 +42,7 @@ export const TalkConfigResultSchema = Type.Object(
               outputFormat: Type.Optional(Type.String()),
               apiKey: Type.Optional(Type.String()),
               interruptOnSpeech: Type.Optional(Type.Boolean()),
+              silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
             },
             { additionalProperties: false },
           ),
