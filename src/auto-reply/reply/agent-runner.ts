@@ -28,6 +28,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -507,6 +508,17 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      // Heartbeat runs can be configured to deliver via a messaging tool
+      // (for example when heartbeat.target routes to iMessage/WhatsApp).
+      // In that case buildReplyPayloads may suppress duplicate payloads because
+      // the text/media was already delivered externally, leaving the main session
+      // with "no response" and triggering followup chaining.
+      const deliveredViaMessagingTool =
+        (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+        (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0;
+      if (isHeartbeat && deliveredViaMessagingTool) {
+        return finalizeWithFollowup({ text: SILENT_REPLY_TOKEN }, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
