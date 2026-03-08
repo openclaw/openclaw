@@ -92,6 +92,12 @@ export function registerOnboardCommand(program: Command) {
   }
 
   command
+    .option("--azure-openai-base-url <url>", "Azure OpenAI base URL")
+    .option("--azure-openai-model-id <id>", "Azure OpenAI deployment/model ID")
+    .option(
+      "--azure-openai-api-version <version>",
+      "Azure OpenAI API version (default: v1; preview example: 2025-04-01-preview)",
+    )
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -147,6 +153,10 @@ export function registerOnboardCommand(program: Command) {
           secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
           anthropicApiKey: opts.anthropicApiKey as string | undefined,
           openaiApiKey: opts.openaiApiKey as string | undefined,
+          azureOpenaiApiKey: opts.azureOpenaiApiKey as string | undefined,
+          azureOpenaiBaseUrl: opts.azureOpenaiBaseUrl as string | undefined,
+          azureOpenaiModelId: opts.azureOpenaiModelId as string | undefined,
+          azureOpenaiApiVersion: opts.azureOpenaiApiVersion as string | undefined,
           mistralApiKey: opts.mistralApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
           kilocodeApiKey: opts.kilocodeApiKey as string | undefined,

@@ -7,6 +7,11 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
+import {
+  applyAzureOpenAIConfig,
+  normalizeAzureOpenAIBaseUrl,
+  normalizeAzureOpenAIModelId,
+} from "../../azure-openai-config.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import { applyPrimaryModel } from "../../model-picker.js";
@@ -47,6 +52,7 @@ import {
   setOpenaiApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setAzureOpenaiApiKey,
   setSyntheticApiKey,
   setVolcengineApiKey,
   setXaiApiKey,
@@ -523,6 +529,60 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenAIConfig(nextConfig);
+  }
+
+  if (authChoice === "azure-openai-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "azure-openai-responses",
+      cfg: baseConfig,
+      flagValue: opts.azureOpenaiApiKey,
+      flagName: "--azure-openai-api-key",
+      envVar: "AZURE_OPENAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAzureOpenaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "azure-openai-responses:default",
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
+
+    const rawBaseUrl = opts.azureOpenaiBaseUrl?.trim();
+    const rawModelId = opts.azureOpenaiModelId?.trim();
+    if (!rawBaseUrl || !rawModelId) {
+      runtime.error(
+        [
+          'Auth choice "azure-openai-api-key" requires Azure base URL and model/deployment ID.',
+          "Use --azure-openai-base-url and --azure-openai-model-id.",
+        ].join("\n"),
+      );
+      runtime.exit(1);
+      return null;
+    }
+
+    let baseUrl: string;
+    let modelId: string;
+    let apiVersion: string | undefined;
+    try {
+      baseUrl = normalizeAzureOpenAIBaseUrl(rawBaseUrl);
+      modelId = normalizeAzureOpenAIModelId(rawModelId);
+      apiVersion = opts.azureOpenaiApiVersion?.trim() || undefined;
+    } catch (error) {
+      runtime.error(error instanceof Error ? error.message : String(error));
+      runtime.exit(1);
+      return null;
+    }
+
+    return applyAzureOpenAIConfig(nextConfig, { baseUrl, modelId, apiVersion });
   }
 
   if (authChoice === "openrouter-api-key") {

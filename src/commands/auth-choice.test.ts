@@ -61,6 +61,7 @@ describe("applyAuthChoice", () => {
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "ANTHROPIC_API_KEY",
+    "AZURE_OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "HF_TOKEN",
     "HUGGINGFACE_HUB_TOKEN",
@@ -269,6 +270,82 @@ describe("applyAuthChoice", () => {
       }
       expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
     }
+  });
+
+  it("configures Azure OpenAI provider with API key, base URL, and model", async () => {
+    await setupTempState();
+
+    const text = vi.fn(async (params: { message: string }) => {
+      if (params.message === "Enter Azure OpenAI API key") {
+        return "azure-test-key";
+      }
+      if (params.message === "Enter Azure OpenAI base URL") {
+        return "https://example.openai.azure.com";
+      }
+      if (params.message === "Enter Azure OpenAI deployment/model ID") {
+        return "gpt-5.4";
+      }
+      return "";
+    });
+    const { prompter, runtime } = createApiKeyPromptHarness({ text });
+
+    const result = await applyAuthChoice({
+      authChoice: "azure-openai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result.config.auth?.profiles?.["azure-openai-responses:default"]).toMatchObject({
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
+    expect(result.config.models?.providers?.["azure-openai-responses"]?.baseUrl).toBe(
+      "https://example.openai.azure.com/openai/v1",
+    );
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "azure-openai-responses/gpt-5.4",
+    );
+    expect(result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-5.4"]?.params).toEqual(
+      {},
+    );
+    expect((await readAuthProfile("azure-openai-responses:default"))?.key).toBe("azure-test-key");
+  });
+
+  it("stores azure apiVersion override in per-model params when provided", async () => {
+    await setupTempState();
+
+    const text = vi.fn(async (params: { message: string }) => {
+      if (params.message === "Enter Azure OpenAI API key") {
+        return "azure-test-key";
+      }
+      if (params.message === "Enter Azure OpenAI base URL") {
+        return "https://example.openai.azure.com";
+      }
+      if (params.message === "Enter Azure OpenAI deployment/model ID") {
+        return "gpt-5.4";
+      }
+      return "";
+    });
+    const { prompter, runtime } = createApiKeyPromptHarness({ text });
+
+    const result = await applyAuthChoice({
+      authChoice: "azure-openai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        azureOpenaiApiVersion: "2025-04-01-preview",
+      },
+    });
+
+    expect(result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-5.4"]?.params).toMatchObject(
+      {
+        azureApiVersion: "2025-04-01-preview",
+      },
+    );
   });
 
   it("handles Z.AI endpoint selection and detection paths", async () => {
@@ -948,6 +1025,45 @@ describe("applyAuthChoice", () => {
       expect(profile?.key).toBe("");
       expect(profile?.key).not.toBe("undefined");
     }
+  });
+
+  it("does not persist literal 'undefined' for Azure OpenAI API key prompts and keeps provider prompts", async () => {
+    await setupTempState();
+    delete process.env.AZURE_OPENAI_API_KEY;
+
+    const text = vi.fn(async (params: { message: string }) => {
+      if (params.message === "Enter Azure OpenAI API key") {
+        return undefined as unknown as string;
+      }
+      if (params.message === "Enter Azure OpenAI base URL") {
+        return "https://example.openai.azure.com/openai/v1";
+      }
+      if (params.message === "Enter Azure OpenAI deployment/model ID") {
+        return "gpt-4.1";
+      }
+      return "";
+    });
+    const prompter = createPrompter({ text });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "azure-openai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.auth?.profiles?.["azure-openai-responses:default"]).toMatchObject({
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
+    const profile = await readAuthProfile("azure-openai-responses:default");
+    expect(profile?.key).toBe("");
+    expect(profile?.key).not.toBe("undefined");
+    expect(result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-4.1"]?.params).toEqual(
+      {},
+    );
   });
 
   it("ignores legacy LiteLLM oauth profiles when selecting litellm-api-key", async () => {

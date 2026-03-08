@@ -63,6 +63,18 @@ openclaw models auth login --provider openai-codex
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
+## Azure OpenAI
+
+Azure OpenAI has moved to a dedicated provider guide:
+
+- [Azure OpenAI](/providers/azure-openai)
+
+That page covers:
+
+- `--azure-openai-api-version` (default `v1` and preview versions)
+- Supported Azure host patterns
+- v1 and preview setup examples
+
 ### Transport default
 
 OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and

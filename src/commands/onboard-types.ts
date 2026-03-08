@@ -12,6 +12,7 @@ export type AuthChoice =
   | "vllm"
   | "openai-codex"
   | "openai-api-key"
+  | "azure-openai-api-key"
   | "openrouter-api-key"
   | "kilocode-api-key"
   | "litellm-api-key"
@@ -53,6 +54,7 @@ export type AuthChoice =
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
+  | "azure-openai"
   | "anthropic"
   | "chutes"
   | "vllm"
@@ -112,6 +114,10 @@ export type OnboardOptions = {
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  azureOpenaiApiKey?: string;
+  azureOpenaiBaseUrl?: string;
+  azureOpenaiModelId?: string;
+  azureOpenaiApiVersion?: string;
   mistralApiKey?: string;
   openrouterApiKey?: string;
   kilocodeApiKey?: string;

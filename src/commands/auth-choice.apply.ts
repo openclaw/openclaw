@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
+import { applyAuthChoiceAzureOpenAI } from "./auth-choice.apply.azure-openai.js";
 import { applyAuthChoiceBytePlus } from "./auth-choice.apply.byteplus.js";
 import { applyAuthChoiceCopilotProxy } from "./auth-choice.apply.copilot-proxy.js";
 import { applyAuthChoiceGitHubCopilot } from "./auth-choice.apply.github-copilot.js";
@@ -39,6 +40,7 @@ export async function applyAuthChoice(
     applyAuthChoiceAnthropic,
     applyAuthChoiceVllm,
     applyAuthChoiceOpenAI,
+    applyAuthChoiceAzureOpenAI,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
     applyAuthChoiceMiniMax,

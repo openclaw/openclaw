@@ -1,5 +1,6 @@
 export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   openai: ["OPENAI_API_KEY"],
+  "azure-openai-responses": ["AZURE_OPENAI_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY"],
   google: ["GEMINI_API_KEY"],
   minimax: ["MINIMAX_API_KEY"],
