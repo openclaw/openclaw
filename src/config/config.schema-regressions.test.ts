@@ -75,6 +75,34 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts channels.bluebubbles.allowPrivateNetwork", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          allowPrivateNetwork: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts channels.bluebubbles.accounts.*.allowPrivateNetwork", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          accounts: {
+            default: {
+              allowPrivateNetwork: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
