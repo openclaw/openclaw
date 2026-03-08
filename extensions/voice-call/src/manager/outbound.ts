@@ -248,17 +248,20 @@ export async function speakInitialMessage(
     return;
   }
 
-  // Clear so we don't speak it again if the provider reconnects.
-  if (call.metadata) {
-    delete call.metadata.initialMessage;
-    persistCallRecord(ctx.storePath, call);
-  }
-
   console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
   const result = await speak(ctx, call.callId, initialMessage);
   if (!result.success) {
     console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
+    // Leave initialMessage in metadata so the onConnect callback can retry
+    // delivery once the media stream is established.
     return;
+  }
+
+  // Clear only after successful delivery so a retry path (e.g. the media
+  // stream onConnect callback) can still find the message if speak() failed.
+  if (call.metadata) {
+    delete call.metadata.initialMessage;
+    persistCallRecord(ctx.storePath, call);
   }
 
   if (mode === "notify") {

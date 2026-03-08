@@ -275,6 +275,11 @@ export class VoiceCallWebhookServer {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;
     }
+    // Close all active media stream sessions before shutting down the HTTP
+    // server.  Without this, orphaned WebSocket connections survive the
+    // server close, fire late disconnect handlers against torn-down state,
+    // and leak the WebSocketServer instance into the next runtime lifecycle.
+    this.mediaStreamHandler?.closeAll();
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => {
