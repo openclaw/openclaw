@@ -1305,8 +1305,8 @@ export async function processMessage(
           if (!baseUrl || !password) {
             return;
           }
-          // Skip typing indicator for tapback/reaction messages to avoid lingering
-          // indicator when agent returns NO_REPLY (fixes #11189)
+          // Skip typing for tapback/reaction messages because they usually end in
+          // NO_REPLY, which would otherwise leave a redundant cleanup call.
           if (isTapbackMessage) {
             return;
           }
@@ -1345,7 +1345,8 @@ export async function processMessage(
     });
   } finally {
     const shouldStopTyping =
-      Boolean(chatGuidForActions && baseUrl && password) && (streamingActive || !sentMessage);
+      Boolean(chatGuidForActions && baseUrl && password) &&
+      (streamingActive || (!sentMessage && !isTapbackMessage));
     streamingActive = false;
     clearTypingRestartTimer();
     if (sentMessage && chatGuidForActions && ackMessageId) {
