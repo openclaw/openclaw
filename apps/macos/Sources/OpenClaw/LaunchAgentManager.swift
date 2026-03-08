@@ -42,7 +42,7 @@ enum LaunchAgentManager {
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>
-          <true/>
+          <false/>
           <key>EnvironmentVariables</key>
           <dict>
             <key>PATH</key>
