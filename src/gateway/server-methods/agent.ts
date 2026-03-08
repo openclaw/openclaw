@@ -24,7 +24,11 @@ import {
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  normalizeInputProvenance,
+  isInterSessionInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
@@ -480,7 +484,19 @@ export const agentHandlers: GatewayRequestHandlers = {
         label: labelValue,
         spawnedBy: spawnedByValue,
         spawnDepth: entry?.spawnDepth,
-        channel: entry?.channel ?? request.channel?.trim(),
+        // Preserve the session's real channel when the message arrives via inter-session
+        // transport (sessions_send). The request.channel is "webchat" (INTERNAL_MESSAGE_CHANNEL)
+        // in that case — it's just the transport, not the session's actual channel identity.
+        // Without this guard, a sessions_send call overwrites the target session's channel
+        // from e.g. "telegram" to "webchat", breaking subsequent message delivery (#31671).
+        // When inter-session and no existing channel, omit the key entirely so
+        // mergeSessionEntry ({...existing, ...patch}) does not clobber a
+        // concurrently written channel with undefined.
+        ...(isInterSessionInputProvenance(inputProvenance)
+          ? entry?.channel
+            ? { channel: entry.channel }
+            : {}
+          : { channel: entry?.channel ?? request.channel?.trim() }),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
@@ -567,8 +583,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.threadId === "string" && request.threadId.trim()
         ? request.threadId.trim()
         : undefined;
+    // For inter-session messages, the request.channel is just the internal transport
+    // ("webchat"). Don't propagate it as the turn's source channel — it would pollute
+    // delivery routing and lastChannel tracking.
+    const isInterSession = isInterSessionInputProvenance(inputProvenance);
     const turnSourceChannel =
-      typeof request.channel === "string" && request.channel.trim()
+      !isInterSession && typeof request.channel === "string" && request.channel.trim()
         ? request.channel.trim()
         : undefined;
     const turnSourceTo =
