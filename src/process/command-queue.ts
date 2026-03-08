@@ -90,6 +90,7 @@ function drainLane(lane: string) {
   state.draining = true;
 
   const pump = () => {
+    const pumpGeneration = state.generation;
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const entry = state.queue.shift() as QueueEntry;
@@ -136,7 +137,10 @@ function drainLane(lane: string) {
         })();
       }
     } finally {
-      state.draining = false;
+      // Only clear draining if generation hasn't changed mid-pump (e.g. via resetAllLanes)
+      if (state.generation === pumpGeneration) {
+        state.draining = false;
+      }
     }
   };
 
