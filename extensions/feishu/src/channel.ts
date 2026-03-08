@@ -365,5 +365,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         accountId: ctx.accountId,
       });
     },
+    stopAccount: async (ctx) => {
+      const { stopFeishuMonitor } = await import("./monitor.js");
+      ctx.log?.info(`stopping feishu[${ctx.accountId}]`);
+      stopFeishuMonitor(ctx.accountId);
+    },
   },
 };

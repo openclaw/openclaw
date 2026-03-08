@@ -7,6 +7,8 @@ import {
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS as WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
   WEBHOOK_RATE_LIMIT_DEFAULTS as WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
 } from "openclaw/plugin-sdk/feishu";
+import { clearClientCache } from "./client.js";
+import { clearStreamingTokenCache } from "./streaming-card.js";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
@@ -133,6 +135,11 @@ export function recordWebhookStatus(
 }
 
 export function stopFeishuMonitorState(accountId?: string): void {
+  // Clear HTTP client and streaming token caches so a restarted channel
+  // gets fresh credentials instead of potentially stale/broken ones.
+  clearClientCache(accountId);
+  clearStreamingTokenCache(accountId);
+
   if (accountId) {
     wsClients.delete(accountId);
     const server = httpServers.get(accountId);

@@ -26,6 +26,15 @@ type StreamingStartOptions = {
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
+/**
+ * Clear the streaming card token cache.
+ * Token cache keys are `${domain}|${appId}` (not account-scoped), so we
+ * always clear all entries to avoid stale tokens after channel restart.
+ */
+export function clearStreamingTokenCache(_accountId?: string): void {
+  tokenCache.clear();
+}
+
 function resolveApiBase(domain?: FeishuDomain): string {
   if (domain === "lark") {
     return "https://open.larksuite.com/open-apis";
@@ -339,9 +348,10 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
     }
 
-    // Close streaming mode
+    // Close streaming mode — propagate errors so callers can fall back to
+    // non-streaming delivery instead of silently losing the message.
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
+    const { response: closeRes, release } = await fetchWithSsrFGuard({
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
       init: {
         method: "PATCH",
@@ -359,11 +369,13 @@ export class FeishuStreamingSession {
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
-    })
-      .then(async ({ release }) => {
-        await release();
-      })
-      .catch((e) => this.log?.(`Close failed: ${String(e)}`));
+    });
+    await release();
+    if (!closeRes.ok) {
+      const errMsg = `Streaming card close failed with HTTP ${closeRes.status} (cardId=${this.state.cardId})`;
+      this.log?.(errMsg);
+      throw new Error(errMsg);
+    }
 
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
   }

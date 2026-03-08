@@ -206,22 +206,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
-  const closeStreaming = async () => {
+  /** Close streaming card. Returns true if closed successfully, false on error. */
+  const closeStreaming = async (): Promise<boolean> => {
     if (streamingStartPromise) {
       await streamingStartPromise;
     }
     await partialUpdateQueue;
+    let ok = true;
     if (streaming?.isActive()) {
       let text = streamText;
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      await streaming.close(text);
+      try {
+        await streaming.close(text);
+      } catch (error) {
+        params.runtime.error?.(
+          `feishu[${account.accountId}] streaming close failed, will fallback: ${String(error)}`,
+        );
+        ok = false;
+      }
     }
     streaming = null;
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    return ok;
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -284,23 +294,50 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
-              deliveredFinalTexts.add(text);
-            }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  accountId,
-                });
+              const closeOk = await closeStreaming();
+              if (closeOk) {
+                deliveredFinalTexts.add(text);
+              } else {
+                // Streaming close failed — fall through to non-streaming send
+                // path below so the message is not silently lost.
+                params.runtime.log?.(
+                  `feishu[${account.accountId}] falling back to non-streaming send for final reply`,
+                );
               }
+              if (closeOk) {
+                // Send media even when streaming handled the text
+                if (hasMedia) {
+                  for (const mediaUrl of mediaList) {
+                    await sendMediaFeishu({
+                      cfg,
+                      to: chatId,
+                      mediaUrl,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      accountId,
+                    });
+                  }
+                }
+                return;
+              }
+              // Fall through: streaming failed, deliver via non-streaming path
+            } else {
+              // block kind: stay in streaming path
+              // Send media even when streaming handled the text
+              if (hasMedia) {
+                for (const mediaUrl of mediaList) {
+                  await sendMediaFeishu({
+                    cfg,
+                    to: chatId,
+                    mediaUrl,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    accountId,
+                  });
+                }
+              }
+              return;
             }
-            return;
           }
 
           let first = true;

@@ -6,6 +6,11 @@ const probeFeishuMock = vi.hoisted(() => vi.fn());
 const feishuClientMockModule = vi.hoisted(() => ({
   createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
+  clearClientCache: vi.fn(),
+}));
+
+vi.mock("./streaming-card.js", () => ({
+  clearStreamingTokenCache: vi.fn(),
 }));
 const feishuRuntimeMockModule = vi.hoisted(() => ({
   getFeishuRuntime: () => ({

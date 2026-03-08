@@ -3,10 +3,20 @@ import { vi } from "vitest";
 export function createFeishuClientMockModule(): {
   createFeishuWSClient: () => { start: () => void };
   createEventDispatcher: () => { register: () => void };
+  clearClientCache: () => void;
 } {
   return {
     createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
     createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
+    clearClientCache: vi.fn(),
+  };
+}
+
+export function createStreamingCardMockModule(): {
+  clearStreamingTokenCache: () => void;
+} {
+  return {
+    clearStreamingTokenCache: vi.fn(),
   };
 }
 

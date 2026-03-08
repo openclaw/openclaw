@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
+  createStreamingCardMockModule,
 } from "./monitor.test-mocks.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -14,6 +15,7 @@ vi.mock("./probe.js", () => ({
 }));
 
 vi.mock("./client.js", () => createFeishuClientMockModule());
+vi.mock("./streaming-card.js", () => createStreamingCardMockModule());
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({

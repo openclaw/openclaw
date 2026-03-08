@@ -588,4 +588,99 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   });
+
+  it("falls back to non-streaming send when streaming close fails", async () => {
+    const errorFn = vi.fn();
+    const logFn = vi.fn();
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: logFn, error: errorFn } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Pre-configure the first streaming session's close to throw
+    // The mock class pushes instances to streamingInstances on construction,
+    // but we need to intercept before deliver() is called.
+    // Use a one-shot close override via the mock class.
+    let closeCallCount = 0;
+    const origMockModule = vi.mocked(await import("./streaming-card.js"));
+    // Instead, we can intercept: the first instance created will have its
+    // close mock. We set it to fail before deliver triggers it.
+
+    // Deliver a markdown final — this creates a streaming session, starts it,
+    // then calls close. We need close to fail.
+    // Since the mock class creates instances synchronously on `new`, we can
+    // intercept after the streaming session is created but before close is called
+    // by making startStreaming trigger instance creation, then patching close.
+    //
+    // Simpler approach: Use onReplyStart to trigger streaming creation for
+    // card mode, then patch the instance's close before final delivery.
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: { renderMode: "card", streaming: true },
+    });
+
+    // Re-create dispatcher with card mode to get onReplyStart streaming
+    streamingInstances.length = 0;
+    vi.clearAllMocks();
+    resolveReceiveIdTypeMock.mockReturnValue("chat_id");
+    createFeishuClientMock.mockReturnValue({});
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4000),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+          chunkTextWithMode: vi.fn((text: string) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+    });
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: { renderMode: "card", streaming: true },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: logFn, error: errorFn } as never,
+      chatId: "oc_chat",
+    });
+
+    const opts = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // onReplyStart triggers startStreaming for card mode
+    await opts.onReplyStart?.();
+    expect(streamingInstances).toHaveLength(1);
+
+    // Patch close to throw before delivering the final payload
+    streamingInstances[0].close.mockRejectedValueOnce(
+      new Error("Streaming card close failed with HTTP 401"),
+    );
+
+    await opts.deliver({ text: "fallback content" }, { kind: "final" });
+
+    // Streaming close failed, so it should fall back to sendMarkdownCardFeishu
+    expect(errorFn).toHaveBeenCalledWith(expect.stringContaining("streaming close failed"));
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "fallback content",
+      }),
+    );
+  });
 });
