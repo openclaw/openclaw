@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { runWithLocalModelFallback } from "../../agents/local-model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   isCompactionFailureError,
@@ -13,6 +13,10 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import {
+  SemanticCacheStore,
+  resolveSemanticCacheConfig,
+} from "../../agents/semantic-cache-store.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -143,6 +147,12 @@ export async function runAgentTurnWithFallback(params: {
     params.getActiveSessionEntry()?.systemPromptReport,
   );
 
+  // Initialize semantic cache once outside the retry loop to avoid repeated SQLite loads.
+  const cacheConfig = resolveSemanticCacheConfig(params.followupRun.run.config);
+  const semanticCache = cacheConfig
+    ? new SemanticCacheStore(cacheConfig, params.followupRun.run.agentId)
+    : null;
+
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -197,7 +207,22 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
-      const fallbackResult = await runWithModelFallback({
+      // Check semantic cache before running LLM
+      if (semanticCache && params.commandBody) {
+        await semanticCache.initialize();
+        const cachedResult = await semanticCache.search(params.commandBody);
+        if (cachedResult) {
+          logVerbose(`Semantic cache hit with similarity ${cachedResult.similarity.toFixed(3)}`);
+          return {
+            kind: "final",
+            payload: {
+              text: cachedResult.entry.response,
+            },
+          };
+        }
+      }
+
+      const fallbackResult = await runWithLocalModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
@@ -470,6 +495,25 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+
+      // Store successful response in semantic cache
+      if (semanticCache && params.commandBody && (runResult.payloads?.length ?? 0) > 0) {
+        const responseText = (runResult.payloads ?? [])
+          .map((p: ReplyPayload) => p.text)
+          .filter(Boolean)
+          .join("\n");
+        if (responseText) {
+          try {
+            await semanticCache.store(params.commandBody, responseText, {
+              provider: fallbackProvider,
+              model: fallbackModel,
+            });
+          } catch (cacheError) {
+            logVerbose(`Failed to store in semantic cache: ${String(cacheError)}`);
+          }
+        }
+      }
+
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: String(attempt.provider ?? ""),

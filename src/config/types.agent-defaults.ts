@@ -1,3 +1,5 @@
+import type { LocalModelConfig } from "../agents/local-model-fallback.js";
+import type { SemanticCacheConfig } from "../agents/semantic-cache-store.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
@@ -118,6 +120,10 @@ export type CliBackendConfig = {
 };
 
 export type AgentDefaultsConfig = {
+  /** Local model fallback configuration for graceful degradation when cloud APIs fail */
+  localModelFallback?: Partial<LocalModelConfig>;
+  /** Semantic cache configuration for query/response caching based on embedding similarity */
+  semanticCache?: Partial<SemanticCacheConfig>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
