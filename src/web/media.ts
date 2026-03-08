@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -251,6 +252,18 @@ async function loadWebMediaInternal(
       mediaUrl = fileURLToPath(mediaUrl);
     } catch {
       throw new LocalMediaAccessError("invalid-file-url", `Invalid file:// URL: ${mediaUrl}`);
+    }
+  }
+  // When running in Docker with host volume mount, tools/agents may return host paths.
+  // OPENCLAW_HOST_STATE_DIR is the host's state dir (e.g. /Users/foo/.openclaw); rewrite to container path.
+  const hostStateDir = process.env.OPENCLAW_HOST_STATE_DIR?.trim();
+  if (hostStateDir && path.isAbsolute(mediaUrl)) {
+    const normalizedHost = path.resolve(hostStateDir);
+    const normalizedPath = path.resolve(mediaUrl);
+    if (normalizedPath === normalizedHost || normalizedPath.startsWith(normalizedHost + path.sep)) {
+      const stateDir = resolveStateDir();
+      const rel = path.relative(normalizedHost, normalizedPath);
+      mediaUrl = path.join(stateDir, rel);
     }
   }
 

@@ -188,8 +188,10 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.delivery.to = target;
     return;
   }
-  if (job.sessionTarget !== "isolated") {
-    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  if (job.sessionTarget !== "isolated" && job.sessionTarget !== "main") {
+    throw new Error(
+      'cron channel delivery (announce) is only supported for sessionTarget="isolated" or "main"',
+    );
   }
   if (job.delivery.channel === "telegram") {
     const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
@@ -628,7 +630,13 @@ export function applyJobPatch(
       'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
     );
   }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+  // Main session supports webhook (body post) and announce (deliver run result to channel).
+  // Clear delivery only when mode is neither, so main can deliver to feishu/telegram etc.
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    job.delivery?.mode !== "announce"
+  ) {
     job.delivery = undefined;
   }
   if (patch.state) {

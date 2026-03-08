@@ -221,6 +221,9 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--account requires an isolated agentTurn job with delivery.");
           }
 
+          const hasDeliveryTarget =
+            (typeof opts.channel === "string" && opts.channel.trim()) ||
+            (typeof opts.to === "string" && opts.to.trim());
           const deliveryMode =
             sessionTarget === "isolated" && payload.kind === "agentTurn"
               ? hasAnnounce
@@ -228,7 +231,11 @@ export function registerCronAddCommand(cron: Command) {
                 : hasNoDeliver
                   ? "none"
                   : "announce"
-              : undefined;
+              : sessionTarget === "main" &&
+                  payload.kind === "systemEvent" &&
+                  (hasAnnounce || hasDeliveryTarget)
+                ? "announce"
+                : undefined;
 
           const nameRaw = typeof opts.name === "string" ? opts.name : "";
           const name = nameRaw.trim();

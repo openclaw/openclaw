@@ -987,15 +987,24 @@ export async function executeJobCore(
         if (abortSignal?.aborted) {
           return resolveAbortError();
         }
+        // When job has announce delivery (e.g. feishu/telegram), deliver main-session
+        // output there; otherwise use "last" so cron main responses reach the last channel.
+        const delivery = job.delivery as
+          | { mode?: string; channel?: string; to?: string; accountId?: string }
+          | undefined;
+        const heartbeatOverride =
+          delivery?.mode === "announce" && delivery?.channel
+            ? {
+                target: delivery.channel,
+                to: delivery.to,
+                accountId: delivery.accountId,
+              }
+            : { target: "last" as const };
         heartbeatResult = await state.deps.runHeartbeatOnce({
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
-          // Cron-triggered heartbeats should deliver to the last active channel.
-          // Without this override, heartbeat target defaults to "none" (since
-          // e2362d35) and cron main-session responses are silently swallowed.
-          // See: https://github.com/openclaw/openclaw/issues/28508
-          heartbeat: { target: "last" },
+          heartbeat: heartbeatOverride,
         });
         if (
           heartbeatResult.status !== "skipped" ||

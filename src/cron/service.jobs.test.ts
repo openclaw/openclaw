@@ -46,7 +46,7 @@ describe("applyJobPatch", () => {
     });
   };
 
-  it("clears delivery when switching to main session", () => {
+  it("keeps announce delivery when switching to main session (main can deliver to channel)", () => {
     const job = createIsolatedAgentTurnJob("job-1", {
       mode: "announce",
       channel: "telegram",
@@ -56,7 +56,7 @@ describe("applyJobPatch", () => {
     expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
-    expect(job.delivery).toBeUndefined();
+    expect(job.delivery).toEqual({ mode: "announce", channel: "telegram", to: "123" });
   });
 
   it("keeps webhook delivery when switching to main session", () => {
