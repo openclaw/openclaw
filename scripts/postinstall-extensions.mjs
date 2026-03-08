@@ -72,7 +72,6 @@ for (const entry of extensions) {
     execFileSync(npmBin, ["install", "--omit=dev", "--silent"], {
       cwd: extDir,
       stdio: "pipe",
-      timeout: 120_000,
       env,
     });
   } catch (err) {
