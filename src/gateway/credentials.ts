@@ -265,7 +265,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
     }
     if (
       localPasswordRef &&
-      localPasswordPrecedence === "config-first" &&
+      localPasswordPrecedence === "config-first" && // pragma: allowlist secret
       !localPassword &&
       Boolean(envPassword) &&
       localPasswordCanWin
