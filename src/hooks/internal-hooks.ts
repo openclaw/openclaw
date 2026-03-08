@@ -371,6 +371,13 @@ function hasStringContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "string";
 }
 
+function hasNumberContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "number";
+}
+
 function hasBooleanContextField<T extends Record<string, unknown>>(
   context: Partial<T>,
   key: keyof T,
@@ -407,7 +414,7 @@ export function isAgentTurnEndEvent(event: InternalHookEvent): event is AgentTur
   if (!context) {
     return false;
   }
-  return hasBooleanContextField(context, "success") && typeof context.durationMs === "number";
+  return hasBooleanContextField(context, "success") && hasNumberContextField(context, "durationMs");
 }
 
 export function isMessageReceivedEvent(
