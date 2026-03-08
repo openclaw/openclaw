@@ -914,7 +914,7 @@ describe("applyExtraParamsToAgent", () => {
       compat: {
         requiresOpenAiAnthropicToolPayload: true,
       },
-    } as Model<"anthropic-messages">;
+    } as unknown as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 

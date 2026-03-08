@@ -123,7 +123,9 @@ const testProfile =
   rawTestProfile === "serial"
     ? rawTestProfile
     : "normal";
-const shouldSplitUnitRuns = testProfile !== "low" && testProfile !== "serial";
+// Even on low-memory hosts, keep the isolated lane split so files like
+// git-commit.test.ts still get the worker/process isolation they require.
+const shouldSplitUnitRuns = testProfile !== "serial";
 const runs = [
   ...(shouldSplitUnitRuns
     ? [
