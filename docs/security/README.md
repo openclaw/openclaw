@@ -4,6 +4,8 @@
 
 ## Documents
 
+- [Security Model Explained](/security/SECURITY-MODEL-EXPLAINED) - Addresses common misconceptions and the IronClaw/TypeScript narrative with accurate, evidenced rebuttals
+
 - [Threat Model](/security/THREAT-MODEL-ATLAS) - MITRE ATLAS-based threat model for the OpenClaw ecosystem
 - [Contributing to the Threat Model](/security/CONTRIBUTING-THREAT-MODEL) - How to add threats, mitigations, and attack chains
 
