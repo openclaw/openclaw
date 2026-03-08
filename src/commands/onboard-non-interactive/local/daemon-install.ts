@@ -66,6 +66,7 @@ export async function installGatewayDaemonNonInteractive(params: {
       programArguments,
       workingDirectory,
       environment,
+      watchdog: true,
     });
   } catch (err) {
     runtime.error(`Gateway service install failed: ${String(err)}`);

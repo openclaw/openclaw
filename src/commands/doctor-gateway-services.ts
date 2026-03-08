@@ -367,6 +367,7 @@ export async function maybeRepairGatewayServiceConfig(
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
+      watchdog: true,
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);

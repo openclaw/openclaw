@@ -197,6 +197,7 @@ export async function finalizeOnboardingWizard(
             programArguments,
             workingDirectory,
             environment,
+            watchdog: true,
           });
         }
       } catch (err) {
