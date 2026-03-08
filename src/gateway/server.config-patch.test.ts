@@ -47,6 +47,31 @@ async function resetTempDir(name: string): Promise<string> {
 }
 
 describe("gateway config methods", () => {
+  it("round-trips config.set and returns the live config path", async () => {
+    const { createConfigIO } = await import("../config/config.js");
+    const current = await rpcReq<{
+      raw?: unknown;
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    expect(current.payload?.config).toBeTruthy();
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      path?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      baseHash: current.payload?.hash,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.path).toBe(createConfigIO().configPath);
+    expect(res.payload?.config).toBeTruthy();
+  });
+
   it("returns a path-scoped config schema lookup", async () => {
     const res = await rpcReq<{
       path: string;

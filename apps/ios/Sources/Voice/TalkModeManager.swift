@@ -34,6 +34,7 @@ final class TalkModeManager: NSObject {
     private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     var isEnabled: Bool = false
     var isListening: Bool = false
@@ -97,7 +98,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
-    private let silenceWindow: TimeInterval = 0.9
+    private var silenceWindow: TimeInterval = TimeInterval(TalkModeManager.defaultSilenceTimeoutMs) / 1000
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
@@ -1969,36 +1970,15 @@ extension TalkModeManager {
         return trimmed
     }
 
-    struct TalkProviderConfigSelection {
-        let provider: String
-        let config: [String: Any]
+    static func selectTalkProviderConfig(_ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection? {
+        TalkConfigParsing.selectProviderConfig(
+            talk,
+            defaultProvider: Self.defaultTalkProvider,
+            allowLegacyFallback: false)
     }
 
-    private static func normalizedTalkProviderID(_ raw: String?) -> String? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    static func selectTalkProviderConfig(_ talk: [String: Any]?) -> TalkProviderConfigSelection? {
-        guard let talk else { return nil }
-        let rawProvider = talk["provider"] as? String
-        let rawProviders = talk["providers"] as? [String: Any]
-        guard rawProvider != nil || rawProviders != nil else { return nil }
-        let providers = rawProviders ?? [:]
-        let normalizedProviders = providers.reduce(into: [String: [String: Any]]()) { acc, entry in
-            guard
-                let providerID = Self.normalizedTalkProviderID(entry.key),
-                let config = entry.value as? [String: Any]
-            else { return }
-            acc[providerID] = config
-        }
-        let providerID =
-            Self.normalizedTalkProviderID(rawProvider) ??
-            normalizedProviders.keys.min() ??
-            Self.defaultTalkProvider
-        return TalkProviderConfigSelection(
-            provider: providerID,
-            config: normalizedProviders[providerID] ?? [:])
+    static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
+        TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: Self.defaultSilenceTimeoutMs)
     }
 
     func reloadConfig() async {
@@ -2012,7 +1992,7 @@ extension TalkModeManager {
             )
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
-            let talk = config["talk"] as? [String: Any]
+            let talk = TalkConfigParsing.bridgeFoundationDictionary(config["talk"] as? [String: Any])
             let selection = Self.selectTalkProviderConfig(talk)
             if talk != nil, selection == nil {
                 GatewayDiagnostics.log(
@@ -2020,12 +2000,13 @@ extension TalkModeManager {
             }
             let activeProvider = selection?.provider ?? Self.defaultTalkProvider
             let activeConfig = selection?.config
-            self.defaultVoiceId = (activeConfig?["voiceId"] as? String)?
+            let silenceTimeoutMs = Self.resolvedSilenceTimeoutMs(talk)
+            self.defaultVoiceId = activeConfig?["voiceId"]?.stringValue?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let aliases = activeConfig?["voiceAliases"] as? [String: Any] {
+            if let aliases = activeConfig?["voiceAliases"]?.dictionaryValue {
                 var resolved: [String: String] = [:]
                 for (key, value) in aliases {
-                    guard let id = value as? String else { continue }
+                    guard let id = value.stringValue else { continue }
                     let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                     let trimmedId = id.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !normalizedKey.isEmpty, !trimmedId.isEmpty else { continue }
@@ -2038,14 +2019,14 @@ extension TalkModeManager {
             if !self.voiceOverrideActive {
                 self.currentVoiceId = self.defaultVoiceId
             }
-            let model = (activeConfig?["modelId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             self.defaultModelId = (model?.isEmpty == false) ? model : Self.defaultModelIdFallback
             if !self.modelOverrideActive {
                 self.currentModelId = self.defaultModelId
             }
-            self.defaultOutputFormat = (activeConfig?["outputFormat"] as? String)?
+            self.defaultOutputFormat = activeConfig?["outputFormat"]?.stringValue?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawConfigApiKey = (activeConfig?["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             let configApiKey = Self.normalizedTalkApiKey(rawConfigApiKey)
             let localApiKey = Self.normalizedTalkApiKey(
                 GatewaySettingsStore.loadTalkProviderApiKey(provider: activeProvider))
@@ -2064,11 +2045,12 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = self.defaultModelId
             self.gatewayTalkApiKeyConfigured = (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
-            if let interrupt = talk?["interruptOnSpeech"] as? Bool {
+            if let interrupt = talk?["interruptOnSpeech"]?.boolValue {
                 self.interruptOnSpeech = interrupt
             }
+            self.silenceWindow = TimeInterval(silenceTimeoutMs) / 1000
             if selection != nil {
-                GatewayDiagnostics.log("talk config provider=\(activeProvider)")
+                GatewayDiagnostics.log("talk config provider=\(activeProvider) silenceTimeoutMs=\(silenceTimeoutMs)")
             }
         } catch {
             self.defaultModelId = Self.defaultModelIdFallback
@@ -2079,6 +2061,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
         }
     }
 

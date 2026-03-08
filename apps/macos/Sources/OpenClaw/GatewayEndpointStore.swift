@@ -2,7 +2,7 @@ import ConcurrencyExtras
 import Foundation
 import OSLog
 
-enum GatewayEndpointState: Sendable, Equatable {
+enum GatewayEndpointState: Equatable {
     case ready(mode: AppState.ConnectionMode, url: URL, token: String?, password: String?)
     case connecting(mode: AppState.ConnectionMode, detail: String)
     case unavailable(mode: AppState.ConnectionMode, reason: String)
@@ -24,14 +24,14 @@ actor GatewayEndpointStore {
     ]
     private static let remoteConnectingDetail = "Connecting to remote gateway…"
     private static let staticLogger = Logger(subsystem: "ai.openclaw", category: "gateway-endpoint")
-    private enum EnvOverrideWarningKind: Sendable {
+    private enum EnvOverrideWarningKind {
         case token
         case password
     }
 
     private static let envOverrideWarnings = LockIsolated((token: false, password: false))
 
-    struct Deps: Sendable {
+    struct Deps {
         let mode: @Sendable () async -> AppState.ConnectionMode
         let token: @Sendable () -> String?
         let password: @Sendable () -> String?
@@ -614,6 +614,44 @@ actor GatewayEndpointStore {
 }
 
 extension GatewayEndpointStore {
+    static func localConfig() -> GatewayConnection.Config {
+        self.localConfig(
+            root: OpenClawConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
+            tailscaleIP: TailscaleService.fallbackTailnetIPv4())
+    }
+
+    static func localConfig(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        tailscaleIP: String?) -> GatewayConnection.Config
+    {
+        let port = GatewayEnvironment.gatewayPort()
+        let bind = self.resolveGatewayBindMode(root: root, env: env)
+        let customBindHost = self.resolveGatewayCustomBindHost(root: root)
+        let scheme = self.resolveGatewayScheme(root: root, env: env)
+        let host = self.resolveLocalGatewayHost(
+            bindMode: bind,
+            customBindHost: customBindHost,
+            tailscaleIP: tailscaleIP)
+        let token = self.resolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot)
+        let password = self.resolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot)
+        return (
+            url: URL(string: "\(scheme)://\(host):\(port)")!,
+            token: token,
+            password: password)
+    }
+
     private static func normalizeDashboardPath(_ rawPath: String?) -> String {
         let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "/" }
@@ -719,6 +757,19 @@ extension GatewayEndpointStore {
         self.resolveLocalGatewayHost(
             bindMode: bindMode,
             customBindHost: customBindHost,
+            tailscaleIP: tailscaleIP)
+    }
+
+    static func _testLocalConfig(
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
+        tailscaleIP: String? = nil) -> GatewayConnection.Config
+    {
+        self.localConfig(
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot,
             tailscaleIP: tailscaleIP)
     }
 }
