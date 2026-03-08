@@ -329,6 +329,45 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("photos.latest")).toBe(true);
     expect(allow.has("motion.activity")).toBe(true);
 
+    // Extended iOS node commands (openclaw-app) — full set
+    // Location
+    expect(allow.has("location.get")).toBe(true);
+    expect(allow.has("location.geocode")).toBe(true);
+    expect(allow.has("location.search")).toBe(true);
+    expect(allow.has("location.distance")).toBe(true);
+    expect(allow.has("location.monitor.start")).toBe(true);
+    expect(allow.has("location.monitor.stop")).toBe(true);
+    expect(allow.has("location.status")).toBe(true);
+    // Device
+    expect(allow.has("device.battery")).toBe(true);
+    expect(allow.has("device.network")).toBe(true);
+    expect(allow.has("device.storage")).toBe(true);
+    expect(allow.has("device.screen")).toBe(true);
+    expect(allow.has("device.display")).toBe(true);
+    expect(allow.has("device.locale")).toBe(true);
+    // Contacts
+    expect(allow.has("contacts.get")).toBe(true);
+    expect(allow.has("contacts.count")).toBe(true);
+    expect(allow.has("contacts.status")).toBe(true);
+    // Calendar
+    expect(allow.has("calendar.today")).toBe(true);
+    expect(allow.has("calendar.upcoming")).toBe(true);
+    expect(allow.has("calendar.search")).toBe(true);
+    expect(allow.has("calendar.calendars")).toBe(true);
+    expect(allow.has("calendar.status")).toBe(true);
+    // Health
+    expect(allow.has("health.steps")).toBe(true);
+    expect(allow.has("health.heartRate")).toBe(true);
+    expect(allow.has("health.sleep")).toBe(true);
+    expect(allow.has("health.workouts")).toBe(true);
+    expect(allow.has("health.energy")).toBe(true);
+    expect(allow.has("health.summary")).toBe(true);
+    expect(allow.has("health.status")).toBe(true);
+    // Motion
+    expect(allow.has("motion.pedometer")).toBe(true);
+    expect(allow.has("motion.altitude")).toBe(true);
+    expect(allow.has("motion.status")).toBe(true);
+
     for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
       expect(allow.has(cmd)).toBe(false);
     }
