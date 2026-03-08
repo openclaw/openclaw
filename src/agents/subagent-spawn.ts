@@ -28,6 +28,13 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  resolveRoleConfig,
+  resolveRoleModel,
+  resolveRoleToolPolicy,
+  type SubagentRole,
+  type SubagentRoleConfig,
+} from "./subagent-roles.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
 import {
@@ -62,6 +69,17 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /**
+   * Role identifier for specialized subagent behavior.
+   * Built-in roles: coder, reviewer, planner, researcher, debugger, tester, writer, analyzer.
+   * Custom roles are also supported.
+   */
+  role?: SubagentRole;
+  /**
+   * Custom role configuration to merge with built-in defaults.
+   * Only used when role is specified.
+   */
+  roleConfig?: Partial<SubagentRoleConfig>;
 };
 
 export type SpawnSubagentContext = {
@@ -423,8 +441,12 @@ export async function spawnSubagentDirect(
     };
   }
 
-  if (resolvedModel) {
-    const modelPatchError = await patchChildSession({ model: resolvedModel });
+  // Resolve role configuration BEFORE patching the model
+  const resolvedRoleConfig = resolveRoleConfig(params.role, params.roleConfig);
+  const effectiveModel = resolveRoleModel(resolvedRoleConfig, resolvedModel);
+
+  if (effectiveModel) {
+    const modelPatchError = await patchChildSession({ model: effectiveModel });
     if (modelPatchError) {
       return {
         status: "error",
@@ -649,13 +671,15 @@ export async function spawnSubagentDirect(
       task,
       cleanup,
       label: label || undefined,
-      model: resolvedModel,
-      runTimeoutSeconds,
+      model: effectiveModel,
+      runTimeoutSeconds: resolvedRoleConfig?.defaultTimeoutSeconds ?? runTimeoutSeconds,
       expectsCompletionMessage,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      role: params.role,
+      roleConfig: resolvedRoleConfig,
     });
   } catch (err) {
     if (attachmentAbsDir) {

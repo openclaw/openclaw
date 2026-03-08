@@ -1149,6 +1149,8 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  role?: import("./subagent-roles.js").SubagentRole;
+  roleConfig?: import("./subagent-roles.js").SubagentRoleConfig;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1180,6 +1182,8 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
+    role: params.role,
+    roleConfig: params.roleConfig,
   });
   ensureListener();
   persistSubagentRuns();
