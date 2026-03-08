@@ -3,7 +3,7 @@ import { vi } from "vitest";
 
 export type MockCommandInteraction = {
   user: { id: string; username: string; globalName: string };
-  channel: { type: ChannelType; id: string };
+  channel: { type: ChannelType; id: string; name?: string; topic?: string };
   guild: { id: string; name?: string } | null;
   rawData: { id: string; member: { roles: string[] } };
   options: {
@@ -22,6 +22,8 @@ type CreateMockCommandInteractionParams = {
   globalName?: string;
   channelType?: ChannelType;
   channelId?: string;
+  channelName?: string;
+  channelTopic?: string;
   guildId?: string | null;
   guildName?: string;
   interactionId?: string;
@@ -42,6 +44,8 @@ export function createMockCommandInteraction(
     channel: {
       type: params.channelType ?? ChannelType.DM,
       id: params.channelId ?? "dm-1",
+      name: params.channelName,
+      topic: params.channelTopic,
     },
     guild,
     rawData: {

@@ -517,6 +517,77 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(false);
   });
 
+  it("rotates the bound Discord guild-channel target session for native /new", async () => {
+    const root = await makeCaseDir("openclaw-discord-native-bound-reset-");
+    const storePath = path.join(root, "sessions.json");
+    const guildId = "1479614326774956167";
+    const channelId = "1479615088053850253";
+    const targetSessionKey = "agent:codex-orchestrator:discord:channel:1479615088053850253";
+    const fallbackSessionKey = "agent:main:discord:channel:1479615088053850253";
+    const existingTargetSessionId = "session-codex";
+    const existingFallbackSessionId = "session-main";
+    const now = Date.now();
+
+    await writeSessionStoreFast(storePath, {
+      [targetSessionKey]: {
+        sessionId: existingTargetSessionId,
+        updatedAt: now,
+        systemSent: true,
+        displayName: `discord:${guildId}#codex`,
+        groupChannel: "#codex",
+        space: guildId,
+      },
+      [fallbackSessionKey]: {
+        sessionId: existingFallbackSessionId,
+        updatedAt: now,
+        systemSent: true,
+        displayName: `discord:g-${channelId}`,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new",
+        CommandBody: "/new",
+        CommandSource: "native",
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        AccountId: "default",
+        From: `discord:channel:${channelId}`,
+        To: "slash:owner",
+        OriginatingTo: `channel:${channelId}`,
+        SessionKey: "agent:codex-orchestrator:discord:slash:owner",
+        CommandTargetSessionKey: targetSessionKey,
+        ChatType: "channel",
+        ConversationLabel: `Scry Ops #codex channel id:${channelId}`,
+        GroupSubject: "#codex",
+        GroupChannel: "#codex",
+        GroupSpace: guildId,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe(targetSessionKey);
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingTargetSessionId);
+    expect(result.sessionEntry.displayName).toBe(`discord:${guildId}#codex`);
+    expect(result.sessionEntry.groupChannel).toBe("#codex");
+    expect(result.sessionEntry.space).toBe(guildId);
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    expect(store[targetSessionKey]?.sessionId).toBe(result.sessionId);
+    expect(store[targetSessionKey]?.displayName).toBe(`discord:${guildId}#codex`);
+    expect(store[fallbackSessionKey]?.sessionId).toBe(existingFallbackSessionId);
+    expect(store[fallbackSessionKey]?.displayName).toBe(`discord:g-${channelId}`);
+  });
+
   it("does not rotate local session state for ACP /new when conversation IDs are unavailable", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-no-conversation-");
     const storePath = path.join(root, "sessions.json");

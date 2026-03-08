@@ -139,6 +139,34 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 
+  test("discord numeric channel binding resolves agent-bound session keys for per-agent channels", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "codex-orchestrator" }],
+      },
+      bindings: [
+        {
+          agentId: "codex-orchestrator",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "1479615088053850253" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      guildId: "1479614326774956167",
+      peer: { kind: "channel", id: "1479615088053850253" },
+    });
+    expect(route.agentId).toBe("codex-orchestrator");
+    expect(route.sessionKey).toBe("agent:codex-orchestrator:discord:channel:1479615088053850253");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
   test("coerces numeric peer ids to stable session keys", () => {
     const cfg: OpenClawConfig = {};
     const route = resolveAgentRoute({

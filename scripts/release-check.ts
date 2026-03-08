@@ -317,10 +317,80 @@ function checkPluginSdkExports() {
   }
 }
 
+type DistBundleSnapshot = {
+  path: string;
+  content: string;
+};
+
+function collectDistBundleSnapshots(rootDir: string): DistBundleSnapshot[] {
+  const snapshots: DistBundleSnapshot[] = [];
+  const visit = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".js")) {
+        continue;
+      }
+      snapshots.push({
+        path: fullPath,
+        content: readFileSync(fullPath, "utf8"),
+      });
+    }
+  };
+  visit(rootDir);
+  return snapshots;
+}
+
+export function collectDiscordNativeRoutingDistErrors(
+  bundles: readonly DistBundleSnapshot[],
+): string[] {
+  const errors: string[] = [];
+  const staleStartupConfigPattern =
+    /const route = resolveAgentRoute\(\{\s*cfg,\s*channel:\s*"discord",[\s\S]{0,2500}?const threadBinding = isThreadChannel \? threadBindings\.getByThreadId\(rawChannelId\) :[\s\S]{0,200}?resolveConfiguredAcpRoute\(\{\s*cfg,\s*route,\s*channel:\s*"discord",[\s\S]{0,1000}?ensureConfiguredAcpRouteReady\(\{\s*cfg,\s*configuredBinding/s;
+  const staleEmptyFallbackPattern =
+    /const configuredBoundSessionKey = configuredRoute\?\.boundSessionKey \?\? "";\s*const boundSessionKey = threadBinding\?\.targetSessionKey\?\.trim\(\) \|\| configuredBoundSessionKey(?!\s*\|\|)/s;
+  const repoRootPrefix = `${resolve(".")}/`;
+
+  for (const bundle of bundles) {
+    const relativePath = bundle.path.includes("/dist/")
+      ? `dist/${bundle.path.split("/dist/")[1] ?? ""}`.replace(/\/+/g, "/")
+      : bundle.path.startsWith(repoRootPrefix)
+        ? bundle.path.slice(repoRootPrefix.length)
+        : bundle.path;
+    if (staleStartupConfigPattern.test(bundle.content)) {
+      errors.push(
+        `${relativePath}: Discord native command bundle still resolves bound routes from startup cfg instead of loadConfig().`,
+      );
+    }
+    if (staleEmptyFallbackPattern.test(bundle.content)) {
+      errors.push(
+        `${relativePath}: Discord native command bundle still treats empty configured bound-session keys as real targets.`,
+      );
+    }
+  }
+
+  return errors;
+}
+
+function checkDiscordNativeRoutingDist() {
+  const errors = collectDiscordNativeRoutingDistErrors(collectDistBundleSnapshots(resolve("dist")));
+  if (errors.length > 0) {
+    console.error("release-check: Discord native routing dist regression detected:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
 function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
+  checkDiscordNativeRoutingDist();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);

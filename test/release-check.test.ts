@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectAppcastSparkleVersionErrors } from "../scripts/release-check.ts";
+import {
+  collectAppcastSparkleVersionErrors,
+  collectDiscordNativeRoutingDistErrors,
+} from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -24,5 +27,76 @@ describe("collectAppcastSparkleVersionErrors", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+  });
+});
+
+describe("collectDiscordNativeRoutingDistErrors", () => {
+  it("flags stale startup-config routing and empty-string fallback bundles", () => {
+    const errors = collectDiscordNativeRoutingDistErrors([
+      {
+        path: "/repo/dist/plugin-sdk/reply-old.js",
+        content: `
+          const route = resolveAgentRoute({
+            cfg,
+            channel: "discord",
+            accountId,
+          });
+          const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : void 0;
+          const configuredRoute = threadBinding == null ? resolveConfiguredAcpRoute({
+            cfg,
+            route,
+            channel: "discord",
+            accountId,
+          }) : null;
+          if (configuredBinding) {
+            await ensureConfiguredAcpRouteReady({
+              cfg,
+              configuredBinding
+            });
+          }
+          const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
+          const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
+        `,
+      },
+    ]);
+
+    expect(errors).toEqual([
+      "dist/plugin-sdk/reply-old.js: Discord native command bundle still resolves bound routes from startup cfg instead of loadConfig().",
+      "dist/plugin-sdk/reply-old.js: Discord native command bundle still treats empty configured bound-session keys as real targets.",
+    ]);
+  });
+
+  it("accepts bundles that reload config and drop empty configured session keys", () => {
+    const errors = collectDiscordNativeRoutingDistErrors([
+      {
+        path: "/repo/dist/plugin-sdk/reply-new.js",
+        content: `
+          const freshCfg = loadConfig();
+          const route = resolveAgentRoute({
+            cfg: freshCfg,
+            channel: "discord",
+            accountId,
+          });
+          const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : void 0;
+          const configuredRoute = threadBinding == null ? resolveConfiguredAcpRoute({
+            cfg: freshCfg,
+            route,
+            channel: "discord",
+            accountId,
+          }) : null;
+          if (configuredBinding) {
+            await ensureConfiguredAcpRouteReady({
+              cfg: freshCfg,
+              configuredBinding
+            });
+          }
+          const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
+          const boundSessionKey =
+            threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey || void 0;
+        `,
+      },
+    ]);
+
+    expect(errors).toEqual([]);
   });
 });

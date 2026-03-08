@@ -19,6 +19,18 @@ import {
 } from "./native-command.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
+const configMocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(),
+}));
+
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: configMocks.loadConfig,
+  };
+});
+
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
 type PickerSelect = ReturnType<typeof createDiscordModelPickerFallbackSelect>;
@@ -238,6 +250,8 @@ function createBoundThreadBindingManager(params: {
 describe("Discord model picker interactions", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    configMocks.loadConfig.mockReset();
+    configMocks.loadConfig.mockImplementation(() => createModelPickerContext().cfg);
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {

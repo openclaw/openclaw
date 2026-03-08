@@ -111,6 +111,7 @@ const useVmForks =
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
+const includeUiSuite = process.env.OPENCLAW_TEST_INCLUDE_UI !== "0";
 const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
 const testProfile =
   rawTestProfile === "low" ||
@@ -187,6 +188,14 @@ const runs = [
             // Keep them on process forks for determinism even when other suites use vmForks.
             "--pool=forks",
           ],
+        },
+      ]
+    : []),
+  ...(includeUiSuite
+    ? [
+        {
+          name: "ui",
+          args: ["vitest", "run", "--config", "ui/vitest.config.ts"],
         },
       ]
     : []),
