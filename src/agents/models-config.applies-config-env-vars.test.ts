@@ -22,7 +22,7 @@ describe("models-config", () => {
           models: { providers: {} },
           env: {
             vars: {
-              OPENROUTER_API_KEY: "from-config",
+              OPENROUTER_API_KEY: "from-config", // pragma: allowlist secret
               [TEST_ENV_VAR]: "from-config",
             },
           },
@@ -44,13 +44,13 @@ describe("models-config", () => {
   it("does not overwrite already-set host env vars while ensuring models.json", async () => {
     await withTempHome(async () => {
       await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
-        process.env.OPENROUTER_API_KEY = "from-host";
+        process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
         process.env[TEST_ENV_VAR] = "from-host";
         const cfg: OpenClawConfig = {
           models: { providers: {} },
           env: {
             vars: {
-              OPENROUTER_API_KEY: "from-config",
+              OPENROUTER_API_KEY: "from-config", // pragma: allowlist secret
               [TEST_ENV_VAR]: "from-config",
             },
           },
