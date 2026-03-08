@@ -514,7 +514,54 @@ async function attachTab(tabId, opts = {}) {
   setBadge(tabId, 'on')
   await persistState()
 
+  // Inject content scripts into the newly attached tab. These are injected
+  // dynamically (not via static content_scripts in manifest.json) so they
+  // only affect relay-attached tabs, not the user's entire browser session.
+  await injectContentScripts(tabId, debuggee)
+
   return { sessionId, targetId }
+}
+
+// Inject content scripts into a relay-attached tab:
+// 1. kill-beforeunload.js via CDP Page.addScriptToEvaluateOnNewDocument
+//    (runs at document_start in MAIN world, scoped to this debugger session,
+//    persists across navigations within the session)
+// 2. kill-beforeunload.js via chrome.scripting.executeScript for the current page
+//    (the CDP method only fires on future navigations, not the current page)
+// 3. content.js via chrome.scripting.executeScript (all frames)
+async function injectContentScripts(tabId, debuggee) {
+  // Load kill-beforeunload source for CDP injection.
+  try {
+    const resp = await fetch(chrome.runtime.getURL('kill-beforeunload.js'))
+    const source = await resp.text()
+    await chrome.debugger.sendCommand(debuggee, 'Page.addScriptToEvaluateOnNewDocument', {
+      source,
+      worldName: '', // empty string = main world
+    })
+  } catch {
+    // Best-effort: debugger may have been detached or file may be missing.
+  }
+
+  // Inject kill-beforeunload into the current page (MAIN world).
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['kill-beforeunload.js'],
+      world: 'MAIN',
+    })
+  } catch {
+    // Ignore — chrome:// pages or CSP restrictions.
+  }
+
+  // Inject content.js (ISOLATED world, all frames).
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['content.js'],
+    })
+  } catch {
+    // Ignore — chrome:// pages or CSP restrictions.
+  }
 }
 
 async function detachTab(tabId, reason) {
@@ -626,6 +673,26 @@ async function connectOrToggleForActiveTab() {
   }
 }
 
+// Send a message to the content script running in the given tab.
+// Auto-injects the content script if it hasn't been loaded yet (e.g. the tab
+// was opened before the extension was installed, or the service worker restarted).
+async function sendContentMessage(tabId, msg) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, msg)
+  } catch {
+    // Content script may not be injected yet — try injecting and retrying.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        files: ['content.js'],
+      })
+    } catch (injectErr) {
+      throw new Error(`Content script injection failed: ${injectErr instanceof Error ? injectErr.message : String(injectErr)}`)
+    }
+    return await chrome.tabs.sendMessage(tabId, msg)
+  }
+}
+
 async function handleForwardCdpCommand(msg) {
   const method = String(msg?.params?.method || '').trim()
   const params = msg?.params?.params || undefined
@@ -644,6 +711,57 @@ async function handleForwardCdpCommand(msg) {
     })()
 
   if (!tabId) throw new Error(`No attached tab for method ${method}`)
+
+  // --- Content script methods (OpenClaw.*) ---------------------------------
+  // These route through chrome.tabs.sendMessage instead of chrome.debugger,
+  // providing a non-CDP fallback channel for DOM scanning, form filling,
+  // clicking, and page reading. Useful when Playwright's CDP approach fails
+  // (CSP restrictions, shadow DOM edge cases, government site framesets,
+  // React/Vue controlled inputs).
+
+  if (method === 'OpenClaw.scanPage') {
+    return await sendContentMessage(tabId, { type: 'OC_SCAN_PAGE' })
+  }
+
+  if (method === 'OpenClaw.fillFields') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_FILL_FIELDS',
+      fields: params?.fields || [],
+      delayMs: params?.delayMs || 100,
+    })
+  }
+
+  if (method === 'OpenClaw.clickElement') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_CLICK',
+      selector: params?.selector || '',
+    })
+  }
+
+  if (method === 'OpenClaw.clickByText') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_CLICK_BY_TEXT',
+      text: params?.text || '',
+    })
+  }
+
+  if (method === 'OpenClaw.readPage') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_READ_PAGE',
+      selector: params?.selector || undefined,
+    })
+  }
+
+  if (method === 'OpenClaw.executeJS') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_EXECUTE_JS',
+      code: params?.code || '',
+    })
+  }
+
+  if (method === 'OpenClaw.getPageInfo') {
+    return await sendContentMessage(tabId, { type: 'OC_GET_PAGE_INFO' })
+  }
 
   /** @type {chrome.debugger.DebuggerSession} */
   const debuggee = { tabId }
@@ -886,13 +1004,22 @@ chrome.debugger.onDetach.addListener((...args) => void whenReady(() => onDebugge
 
 chrome.action.onClicked.addListener(() => void whenReady(() => connectOrToggleForActiveTab()))
 
-// Refresh badge after navigation completes — service worker may have restarted
-// during navigation, losing ephemeral badge state.
+// Refresh badge and re-inject content script after navigation completes.
+// Service worker may have restarted during navigation, losing ephemeral badge
+// state. Content script needs re-injection because navigation resets the page.
+// (kill-beforeunload.js is automatically re-injected by CDP's
+// Page.addScriptToEvaluateOnNewDocument, which persists across navigations.)
 chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenReady(() => {
   if (frameId !== 0) return
   const tab = tabs.get(tabId)
   if (tab?.state === 'connected') {
     setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
+
+    // Re-inject content.js into the attached tab (all frames).
+    chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['content.js'],
+    }).catch(() => { /* ignore — CSP or chrome:// page */ })
   }
 }))
 

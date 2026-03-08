@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 type ExtensionManifest = {
   background?: { service_worker?: string; type?: string };
   permissions?: string[];
+  content_scripts?: unknown[];
 };
 
 function readManifest(): ExtensionManifest {
@@ -25,5 +26,18 @@ describe("chrome extension manifest", () => {
     expect(permissions).toContain("webNavigation");
     expect(permissions).toContain("storage");
     expect(permissions).toContain("debugger");
+  });
+
+  it("includes scripting permission for dynamic content script injection", () => {
+    const permissions = readManifest().permissions ?? [];
+    expect(permissions).toContain("scripting");
+  });
+
+  it("does not declare static content_scripts (injected dynamically per-tab)", () => {
+    const manifest = readManifest();
+    // Content scripts are injected dynamically via chrome.scripting.executeScript
+    // and CDP Page.addScriptToEvaluateOnNewDocument at attach-time, so they only
+    // affect relay-attached tabs — not the user's entire browser session.
+    expect(manifest.content_scripts).toBeUndefined();
   });
 });
